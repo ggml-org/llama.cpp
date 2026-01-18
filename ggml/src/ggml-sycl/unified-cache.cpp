@@ -95,6 +95,27 @@ static void resolve_dma_defaults(size_t & slice_bytes, size_t & buffer_count) {
     }
 }
 
+static size_t resolve_host_staging_bytes() {
+    size_t staging_mb = 64;
+    size_t env_mb     = 0;
+    if (parse_env_mb_value("GGML_SYCL_HOST_STAGING_MB", env_mb) ||
+        parse_env_mb_value("GGML_SYCL_MMAP_STAGING_MB", env_mb)) {
+        staging_mb = env_mb;
+    }
+    return staging_mb * 1024ULL * 1024ULL;
+}
+
+static size_t resolve_host_reserve_bytes(size_t staging_bytes) {
+    size_t reserve_mb = 0;
+    size_t env_mb     = 0;
+    if (parse_env_mb_value("GGML_SYCL_HOST_RESERVE_MB", env_mb)) {
+        reserve_mb = env_mb;
+    } else {
+        reserve_mb = staging_bytes / (1024ULL * 1024ULL);
+    }
+    return reserve_mb * 1024ULL * 1024ULL;
+}
+
 static bool cache_assert_enabled() {
     int enabled = g_cache_assert_enabled.load(std::memory_order_acquire);
     if (enabled >= 0) {
@@ -493,6 +514,21 @@ host_cache::~host_cache() {
     entries_.clear();
     // pinned_pool_ will be destroyed normally here (its destructor calls sycl::free)
 }
+
+void * host_cache::allocate_pinned_runtime(size_t size, size_t alignment) {
+    if (!pinned_pool_) {
+        return nullptr;
+    }
+    return pinned_pool_->allocate(size, alignment);
+}
+
+void host_cache::free_pinned_runtime(void * ptr, size_t size) {
+    if (!pinned_pool_ || !ptr || size == 0) {
+        return;
+    }
+    pinned_pool_->deallocate(ptr, size);
+}
+
 
 void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &     key_id,
                                        const void *                  src_ptr,
@@ -2904,16 +2940,31 @@ bool unified_cache::get_dma_staging_buffers(size_t slice_bytes, size_t count, dm
     }
     std::lock_guard<std::mutex> lock(dma_staging_mutex_);
     if (!dma_staging_buffers_.empty()) {
-        if (dma_buffer_count_ < count || dma_slice_bytes_ < slice_bytes) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging pool mismatch: have=%zu x %.1f MB, need=%zu x %.1f MB\n",
-                          dma_buffer_count_, dma_slice_bytes_ / (1024.0 * 1024.0), count,
-                          slice_bytes / (1024.0 * 1024.0));
-            return false;
+        if (dma_buffer_count_ >= count && dma_slice_bytes_ >= slice_bytes) {
+            out.buffers     = dma_staging_buffers_.data();
+            out.count       = count;
+            out.slice_bytes = slice_bytes;
+            return true;
         }
-        out.buffers     = dma_staging_buffers_.data();
-        out.count       = count;
-        out.slice_bytes = slice_bytes;
-        return true;
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA staging pool mismatch: have=%zu x %.1f MB, need=%zu x %.1f MB; reallocating\n",
+                      dma_buffer_count_, dma_slice_bytes_ / (1024.0 * 1024.0), count,
+                      slice_bytes / (1024.0 * 1024.0));
+        try {
+            queue_.wait();
+        } catch (...) {
+        }
+        for (void * ptr : dma_staging_buffers_) {
+            if (!ptr) {
+                continue;
+            }
+            try {
+                sycl::free(ptr, queue_);
+            } catch (...) {
+            }
+        }
+        dma_staging_buffers_.clear();
+        dma_slice_bytes_  = 0;
+        dma_buffer_count_ = 0;
     }
 
     dma_staging_buffers_.resize(count, nullptr);
@@ -3044,6 +3095,13 @@ unified_cache::dma_stream_result unified_cache::stream_dma(const cache_ptr_view 
         try {
             if (copy_fn) {
                 copy_evt = copy_fn(queue_, staging.buffers[slot], cur, offset, src.ptr, src.size, ctx, copy_deps);
+            } else if (src.location == cache_location::HOST_MMAP) {
+                // Avoid direct queue_.memcpy from mmap'd pointers (can trigger device loss).
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] DMA stream staging mmap slice offset=%zu size=%zu\n", offset, cur);
+                copy_evt = copy_to_device_async(staging.buffers[slot],
+                                                static_cast<const char *>(src.ptr) + offset,
+                                                cur,
+                                                copy_deps);
             } else {
                 copy_evt = queue_.memcpy(staging.buffers[slot],
                                          static_cast<const char *>(src.ptr) + offset,
@@ -3224,7 +3282,10 @@ static unified_cache * create_cache_for_device(int device_id) {
     if (budget == 0) {
         size_t free_mem = 0, total_mem = 0;
         ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
-        const size_t base_mem = total_mem > 0 ? total_mem : free_mem;
+        size_t base_mem = ggml_sycl_info().devices[device_id].total_vram;
+        if (base_mem == 0) {
+            base_mem = total_mem > 0 ? total_mem : free_mem;
+        }
 
         int pct = g_unified_cache_budget_pct;
         if (pct < 1) {
@@ -3241,27 +3302,26 @@ static unified_cache * create_cache_for_device(int device_id) {
             budget = base_mem - headroom;
         }
 
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Device %d: budget=%.1f MB (%d%% of %.1f MB total, headroom=%.1f MB)\n",
-                      device_id, budget / (1024.0f * 1024.0f), pct, base_mem / (1024.0f * 1024.0f),
+        char desc[256] = { 0 };
+        ggml_backend_sycl_get_device_description(device_id, desc, sizeof(desc));
+        GGML_LOG_INFO("[UNIFIED-CACHE] Device %d (%s): total=%.1f MB free=%.1f MB budget=%.1f MB (%d%%, headroom=%.1f MB)\n",
+                      device_id,
+                      desc,
+                      base_mem / (1024.0f * 1024.0f),
+                      free_mem / (1024.0f * 1024.0f),
+                      budget / (1024.0f * 1024.0f),
+                      pct,
                       headroom / (1024.0f * 1024.0f));
     }
 
-    const size_t base_budget = budget;
-    const size_t reserved    = runtime_reserved_bytes_nolock(device_id);
-    if (reserved > 0) {
-        if (reserved >= budget) {
-            GGML_LOG_INFO("[UNIFIED-CACHE] Runtime reserve %.1f MB >= cache budget %.1f MB (base %.1f MB). "
-                          "Budget clamped to 0\n",
-                          reserved / (1024.0f * 1024.0f), budget / (1024.0f * 1024.0f),
-                          base_budget / (1024.0f * 1024.0f));
-            budget = 0;
-        } else {
-            budget -= reserved;
-        }
-    }
 
+    const size_t staging_bytes = resolve_host_staging_bytes();
     try {
-        g_device_caches[device_id] = std::make_unique<unified_cache>(queue, budget);
+        g_device_caches[device_id] = std::make_unique<unified_cache>(queue, budget, staging_bytes);
+        const size_t reserved = runtime_reserved_bytes_nolock(device_id);
+        if (reserved > 0) {
+            g_device_caches[device_id]->update_reserved_bytes(reserved);
+        }
         return g_device_caches[device_id].get();
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to initialize device %d: %s\n", device_id, e.what());
@@ -3294,6 +3354,24 @@ static host_cache * create_host_cache_for_device(int device_id) {
         budget = static_cast<size_t>(total_mem * (static_cast<double>(pct) / 100.0));
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Host cache budget=%.1f MB (%d%% of %.1f MB total RAM)\n",
                       budget / (1024.0 * 1024.0), pct, total_mem / (1024.0 * 1024.0));
+    }
+
+    const size_t staging_bytes = resolve_host_staging_bytes();
+    size_t       reserve_bytes = resolve_host_reserve_bytes(staging_bytes);
+    const int    device_count  = std::max(1, static_cast<int>(dpct::dev_mgr::instance().device_count()));
+    if (reserve_bytes > 0) {
+        const size_t total_reserve = reserve_bytes * static_cast<size_t>(device_count);
+        if (total_reserve >= budget) {
+            GGML_LOG_INFO("[UNIFIED-CACHE] Host reserve %.1f MB >= host budget %.1f MB; host cache disabled\n",
+                          total_reserve / (1024.0 * 1024.0), budget / (1024.0 * 1024.0));
+            return nullptr;
+        }
+        budget -= total_reserve;
+        GGML_LOG_INFO("[UNIFIED-CACHE] Host reserve %.1f MB (staging %.1f MB x %d devices), host budget now %.1f MB\n",
+                      total_reserve / (1024.0 * 1024.0),
+                      staging_bytes / (1024.0 * 1024.0),
+                      device_count,
+                      budget / (1024.0 * 1024.0));
     }
 
     try {

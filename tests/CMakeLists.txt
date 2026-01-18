@@ -1476,6 +1476,22 @@ if(GGML_SYCL)
         add_test(NAME test-sycl-compute-buffer-manager COMMAND $<TARGET_FILE:test-sycl-compute-buffer-manager>)
     endif()
 
+    # test-sycl-unified-cache: Integration tests for unified cache system
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-dkr)
+    # Tests allocation routing, memory pressure, eviction, and budget enforcement
+    add_executable(test-sycl-unified-cache test-sycl-unified-cache.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/eviction-policy.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp)
+    target_link_libraries(test-sycl-unified-cache PRIVATE ggml)
+    target_include_directories(test-sycl-unified-cache PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-unified-cache PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-unified-cache PRIVATE "-fsycl")
+    install(TARGETS test-sycl-unified-cache RUNTIME)
+    add_test(NAME test-sycl-unified-cache COMMAND $<TARGET_FILE:test-sycl-unified-cache>)
+
     # test-tiered-dispatch: Tests for tiered memory dispatch integration
     # Validates that tensor inventory and tiered mode affect kernel dispatch decisions
     add_executable(test-tiered-dispatch test-tiered-dispatch.cpp)
@@ -1499,4 +1515,21 @@ if(GGML_SYCL)
         set_property(TEST test-tiered-memory-integration PROPERTY LABELS "sycl;integration")
         set_property(TEST test-tiered-memory-integration PROPERTY ENVIRONMENT "LLAMA_BIN_DIR=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
     endif()
+
+    # test-sycl-unified-memory-e2e: End-to-end validation tests for unified memory system
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-13o)
+    # Validates 120B+ MoE inference patterns on 13.5GB VRAM
+    add_executable(test-sycl-unified-memory-e2e test-sycl-unified-memory-e2e.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/eviction-policy.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp)
+    target_link_libraries(test-sycl-unified-memory-e2e PRIVATE ggml)
+    target_include_directories(test-sycl-unified-memory-e2e PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-unified-memory-e2e PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-unified-memory-e2e PRIVATE "-fsycl")
+    install(TARGETS test-sycl-unified-memory-e2e RUNTIME)
+    add_test(NAME test-sycl-unified-memory-e2e COMMAND $<TARGET_FILE:test-sycl-unified-memory-e2e>)
+    set_property(TEST test-sycl-unified-memory-e2e PROPERTY LABELS "sycl;e2e")
 endif()

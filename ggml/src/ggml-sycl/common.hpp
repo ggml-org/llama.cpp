@@ -502,6 +502,9 @@ struct layout_policy {
                     return GGML_LAYOUT_SOA;
                 }
             }
+            if (qtype == GGML_TYPE_MXFP4) {
+                return GGML_LAYOUT_COALESCED;
+            }
             // MMVQ _id kernels for Q4_0/Q8_0 are AoS-only.
             if (qtype == GGML_TYPE_Q4_0 || qtype == GGML_TYPE_Q8_0) {
                 return GGML_LAYOUT_AOS;

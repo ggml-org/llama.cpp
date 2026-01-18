@@ -348,6 +348,9 @@ class host_cache {
     host_cache(sycl::queue & queue, size_t budget_bytes);
     ~host_cache();
 
+    void * allocate_pinned_runtime(size_t size, size_t alignment = 64);
+    void   free_pinned_runtime(void * ptr, size_t size);
+
     host_cache(const host_cache &)             = delete;
     host_cache & operator=(const host_cache &) = delete;
     host_cache(host_cache &&)                  = delete;
