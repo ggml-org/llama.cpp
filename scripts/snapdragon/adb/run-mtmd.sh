@@ -12,6 +12,9 @@ branch=.
 adbserial=
 [ "$S" != "" ] && adbserial="-s $S"
 
+adbhost=
+[ "$H" != "" ] && adbhost="-H $H"
+
 model="gemma-3-4b-it-Q4_0.gguf"
 [ "$M" != "" ] && model="$M"
 
@@ -51,7 +54,7 @@ mtmd_backend=
 
 set -x
 
-adb $adbserial shell " \
+adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \

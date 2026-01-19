@@ -7,10 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
-
 #include "HAP_farf.h"
 
 #define WORKER_THREAD_STACK_SZ  (2 * 16384)

@@ -1,41 +1,37 @@
-#define(VARIANTS)
-
-[
-  {
-    "SHADER_SUFFIX": "f16_vec",
-    "REPLS": {
-      "TYPE" : "vec4<f32>",
-      "DST_TYPE": "vec4<f16>",
-      "VEC_SIZE": 4
-    }
-  },
-  {
-    "SHADER_SUFFIX": "f16",
-    "REPLS": {
-      "TYPE" : "f32",
-      "DST_TYPE": "f16",
-      "VEC_SIZE": 1
-    }
-  }
-]
-
-#end(VARIANTS)
-
-#define(SHADER)
-
 enable f16;
 
+#ifdef DST_F32
+#define DST_INNER_TYPE f32
+#else
+#define DST_INNER_TYPE f16
+#endif
+
+#ifdef VEC4
+#define SRC_TYPE vec4<f32>
+#define DST_TYPE vec4<DST_INNER_TYPE>
+#define VEC_SIZE 4
+#else
+#define SRC_TYPE f32
+#define DST_TYPE DST_INNER_TYPE
+#define VEC_SIZE 1
+#endif
+
 @group(0) @binding(0)
-var<storage, read_write> src: array<{{TYPE}}>;
+var<storage, read_write> src: array<SRC_TYPE>;
 
 @group(0) @binding(1)
 var<storage, read_write> idx: array<u32>;
 
 @group(0) @binding(2)
-var<storage, read_write> dst: array<{{DST_TYPE}}>;
+var<storage, read_write> dst: array<DST_TYPE>;
 
+#ifdef I64_IDX
 @group(0) @binding(3)
 var<storage, read_write> error: atomic<u32>;
+#define PARAMS_BINDING 4
+#else
+#define PARAMS_BINDING 3
+#endif
 
 struct Params {
     offset_src: u32, // in elements
@@ -66,18 +62,17 @@ struct Params {
     idx2: u32,
 };
 
-@group(0) @binding(4)
+@group(0) @binding(PARAMS_BINDING)
 var<uniform> params: Params;
 
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= (params.ne3 * params.ne2 * params.n_rows * params.ne0) / {{VEC_SIZE}}) {
+    if (gid.x >= (params.ne3 * params.ne2 * params.n_rows * params.ne0) / VEC_SIZE) {
         return;
     }
 
     // getting the row from gid
-    let elems_per_row = params.ne0 / {{VEC_SIZE}};
+    let elems_per_row = params.ne0 / VEC_SIZE;
     var i = gid.x / elems_per_row;
 
     let i_src3 = i / (params.ne2 * params.n_rows);
@@ -90,9 +85,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_idx1 = i_src2 % params.idx1;
     let i_idx0 = i_src1;
 
+#ifdef I64_IDX
     let idx_high = (params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2) * 2;
 
-    let idx_high_val = idx[idx_high];
+    let idx_val = idx[idx_high];
     let idx_low_val = idx[idx_high + 1];
 
     if (idx_low_val != 0) {
@@ -100,13 +96,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         atomicStore(&error, 1);
         return;
     }
+#else
+    let idx_i = params.offset_idx + i_idx0 * params.stride_idx0 + i_idx1 * params.stride_idx1 + i_idx2 * params.stride_idx2;
+    let idx_val = idx[idx_i];
+#endif
 
-    let i_dst_row = params.offset_dst + idx_high_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
+    let i_dst_row = params.offset_dst + idx_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
     let i_src_row = params.offset_src + i_src1 * params.stride_src1 + i_src2 * params.stride_src2 + i_src3 * params.stride_src3;
 
     let col_idx = (gid.x % elems_per_row);
-    dst[i_dst_row/{{VEC_SIZE}} + col_idx] = {{DST_TYPE}}(src[i_src_row/{{VEC_SIZE}} + col_idx]);
+    dst[i_dst_row/VEC_SIZE + col_idx] = DST_TYPE(src[i_src_row/VEC_SIZE + col_idx]);
 }
-
-#end(SHADER)
-

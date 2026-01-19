@@ -271,6 +271,8 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
 
 This table can be generated with:
 
+<!-- TODO @ngxson : we should update this, since minja dependency has been removed -->
+
 ```bash
 ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
 ```

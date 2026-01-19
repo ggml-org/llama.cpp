@@ -30,7 +30,7 @@ jobs:
 
   #     - name: Build
   #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
   #                        -DCMAKE_BUILD_TYPE=Release \
   #                        -DGGML_OPENMP=OFF \
   #                        -DLLAMA_BUILD_EXAMPLES=ON \
@@ -76,7 +76,7 @@ jobs:
 
   #     - name: Build
   #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
   #                        -DCMAKE_BUILD_TYPE=Release \
   #                        -DGGML_VULKAN=ON \
   #                        -DGGML_OPENMP=OFF \
@@ -122,7 +122,7 @@ jobs:
 
   #     - name: Build
   #       run: |
-  #         cmake -B build -DLLAMA_CURL=OFF \
+  #         cmake -B build -DLLAMA_OPENSSL=OFF \
   #                        -DCMAKE_BUILD_TYPE=Release \
   #                        -DGGML_VULKAN=ON \
   #                        -DGGML_OPENMP=OFF \
@@ -178,7 +178,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF \
+          cmake -B build -DLLAMA_OPENSSL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
@@ -235,7 +235,7 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF \
+          cmake -B build -DLLAMA_OPENSSL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
@@ -281,7 +281,7 @@ jobs:
       - name: Build
         run: |
           export RISCV_ROOT_PATH=${PWD}/spacemit_toolchain
-          cmake -B build -DLLAMA_CURL=OFF \
+          cmake -B build -DLLAMA_OPENSSL=OFF \
                          -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \

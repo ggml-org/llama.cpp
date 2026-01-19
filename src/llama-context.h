@@ -40,6 +40,14 @@ struct llama_context {
 
     ~llama_context();
 
+    // reserve a new backend scheduler (if needed)
+    // for example, when:
+    //   - changing loras
+    //   - changing samplers
+    //   - changing attention type
+    //   - etc.
+    void sched_reserve();
+
     void synchronize();
 
     const llama_model   & get_model()   const;
@@ -313,6 +321,8 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+
+    bool sched_need_reserve = true;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;

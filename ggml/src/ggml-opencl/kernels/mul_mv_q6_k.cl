@@ -111,6 +111,10 @@ kernel void kernel_mul_mv_q6_K_f32(
 
     int row = N_SIMDGROUP * r0 + get_sub_group_id();
 
+    if (row >= ne01) {
+        return;
+    }
+
     int i12 = im%ne12;
     int i13 = im/ne12;
 

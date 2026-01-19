@@ -1,17 +1,13 @@
 #pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 #pragma clang diagnostic ignored "-Wunused-function"
 
-#define FARF_ERROR  1
-#define FARF_HIGH   1
-#define FARF_MEDIUM 0
-#define FARF_LOW    0
+#include <HAP_farf.h>
+#include <HAP_perf.h>
 #include <AEEStdErr.h>
 #include <dspqueue.h>
 #include <HAP_compute_res.h>
 #include <HAP_etm_config.h>
-#include <HAP_farf.h>
 #include <HAP_mem.h>
-#include <HAP_perf.h>
 #include <HAP_power.h>
 #include <HAP_ps.h>
 #include <qurt.h>
@@ -19,13 +15,14 @@
 #include <remote.h>
 #include <string.h>
 
+#include "hex-dma.h"
+#include "hex-utils.h"
+
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "ops-utils.h"
 #include "worker-pool.h"
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
@@ -362,14 +359,14 @@ struct profile_data {
 
 static inline void profile_start(struct profile_data * d) {
     d->usecs  = HAP_perf_get_qtimer_count();
-    d->cycles = htp_get_cycles();
-    d->pkts   = htp_get_pktcnt();
+    d->cycles = hex_get_cycles();
+    d->pkts   = hex_get_pktcnt();
 }
 
 static inline void profile_stop(struct profile_data * d) {
     d->usecs  = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - d->usecs);
-    d->cycles = htp_get_cycles() - d->cycles;
-    d->pkts   = htp_get_pktcnt() - d->pkts;
+    d->cycles = hex_get_cycles() - d->cycles;
+    d->pkts   = hex_get_pktcnt() - d->pkts;
 }
 
 static int send_htp_rsp(struct htp_context *     c,
@@ -436,6 +433,43 @@ static void proc_matmul_req(struct htp_context *     ctx,
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
     if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_matmul(&octx);
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
+static void proc_cpy_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
+    struct dspqueue_buffer rsp_bufs[1];
+
+    // We had written to the output buffer, we'd also need to flush it
+    rsp_bufs[0].fd     = bufs[1].fd;
+    rsp_bufs[0].ptr    = bufs[1].ptr;
+    rsp_bufs[0].offset = bufs[1].offset;
+    rsp_bufs[0].size   = bufs[1].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+
+    // Setup Op context
+    struct htp_ops_context octx = { 0 };
+    octx.ctx                    = ctx;
+    octx.src0                   = req->src0;
+    octx.dst                    = req->dst;
+    octx.flags                  = req->flags;
+    octx.op                     = req->op;
+
+    // Update data pointers
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.dst.data  = (uint32_t) bufs[1].ptr;
+    octx.n_threads = ctx->n_threads;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_cpy(&octx);
         vtcm_release(ctx);
     }
 
@@ -991,6 +1025,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     continue;
                 }
                 proc_get_rows_req(ctx, &req, bufs);
+                break;
+
+            case HTP_OP_CPY:
+                if (n_bufs != 2) {
+                    FARF(ERROR, "Bad cpy-req buffer list");
+                    continue;
+                }
+                proc_cpy_req(ctx, &req, bufs);
                 break;
 
             default:

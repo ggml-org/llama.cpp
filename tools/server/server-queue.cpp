@@ -74,11 +74,26 @@ int server_queue::get_new_id() {
     return new_id;
 }
 
-void server_queue::pop_deferred_task() {
+void server_queue::pop_deferred_task(int id_slot) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     if (!queue_tasks_deferred.empty()) {
-        queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
-        queue_tasks_deferred.pop_front();
+        // try to find a task that uses the specified slot
+        bool found = false;
+        for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
+            if (it->id_slot == id_slot) {
+                QUE_DBG("pop deferred task (use slot %d), id_task = %d\n", id_slot, it->id);
+                queue_tasks.emplace_front(std::move(*it));
+                queue_tasks_deferred.erase(it);
+                found = true;
+                break;
+            }
+        }
+        // if not tasks found using the slot, just pop the first deferred task (default behavior)
+        if (!found) {
+            QUE_DBG("pop deferred task, id_task = %d\n", queue_tasks_deferred.front().id);
+            queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
+            queue_tasks_deferred.pop_front();
+        }
     }
     time_last_task = ggml_time_ms();
     condition_tasks.notify_one();
@@ -217,12 +232,12 @@ void server_response::add_waiting_task_id(int id_task) {
     waiting_task_ids.insert(id_task);
 }
 
-void server_response::add_waiting_tasks(const std::vector<server_task> & tasks) {
+void server_response::add_waiting_task_ids(const std::unordered_set<int> & id_tasks) {
     std::unique_lock<std::mutex> lock(mutex_results);
 
-    for (const auto & task : tasks) {
-        RES_DBG("add task %d to waiting list. current waiting = %d (before add)\n", task.id, (int) waiting_task_ids.size());
-        waiting_task_ids.insert(task.id);
+    for (const auto & id_task : id_tasks) {
+        RES_DBG("add task %d to waiting list. current waiting = %d (before add)\n", id_task, (int) waiting_task_ids.size());
+        waiting_task_ids.insert(id_task);
     }
 }
 
@@ -327,6 +342,7 @@ void server_response::terminate() {
 
 void server_response_reader::post_task(server_task && task, bool front) {
     GGML_ASSERT(id_tasks.empty() && "post_task() can only be called once per reader");
+    GGML_ASSERT(!task.is_parent() && "not supported, use post_tasks() instead");
     task.index = 0;
     id_tasks.insert(task.id);
     states.push_back(task.create_state());
@@ -338,11 +354,18 @@ void server_response_reader::post_tasks(std::vector<server_task> && tasks, bool 
     GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
     id_tasks = server_task::get_list_id(tasks);
     states.reserve(tasks.size());
-    for (size_t i = 0; i < tasks.size(); i++) {
-        tasks[i].index = i;
-        states.push_back(tasks[i].create_state());
+    size_t index = 0;
+    for (auto & task : tasks) {
+        task.index = index++;
+        states.push_back(task.create_state());
+        // for child tasks
+        for (auto & child_task : task.child_tasks) {
+            child_task.index = index++;
+            states.push_back(child_task.create_state());
+        }
     }
-    queue_results.add_waiting_tasks(tasks);
+    GGML_ASSERT(states.size() == id_tasks.size());
+    queue_results.add_waiting_task_ids(id_tasks);
     queue_tasks.post(std::move(tasks), front);
 }
 

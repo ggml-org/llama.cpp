@@ -244,11 +244,14 @@ struct llama_file::impl {
         }
         errno = 0;
         if (fd == -1) {
-            std::size_t ret = std::fread(ptr, len, 1, fp);
+            const size_t curr_off = tell();
+            const size_t to_read = std::min(len, size - curr_off);
+
+            std::size_t ret = std::fread(ptr, to_read, 1, fp);
             if (ferror(fp)) {
                 throw std::runtime_error(format("read error: %s", strerror(errno)));
             }
-            if (ret != 1) {
+            if (to_read > 0 && ret != 1) {
                 throw std::runtime_error("unexpectedly reached end of file");
             }
         } else {
@@ -262,7 +265,8 @@ struct llama_file::impl {
                         continue;  // Interrupted by signal, retry
                     }
                     // Fallback to std::fread in case the DMA controller cannot access the buffer
-                    if (errno == EFAULT) {
+                    if (errno == EFAULT || errno == EINVAL) {
+                        LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();
                         close(fd);
                         fd = -1;
@@ -381,6 +385,9 @@ int llama_file::file_id() const {
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
+    if (pimpl->fd != -1) {
+        return pimpl->fd;
+    }
 #if defined(fileno)
     return fileno(pimpl->fp);
 #else
@@ -611,9 +618,9 @@ struct llama_mlock::impl {
 
         char* errmsg = std::strerror(errno);
         bool suggest = (errno == ENOMEM);
-#if defined(TARGET_OS_VISION) || defined(TARGET_OS_TV) || defined(_AIX)
-        // visionOS/tvOS dont't support RLIMIT_MEMLOCK
-        // Skip resource limit checks on visionOS/tvOS
+#if defined(TARGET_OS_VISION) || defined(TARGET_OS_TV) || defined(_AIX) || defined(__HAIKU__)
+        // visionOS/tvOS/Haiku don't support RLIMIT_MEMLOCK
+        // Skip resource limit checks on these platforms
         suggest = false;
 #else
         struct rlimit lock_limit;

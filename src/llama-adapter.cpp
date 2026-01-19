@@ -146,10 +146,8 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(ggml_tensor * w) {
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_lora & adapter) {
+static void llama_adapter_lora_init_impl(llama_model & model, const char * path_lora, llama_adapter_lora & adapter) {
     LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
-
-    llama_model & model = adapter.model;
 
     ggml_context * ctx_init;
     gguf_init_params meta_gguf_params = {
@@ -413,17 +411,17 @@ static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_l
         }
     }
 
-    // update number of nodes used
-    model.n_lora_nodes += adapter.get_n_nodes();
+    // register adapter with model
+    model.loras.insert(&adapter);
 
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
 
 llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * path_lora) {
-    llama_adapter_lora * adapter = new llama_adapter_lora(*model);
+    llama_adapter_lora * adapter = new llama_adapter_lora();
 
     try {
-        llama_adapter_lora_init_impl(path_lora, *adapter);
+        llama_adapter_lora_init_impl(*model, path_lora, *adapter);
         return adapter;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
@@ -473,12 +471,8 @@ int32_t llama_adapter_meta_val_str_by_index(const llama_adapter_lora * adapter, 
     return snprintf(buf, buf_size, "%s", it->second.c_str());
 }
 
-void llama_adapter_lora_free(llama_adapter_lora * adapter) {
-    // update number of nodes used
-    GGML_ASSERT(adapter->model.n_lora_nodes >= adapter->get_n_nodes());
-    adapter->model.n_lora_nodes -= adapter->get_n_nodes();
-
-    delete adapter;
+void llama_adapter_lora_free(llama_adapter_lora *) {
+    // deprecated: adapters are freed by llama_model's destructor
 }
 
 uint64_t llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter) {
