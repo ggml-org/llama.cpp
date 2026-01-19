@@ -99,6 +99,11 @@ jobs:
           Get-ChildItem -Path .\build\bin\Release\*.dll | Copy-Item -Destination .\upload\
           Copy-Item .\build\bin\Release\llama-server.exe .\upload\boxed-logic-engine.exe
 
+      - name: Verify artifacts
+        run: |
+          Write-Host "Files prepared for upload:"
+          Get-ChildItem -Path .\upload\ -Recurse | ForEach-Object { Write-Host $_.FullName }
+
       - name: Install Python and AWS CLI
         run: |
           python -m pip install --upgrade pip
@@ -111,7 +116,9 @@ jobs:
           AWS_DEFAULT_REGION: auto
           AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
         run: |
-          aws s3 sync .\upload\ s3://${{ env.R2_BUCKET }}/windows/ --endpoint-url ${{ env.AWS_ENDPOINT_URL }}
+          Write-Host "Starting upload to R2..."
+          aws s3 sync ./upload/ s3://${{ env.R2_BUCKET }}/windows/ --endpoint-url https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          Write-Host "Upload completed"
 
   macos_metal_arm64:
     name: macOS Metal arm64
