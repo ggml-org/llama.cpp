@@ -498,6 +498,11 @@ class unified_cache {
     // This prevents returning mmap'd pointers when cache fill is in flight.
     void * get_or_wait(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
+    // Fallback lookup by data pointer (aux_id) when primary key lookup fails.
+    // Used during graph recording to find entries with aliased tensor names.
+    // Only searches entries where src_ptr matches the given data_ptr.
+    void * get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layout_mode layout);
+
     // Remove a cache entry (free device memory).
     void remove(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
                 ggml_layout_mode layout);

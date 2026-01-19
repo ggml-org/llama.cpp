@@ -1582,6 +1582,19 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
                             return cached;
                         }
 
+                        // During graph recording, try fallback lookup by data pointer.
+                        // This handles tensor name aliasing where same buffer has multiple names
+                        // (e.g., "norm-1" staged but accessed as "attn_norm-1").
+                        if (graph_active) {
+                            void * alias_ptr = cache->get_by_data_ptr(tensor->data, ggml_nbytes(tensor), GGML_LAYOUT_AOS);
+                            if (alias_ptr) {
+                                GGML_SYCL_DEBUG(
+                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, alias cache hit=%p (type=%d, graph=%d)\n",
+                                    tensor->name, device, alias_ptr, (int) ptr_type, graph_active);
+                                return alias_ptr;
+                            }
+                        }
+
                         // Debug: log cache miss with key details ALWAYS during graph mode
                         if (graph_active) {
                             GGML_SYCL_DEBUG("[CACHE-MISS-GRAPH] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] aux_id=%llu data=%p\n",

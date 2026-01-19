@@ -20604,6 +20604,10 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
     int already_device_count = 0;
     int cache_hit_count = 0;
     int skipped_weight_count = 0;
+    int tiered_weight_promoted_count = 0;
+
+    // Check if tiered mode is enabled - if so, weight tensors in HOST need promotion to VRAM
+    const bool tiered_enabled = g_tiered_enabled.load(std::memory_order_acquire);
 
     // Get the unified cache for this device
     ggml_sycl::unified_cache * cache = nullptr;
@@ -20624,6 +20628,8 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
 
     // Track already-staged pointers to avoid duplicates
     std::unordered_set<void *> staged_pointers;
+    // Track weight tensors that need promotion in tiered mode (collected first, promoted in batch)
+    std::vector<std::pair<const ggml_tensor *, uint64_t>> weights_to_promote;
 
     // Helper lambda to stage a tensor
     auto stage_tensor = [&](const ggml_tensor * tensor, const char * source_desc) {
@@ -20636,9 +20642,47 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
             return;
         }
 
-        // Skip weight tensors - they're handled by the weight cache with layout transformations
+        // Handle weight tensors specially in tiered mode
         if (ggml_sycl_tensor_is_weight(tensor)) {
-            skipped_weight_count++;
+            if (!tiered_enabled) {
+                // Non-tiered mode: weights are handled by the weight cache with layout transformations
+                skipped_weight_count++;
+                return;
+            }
+
+            // Tiered mode: check if weight is in HOST tier and needs promotion to VRAM
+            // Query the unified_tensor_cache to get current location
+            ggml_sycl::memory_tier tier = ggml_sycl::memory_tier::MMAP;
+            bool found_in_inventory = false;
+            void * cached_ptr = get_cached_tensor_ptr(tensor->name, &tier, &found_in_inventory);
+
+            if (!found_in_inventory) {
+                // Weight not tracked by tiered cache - skip (handled elsewhere)
+                skipped_weight_count++;
+                return;
+            }
+
+            if (tier == ggml_sycl::memory_tier::VRAM) {
+                // Already in VRAM - no promotion needed
+                already_device_count++;
+                staged_pointers.insert(tensor->data);
+                return;
+            }
+
+            // Weight is in HOST or MMAP tier - collect for batch promotion
+            // Get tensor ID for promotion request
+            {
+                std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
+                if (g_tensor_cache) {
+                    auto id_opt = g_tensor_cache->get_tensor_id(tensor->name);
+                    if (id_opt.has_value()) {
+                        weights_to_promote.emplace_back(tensor, id_opt.value());
+                        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Queued tiered weight %s for promotion (tier=%d)\n",
+                                        tensor->name, (int)tier);
+                    }
+                }
+            }
+            staged_pointers.insert(tensor->data);
             return;
         }
 
@@ -20733,8 +20777,26 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
         }
     }
 
-    GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Complete: %d staged, %d cache hits, %d already device, %d weights skipped\n",
-                    staged_count, cache_hit_count, already_device_count, skipped_weight_count);
+    // Batch promote all collected tiered weights to VRAM and wait for completion
+    if (!weights_to_promote.empty()) {
+        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Promoting %zu tiered weights to VRAM...\n", weights_to_promote.size());
+        {
+            std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
+            if (g_tensor_cache) {
+                for (const auto & [tensor, tensor_id] : weights_to_promote) {
+                    g_tensor_cache->request_promotion(tensor_id);
+                    tiered_weight_promoted_count++;
+                }
+                // CRITICAL: Wait for all async transfers to complete before graph recording starts
+                // This ensures all weights are in VRAM when kernels access them during recording
+                g_tensor_cache->wait_pending_transfers();
+            }
+        }
+        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Tiered weight promotion complete: %d promoted\n", tiered_weight_promoted_count);
+    }
+
+    GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Complete: %d staged, %d cache hits, %d already device, %d weights skipped, %d tiered weights promoted\n",
+                    staged_count, cache_hit_count, already_device_count, skipped_weight_count, tiered_weight_promoted_count);
 }
 
 static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {

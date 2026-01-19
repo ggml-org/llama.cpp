@@ -2290,6 +2290,36 @@ void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout
     return entry_it->second.device_ptr;
 }
 
+void * unified_cache::get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layout_mode layout) {
+    if (!data_ptr || nbytes == 0) {
+        return nullptr;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    // Search all entries for one that matches by source pointer and size.
+    // This is O(N) but only used as a fallback during graph recording when
+    // the primary name-based lookup fails due to tensor name aliasing.
+    for (const auto & [key, entry] : entries_) {
+        if (entry.state != cache_entry_state::READY) {
+            continue;
+        }
+        if (entry.layout != layout) {
+            continue;
+        }
+        if (entry.size != nbytes) {
+            continue;
+        }
+        if (entry.src_ptr == data_ptr) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] get_by_data_ptr: found alias data=%p size=%zu -> device=%p\n",
+                           data_ptr, nbytes, entry.device_ptr);
+            return entry.device_ptr;
+        }
+    }
+
+    return nullptr;
+}
+
 cache_ptr_view unified_cache::get_view(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
     cache_ptr_view view{};
     if (!key_id.valid) {
