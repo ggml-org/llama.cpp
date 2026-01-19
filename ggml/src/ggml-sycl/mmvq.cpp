@@ -3549,6 +3549,8 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                 const ggml_tensor *         ids,
                                 ggml_tensor *               dst,
                                 const layout_mode *         forced_layout) {
+    GGML_SYCL_DEBUG("[MMVQ-ENTRY] src0=%s type=%d forced_layout=%d\n",
+                    src0->name ? src0->name : "?", src0->type, forced_layout ? (int)*forced_layout : -1);
     // Early batch size check - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for large batches
     // For large batch sizes, host-side routing with oneDNN batching is faster
     // MMVQ dispatches per-(token, expert) which has more overhead for large batches
@@ -3674,12 +3676,14 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             const bool allow_all_experts = false;
             // force_cache_aos=true ensures experts are staged to GPU memory even for AoS layout
             // This is critical for mmap'd weights which cannot be accessed directly by GPU kernels
+            GGML_SYCL_DEBUG("[MMVQ] About to call ggml_sycl_update_moe_ptr_table layout=%d\n", (int)layout);
             if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts, nullptr,
                                                 /*skip_device_copy=*/false,
                                                 /*force_cache_aos=*/host_weights)) {
                 GGML_SYCL_DEBUG("[MMVQ] Failed to update expert pointer table for %s\n", src0->name);
                 return false;
             }
+            GGML_SYCL_DEBUG("[MMVQ] ggml_sycl_update_moe_ptr_table succeeded\n");
             has_table_event = true;
             if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
                 expert_ptrs = static_cast<const void * const *>(src0_extra->moe_expert_ptrs_device[ctx.device]);
@@ -3688,6 +3692,7 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                 GGML_SYCL_DEBUG("[MMVQ] Missing expert pointer table for %s\n", src0->name);
                 return false;
             }
+            GGML_SYCL_DEBUG("[MMVQ] expert_ptrs=%p\n", (void*)expert_ptrs);
         }
     }
 
@@ -3859,6 +3864,8 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                 const bool x_is_coalesced = (layout == GGML_LAYOUT_COALESCED);
                 const bool x_is_reordered = x_is_soa || x_is_coalesced;
 
+                GGML_SYCL_DEBUG("[MMVQ-MXFP4] ENTER: layout=%d use_ptr_table=%d host_weights=%d src0_d=%p dispatch_ptrs=%p\n",
+                                (int)layout, use_ptr_table, host_weights, src0_d, (void*)dispatch_ptrs);
                 GGML_SYCL_DEBUG("[MMVQ-MXFP4] X: is_soa=%d is_coalesced=%d is_reordered=%d extra=%p tensor=%s\n",
                                 x_is_soa, x_is_coalesced, x_is_reordered, extra, src0->name ? src0->name : "null");
 
@@ -3925,6 +3932,29 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                     } else {
                         GGML_SYCL_DEBUG("[MMVQ-MXFP4-SoA] X=SoA Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
                                         (long long) ne00, (long long) ne10, (long long) ne01, (long long) ne02);
+
+                        // DEBUG: Verify all kernel pointers are device-accessible before dispatch
+                        if (g_ggml_sycl_debug >= 1) {
+                            sycl::context sycl_ctx = stream->get_context();
+                            auto q8_alloc = q8_1_buffer ? sycl::get_pointer_type(q8_1_buffer, sycl_ctx) : sycl::usm::alloc::unknown;
+                            auto dst_alloc = dst_d ? sycl::get_pointer_type(dst_d, sycl_ctx) : sycl::usm::alloc::unknown;
+                            auto ids_alloc = dispatch_ids ? sycl::get_pointer_type(dispatch_ids, sycl_ctx) : sycl::usm::alloc::unknown;
+                            auto ptrs_alloc = dispatch_ptrs ? sycl::get_pointer_type(dispatch_ptrs, sycl_ctx) : sycl::usm::alloc::unknown;
+                            GGML_SYCL_DEBUG("[MMVQ-USM-CHECK] q8=%d dst=%d ids=%d ptrs=%d dispatch_ids=%p ids_d=%p (0=host,1=dev,2=shared,3=unknown)\n",
+                                            (int)q8_alloc, (int)dst_alloc, (int)ids_alloc, (int)ptrs_alloc,
+                                            (void*)dispatch_ids, (void*)ids_d);
+
+                            // Check expert pointers inside the table (first few)
+                            if (dispatch_ptrs && src0_extra) {
+                                const auto & host_ptrs = src0_extra->moe_expert_ptrs_host[ctx.device];
+                                for (size_t e = 0; e < std::min(host_ptrs.size(), (size_t)4); ++e) {
+                                    void * eptr = host_ptrs[e];
+                                    auto ealloc = eptr ? sycl::get_pointer_type(eptr, sycl_ctx) : sycl::usm::alloc::unknown;
+                                    GGML_SYCL_DEBUG("[MMVQ-USM-CHECK] expert[%zu]=%p alloc=%d\n", e, eptr, (int)ealloc);
+                                }
+                            }
+                        }
+
                         reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
                                                                ne00,     // ncols (MXFP4)
                                                                ne10,     // ncols_y (Q8_1 row size for SoA ds offset)

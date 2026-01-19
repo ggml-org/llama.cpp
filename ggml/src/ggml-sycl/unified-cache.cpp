@@ -2668,12 +2668,9 @@ sycl::event unified_cache::copy_to_device_async(void *                          
         // NOTE: Avoid ext_oneapi_submit_barrier which can corrupt Level Zero event state.
         // Instead, wait on each dep individually.
         for (const auto & dep : deps) {
-            try {
-                // sycl::event::wait() is non-const, so use const_cast
-                const_cast<sycl::event &>(dep).wait();
-            } catch (...) {
-                // Ignore - event may have issues
-            }
+            // sycl::event::wait() is non-const, so use const_cast
+            // Let exceptions propagate - if device is lost, we must abort
+            const_cast<sycl::event &>(dep).wait();
         }
 
         if (staging_) {

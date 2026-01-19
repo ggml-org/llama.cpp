@@ -466,6 +466,10 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
     void *    src0_d = ggml_sycl_get_layout_ptr(src0, device);
     void *    src1_d = ggml_sycl_get_layout_ptr(src1, device);
     void *    dst_d  = ggml_sycl_get_data_ptr(dst, device);
+    GGML_SYCL_DEBUG("[BINBCAST-PTR] src0=%s src0->data=%p src0_d=%p\n",
+                    src0 ? src0->name : "(null)", src0 ? src0->data : nullptr, src0_d);
+    GGML_SYCL_DEBUG("[BINBCAST-PTR] src1=%s src1->data=%p src1_d=%p\n",
+                    src1 ? src1->name : "(null)", src1 ? src1->data : nullptr, src1_d);
 
     ggml_sycl::unified_cache * cache = nullptr;
     struct inflight_pin {

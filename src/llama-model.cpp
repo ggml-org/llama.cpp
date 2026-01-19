@@ -3234,6 +3234,15 @@ void llama_model::load_vocab(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
+#ifdef GGML_USE_SYCL
+    // Signal SYCL backend that we're in model load phase (buffer allocation)
+    // This allows the unified cache to avoid monolithic pinned allocations
+    ggml_backend_sycl_set_model_loading(true);
+    struct sycl_tensor_load_guard {
+        ~sycl_tensor_load_guard() { ggml_backend_sycl_set_model_loading(false); }
+    } tensor_load_guard;
+#endif
+
     const auto & split_mode   = params.split_mode;
     const auto & n_gpu_layers = params.n_gpu_layers;
     const auto & use_mlock    = params.use_mlock;
@@ -8520,6 +8529,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // Early tensor inventory collection for SYCL tiered memory
     // This MUST happen BEFORE buffer allocation so tiered mode can be enabled
     // before ggml_backend_alloc_ctx_tensors_from_buft() is called
+    LLAMA_LOG_INFO("%s: [SYCL] Starting early tensor inventory collection (ctx_map size: %zu)\n", __func__, ctx_map.size());
     {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         size_t                             total_size = 0;
@@ -8535,6 +8545,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
         }
 
+        LLAMA_LOG_INFO("%s: [SYCL] Collected %zu tensors, %.2f GB total\n", __func__, sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
         if (!sycl_tensors.empty()) {
             ggml_sycl_tensor_inventory inventory;
             inventory.tensors    = sycl_tensors.data();
