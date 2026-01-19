@@ -211,12 +211,24 @@ class ConversationsStore {
 		return this.client.getMcpServerOverride(serverId);
 	}
 
-	isMcpServerEnabledForChat(serverId: string, globalEnabled: boolean): boolean {
+	/**
+	 * Get all MCP server overrides for the current conversation.
+	 * Returns pending overrides if no active conversation.
+	 */
+	getAllMcpServerOverrides(): McpServerOverride[] {
+		if (this.activeConversation?.mcpServerOverrides) {
+			return this.activeConversation.mcpServerOverrides;
+		}
+
+		return this.pendingMcpServerOverrides;
+	}
+
+	isMcpServerEnabledForChat(serverId: string): boolean {
 		if (!this.client) {
 			const override = this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
-			return override !== undefined ? override.enabled : globalEnabled;
+			return override?.enabled ?? false;
 		}
-		return this.client.isMcpServerEnabledForChat(serverId, globalEnabled);
+		return this.client.isMcpServerEnabledForChat(serverId);
 	}
 
 	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
@@ -224,14 +236,14 @@ class ConversationsStore {
 		return this.client.setMcpServerOverride(serverId, enabled);
 	}
 
-	async toggleMcpServerForChat(serverId: string, globalEnabled: boolean): Promise<void> {
+	async toggleMcpServerForChat(serverId: string): Promise<void> {
 		if (!this.client) return;
-		return this.client.toggleMcpServerForChat(serverId, globalEnabled);
+		return this.client.toggleMcpServerForChat(serverId);
 	}
 
-	async resetMcpServerToGlobal(serverId: string): Promise<void> {
+	async removeMcpServerOverride(serverId: string): Promise<void> {
 		if (!this.client) return;
-		return this.client.resetMcpServerToGlobal(serverId);
+		return this.client.removeMcpServerOverride(serverId);
 	}
 
 	clearPendingMcpServerOverrides(): void {

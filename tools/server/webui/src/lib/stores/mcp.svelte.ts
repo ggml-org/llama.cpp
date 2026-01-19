@@ -210,7 +210,16 @@ class MCPStore {
 	}
 
 	/**
-	 * Check if there are any enabled MCP servers
+	 * Check if there are any available MCP servers (enabled in settings).
+	 * Used to determine if McpSelector should be shown.
+	 */
+	hasAvailableServers(): boolean {
+		const servers = parseMcpServerSettings(config().mcpServers);
+		return servers.some((s) => s.enabled && s.url.trim());
+	}
+
+	/**
+	 * Check if there are any MCP servers enabled for the current chat.
 	 */
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
 		return Boolean(buildMcpClientConfig(config(), perChatOverrides));

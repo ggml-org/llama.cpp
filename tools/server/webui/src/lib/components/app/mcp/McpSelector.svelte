@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { ChevronDown, Settings } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Switch } from '$lib/components/ui/switch';
@@ -12,7 +11,8 @@
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpClient } from '$lib/clients/mcp.client';
+	import { onMount } from 'svelte';
+	import { mcpClient } from '$lib/clients';
 
 	interface Props {
 		class?: string;
@@ -24,8 +24,9 @@
 
 	let searchQuery = $state('');
 
+	// Only show servers that are enabled in settings (available for use)
 	let mcpServers = $derived.by(() => {
-		return parseMcpServerSettings(settingsStore.config.mcpServers);
+		return parseMcpServerSettings(settingsStore.config.mcpServers).filter((s) => s.enabled);
 	});
 
 	let hasMcpServers = $derived(mcpServers.length > 0);
@@ -36,12 +37,8 @@
 		return mcpUsageStats[serverId] || 0;
 	}
 
-	function isServerEnabledForChat(server: MCPServerSettingsEntry): boolean {
-		return conversationsStore.isMcpServerEnabledForChat(server.id, server.enabled);
-	}
-
-	function hasPerChatOverride(serverId: string): boolean {
-		return conversationsStore.getMcpServerOverride(serverId) !== undefined;
+	function isServerEnabledForChat(serverId: string): boolean {
+		return conversationsStore.isMcpServerEnabledForChat(serverId);
 	}
 
 	function getServerLabel(server: MCPServerSettingsEntry): string {
@@ -49,7 +46,7 @@
 	}
 
 	let enabledMcpServersForChat = $derived(
-		mcpServers.filter((s) => isServerEnabledForChat(s) && s.url.trim())
+		mcpServers.filter((s) => isServerEnabledForChat(s.id) && s.url.trim())
 	);
 
 	let healthyEnabledMcpServers = $derived(
@@ -63,8 +60,10 @@
 
 	let sortedMcpServers = $derived(
 		[...mcpServers].sort((a, b) => {
-			// First: globally enabled servers come first
-			if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+			// First: enabled for chat servers come first
+			const aEnabled = isServerEnabledForChat(a.id);
+			const bEnabled = isServerEnabledForChat(b.id);
+			if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
 
 			// Then sort by usage count (descending)
 			const usageA = getServerUsageCount(a.id);
@@ -91,8 +90,8 @@
 
 	let extraServersCount = $derived(Math.max(0, healthyEnabledMcpServers.length - 3));
 
-	async function toggleServerForChat(serverId: string, globalEnabled: boolean) {
-		await conversationsStore.toggleMcpServerForChat(serverId, globalEnabled);
+	async function toggleServerForChat(serverId: string) {
+		await conversationsStore.toggleMcpServerForChat(serverId);
 	}
 
 	let mcpFavicons = $derived(
@@ -162,8 +161,7 @@
 		{#each filteredMcpServers() as server (server.id)}
 			{@const healthState = mcpStore.getHealthCheckState(server.id)}
 			{@const hasError = healthState.status === HealthCheckStatus.Error}
-			{@const isEnabledForChat = isServerEnabledForChat(server)}
-			{@const hasOverride = hasPerChatOverride(server.id)}
+			{@const isEnabledForChat = isServerEnabledForChat(server.id)}
 
 			<div class="flex items-center justify-between gap-2 px-2 py-2">
 				<div class="flex min-w-0 flex-1 items-center gap-2">
@@ -182,17 +180,12 @@
 						<span class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
 							>Error</span
 						>
-					{:else if server.enabled}
-						<span class="shrink-0 rounded bg-primary/15 px-1.5 py-0.5 text-xs text-primary"
-							>Global</span
-						>
 					{/if}
 				</div>
 				<Switch
 					checked={isEnabledForChat}
-					onCheckedChange={() => toggleServerForChat(server.id, server.enabled)}
+					onCheckedChange={() => toggleServerForChat(server.id)}
 					disabled={hasError}
-					class={hasOverride ? 'ring-2 ring-primary/50 ring-offset-1' : ''}
 				/>
 			</div>
 		{/each}
