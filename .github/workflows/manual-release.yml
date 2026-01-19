@@ -1,4 +1,4 @@
-name: Manual Release (Win CPU x64 + macOS Metal)
+name: Manual Release (Win CPU x64 + macOS Metal) - R2 Upload
 
 on:
   workflow_dispatch: # manual only
@@ -10,6 +10,7 @@ concurrency:
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  R2_BUCKET: bl-llama-cpp
 
 jobs:
   server_tests:
@@ -91,16 +92,26 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
-      - name: Pack artifacts
+      - name: Prepare artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\build\bin\Release\
-          7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
+          New-Item -ItemType Directory -Force -Path .\upload
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\upload\
+          Get-ChildItem -Path .\build\bin\Release\*.dll | Copy-Item -Destination .\upload\
+          Copy-Item .\build\bin\Release\llama-server.exe .\upload\boxed-logic-engine.exe
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          path: llama-bin-win-cpu-x64.zip
-          name: llama-bin-win-cpu-x64.zip
+      - name: Install Python and AWS CLI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install awscli
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 sync .\upload\ s3://${{ env.R2_BUCKET }}/windows/ --endpoint-url ${{ env.AWS_ENDPOINT_URL }}
 
   macos_metal_arm64:
     name: macOS Metal arm64
@@ -135,90 +146,22 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Pack artifacts
-        id: pack_artifacts
+      - name: Prepare artifacts
         run: |
-          cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+          mkdir -p upload
+          find ./build/bin -name "*.dylib" -exec cp {} ./upload/ \;
+          cp ./build/bin/llama-server ./upload/boxed-logic-engine
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz
-          name: llama-bin-macos-arm64.tar.gz
-
-  publish_release:
-    name: Publish release
-    needs: [windows_cpu_x64, macos_metal_arm64]
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: ./artifact
-          merge-multiple: true
-
-      - name: Move artifacts
+      - name: Install AWS CLI
         run: |
-          mkdir -p release
-          mv -v artifact/llama-bin-win-cpu-x64.zip release/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip
-          mv -v artifact/*.tar.gz release
+          pip install awscli
 
-      - name: Create release
-        id: create_release
-        uses: ggml-org/action-create-release@v1
+      - name: Upload to Cloudflare R2
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          body: |
-            <details open>
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 sync ./upload/ s3://${{ env.R2_BUCKET }}/macos/ --endpoint-url ${{ env.AWS_ENDPOINT_URL }}
 
-            ${{ github.event.head_commit.message }}
-
-            </details>
-
-            **macOS:**
-            - [macOS Apple Silicon (arm64)](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
-
-            **Windows:**
-            - [Windows x64 (CPU)](https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
-
-      - name: Upload release
-        uses: actions/github-script@v3
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const path = require('path');
-            const fs = require('fs');
-            const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./release')) {
-              if (path.extname(file) === '.zip' || file.endsWith('.tar.gz')) {
-                console.log('uploadReleaseAsset', file);
-                await github.repos.uploadReleaseAsset({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  release_id: release_id,
-                  name: file,
-                  data: await fs.readFileSync(`./release/${file}`)
-                });
-              }
-            }
