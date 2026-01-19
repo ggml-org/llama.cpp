@@ -425,6 +425,7 @@ enum class tensor_usage : uint8_t {
     FFN_WEIGHT,         // feed-forward non-MoE
     MOE_EXPERT_WEIGHT,  // MoE expert gate/up/down
     MOE_GATE,           // MoE routing gate
+    MOE_INTERMEDIATE,   // MoE intermediate tensors (probs, indices, etc.)
     EMBEDDING,          // token embeddings
     NORM,               // RMS/LayerNorm weights
 };
@@ -563,6 +564,12 @@ inline tensor_usage infer_tensor_usage(const char * name) {
     // MoE routing gate
     if (strstr(name, "ffn_gate_inp")) {
         return tensor_usage::MOE_GATE;
+    }
+
+    // MoE intermediate tensors (probs, indices, expert selection)
+    if (strstr(name, "ffn_moe_probs") || strstr(name, "ffn_moe_") ||
+        strstr(name, "expert_ids") || strstr(name, "expert_weights")) {
+        return tensor_usage::MOE_INTERMEDIATE;
     }
 
     // Attention weights

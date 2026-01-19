@@ -899,7 +899,7 @@ void ggml_backend_sycl_release_host_weight_extras(void) {
     ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode::release_extras);
 }
 
-static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_gpu * extra, int expert_id);
+static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor * tensor, ggml_tensor_extra_gpu * extra, int expert_id);
 
 static bool ggml_sycl_has_missing_layout_choice_for_tensor(const ggml_tensor * tensor, int device) {
     if (!tensor || !ggml_sycl_tensor_is_weight(tensor)) {
@@ -914,7 +914,7 @@ static bool ggml_sycl_has_missing_layout_choice_for_tensor(const ggml_tensor * t
         }
         const int64_t n_experts = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
         for (int64_t e = 0; e < n_experts; ++e) {
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(extra, static_cast<int>(e));
+            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
             if (!key.valid) {
                 return true;
             }
@@ -1319,7 +1319,14 @@ ggml_sycl_cache_id ggml_backend_sycl_get_weight_cache_key(const ggml_tensor * te
     id.file_idx  = has_gguf_identity ? identity.file_idx : 0;
     id.file_offs = has_gguf_identity ? identity.file_offs : 0;
     id.nbytes    = has_gguf_identity ? identity.nbytes : ggml_nbytes(tensor);
-    id.name_hash = has_gguf_identity ? 0 : name_hash;
+    // Always preserve name_hash to ensure unique tensor identities.
+    // Previously we discarded name_hash for GGUF-backed tensors assuming GGUF metadata
+    // (file_idx, file_offs, nbytes) would be unique. However, this causes collisions when:
+    // - Multiple MoE experts share file offsets (stored contiguously)
+    // - Tensor views/reshapes share the same underlying data
+    // - Intermediate tensors get GGUF identity via name lookup
+    // The name_hash provides the additional uniqueness needed to distinguish them.
+    id.name_hash = name_hash;
     id.type      = tensor->type;
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         id.ne[i]           = tensor->ne[i];
@@ -1737,7 +1744,7 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     }
     return cached_ptr;
 }
-static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_gpu * extra, int expert_id) {
+static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor * tensor, ggml_tensor_extra_gpu * extra, int expert_id) {
     ggml_sycl_cache_id id{};
     if (!extra || expert_id < 0) {
         return id;
@@ -1746,25 +1753,27 @@ static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_g
     if (cache_uuid == 0) {
         return id;
     }
+
+    // Always use tensor name hash for uniqueness - this ensures different
+    // weight tensors (gate, up, down) across different layers have unique keys
+    const char * name      = tensor ? ggml_get_name(tensor) : "unknown";
+    uint64_t     name_hash = static_cast<uint64_t>(std::hash<std::string>()(name ? name : "unknown"));
+
     id.valid         = true;
     id.model_id      = extra->model_id;
     id.has_gguf      = false;
     id.file_idx      = 0;
-
     id.file_offs     = 0;
     id.nbytes        = 0;
-    id.name_hash     = 0;
+    id.name_hash     = name_hash;  // Always include tensor name hash
     id.type          = GGML_TYPE_COUNT;
     id.tp_sharded    = false;
-
     id.tp_rank       = 0;
     id.tp_world_size = 1;
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         id.ne[i]           = 0;
-
         id.tp_local_ne[i]  = 0;
         id.tp_offset_ne[i] = 0;
-
     }
     if (extra->tp_sharded && extra->tp_world_size > 1) {
         id.tp_sharded    = true;
@@ -1773,12 +1782,11 @@ static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_g
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             id.tp_local_ne[i]  = extra->tp_local_ne[i];
             id.tp_offset_ne[i] = extra->tp_offset_ne[i];
-
         }
     }
+    // Combine cache_uuid with expert_id for per-expert uniqueness
     uint64_t aux = cache_uuid;
     aux          = ggml_sycl_hash_combine(aux, static_cast<uint64_t>(expert_id));
-
     id.aux_id    = aux;
     return id;
 }
@@ -3351,7 +3359,7 @@ static bool ggml_sycl_preload_moe_experts(const ggml_tensor * src0, int device, 
     size_t    failed   = 0;
     for (int64_t e = 0; e < n_experts; ++e) {
         const uint8_t *    expert_aos = static_cast<const uint8_t *>(src0->data) + e * expert_size;
-        ggml_sycl_cache_id key        = ggml_sycl_get_moe_expert_cache_key(extra, static_cast<int>(e));
+        ggml_sycl_cache_id key        = ggml_sycl_get_moe_expert_cache_key(src0, extra, static_cast<int>(e));
         if (!expert_aos || !key.valid) {
             failed++;
             continue;
@@ -14671,7 +14679,7 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
         }
 
         for (int64_t e = 0; e < n_experts; ++e) {
-            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(extra, static_cast<int>(e));
+            ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
             if (key.valid) {
                 ggml_sycl_register_layout_choice(key, ctx.device, target, ggml_get_name(tensor));
             }
@@ -14793,16 +14801,15 @@ static void ggml_sycl_ensure_moe_ptr_table(ggml_tensor_extra_gpu * extra,
 }
 
 static void ggml_sycl_update_moe_hotset(ggml_sycl::unified_cache *   cache,
+                                        const ggml_tensor *          tensor,
                                         ggml_tensor_extra_gpu *      extra,
                                         const std::vector<int32_t> & ids_host,
-
                                         int64_t                      n_experts,
                                         size_t                       expert_bytes,
-
                                         ggml_layout_mode             layout,
                                         int                          layer_id,
                                         int                          moe_layer_count) {
-    if (!cache || !extra || ids_host.empty() || n_experts <= 0 || expert_bytes == 0) {
+    if (!cache || !tensor || !extra || ids_host.empty() || n_experts <= 0 || expert_bytes == 0) {
         return;
     }
     if (moe_layer_count <= 0) {
@@ -14850,9 +14857,8 @@ static void ggml_sycl_update_moe_hotset(ggml_sycl::unified_cache *   cache,
     cache->clear_hot_experts(layer_id);
     for (size_t i = 0; i < max_hot_experts; ++i) {
         const int          expert_id = indices[i];
-        ggml_sycl_cache_id key       = ggml_sycl_get_moe_expert_cache_key(extra, expert_id);
+        ggml_sycl_cache_id key       = ggml_sycl_get_moe_expert_cache_key(tensor, extra, expert_id);
         if (!key.valid) {
-
             continue;
         }
         cache->set_hot(key, ggml_sycl::cache_entry_type::MOE_EXPERT, layer_id, expert_id, layout, true);
@@ -15225,7 +15231,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
         if (!expert_aos) {
             return false;
         }
-        ggml_sycl_cache_id expert_cache_key = ggml_sycl_get_moe_expert_cache_key(extra, static_cast<int>(e));
+        ggml_sycl_cache_id expert_cache_key = ggml_sycl_get_moe_expert_cache_key(src0, extra, static_cast<int>(e));
         if (!expert_cache_key.valid) {
             GGML_LOG_ERROR("[MOE] Missing cache key for %s expert=%ld layer=%d\n", src0->name, (long) e, layer_id);
             GGML_ASSERT(expert_cache_key.valid && "missing MoE cache key");
@@ -15296,8 +15302,7 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
 
     }
     if (cache && !need_all_experts && !ids_host.empty()) {
-        ggml_sycl_update_moe_hotset(cache, extra, ids_host, n_experts, expert_layout_bytes, layout, layer_id,
-
+        ggml_sycl_update_moe_hotset(cache, src0, extra, ids_host, n_experts, expert_layout_bytes, layout, layer_id,
                                     ctx.moe_layer_count);
     }
     if (extra->moe_expert_ptrs_device[device] != nullptr) {
@@ -15428,12 +15433,13 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
             table_events.push_back(table_event);
         }
         if (cache && extra) {
+            const int layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
             const auto & host_ptrs = extra->moe_expert_ptrs_host[ctx.device];
             for (size_t e = 0; e < host_ptrs.size(); ++e) {
                 if (!host_ptrs[e]) {
                     continue;
                 }
-                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(extra, static_cast<int>(e));
+                ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(src0, extra, static_cast<int>(e));
                 if (!key.valid) {
                     continue;
                 }
@@ -17794,7 +17800,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         expert_ctx.xmx_cfg             = xmx_cfg;
         if (use_ptr_table) {
 
-            ggml_sycl_cache_id expert_cache_key = ggml_sycl_get_moe_expert_cache_key(src0_extra, static_cast<int>(e));
+            ggml_sycl_cache_id expert_cache_key = ggml_sycl_get_moe_expert_cache_key(src0, src0_extra, static_cast<int>(e));
             ggml_sycl::cache_ptr_view view{};
 
             if (cache && expert_cache_key.valid) {

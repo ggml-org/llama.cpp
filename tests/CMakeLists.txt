@@ -1160,6 +1160,18 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-weight-key-uniqueness RUNTIME)
     add_test(NAME test-sycl-weight-key-uniqueness COMMAND $<TARGET_FILE:test-sycl-weight-key-uniqueness>)
 
+    # test-sycl-moe-identity-hash: MoE identity hash collision detection.
+    add_executable(test-sycl-moe-identity-hash test-sycl-moe-identity-hash.cpp)
+    target_link_libraries(test-sycl-moe-identity-hash PRIVATE ggml)
+    target_include_directories(test-sycl-moe-identity-hash PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-moe-identity-hash PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-moe-identity-hash PRIVATE "-fsycl")
+    install(TARGETS test-sycl-moe-identity-hash RUNTIME)
+    add_test(NAME test-sycl-moe-identity-hash COMMAND $<TARGET_FILE:test-sycl-moe-identity-hash>)
+
     # test-sycl-weight-cache-guard: stress weight cache guard + host reorders.
     add_executable(test-sycl-weight-cache-guard test-sycl-weight-cache-guard.cpp)
     target_link_libraries(test-sycl-weight-cache-guard PRIVATE ggml)
