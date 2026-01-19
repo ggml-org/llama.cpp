@@ -745,6 +745,65 @@ bool host_cache_guard_check_all(int device_id, const char * where);
 // Unpin all experts
 void unpin_all_experts();
 
+// === Routing-Aware Expert Pre-staging ===
+// These functions use routing indices from argsort to pre-stage only needed experts
+
+// Result of pre-staging operation
+struct prestage_result {
+    int  n_staged;   // Number of experts actually staged (not already cached)
+    int  n_pinned;   // Number of experts pinned (includes already-cached)
+    int  n_unique;   // Number of unique experts in input
+    bool success;    // True if all staging/pinning succeeded
+};
+
+// Pre-stage only the experts identified by routing indices.
+// Deduplicates expert IDs, checks cache hits, stages missing experts, and pins all.
+//
+// Parameters:
+//   queue:           SYCL queue for the device (sycl::queue*)
+//   expert_ids:      Routing indices from argsort [n_expert_used * n_tokens]
+//   n_expert_used:   Experts per token (typically 4)
+//   n_tokens:        Batch size
+//   weight_base_ptr: mmap base pointer for expert weights
+//   expert_stride:   Bytes between consecutive experts
+//   expert_size:     Size of each expert in bytes
+//   layer_id:        Layer ID for cache key
+//   n_experts_total: Total experts for bounds checking (e.g., 128)
+//   device_id:       Device ID for cache lookup
+//
+// Returns: prestage_result with counts and success status
+prestage_result prestage_routed_experts(void *          queue,
+                                        const int32_t * expert_ids,
+                                        int             n_expert_used,
+                                        int             n_tokens,
+                                        const void *    weight_base_ptr,
+                                        size_t          expert_stride,
+                                        size_t          expert_size,
+                                        int             layer_id,
+                                        int             n_experts_total,
+                                        int             device_id);
+
+// Unpin routed experts after MoE computation completes.
+// Call this after the MoE kernel finishes to allow eviction of these experts.
+//
+// Parameters:
+//   expert_ids:      Same routing indices used in prestage_routed_experts
+//   n_expert_used:   Experts per token
+//   n_tokens:        Batch size
+//   weight_base_ptr: mmap base pointer for expert weights
+//   expert_stride:   Bytes between consecutive experts
+//   layer_id:        Layer ID for cache key
+//   n_experts_total: Total experts for bounds checking
+//   device_id:       Device ID for cache lookup
+void unpin_routed_experts(const int32_t * expert_ids,
+                          int             n_expert_used,
+                          int             n_tokens,
+                          const void *    weight_base_ptr,
+                          size_t          expert_stride,
+                          int             layer_id,
+                          int             n_experts_total,
+                          int             device_id);
+
 // === Shutdown API ===
 
 // Shutdown the unified cache system before SYCL runtime destruction

@@ -17,6 +17,7 @@
 #include <cstring>
 #include <limits>
 #include <thread>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #    include <windows.h>
@@ -3651,6 +3652,202 @@ void unpin_all_experts() {
             cache->unpin_experts();
         }
     }
+}
+
+// === Routing-Aware Expert Pre-staging ===
+
+// Helper: Create a cache ID from expert pointer and metadata
+// This is used for routing-aware pre-staging where we don't have a tensor object
+static ggml_sycl_cache_id make_expert_ptr_cache_id(const void * expert_ptr,
+                                                   size_t       expert_size,
+                                                   int          layer_id,
+                                                   int          expert_id) {
+    ggml_sycl_cache_id id{};
+    if (!expert_ptr) {
+        return id;
+    }
+
+    // Use pointer address as unique identifier
+    // Combined with layer_id and expert_id for full uniqueness
+    const uint64_t ptr_hash = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(expert_ptr));
+
+    id.valid         = true;
+    id.model_id      = 0;  // Not model-specific for ptr-based keys
+    id.has_gguf      = false;
+    id.file_idx      = 0;
+    id.file_offs     = 0;
+    id.nbytes        = expert_size;
+    id.name_hash     = ptr_hash;  // Use pointer as hash for uniqueness
+    id.type          = GGML_TYPE_COUNT;
+    id.tp_sharded    = false;
+    id.tp_rank       = 0;
+    id.tp_world_size = 1;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        id.ne[i]           = 0;
+        id.tp_local_ne[i]  = 0;
+        id.tp_offset_ne[i] = 0;
+    }
+
+    // Combine layer_id and expert_id into aux_id for uniqueness
+    uint64_t aux = static_cast<uint64_t>(layer_id);
+    aux          = detail::cache_hash_combine(aux, static_cast<uint64_t>(expert_id));
+    aux          = detail::cache_hash_combine(aux, ptr_hash);
+    id.aux_id    = aux;
+
+    return id;
+}
+
+prestage_result prestage_routed_experts(void *          queue_ptr,
+                                        const int32_t * expert_ids,
+                                        int             n_expert_used,
+                                        int             n_tokens,
+                                        const void *    weight_base_ptr,
+                                        size_t          expert_stride,
+                                        size_t          expert_size,
+                                        int             layer_id,
+                                        int             n_experts_total,
+                                        int             device_id) {
+    prestage_result result{};
+    result.n_staged  = 0;
+    result.n_pinned  = 0;
+    result.n_unique  = 0;
+    result.success   = false;
+
+    // Validate inputs
+    if (!expert_ids || n_expert_used <= 0 || n_tokens <= 0 || !weight_base_ptr) {
+        GGML_SYCL_DEBUG("[PRESTAGE] Invalid inputs: expert_ids=%p, n_expert_used=%d, n_tokens=%d, weight_base=%p\n",
+                        (const void *) expert_ids, n_expert_used, n_tokens, weight_base_ptr);
+        return result;
+    }
+
+    // Get unified cache for this device
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        GGML_SYCL_DEBUG("[PRESTAGE] No unified cache for device %d\n", device_id);
+        return result;
+    }
+
+    // Step 1: Deduplicate expert IDs with bounds checking
+    std::unordered_set<int32_t> unique_experts;
+    const int total_ids = n_expert_used * n_tokens;
+
+    for (int i = 0; i < total_ids; i++) {
+        const int32_t expert_id = expert_ids[i];
+        if (expert_id >= 0 && expert_id < n_experts_total) {
+            unique_experts.insert(expert_id);
+        }
+    }
+
+    result.n_unique = static_cast<int>(unique_experts.size());
+
+    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: %d unique experts from %d IDs (n_experts_total=%d)\n",
+                    layer_id, result.n_unique, total_ids, n_experts_total);
+
+    if (result.n_unique == 0) {
+        result.success = true;  // Nothing to do, but not an error
+        return result;
+    }
+
+    // Step 2: Check cache hits and build list of experts to stage
+    std::vector<int32_t> experts_to_stage;
+    experts_to_stage.reserve(result.n_unique);
+
+    for (int32_t expert_id : unique_experts) {
+        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
+        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+
+        // Check if already cached (any layout)
+        if (!cache->is_cached_any(key)) {
+            experts_to_stage.push_back(expert_id);
+        }
+    }
+
+    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: %zu cache hits, %zu to stage\n",
+                    layer_id, unique_experts.size() - experts_to_stage.size(), experts_to_stage.size());
+
+    // Step 3: Stage missing experts
+    // NOTE: This is a placeholder - actual staging requires layout decisions and fill callbacks
+    // For now, we just use ensure_cached with AOS layout (passthrough)
+    for (int32_t expert_id : experts_to_stage) {
+        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
+        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+
+        // Stage expert with AOS layout (passthrough - no reorder)
+        void * cached_ptr = cache->ensure_cached(key,
+                                                 expert_ptr,
+                                                 expert_size,
+                                                 cache_entry_type::MOE_EXPERT,
+                                                 layer_id,
+                                                 expert_id,
+                                                 GGML_LAYOUT_AOS,
+                                                 false);  // No content validation
+
+        if (cached_ptr) {
+            result.n_staged++;
+        } else {
+            GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Failed to stage expert %d\n", layer_id, expert_id);
+        }
+    }
+
+    // Step 4: Pin all unique experts (including those already cached)
+    for (int32_t expert_id : unique_experts) {
+        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
+        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+
+        cache->pin(key, GGML_LAYOUT_AOS);
+        result.n_pinned++;
+    }
+
+    result.success = true;
+
+    GGML_SYCL_DEBUG("[PRESTAGE] Layer %d: Completed - staged=%d, pinned=%d, unique=%d\n",
+                    layer_id, result.n_staged, result.n_pinned, result.n_unique);
+
+    // Unused for now but may be used for async staging
+    (void) queue_ptr;
+
+    return result;
+}
+
+void unpin_routed_experts(const int32_t * expert_ids,
+                          int             n_expert_used,
+                          int             n_tokens,
+                          const void *    weight_base_ptr,
+                          size_t          expert_stride,
+                          int             layer_id,
+                          int             n_experts_total,
+                          int             device_id) {
+    // Validate inputs
+    if (!expert_ids || n_expert_used <= 0 || n_tokens <= 0 || !weight_base_ptr) {
+        return;
+    }
+
+    // Get unified cache for this device
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return;
+    }
+
+    // Deduplicate expert IDs (same as prestage)
+    std::unordered_set<int32_t> unique_experts;
+    const int                   total_ids = n_expert_used * n_tokens;
+
+    for (int i = 0; i < total_ids; i++) {
+        const int32_t expert_id = expert_ids[i];
+        if (expert_id >= 0 && expert_id < n_experts_total) {
+            unique_experts.insert(expert_id);
+        }
+    }
+
+    // Unpin all unique experts
+    for (int32_t expert_id : unique_experts) {
+        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
+        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_stride, layer_id, expert_id);
+
+        cache->unpin(key, GGML_LAYOUT_AOS);
+    }
+
+    GGML_SYCL_DEBUG("[UNPIN] Layer %d: Unpinned %zu experts\n", layer_id, unique_experts.size());
 }
 
 void shutdown_unified_cache() {

@@ -37,3 +37,13 @@ struct test_layout_override_guard {
 };
 
 }  // namespace ggml_sycl
+
+// =============================================================================
+// Blind preload threshold functions (for testing)
+// =============================================================================
+// Get the blind preload threshold (cached, reads env var once)
+int ggml_sycl_get_blind_preload_threshold();
+
+// Check if blind preload should be skipped for given expert count
+// Returns true if should SKIP blind preload (expert count exceeds threshold)
+bool ggml_sycl_should_skip_blind_preload(int64_t n_experts);

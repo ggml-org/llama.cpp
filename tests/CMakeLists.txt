@@ -611,6 +611,19 @@ if(GGML_SYCL)
     add_test(NAME test-moe-mul-mat-id-q4q8 COMMAND $<TARGET_FILE:test-moe-mul-mat-id-q4q8>)
 endif()
 
+# test-routing-indices-cache: MoE routing indices extraction for pre-staging
+if(GGML_SYCL)
+    add_executable(test-routing-indices-cache test-routing-indices-cache.cpp)
+    target_link_libraries(test-routing-indices-cache PRIVATE ggml ggml-cpu)
+    target_include_directories(test-routing-indices-cache PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-routing-indices-cache PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-routing-indices-cache PRIVATE "-fsycl")
+    install(TARGETS test-routing-indices-cache RUNTIME)
+    add_test(NAME test-routing-indices-cache COMMAND $<TARGET_FILE:test-routing-indices-cache>)
+endif()
+
 # test-moe-mini-graph: embedding -> RMS -> MoE MUL_MAT_ID (MXFP4)
 if(GGML_SYCL)
     add_executable(test-moe-mini-graph test-moe-mini-graph.cpp)
@@ -1558,4 +1571,33 @@ if(GGML_SYCL)
     target_link_options(test-sycl-compute-buffers PRIVATE "-fsycl")
     install(TARGETS test-sycl-compute-buffers RUNTIME)
     add_test(NAME test-sycl-compute-buffers COMMAND $<TARGET_FILE:test-sycl-compute-buffers>)
+
+    # test-sycl-blind-preload-threshold: Tests for disabling blind graph_preload_moe_experts
+    # for large expert counts (128+ experts causes cache thrashing on 13.5GB VRAM)
+    # Part of routing-aware MoE expert pre-staging optimization
+    add_executable(test-sycl-blind-preload-threshold test-sycl-blind-preload-threshold.cpp)
+    target_link_libraries(test-sycl-blind-preload-threshold PRIVATE ggml)
+    target_include_directories(test-sycl-blind-preload-threshold PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-blind-preload-threshold PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-blind-preload-threshold PRIVATE "-fsycl")
+    install(TARGETS test-sycl-blind-preload-threshold RUNTIME)
+    add_test(NAME test-sycl-blind-preload-threshold COMMAND $<TARGET_FILE:test-sycl-blind-preload-threshold>)
+    # Test with custom threshold via env var
+    add_test(NAME test-sycl-blind-preload-threshold-custom COMMAND $<TARGET_FILE:test-sycl-blind-preload-threshold>)
+    set_tests_properties(test-sycl-blind-preload-threshold-custom PROPERTIES
+        ENVIRONMENT "GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS=32")
+
+    # test-sycl-prestage-routed-experts: Tests for routing-aware MoE expert pre-staging
+    # Part of MoE optimization for 128+ expert models (epic llama.cpp-qz6)
+    # Standalone test - does not require SYCL runtime, tests pure C++ deduplication logic
+    add_executable(test-sycl-prestage-routed-experts test-sycl-prestage-routed-experts.cpp)
+    target_include_directories(test-sycl-prestage-routed-experts PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-prestage-routed-experts PRIVATE "-Wno-narrowing")
+    install(TARGETS test-sycl-prestage-routed-experts RUNTIME)
+    add_test(NAME test-sycl-prestage-routed-experts COMMAND $<TARGET_FILE:test-sycl-prestage-routed-experts>)
 endif()

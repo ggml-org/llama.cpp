@@ -379,6 +379,108 @@ static std::mutex                                                 g_sycl_host_we
 static std::unordered_map<ggml_tensor *, ggml_tensor_extra_gpu *> g_sycl_host_weight_extras;
 static std::atomic<uint64_t>                                      g_sycl_weight_cache_uuid{ 1 };
 
+// Routing indices cache for MoE expert pre-staging.
+// Captures argsort output for MoE router tensors to enable routing-aware caching.
+// This allows pre-staging only the needed experts instead of all 128 (for large MoE models).
+struct routing_indices_cache {
+    std::vector<int32_t> indices;       // Sorted expert indices [ncols * nrows]
+    int                  ncols;         // Number of columns (e.g., n_experts)
+    int                  nrows;         // Number of rows (e.g., n_tokens)
+    std::string          tensor_name;   // Name of the argsort output tensor
+    std::mutex           mutex;         // Thread-safe access
+
+    routing_indices_cache() : ncols(0), nrows(0) {}
+};
+
+static routing_indices_cache g_routing_indices_cache;
+
+// Check if tensor name indicates MoE routing (should capture indices)
+static bool is_moe_routing_tensor(const char * name) {
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    // Look for common MoE tensor naming patterns:
+    // - "ffn_moe_*" (llama.cpp MoE naming)
+    // - "*moe*topk*" (top-k selection)
+    // - "*router*" (router output)
+    // - "*gate*" with "moe" somewhere
+    const char * lower_name = name;  // Already lowercase in ggml typically
+    return (strstr(lower_name, "moe") != nullptr) ||
+           (strstr(lower_name, "router") != nullptr) ||
+           (strstr(lower_name, "topk") != nullptr);
+}
+
+// Store routing indices in cache (called after argsort for MoE tensors)
+static void store_routing_indices(const char *          tensor_name,
+                                  const int32_t *       indices,
+                                  int                   ncols,
+                                  int                   nrows,
+                                  sycl::queue *         stream) {
+    if (!tensor_name || !indices || ncols <= 0 || nrows <= 0) {
+        return;
+    }
+
+    const size_t count = static_cast<size_t>(ncols) * static_cast<size_t>(nrows);
+
+    // Allocate host buffer for async copy
+    std::vector<int32_t> host_indices(count);
+
+    // Async copy from device to host
+    auto copy_event = stream->memcpy(host_indices.data(), indices, count * sizeof(int32_t));
+
+    // Wait for copy to complete (needed for cache storage)
+    // TODO: For better performance, use an event callback instead of blocking wait
+    copy_event.wait();
+
+    // Store in cache with lock
+    {
+        std::lock_guard<std::mutex> lock(g_routing_indices_cache.mutex);
+        g_routing_indices_cache.indices     = std::move(host_indices);
+        g_routing_indices_cache.ncols       = ncols;
+        g_routing_indices_cache.nrows       = nrows;
+        g_routing_indices_cache.tensor_name = tensor_name;
+    }
+
+    GGML_SYCL_DEBUG("[ROUTING] Cached %d x %d indices for tensor '%s'\n", ncols, nrows, tensor_name);
+}
+
+// Public API: Get routing indices from cache
+// Returns true if found, false otherwise
+bool ggml_sycl_get_routing_indices(const char *           tensor_name,
+                                   std::vector<int32_t> & out_indices,
+                                   int &                  n_expert_used,
+                                   int &                  n_tokens) {
+    std::lock_guard<std::mutex> lock(g_routing_indices_cache.mutex);
+
+    // Check if we have cached indices for this tensor
+    if (g_routing_indices_cache.tensor_name.empty()) {
+        return false;  // No cached data
+    }
+
+    // If tensor_name is provided, check for match
+    if (tensor_name && tensor_name[0] != '\0') {
+        if (g_routing_indices_cache.tensor_name != tensor_name) {
+            return false;  // Different tensor
+        }
+    }
+
+    // Return cached data
+    out_indices   = g_routing_indices_cache.indices;
+    n_expert_used = g_routing_indices_cache.ncols;  // ncols = n_experts (sorted)
+    n_tokens      = g_routing_indices_cache.nrows;
+
+    return true;
+}
+
+// Public API: Clear routing indices cache
+void ggml_sycl_clear_routing_indices_cache() {
+    std::lock_guard<std::mutex> lock(g_routing_indices_cache.mutex);
+    g_routing_indices_cache.indices.clear();
+    g_routing_indices_cache.ncols       = 0;
+    g_routing_indices_cache.nrows       = 0;
+    g_routing_indices_cache.tensor_name.clear();
+}
+
 static void ggml_sycl_preload_model_weights();
 
 static bool ggml_sycl_copy_trace_enabled() {
@@ -8670,6 +8772,12 @@ inline void ggml_sycl_op_argsort(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const int64_t nrows = ggml_nrows(dst->src[0]);
     enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
     argsort_f32_i32_sycl(src0_dd, (int *) dst_dd, ncols, nrows, order, main_stream, ctx.device);
+
+    // Capture routing indices for MoE expert pre-staging
+    // Only capture if tensor name indicates MoE routing (to avoid overhead for non-MoE argsort)
+    if (is_moe_routing_tensor(dst->name)) {
+        store_routing_indices(dst->name, dst_dd, static_cast<int>(ncols), static_cast<int>(nrows), main_stream);
+    }
 }
 
 inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -15346,6 +15454,36 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     }
     return true;
 }
+
+// =============================================================================
+// Blind preload threshold for large MoE models
+// =============================================================================
+// Problem: graph_preload_moe_experts() pre-loads ALL experts for every MoE layer.
+// For 128 experts x 4.2MB = 537MB per layer, this causes cache thrashing and DEVICE_LOST.
+// Solution: Skip blind preload when expert count exceeds threshold.
+// Env var: GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS (default: 64)
+// - n_experts <= threshold: use blind preload (loads all experts)
+// - n_experts > threshold: skip blind preload, routing-aware pre-staging handles it
+
+// Get the blind preload threshold (cached, reads env var once)
+int ggml_sycl_get_blind_preload_threshold() {
+    static int threshold = -1;
+    if (threshold < 0) {
+        const char * env = getenv("GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS");
+        threshold        = env ? atoi(env) : 64;  // Default: 64 experts
+        GGML_LOG_INFO("[SYCL] Blind preload threshold: %d experts (GGML_SYCL_MAX_BLIND_PRELOAD_EXPERTS=%s)\n", threshold,
+                      env ? env : "default");
+    }
+    return threshold;
+}
+
+// Check if blind preload should be skipped for given expert count
+// Returns true if should SKIP blind preload (expert count exceeds threshold)
+bool ggml_sycl_should_skip_blind_preload(int64_t n_experts) {
+    const int threshold = ggml_sycl_get_blind_preload_threshold();
+    return n_experts > threshold;
+}
+
 // Prepare MoE pointer tables before graph recording/execution
 // This updates per-id cached layouts without full preload
 static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
@@ -15374,6 +15512,16 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
             continue;
         }
         any_moe = true;
+
+        // Check if this MoE layer has too many experts for blind preload
+        const int64_t n_experts = src0->ne[2];
+        if (ggml_sycl_should_skip_blind_preload(n_experts)) {
+            const int layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
+            GGML_LOG_INFO("[GRAPH-PRELOAD] Skipping blind preload for layer %d: %lld experts exceeds threshold %d, "
+                          "routing-aware pre-staging will handle\n",
+                          layer_id, (long long) n_experts, ggml_sycl_get_blind_preload_threshold());
+            continue;  // Skip to next node, let routing-aware pre-staging handle it
+        }
 
         if (!unpinned) {
             ggml_sycl::unpin_all_experts();
@@ -15437,6 +15585,11 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         // For graph recording/replay: load ALL experts so any expert selection works during replay.
         // The graph captures the pointer table copy, but the ids tensor can change between replays.
         // Without all experts pre-loaded, accessing an expert not in the warmup's ids causes NULL deref.
+        {
+            const int layer_id_log = ggml_sycl_tp_extract_layer_number(src0->name);
+            GGML_LOG_INFO("[GRAPH-PRELOAD] Pre-loading %lld experts for layer %d (within threshold %d)\n",
+                          (long long) src0->ne[2], layer_id_log, ggml_sycl_get_blind_preload_threshold());
+        }
         const bool  allow_all_experts = true;
         sycl::event table_event;
         const bool  expect_table_event =
@@ -17975,6 +18128,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const ggml_tensor * ids = dst->src[2];
     GGML_TENSOR_BINARY_OP_LOCALS
 
+    // Routing-aware pre-staging environment variable check
+    static int routing_prestage_enabled = -1;
+    if (routing_prestage_enabled < 0) {
+        const char * env         = getenv("GGML_SYCL_ROUTING_PRESTAGE");
+        routing_prestage_enabled = env ? atoi(env) : 1;  // Default: enabled
+    }
+
+    // Detect if routing-aware prestage should be used (>64 experts)
+    const int64_t n_experts              = src0->ne[2];
+    const int     max_blind_threshold    = ggml_sycl_get_blind_preload_threshold();
+    const bool    use_routing_prestage_candidate = routing_prestage_enabled && (n_experts > max_blind_threshold);
+
     layout_mode override_layout = GGML_LAYOUT_AOS;
     const bool  has_override    = ggml_sycl_layout_override_active(override_layout);
     auto xmx_layout_allowed = [&]() -> bool {
@@ -18224,6 +18389,38 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         if (!expert_ptrs_host) {
             GGML_LOG_ERROR("[MoE] Missing expert pointer table for %s\n", src0->name);
         }
+    }
+
+    // Routing-aware pre-staging: stage only needed experts for large MoE models (>64 experts)
+    // This avoids blind preloading all experts which is wasteful for 128+ expert models
+    const bool use_routing_prestage = use_routing_prestage_candidate && use_expert_cache;
+    if (use_routing_prestage) {
+        // Get expert indices from IDs tensor (already copied to ids_host)
+        const int32_t * expert_ids_ptr = reinterpret_cast<const int32_t *>(ids_host.data());
+        const int       n_expert_used  = static_cast<int>(ids->ne[0]);  // experts per token (typically 4)
+        const int       n_tokens_ids   = static_cast<int>(ids->ne[1]);  // batch size
+
+        // Expert stride and size
+        const size_t expert_stride = src0->nb[2];  // bytes between experts
+        const size_t expert_size_prestage =
+            static_cast<size_t>(src0->ne[0]) * static_cast<size_t>(src0->ne[1]) * ggml_type_size(src0->type);
+
+        // Pre-stage only needed experts
+        ggml_sycl::prestage_result prestage_res = ggml_sycl::prestage_routed_experts(
+            stream,                             // SYCL queue
+            expert_ids_ptr,                     // Routing indices
+            n_expert_used,                      // Experts per token
+            n_tokens_ids,                       // Batch size
+            src0->data,                         // mmap base pointer
+            expert_stride,                      // Bytes between experts
+            expert_size_prestage,               // Size of each expert
+            layer_id,                           // Layer ID
+            static_cast<int>(n_experts),        // Total experts for bounds checking
+            ctx.device);                        // Device ID
+
+        GGML_SYCL_DEBUG("[MOE-PRESTAGE] Layer %d: %d unique experts, %d staged, %d pinned (threshold=%d, n_experts=%ld)\n",
+                        layer_id, prestage_res.n_unique, prestage_res.n_staged, prestage_res.n_pinned,
+                        max_blind_threshold, (long) n_experts);
     }
 
     char * src0_original = use_expert_cache ? (char *) src0->data : (char *) src0_layout_base;
@@ -18524,6 +18721,25 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
         }
         fprintf(stderr, "]\n");
+    }
+
+    // Unpin routed experts after dispatch completes (allows eviction)
+    if (use_routing_prestage) {
+        const int32_t * expert_ids_ptr = reinterpret_cast<const int32_t *>(ids_host.data());
+        const int       n_expert_used  = static_cast<int>(ids->ne[0]);
+        const int       n_tokens_ids   = static_cast<int>(ids->ne[1]);
+        const size_t    expert_stride  = src0->nb[2];
+
+        ggml_sycl::unpin_routed_experts(expert_ids_ptr,
+                                        n_expert_used,
+                                        n_tokens_ids,
+                                        src0->data,
+                                        expert_stride,
+                                        layer_id,
+                                        static_cast<int>(n_experts),
+                                        ctx.device);
+
+        GGML_SYCL_DEBUG("[MOE-UNPIN] Layer %d: Unpinned routed experts\n", layer_id);
     }
 } catch (const sycl::exception & exc) {
 
