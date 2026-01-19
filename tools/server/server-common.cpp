@@ -831,7 +831,7 @@ static void handle_media(
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
-    const oaicompat_parser_options & opt,
+    const server_chat_params & opt,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
@@ -1012,7 +1012,7 @@ json oaicompat_chat_params_parse(
     }
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {

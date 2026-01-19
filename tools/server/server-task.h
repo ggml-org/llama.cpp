@@ -130,8 +130,10 @@ struct server_task {
     task_params   params;
     server_tokens tokens;
 
-    // only used by CLI, this delegates the tokenization to the server
-    json                    cli_input = nullptr;
+    // only used by CLI, this allow tokenizing CLI inputs on server side
+    // we need this because mtmd_context and vocab are not accessible outside of server_context
+    bool                    cli = false;
+    std::string             cli_prompt;
     std::vector<raw_buffer> cli_files;
 
     server_task_type type;

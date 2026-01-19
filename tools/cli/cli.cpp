@@ -71,14 +71,16 @@ struct cli_context {
 
     std::string generate_completion(result_timings & out_timings) {
         server_response_reader rd = ctx_server.get_response_reader();
+        auto formatted = format_chat();
         {
             // TODO: reduce some copies here in the future
             server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
-            task.id        = rd.get_new_id();
-            task.index     = 0;
-            task.params    = defaults;    // copy
-            task.cli_input = messages;    // copy
-            task.cli_files = input_files; // copy
+            task.id         = rd.get_new_id();
+            task.index      = 0;
+            task.params     = defaults;         // copy
+            task.cli_prompt = formatted.prompt; // copy
+            task.cli_files  = input_files;      // copy
+            task.cli        = true;
             rd.post_task({std::move(task)});
         }
 
@@ -155,6 +157,26 @@ struct cli_context {
             std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             return content;
         }
+    }
+
+    common_chat_params format_chat() {
+        auto meta = ctx_server.get_meta();
+        auto & chat_params = meta.chat_params;
+
+        common_chat_templates_inputs inputs;
+        inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
+        inputs.tools                 = {}; // TODO
+        inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+        inputs.json_schema           = ""; // TODO
+        inputs.grammar               = ""; // TODO
+        inputs.use_jinja             = chat_params.use_jinja;
+        inputs.parallel_tool_calls   = false;
+        inputs.add_generation_prompt = true;
+        inputs.reasoning_format      = chat_params.reasoning_format;
+        inputs.enable_thinking       = chat_params.enable_thinking;
+
+        // Apply chat template to the list of messages
+        return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
     }
 };
 

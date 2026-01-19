@@ -20,9 +20,8 @@ struct server_context_meta {
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
 
-    // chat template
-    std::string chat_template;
-    std::string chat_template_tool_use;
+    // chat params
+    server_chat_params & chat_params;
 
     // tokens
     std::string bos_token_str;

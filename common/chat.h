@@ -191,7 +191,7 @@ common_chat_templates_ptr common_chat_templates_init(
                                            const std::string & eos_token_override = "");
 
 bool         common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
-const char * common_chat_templates_source(const struct common_chat_templates * tmpls, const char * variant = nullptr);
+std::string  common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
 
 struct common_chat_params      common_chat_templates_apply(
