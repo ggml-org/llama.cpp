@@ -1544,20 +1544,38 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     size_t free_mem = 0, total_mem = 0;
 
     ggml_backend_sycl_get_device_memory(ctx->device, &free_mem, &total_mem);
-    // Enable tiered mode if total model size exceeds 90% of free VRAM
-    const size_t vram_budget = (size_t) (free_mem * 0.9);
 
-    g_tiered_enabled.store(g_tensor_inventory_total_size > vram_budget, std::memory_order_release);
-    // Reserve extra VRAM headroom for large tiered models (onemath/DNN scratch)
+    // Use total VRAM as base for budget calculation (not free_mem which depends on allocation order)
+    // This matches how unified_cache calculates its budget
     const size_t base_mem = total_mem > 0 ? total_mem : free_mem;
-    const size_t base_headroom = std::max<size_t>(256ull * 1024ull * 1024ull, base_mem / 10);
+
+    // Calculate already-allocated memory (KV cache, compute buffers, etc.)
+    // This is the difference between total and free at this point
+    const size_t already_allocated = base_mem > free_mem ? base_mem - free_mem : 0;
+
+    // Budget for weight cache = 90% of total VRAM minus already-allocated memory minus headroom
+    // Headroom = max(256MB, 10% of total) for runtime scratch space
+    const size_t min_headroom = 256ull * 1024ull * 1024ull;
+    const size_t base_headroom = std::max<size_t>(min_headroom, base_mem / 10);
+
+    // Tiered mode budget: total * 0.9 - already_allocated - headroom
+    // This gives the cache a fair budget based on what's actually available for weights
+    size_t vram_budget_base = static_cast<size_t>(base_mem * 0.9);
+    size_t vram_budget = 0;
+    if (vram_budget_base > already_allocated + base_headroom) {
+        vram_budget = vram_budget_base - already_allocated - base_headroom;
+    }
+
+    // Enable tiered mode if total model size exceeds available VRAM budget
+    g_tiered_enabled.store(g_tensor_inventory_total_size > vram_budget, std::memory_order_release);
+
+    // Reserve extra VRAM headroom for large tiered models (onemath/DNN scratch)
     const size_t desired_headroom = std::max(base_headroom, base_mem / 4);
     const size_t desired_extra = g_tiered_enabled.load(std::memory_order_acquire) && desired_headroom > base_headroom
                                     ? (desired_headroom - base_headroom)
                                     : 0;
     size_t & prev_extra = g_tiered_headroom_reserve[ctx->device];
     if (desired_extra > prev_extra) {
-
         ggml_sycl::unified_cache_add_runtime_bytes(ctx->device, desired_extra - prev_extra);
     } else if (desired_extra < prev_extra) {
         ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, prev_extra - desired_extra);
@@ -1574,16 +1592,19 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     if (g_tiered_enabled.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
         if (!g_tensor_cache) {
-            // Create cache with VRAM budget = 90% of free, host budget = 75% of system RAM
+            // Create cache with VRAM budget based on total VRAM minus allocated/headroom
             // The pinned_chunk_pool handles the per-allocation ~11GB Level Zero limit
             // by using multiple 8GB chunks, so total budget can be much larger.
             size_t cache_vram_budget = vram_budget;
             size_t system_ram        = get_system_memory_bytes();
             size_t host_budget       = system_ram > 0 ? static_cast<size_t>(system_ram * 0.75)
                                                       : 10ULL * 1024 * 1024 * 1024;  // 75% of RAM, fallback 10GB
-            GGML_LOG_INFO("[SYCL] Unified tensor cache: VRAM %.2f GB, Host %.2f GB (%.0f%% of %.2f GB RAM)\n",
-                          cache_vram_budget / (1024.0 * 1024.0 * 1024.0), host_budget / (1024.0 * 1024.0 * 1024.0),
-                          system_ram > 0 ? 75.0 : 0.0, system_ram / (1024.0 * 1024.0 * 1024.0));
+            GGML_LOG_INFO("[SYCL] Unified tensor cache: VRAM %.2f GB (total %.2f GB - allocated %.2f GB - headroom %.2f GB), Host %.2f GB\n",
+                          cache_vram_budget / (1024.0 * 1024.0 * 1024.0),
+                          base_mem / (1024.0 * 1024.0 * 1024.0),
+                          already_allocated / (1024.0 * 1024.0 * 1024.0),
+                          base_headroom / (1024.0 * 1024.0 * 1024.0),
+                          host_budget / (1024.0 * 1024.0 * 1024.0));
             g_tensor_cache =
                 std::make_unique<ggml_sycl::unified_tensor_cache>(*(ctx->stream()), cache_vram_budget, host_budget);
         }
