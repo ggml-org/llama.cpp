@@ -20946,11 +20946,35 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         //     }
         // }
 
-        // Note: Prompt phase graph recording is now supported.
+        // Note: Prompt phase graph recording is now supported for most models.
         // oneDNN primitives are cached during warmup (first inference) via DnnlPrimitiveCache
         // in gemm.hpp. During graph recording, cached primitives are reused (no JIT compilation),
         // making the execute() calls graph-compatible.
-
+        //
+        // WORKAROUND: Disable graphs for MoE models during prompt phase due to Level Zero
+        // driver bug causing Enqueue process failed during graph execution wait.
+        // The MoE expert dispatch with dynamic pointer tables seems to cause issues in the
+        // Level Zero command graph implementation. MoE decode phase graphs work fine.
+        // Non-MoE models work fine in both phases.
+        if (is_prompt_phase) {
+            bool has_moe_ops = false;
+            for (int i = 0; i < cgraph->n_nodes && !has_moe_ops; i++) {
+                if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
+                    has_moe_ops = true;
+                }
+            }
+            if (has_moe_ops) {
+                static bool logged_once = false;
+                if (!logged_once) {
+                    GGML_LOG_INFO("[SYCL-GRAPH] MoE prompt phase: disabling graphs (Level Zero workaround)\n");
+                    logged_once = true;
+                }
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - MoE prompt phase (Level Zero graph bug workaround)\n");
+                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                record_completion(false);
+                return GGML_STATUS_SUCCESS;
+            }
+        }
         //
         // Layout finalization decides coalesced usage before graph recording.
         // Minimum nodes to benefit from graph batching - skip tiny graphs

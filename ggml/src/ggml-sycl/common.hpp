@@ -124,6 +124,20 @@ inline bool ggml_sycl_graph_recording_active() {
            g_ggml_sycl_graph_recording_depth.load(std::memory_order_acquire) > 0;
 }
 
+// Helper to check if we should add an event dependency.
+// During graph recording, we MUST always add depends_on() to capture the dependency edge.
+// Event status queries are unreliable during recording (events haven't executed yet).
+// Outside graph recording, we only add the dependency if the event is not complete.
+inline bool ggml_sycl_should_add_dependency(const sycl::event& dep_event) {
+    if (ggml_sycl_graph_recording_active()) {
+        // During graph recording, always add dependency to ensure correct graph structure
+        return true;
+    }
+    // Outside graph recording, check if event is already complete
+    return dep_event.get_info<sycl::info::event::command_execution_status>() !=
+           sycl::info::event_command_status::complete;
+}
+
 // Tiered cache state for memory placement optimization
 extern std::atomic<bool> g_tiered_enabled;
 
