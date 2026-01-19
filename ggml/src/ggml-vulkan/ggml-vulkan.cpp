@@ -38,6 +38,7 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <mutex>
 #include <future>
 #include <thread>
+#include <optional>
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -2836,13 +2837,16 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     return supported;
 }
 
-// Pipeline configuration for a specific pipeline
+// A specific pipeline's configuration
 struct PipelineConfigParameter {
     uint32_t subgroup_size;
+    // True if we require full subgroup for this pipeline,
+    // False if not required. Empty means don't care (use default)
+    std::optional<bool> require_full_subgroup;
     // Specialization constants used for a specific pipeline.
     // If empty we use the default.
-    // Some kernels must have matching values between subgroup size and
-    // specialization constants so we have an interface to override the default here.
+    // Some kernels must calculate specialization constants
+    // based on subgroup size so we have an interface to override the default here.
     std::vector<uint32_t> specialization_constants;
 };
 
@@ -3167,21 +3171,23 @@ static void ggml_vk_load_shaders(vk_device& device) {
             param_found = get_pipeline_config_parameter(&pipeline_param, gpu_config, std::string(name));
         }
 
-        if (required_subgroup_size == 0) {
-            // No requirement in subgroup size so we can override it
-            if (param_found) {
-                // set specific subgroup size for this pipeline
-                required_subgroup_size = pipeline_param.subgroup_size;
-            } else if (!param_found && gpu_config_found) {
-                // no specific parameter for this pipeline so set the default
+        std::vector<uint32_t> target_specilization_constants = specialization_constants;
+        if (gpu_config_found && param_found) {
+            // We have a GPU configuration and a specific parameter for this pipeline.
+            // We overwrite all parameters assuming the setting creator knows what they are doing.
+            required_subgroup_size = pipeline_param.subgroup_size;
+            if (pipeline_param.require_full_subgroup.has_value()) {
+                require_full_subgroups = pipeline_param.require_full_subgroup.value();
+            }
+            if (!pipeline_param.specialization_constants.empty()) {
+                target_specilization_constants = pipeline_param.specialization_constants;
+            }
+        } else if (gpu_config_found && !param_found) {
+            // Only GPU config was given. Just update the default subgroup size
+            // if not specified by default
+            if (required_subgroup_size == 0) {
                 required_subgroup_size = gpu_config.default_subgroup_size;
             }
-        }
-
-        // We always override the specialization constant if a matching pipline name exists with valid parameters
-        std::vector<uint32_t> target_specilization_constants = specialization_constants;
-        if (param_found && !pipeline_param.specialization_constants.empty()) {
-            target_specilization_constants = pipeline_param.specialization_constants;
         }
 
         vk_pipeline *ptr = &base_pipeline;
