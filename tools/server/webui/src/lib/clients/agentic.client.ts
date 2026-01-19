@@ -670,7 +670,7 @@ export class AgenticClient {
 		});
 
 		return {
-			cleanedResult: cleanedLines.join('\n').trim(),
+			cleanedResult: cleanedLines.join('\n'),
 			attachments
 		};
 	}
