@@ -15080,13 +15080,19 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     sycl::queue * stream = ctx.stream();
     GGML_SYCL_DEBUG("[MOE-PTR] stream=%p data=%p\n", (void*)stream, src0->data);
 
-    // Force queue sync to catch any pending errors from previous operations
-    try {
-        stream->wait();
-        GGML_SYCL_DEBUG("[MOE-PTR] queue sync complete\n");
-    } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[MOE-PTR] Pending error in queue: %s\n", e.what());
-        throw;
+    // Force queue sync to catch any pending errors from previous operations.
+    // Skip during graph recording - wait() is illegal during recording and dependencies
+    // should already be captured via the event chain mechanism.
+    if (!ggml_sycl_graph_recording_active()) {
+        try {
+            stream->wait();
+            GGML_SYCL_DEBUG("[MOE-PTR] queue sync complete\n");
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[MOE-PTR] Pending error in queue: %s\n", e.what());
+            throw;
+        }
+    } else {
+        GGML_SYCL_DEBUG("[MOE-PTR] Skipping wait during graph recording\n");
     }
 
     // Determine if src0->data is directly usable by GPU kernels
@@ -15402,7 +15408,10 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
             }
         }
 
-        const bool  allow_all_experts = false;  // streaming: only load experts used by current ids
+        // For graph recording/replay: load ALL experts so any expert selection works during replay.
+        // The graph captures the pointer table copy, but the ids tensor can change between replays.
+        // Without all experts pre-loaded, accessing an expert not in the warmup's ids causes NULL deref.
+        const bool  allow_all_experts = true;
         sycl::event table_event;
         const bool  expect_table_event =
             extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES && extra->moe_expert_ptrs_device[ctx.device];
@@ -20951,31 +20960,32 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // in gemm.hpp. During graph recording, cached primitives are reused (no JIT compilation),
         // making the execute() calls graph-compatible.
         //
-        // WORKAROUND: Disable graphs for MoE models during prompt phase due to Level Zero
-        // driver bug causing Enqueue process failed during graph execution wait.
-        // The MoE expert dispatch with dynamic pointer tables seems to cause issues in the
-        // Level Zero command graph implementation. MoE decode phase graphs work fine.
-        // Non-MoE models work fine in both phases.
-        if (is_prompt_phase) {
+        // WORKAROUND: Disable graphs for MoE streaming mode (host memory).
+        // Dynamic pointer tables are incompatible with SYCL command graphs.
+        {
             bool has_moe_ops = false;
-            for (int i = 0; i < cgraph->n_nodes && !has_moe_ops; i++) {
+            bool moe_uses_host_memory = false;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
                 if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
                     has_moe_ops = true;
+                    const ggml_tensor * src0 = cgraph->nodes[i]->src[0];
+                    if (src0 && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+                        moe_uses_host_memory = true;
+                        break;
+                    }
                 }
             }
-            if (has_moe_ops) {
+            if (has_moe_ops && moe_uses_host_memory) {
                 static bool logged_once = false;
                 if (!logged_once) {
-                    GGML_LOG_INFO("[SYCL-GRAPH] MoE prompt phase: disabling graphs (Level Zero workaround)\n");
+                    GGML_LOG_INFO("[SYCL-GRAPH] MoE streaming mode: disabling graphs\n");
                     logged_once = true;
                 }
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - MoE prompt phase (Level Zero graph bug workaround)\n");
                 ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
             }
         }
-        //
         // Layout finalization decides coalesced usage before graph recording.
         // Minimum nodes to benefit from graph batching - skip tiny graphs
         constexpr int MIN_GRAPH_NODES = 10;
