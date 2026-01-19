@@ -264,7 +264,7 @@ static void test_conditionals(testing & t) {
         "yes"
     );
 
-    test_template(t, "is 1.0 thruthy",
+    test_template(t, "is 1.0 truthy",
         "{{ 'yes' if y else 'no' }}",
         {{"y", 1.0}},
         "yes"
