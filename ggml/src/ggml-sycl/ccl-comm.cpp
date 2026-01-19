@@ -302,18 +302,17 @@ void ggml_sycl_ccl_allreduce_sum_f32(const float* send_buf, float* recv_buf, siz
         auto& stream = g_ccl_ctx.streams[comm_idx];
 
         // Get the SYCL queue from CCL stream to check pointer types
-        // CCL requires device or shared memory for GPU allreduce
-        // If we receive host pointers, we need to use a staging buffer
+        // CCL requires device memory for GPU allreduce
+        // CRITICAL: Stage ALL non-device memory due to Level Zero driver bug that reports
+        // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
         sycl::queue& q = stream.get_native();
         sycl::context ctx = q.get_context();
 
         auto send_ptr_type = sycl::get_pointer_type(send_buf, ctx);
         auto recv_ptr_type = sycl::get_pointer_type(recv_buf, ctx);
 
-        bool need_staging = (send_ptr_type == sycl::usm::alloc::host ||
-                            send_ptr_type == sycl::usm::alloc::unknown ||
-                            recv_ptr_type == sycl::usm::alloc::host ||
-                            recv_ptr_type == sycl::usm::alloc::unknown);
+        bool need_staging = (send_ptr_type != sycl::usm::alloc::device ||
+                            recv_ptr_type != sycl::usm::alloc::device);
 
         if (ccl_debug_enabled()) {
             const char* send_type_str = (send_ptr_type == sycl::usm::alloc::device) ? "device" :

@@ -1506,52 +1506,51 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 
         if (ctx != nullptr) {
             sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *ctx);
-            if (ptr_type == sycl::usm::alloc::host || ptr_type == sycl::usm::alloc::shared) {
-                // HOST or SHARED USM - directly accessible from device, no staging needed
+
+            // DEVICE memory - directly accessible, no staging needed
+            if (ptr_type == sycl::usm::alloc::device) {
                 GGML_SYCL_DEBUG(
-                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, using HOST/SHARED USM tensor->data=%p (type=%d)\n",
-                    tensor->name, device, tensor->data, (int) ptr_type);
+                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
+                    tensor->name, device, tensor->data);
                 return tensor->data;
             }
 
-            // Non-USM memory (unknown/device-local) - try unified cache first, then staging
-            // This handles mmap'd weights that the GPU kernel cannot read directly
-            if (ptr_type == sycl::usm::alloc::unknown) {
-                // Check if this is a weight tensor (inline check to avoid forward declaration)
-                const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
-                                       ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+            // ALL non-device memory needs cache/staging due to Level Zero driver bug that reports
+            // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
+            // Check if this is a weight tensor (inline check to avoid forward declaration)
+            const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
+                                   ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 
-                // Try to get from unified cache (already uploaded weights)
-                // Use get_or_wait() to block for IN_PROGRESS entries - prevents mmap fallback
-                if (ggml_sycl::unified_cache_enabled() && is_weight) {
-                    if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-                        if (cache_key.valid) {
-                            // get_or_wait waits for IN_PROGRESS entries to complete
-                            // This prevents returning mmap pointer while cache fill is in flight
-                            void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
-                            if (cached) {
-                                GGML_SYCL_DEBUG(
-                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, non-USM fallback to cache=%p\n",
-                                    tensor->name, device, cached);
-                                return cached;
-                            }
+            // Try to get from unified cache (already uploaded weights)
+            // Use get_or_wait() to block for IN_PROGRESS entries - prevents mmap fallback
+            if (ggml_sycl::unified_cache_enabled() && is_weight) {
+                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                    if (cache_key.valid) {
+                        // get_or_wait waits for IN_PROGRESS entries to complete
+                        // This prevents returning mmap pointer while cache fill is in flight
+                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
+                        if (cached) {
+                            GGML_SYCL_DEBUG(
+                                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, non-device fallback to cache=%p (type=%d)\n",
+                                tensor->name, device, cached, (int) ptr_type);
+                            return cached;
                         }
                     }
                 }
-
-                // Not cached - need to stage to device-local USM memory
-                size_t nbytes = ggml_nbytes(tensor);
-                void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
-                if (staged != nullptr) {
-                    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-USM %p -> %p (%zu bytes)\n",
-                                    tensor->name, device, tensor->data, staged, nbytes);
-                    return staged;
-                }
-                // Staging failed - fall through and return original pointer (will likely fail)
-                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-USM, using tensor->data=%p\n",
-                                tensor->name, device, tensor->data);
             }
+
+            // Not cached - need to stage to device-local USM memory
+            size_t nbytes = ggml_nbytes(tensor);
+            void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+            if (staged != nullptr) {
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
+                                tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
+                return staged;
+            }
+            // Staging failed - fall through and return original pointer (will likely fail)
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d), using tensor->data=%p\n",
+                            tensor->name, device, (int) ptr_type, tensor->data);
         }
     }
 

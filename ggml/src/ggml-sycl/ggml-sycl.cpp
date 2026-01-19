@@ -1431,6 +1431,30 @@ static size_t                                      g_tensor_inventory_total_size
 std::atomic<bool>                                  g_tiered_enabled{ false };
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
+
+// Helper: Get total system RAM in bytes
+static size_t get_system_memory_bytes() {
+#if defined(_WIN32)
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status)) {
+        return static_cast<size_t>(status.ullTotalPhys);
+    }
+    return 0;
+#else
+    long pages     = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    if (pages <= 0 || page_size <= 0) {
+        GGML_LOG_WARN("[SYCL] System RAM detection failed: pages=%ld, page_size=%ld\n", pages, page_size);
+        return 0;
+    }
+    size_t total = static_cast<size_t>(pages) * static_cast<size_t>(page_size);
+    GGML_LOG_INFO("[SYCL] System RAM detected: %.2f GB (%ld pages x %ld bytes)\n",
+                  total / (1024.0 * 1024.0 * 1024.0), pages, page_size);
+    return total;
+#endif
+}
+
 // Global unified_tensor_cache for tiered memory dispatch
 static std::unique_ptr<ggml_sycl::unified_tensor_cache> g_tensor_cache;
 
@@ -1499,13 +1523,18 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     if (g_tiered_enabled.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
         if (!g_tensor_cache) {
-            // Create cache with VRAM budget = 90% of free, host budget = 10GB
-
+            // Create cache with VRAM budget = 90% of free, host budget = 75% of system RAM
+            // The pinned_chunk_pool handles the per-allocation ~11GB Level Zero limit
+            // by using multiple 8GB chunks, so total budget can be much larger.
             size_t cache_vram_budget = vram_budget;
-            size_t host_budget       = 10ULL * 1024 * 1024 * 1024;  // 10GB
+            size_t system_ram        = get_system_memory_bytes();
+            size_t host_budget       = system_ram > 0 ? static_cast<size_t>(system_ram * 0.75)
+                                                      : 10ULL * 1024 * 1024 * 1024;  // 75% of RAM, fallback 10GB
+            GGML_LOG_INFO("[SYCL] Unified tensor cache: VRAM %.2f GB, Host %.2f GB (%.0f%% of %.2f GB RAM)\n",
+                          cache_vram_budget / (1024.0 * 1024.0 * 1024.0), host_budget / (1024.0 * 1024.0 * 1024.0),
+                          system_ram > 0 ? 75.0 : 0.0, system_ram / (1024.0 * 1024.0 * 1024.0));
             g_tensor_cache =
                 std::make_unique<ggml_sycl::unified_tensor_cache>(*(ctx->stream()), cache_vram_budget, host_budget);
-
         }
         // Build internal inventory from API inventory
         ggml_sycl::tensor_inventory internal_inv;
@@ -1873,12 +1902,14 @@ static ggml_sycl_device_info ggml_sycl_init() {
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
-    // Set host malloc limit based on known driver constraints
+    // Set per-allocation host malloc limit based on known driver constraints
     // Intel Level Zero has a per-allocation limit of ~11GB for malloc_host
-    // Use 10GB as safe default to avoid allocation failures
-    info.host_max_alloc_size = 10ULL * 1024 * 1024 * 1024;  // 10GB safe limit
+    // Note: The pinned_chunk_pool works around this by using 8GB chunks,
+    // so total host memory usage can exceed this limit.
+    // This is only used as a per-allocation check in ggml_sycl_host_malloc().
+    info.host_max_alloc_size = 8ULL * 1024 * 1024 * 1024;  // 8GB per-allocation limit
 
-    GGML_LOG_INFO("[SYCL] Host malloc limit: %.1f GB (safe default for Intel Arc)\n",
+    GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (Level Zero constraint)\n",
                   info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
     return info;
 
@@ -2680,6 +2711,14 @@ static bool ggml_sycl_reorder_weight_cpu(void * dst, const void * src, const ggm
     }
     return false;
 }
+
+// Forward declaration - handles mmap'd source memory by staging through pinned host memory
+static sycl::event ggml_sycl_safe_memcpy(sycl::queue &                    queue,
+                                          void *                           dst,
+                                          const void *                     src,
+                                          size_t                           bytes,
+                                          const std::vector<sycl::event> & deps);
+
 static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                    queue,
                                                  void *                           dst,
                                                  size_t                           dst_size,
@@ -2692,21 +2731,28 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     const auto * ctx = static_cast<const ggml_sycl_reorder_fill_ctx *>(ctx_void);
     if (!ctx) {
         GGML_SYCL_DEBUG("[DEBUG-FILL] ctx is NULL, fallback to memcpy\n");
-        return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+        return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
     }
-    bool src_is_host = false;
-    if (ctx->src_is_device) {
+    // Determine pointer type to choose correct copy strategy
+    // CRITICAL: unknown (mmap'd) memory is NOT USM-accessible - do NOT include in usm_accessible check!
+    // Only host/shared/device are safe for SYCL memcpy operations.
+    bool src_is_usm_accessible = false;
+    bool src_is_device         = ctx->src_is_device;
+    sycl::usm::alloc src_alloc = sycl::usm::alloc::unknown;
 
-        src_is_host = false;
-    } else {
-        const sycl::usm::alloc src_alloc = sycl::get_pointer_type(src, queue.get_context());
-        src_is_host = src_alloc == sycl::usm::alloc::host || src_alloc == sycl::usm::alloc::shared ||
-                      src_alloc == sycl::usm::alloc::unknown;
+    if (!src_is_device) {
+        src_alloc           = sycl::get_pointer_type(src, queue.get_context());
+        src_is_usm_accessible = (src_alloc == sycl::usm::alloc::host ||
+                                 src_alloc == sycl::usm::alloc::shared);
+        // NOTE: device type would be src_is_device=true, so not checked here
     }
+
     const void * reorder_src   = src;
     void *       host_src      = nullptr;
     bool         deps_consumed = false;  // Track if deps were already used
-    if (!src_is_host) {
+
+    if (src_is_device) {
+        // Source is device memory - need to copy to host staging for CPU reorder
         host_src = sycl::malloc_host(src_size, queue);
         if (!host_src) {
             GGML_LOG_ERROR("[UNIFIED-CACHE] reorder host staging alloc failed (%zu bytes)\n", src_size);
@@ -2720,12 +2766,25 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
                 cgh.depends_on(deps);
                 cgh.memcpy(host_src, src, src_size);
             });
-            deps_consumed = true;  // Mark deps as already consumed
+            deps_consumed = true;
         }
-
         src_copy.wait();
         reorder_src = host_src;
+    } else if (!src_is_usm_accessible) {
+        // Source is non-USM (mmap'd) memory - use CPU memcpy to pinned staging buffer
+        // SYCL queue.memcpy() cannot access mmap'd memory, so we must use std::memcpy
+        GGML_SYCL_DEBUG("[DEBUG-FILL] Non-USM source detected (alloc=%d), using CPU memcpy staging\n", (int)src_alloc);
+        host_src = sycl::malloc_host(src_size, queue);
+        if (!host_src) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] reorder host staging alloc failed for non-USM source (%zu bytes)\n", src_size);
+            // Cannot proceed - mmap memory can't be accessed by GPU
+            return queue.ext_oneapi_submit_barrier(deps);
+        }
+        // CPU memcpy is safe for non-USM -> pinned host memory
+        std::memcpy(host_src, src, src_size);
+        reorder_src = host_src;
     }
+    // else: src is USM host/shared - can read directly
     void * reorder_buf     = nullptr;
     void * reorder_buf_raw = nullptr;
     size_t reorder_guard   = 0;
@@ -2751,7 +2810,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
             sycl::free(host_src, queue);
         }
 
-        return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+        return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
     }
     const bool ok = ggml_sycl_reorder_weight_cpu(reorder_buf, reorder_src, *ctx);
 
@@ -2804,6 +2863,37 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     // Avoiding ext_oneapi_submit_barrier() which can produce corrupt events on Level Zero.
     return copy_event;
 }
+// Helper: Safe memcpy that handles mmap'd source memory via host staging
+static sycl::event ggml_sycl_safe_memcpy(sycl::queue &                    queue,
+                                          void *                           dst,
+                                          const void *                     src,
+                                          size_t                           bytes,
+                                          const std::vector<sycl::event> & deps) {
+    if (bytes == 0) {
+        return deps.empty() ? sycl::event() : queue.ext_oneapi_submit_barrier(deps);
+    }
+
+    // CRITICAL: Stage ALL non-device sources due to Level Zero driver bug that reports
+    // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
+    const sycl::usm::alloc src_type = sycl::get_pointer_type(src, queue.get_context());
+    if (src_type != sycl::usm::alloc::device) {
+        // Non-device source - cannot use queue.memcpy directly
+        // Use CPU memcpy to pinned staging buffer, then DMA to device
+        void * staging = sycl::malloc_host(bytes, queue);
+        if (!staging) {
+            GGML_LOG_ERROR("[SYCL] safe_memcpy: staging alloc failed for non-device source (%zu bytes)\n", bytes);
+            return deps.empty() ? sycl::event() : queue.ext_oneapi_submit_barrier(deps);
+        }
+        std::memcpy(staging, src, bytes);
+        sycl::event copy_event = queue.memcpy(dst, staging, bytes, deps);
+        copy_event.wait();
+        sycl::free(staging, queue);
+        return copy_event;
+    }
+    // USM-accessible source - direct DMA
+    return queue.memcpy(dst, src, bytes, deps);
+}
+
 static sycl::event ggml_sycl_fill_xmx_tiled(sycl::queue &                    queue,
                                             void *                           dst,
                                             size_t                           dst_size,
@@ -2816,63 +2906,87 @@ static sycl::event ggml_sycl_fill_xmx_tiled(sycl::queue &                    que
     const auto * ctx = static_cast<const ggml_sycl_xmx_tiled_fill_ctx *>(ctx_void);
 
     if (!ctx) {
-        return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+        return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
     }
 
     if (ctx->n_experts <= 0 || ctx->info.total_bytes == 0) {
-        return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+        return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
     }
     const size_t aos_bytes = src_size;
     if (aos_bytes == 0 || (aos_bytes % static_cast<size_t>(ctx->n_experts)) != 0) {
-        return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+        return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
     }
     const size_t    aos_expert_size = aos_bytes / static_cast<size_t>(ctx->n_experts);
     const uint8_t * aos_base        = static_cast<const uint8_t *>(src);
 
-    const sycl::usm::alloc aos_alloc   = sycl::get_pointer_type(aos_base, queue.get_context());
-    const bool             aos_is_host = aos_alloc == sycl::usm::alloc::host || aos_alloc == sycl::usm::alloc::unknown;
-    uint8_t * staging = nullptr;
-    if (aos_is_host) {
-        staging = sycl::malloc_device<uint8_t>(aos_expert_size, queue);
-        if (!staging) {
+    // Determine source memory type to choose correct copy strategy
+    // CRITICAL: Stage ALL non-device memory due to Level Zero driver bug that reports
+    // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
+    // We must use host staging for all non-device sources to be safe.
+    const sycl::usm::alloc aos_alloc     = sycl::get_pointer_type(aos_base, queue.get_context());
+    const bool             aos_needs_staging = (aos_alloc != sycl::usm::alloc::device);
 
-            GGML_LOG_ERROR("[UNIFIED-CACHE] XMX tiled staging alloc failed (%zu bytes)\n", aos_expert_size);
-            return queue.memcpy(dst, src, std::min(dst_size, src_size), deps);
+    uint8_t * device_staging = nullptr;  // Device-side staging for non-device source
+    uint8_t * host_staging   = nullptr;  // Host-side staging for non-device source
+
+    if (aos_needs_staging) {
+        device_staging = sycl::malloc_device<uint8_t>(aos_expert_size, queue);
+        if (!device_staging) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] XMX tiled device staging alloc failed (%zu bytes)\n", aos_expert_size);
+            return ggml_sycl_safe_memcpy(queue, dst, src, std::min(dst_size, src_size), deps);
+        }
+        // Always use host staging for non-device memory due to driver bug where
+        // mmap'd memory is reported as "shared" - queue.memcpy would fail on it
+        host_staging = static_cast<uint8_t *>(sycl::malloc_host(aos_expert_size, queue));
+        if (!host_staging) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] XMX tiled host staging alloc failed (%zu bytes)\n", aos_expert_size);
+            sycl::free(device_staging, queue);
+            return queue.ext_oneapi_submit_barrier(deps);
         }
     }
+
     sycl::event chain_event;
     bool        has_chain_event = false;
     if (!deps.empty()) {
         chain_event     = queue.ext_oneapi_submit_barrier(deps);
-
         has_chain_event = true;
     }
+
     for (int64_t e = 0; e < ctx->n_experts; ++e) {
         const uint8_t * expert_aos = aos_base + static_cast<size_t>(e) * aos_expert_size;
         const uint8_t * d_aos      = expert_aos;
-        if (aos_is_host) {
+
+        if (aos_needs_staging) {
+            // Non-device source: CPU memcpy to host staging, then queue.memcpy to device staging
+            // Always use host staging path due to driver bug where mmap'd memory is mis-reported
+            std::memcpy(host_staging, expert_aos, aos_expert_size);
             if (has_chain_event) {
-                chain_event = queue.memcpy(staging, expert_aos, aos_expert_size, chain_event);
+                chain_event = queue.memcpy(device_staging, host_staging, aos_expert_size, chain_event);
             } else {
-                chain_event     = queue.memcpy(staging, expert_aos, aos_expert_size);
+                chain_event     = queue.memcpy(device_staging, host_staging, aos_expert_size);
                 has_chain_event = true;
             }
-
-            d_aos = staging;
+            d_aos = device_staging;
         }
+
         uint8_t * d_out = static_cast<uint8_t *>(dst) + static_cast<size_t>(e) * ctx->info.total_bytes;
         chain_event     = ggml_sycl::moe_tile_convert::reorder_mxfp4_aos_to_xmx_tiled(
             queue, chain_event, d_aos, d_out, static_cast<size_t>(e), ctx->info,
             sycl::range<3>(1, ctx->info.n_tile_groups_n, ctx->info.n_tile_groups_k), sycl::range<3>(1, 1, 1));
         has_chain_event = true;
     }
-    if (aos_is_host && staging) {
-        // Wait for tiling to complete and free staging buffer synchronously.
+
+    if (aos_needs_staging) {
+        // Wait for tiling to complete and free staging buffers synchronously.
         // NOTE: We avoid host_task because Level Zero driver has issues with it
         // that can corrupt event handles and cause crashes.
         chain_event.wait();
-        sycl::free(staging, queue);
-        // Return the chain_event - it's now complete and safe to wait on again.
+        if (host_staging) {
+            sycl::free(host_staging, queue);
+        }
+        if (device_staging) {
+            sycl::free(device_staging, queue);
+        }
     }
 
     return chain_event;
@@ -6961,6 +7075,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     const bool              weights_evictable             = ggml_backend_sycl_weights_evictable();
 
     const bool              in_model_load                 = g_sycl_in_model_load.load(std::memory_order_acquire);
+    GGML_LOG_INFO("[SYCL] Host buffer alloc request: %.1f MB (evictable=%d, in_model_load=%d, threshold=64MB)\n",
+                  size / (1024.0 * 1024.0), weights_evictable ? 1 : 0, in_model_load ? 1 : 0);
     // During model load, avoid monolithic pinned allocations for large buffers.
     // Unified cache will manage pinned/device layouts; tensor->data stays in CPU/mmap.
     if (weights_evictable && in_model_load && size >= k_model_load_pinned_threshold) {
@@ -13912,26 +14028,36 @@ static bool convert_tensor_layout(ggml_tensor *   tensor,
             sycl::free(tiled_buf, *stream);
             return false;
         }
+        // Determine source memory type to choose correct copy strategy
+        // CRITICAL: Stage ALL non-device memory due to Level Zero driver bug that reports
+        // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
         const sycl::usm::alloc aos_alloc = sycl::get_pointer_type(aos_base, stream->get_context());
-        const bool aos_is_host = aos_alloc == sycl::usm::alloc::host || aos_alloc == sycl::usm::alloc::unknown;
-        uint8_t * staging = nullptr;
+        const bool aos_needs_staging = (aos_alloc != sycl::usm::alloc::device);
+        uint8_t * device_staging = nullptr;
+        uint8_t * host_staging   = nullptr;  // For non-device source
 
-        if (aos_is_host) {
-            staging = static_cast<uint8_t *>(extra->xmx_mxfp4_tiled_aos_staging[device_id]);
-            if (staging && extra->xmx_mxfp4_tiled_aos_staging_size[device_id] < aos_expert_size) {
-                sycl::free(staging, *stream);
-                staging = nullptr;
+        if (aos_needs_staging) {
+            device_staging = static_cast<uint8_t *>(extra->xmx_mxfp4_tiled_aos_staging[device_id]);
+            if (device_staging && extra->xmx_mxfp4_tiled_aos_staging_size[device_id] < aos_expert_size) {
+                sycl::free(device_staging, *stream);
+                device_staging = nullptr;
             }
-            if (!staging) {
-
-                staging = sycl::malloc_device<uint8_t>(aos_expert_size, *stream);
-                if (staging) {
-                    extra->xmx_mxfp4_tiled_aos_staging[device_id]      = staging;
+            if (!device_staging) {
+                device_staging = sycl::malloc_device<uint8_t>(aos_expert_size, *stream);
+                if (device_staging) {
+                    extra->xmx_mxfp4_tiled_aos_staging[device_id]      = device_staging;
                     extra->xmx_mxfp4_tiled_aos_staging_size[device_id] = aos_expert_size;
                 }
             }
-            if (!staging) {
-
+            if (!device_staging) {
+                sycl::free(tiled_buf, *stream);
+                return false;
+            }
+            // Always use host staging for non-device memory due to driver bug where
+            // mmap'd memory is reported as "shared" - queue.memcpy would fail on it
+            host_staging = static_cast<uint8_t *>(sycl::malloc_host(aos_expert_size, *stream));
+            if (!host_staging) {
+                GGML_LOG_ERROR("[LAYOUT] XMX tiled host staging alloc failed (%zu bytes)\n", aos_expert_size);
                 sycl::free(tiled_buf, *stream);
                 return false;
             }
@@ -13941,9 +14067,12 @@ static bool convert_tensor_layout(ggml_tensor *   tensor,
             for (int64_t e = 0; e < n_experts; e++) {
                 const uint8_t * expert_aos = aos_base + static_cast<size_t>(e) * aos_expert_size;
                 const uint8_t * d_aos      = expert_aos;
-                if (aos_is_host) {
-                    conversion_evt = stream->memcpy(staging, expert_aos, aos_expert_size, conversion_evt);
-                    d_aos          = staging;
+                if (aos_needs_staging) {
+                    // Non-device source: CPU memcpy to host staging, then queue.memcpy to device staging
+                    // Always use host staging path due to driver bug where mmap'd memory is mis-reported
+                    std::memcpy(host_staging, expert_aos, aos_expert_size);
+                    conversion_evt = stream->memcpy(device_staging, host_staging, aos_expert_size, conversion_evt);
+                    d_aos = device_staging;
                 }
                 uint8_t * d_out = static_cast<uint8_t *>(tiled_buf) + static_cast<size_t>(e) * info.total_bytes;
                 conversion_evt  = ggml_sycl::moe_tile_convert::reorder_mxfp4_aos_to_xmx_tiled(
@@ -13952,6 +14081,10 @@ static bool convert_tensor_layout(ggml_tensor *   tensor,
                     sycl::range<3>(1, info.n_tile_groups_n, info.n_tile_groups_k), sycl::range<3>(1, 1, 1));
             }
             conversion_evt.wait();
+            // Free host staging buffer if used (for mmap'd source)
+            if (host_staging) {
+                sycl::free(host_staging, *stream);
+            }
             extra->xmx_mxfp4_tiled[device_id]                     = tiled_buf;
             extra->xmx_mxfp4_tiled_size                           = tiled_bytes;
             extra->xmx_mxfp4_tiled_owned[device_id]               = true;
@@ -13980,6 +14113,9 @@ static bool convert_tensor_layout(ggml_tensor *   tensor,
 
         } catch (const sycl::exception & ex) {
             GGML_SYCL_DEBUG("[LAYOUT] %s: AoS→XMX_TILED failed for %s: %s\n", caller, tensor->name, ex.what());
+            if (host_staging) {
+                sycl::free(host_staging, *stream);
+            }
             sycl::free(tiled_buf, *stream);
             ggml_sycl_release_xmx_aos_staging(extra, device_id, stream);
 
@@ -14753,11 +14889,26 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
         *out_nb1 = ids->nb[1];
 
     }
-    const bool ids_on_host = ids->buffer && ggml_backend_buffer_is_host(ids->buffer);
-    if (!ids_on_host) {
+    // Check both buffer type AND USM accessibility
+    // mmap'd data may not be in a "host" buffer but is still not device-accessible
+    const bool ids_buffer_on_host = ids->buffer && ggml_backend_buffer_is_host(ids->buffer);
 
+    // Also check USM type - if pointer is unknown (mmap'd/heap), we need staging
+    sycl::queue * stream = ctx.stream();
+    sycl::usm::alloc ptr_type = sycl::get_pointer_type(ids->data, stream->get_context());
+    const bool ids_ptr_device_accessible = (ptr_type == sycl::usm::alloc::device ||
+                                            ptr_type == sycl::usm::alloc::shared ||
+                                            ptr_type == sycl::usm::alloc::host);
+
+    // Only return raw pointer if both buffer says not-host AND pointer is device-accessible
+    if (!ids_buffer_on_host && ids_ptr_device_accessible) {
+        GGML_SYCL_DEBUG("[MOE-IDS] Using device-accessible pointer directly (usm_type=%d, ptr=%p)\n",
+                        (int)ptr_type, ids->data);
         return static_cast<const int32_t *>(ids->data);
     }
+    GGML_SYCL_DEBUG("[MOE-IDS] Staging ids to device (buffer_on_host=%d, ptr_usm_type=%d)\n",
+                    ids_buffer_on_host ? 1 : 0, (int)ptr_type);
+
     auto &        entry     = ctx.moe_ids_cache[ids];
     const int64_t n_ids     = ids->ne[0];
 
@@ -14766,9 +14917,9 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
     const size_t  ids_bytes = static_cast<size_t>(n_ids * n_tokens) * sizeof(int32_t);
     if (!entry.device_ids || entry.device_bytes < ids_bytes) {
         if (entry.device_ids) {
-            sycl::free(entry.device_ids, *ctx.stream());
+            sycl::free(entry.device_ids, *stream);
         }
-        entry.device_ids   = sycl::malloc_device(ids_bytes, *ctx.stream());
+        entry.device_ids   = sycl::malloc_device(ids_bytes, *stream);
         entry.device_bytes = ids_bytes;
         if (!entry.device_ids) {
 
@@ -14776,10 +14927,54 @@ const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx
         }
     }
 
-    const char *             ids_base = static_cast<const char *>(ids->data);
-    sycl::queue *            stream   = ctx.stream();
+    const char * ids_base = static_cast<const char *>(ids->data);
+
+    // CRITICAL: Stage ALL non-device pointers due to Level Zero driver bug that reports
+    // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
+    const bool need_staging = (ptr_type != sycl::usm::alloc::device);
+
+    if (need_staging) {
+        // Use pinned host staging buffer for non-device sources
+        if (!entry.staging_ids || entry.staging_bytes < ids_bytes) {
+            if (entry.staging_ids) {
+                sycl::free(entry.staging_ids, *stream);
+            }
+            entry.staging_ids   = sycl::malloc_host(ids_bytes, *stream);
+            entry.staging_bytes = ids_bytes;
+            if (!entry.staging_ids) {
+                return nullptr;
+            }
+        }
+
+        // CPU memcpy from non-device to pinned staging, then DMA to device
+        if (ids->nb[1] == static_cast<int64_t>(row_bytes)) {
+            std::memcpy(entry.staging_ids, ids_base, ids_bytes);
+        } else {
+            for (int64_t row = 0; row < n_tokens; ++row) {
+                std::memcpy(static_cast<char *>(entry.staging_ids) + row * row_bytes,
+                            ids_base + row * ids->nb[1], row_bytes);
+            }
+        }
+        sycl::event copy_event = stream->memcpy(entry.device_ids, entry.staging_ids, ids_bytes);
+        if (out_nb0) {
+            *out_nb0 = sizeof(int32_t);
+        }
+        if (out_nb1) {
+            *out_nb1 = static_cast<int64_t>(row_bytes);
+        }
+        if (g_ggml_sycl_graph_recording) {
+            if (out_event) {
+                *out_event = copy_event;
+            }
+        } else {
+            copy_event.wait();
+        }
+        return static_cast<const int32_t *>(entry.device_ids);
+    }
+
+    // For USM-accessible sources, use direct DMA
     std::vector<sycl::event> copy_events;
-    if (ids->nb[1] == row_bytes) {
+    if (ids->nb[1] == static_cast<int64_t>(row_bytes)) {
         copy_events.push_back(stream->memcpy(entry.device_ids, ids_base, ids_bytes));
     } else {
         copy_events.reserve(static_cast<size_t>(n_tokens));
@@ -14818,26 +15013,51 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
                                     bool                         skip_device_copy,
 
                                     bool                         force_cache_aos) {
+    GGML_SYCL_DEBUG("[MOE-PTR] ENTER: src0=%s layout=%d allow_all=%d force_aos=%d\n",
+                    src0 ? (src0->name ? src0->name : "?") : "(null)", (int)layout, allow_all_experts, force_cache_aos);
     if (out_event) {
         *out_event = sycl::event{};
     }
 
     if (!src0 || (!ids && !allow_all_experts)) {
+        GGML_SYCL_DEBUG("[MOE-PTR] Early return: src0=%p ids=%p\n", (void*)src0, (void*)ids);
         return false;
     }
     const int     device      = ctx.device;
     const int64_t n_experts   = src0->ne[2] > 0 ? src0->ne[2] : 1;
     const size_t  expert_size = src0->nb[2];
+    GGML_SYCL_DEBUG("[MOE-PTR] n_experts=%ld expert_size=%zu device=%d\n", (long)n_experts, expert_size, device);
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
 
     if (!extra) {
+        GGML_SYCL_DEBUG("[MOE-PTR] No extra, returning false\n");
         return false;
     }
     sycl::queue * stream = ctx.stream();
+    GGML_SYCL_DEBUG("[MOE-PTR] stream=%p data=%p\n", (void*)stream, src0->data);
 
-    const bool    src0_is_device =
-        src0->data && sycl::get_pointer_type(src0->data, stream->get_context()) == sycl::usm::alloc::device;
+    // Force queue sync to catch any pending errors from previous operations
+    try {
+        stream->wait();
+        GGML_SYCL_DEBUG("[MOE-PTR] queue sync complete\n");
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[MOE-PTR] Pending error in queue: %s\n", e.what());
+        throw;
+    }
+
+    // Determine if src0->data is directly usable by GPU kernels
+    // Only host and shared USM types are device-accessible without staging
+    // unknown (mmap'd/heap) and device require special handling
+    sycl::usm::alloc src0_alloc = src0->data
+                                      ? sycl::get_pointer_type(src0->data, stream->get_context())
+                                      : sycl::usm::alloc::unknown;
+    const bool    src0_is_device = (src0_alloc == sycl::usm::alloc::device);
+    const bool    src0_is_usm_accessible = (src0_alloc == sycl::usm::alloc::host ||
+                                            src0_alloc == sycl::usm::alloc::shared);
+    GGML_SYCL_DEBUG("[MOE-PTR] src0_alloc=%d src0_is_device=%d src0_is_usm_accessible=%d\n",
+                    (int)src0_alloc, src0_is_device, src0_is_usm_accessible);
     ggml_sycl_ensure_moe_ptr_table(extra, device, n_experts, *stream);
+    GGML_SYCL_DEBUG("[MOE-PTR] ensure_moe_ptr_table done\n");
     if (!extra->moe_expert_ptrs_device[device] ||
         extra->moe_expert_ptrs_host[device].size() != static_cast<size_t>(n_experts)) {
         return false;
@@ -14886,8 +15106,14 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
     if (layout == GGML_LAYOUT_AOS && !force_cache_aos) {
 
         direct_base = ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
-        if (!direct_base) {
+        if (!direct_base && src0_is_usm_accessible) {
+            // Only use raw src0->data if it's USM-accessible (host or shared)
+            // mmap'd (unknown) memory is NOT GPU-accessible and must go through cache staging
+            GGML_SYCL_DEBUG("[MOE-PTR] Using direct src0->data=%p (USM accessible)\n", src0->data);
             direct_base = const_cast<void *>(src0->data);
+        } else if (!direct_base) {
+            // Not USM-accessible - must use cache path for proper staging
+            GGML_SYCL_DEBUG("[MOE-PTR] Non-USM src0->data, forcing cache path for %s\n", src0->name);
         }
     }
     if (need_all_experts && layout != GGML_LAYOUT_AOS && g_ggml_sycl_graph_recording) {
@@ -14994,7 +15220,9 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             return false;
 #endif
         }
+        GGML_SYCL_DEBUG("[MOE] Caching expert %ld layout=%d src=%p size=%zu\n", (long) e, (int) layout, req.src_ptr, req.src_size);
         ggml_sycl::cache_layout_result result = cache->ensure_cached_layout(req, {});
+        GGML_SYCL_DEBUG("[MOE] Expert %ld cache result: status=%d device_ptr=%p\n", (long) e, (int) result.status, result.device_ptr);
         if (result.status != ggml_sycl::cache_layout_status::READY &&
             result.status != ggml_sycl::cache_layout_status::IN_PROGRESS) {
             GGML_LOG_ERROR("[MOE] Failed to cache expert %ld layout=%d status=%d\n", (long) e, (int) layout,
@@ -16450,13 +16678,14 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     if (!src0_weight_ptr) {
         return false;
     }
-    // Check if expert weights are in host memory
+    // Check if expert weights are in device memory
     // Fused kernel requires contiguous device memory for all experts
-    // Fall back to MMVQ which has per-expert caching support
+    // Fall back to MMVQ which has per-expert caching support for non-device memory
+    // CRITICAL: Check for != device due to Level Zero driver bug that reports mmap'd memory as "shared"
     {
         sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_weight_ptr, stream->get_context());
-        if (ptr_type == sycl::usm::alloc::unknown || ptr_type == sycl::usm::alloc::host) {
-            GGML_SYCL_DEBUG("[MoE FUSED] Weights in host memory (type=%d), falling back to MMVQ for caching\n",
+        if (ptr_type != sycl::usm::alloc::device) {
+            GGML_SYCL_DEBUG("[MoE FUSED] Weights not in device memory (type=%d), falling back to MMVQ for caching\n",
                             (int) ptr_type);
             return false;  // Let MMVQ handle with expert caching
         }
@@ -16851,15 +17080,12 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     const uint8_t * src0_layout_u8 = use_ptr_table ? nullptr : static_cast<const uint8_t *>(src0_layout_ptr);
     if (!use_ptr_table) {
         const sycl::usm::alloc src0_layout_alloc = sycl::get_pointer_type(src0_layout_ptr, stream->get_context());
-        const bool             src0_layout_is_host =
-            src0_layout_alloc == sycl::usm::alloc::host || src0_layout_alloc == sycl::usm::alloc::unknown;
-        if (src0_layout_is_host) {
-            // Log performance warning but continue (USM allows host access, just slower)
-            static std::atomic<int> host_warn_count{ 0 };
-            if (host_warn_count.fetch_add(1, std::memory_order_relaxed) < 5) {
-                GGML_LOG_WARN("[XMX MoE] Expert weights in host memory - performance may be reduced (~2-4x slower)\n");
-            }
-            // DO NOT return false - continue with XMX using host pointer via SYCL USM
+        // CRITICAL: non-device memory is NOT safe - must fall back to MMVQ
+        // Level Zero driver bug reports mmap'd memory as "shared" instead of "unknown"
+        if (src0_layout_alloc != sycl::usm::alloc::device) {
+            GGML_SYCL_DEBUG("[XMX MoE] Expert weights not in device memory (type=%d), falling back to MMVQ\n",
+                            (int)src0_layout_alloc);
+            return false;  // Fall back to MMVQ which handles non-device weights via per-expert caching
         }
     }
     // Extract tensor dimensions
@@ -17698,26 +17924,34 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     auto try_mmvq_layout = [&](layout_mode layout) -> bool {
         if (has_override && layout != override_layout) {
+            GGML_SYCL_DEBUG("[MoE] Skipping layout=%d (override=%d)\n", (int)layout, (int)override_layout);
             return false;
         }
-        return ggml_sycl_mul_mat_id_vec_q(ctx, src0, src1, ids, dst, &layout);
+        GGML_SYCL_DEBUG("[MoE] Trying MMVQ with layout=%d for %s\n", (int)layout, src0->name ? src0->name : "?");
+        bool result = ggml_sycl_mul_mat_id_vec_q(ctx, src0, src1, ids, dst, &layout);
+        GGML_SYCL_DEBUG("[MoE] MMVQ layout=%d returned %s\n", (int)layout, result ? "true" : "false");
+        return result;
     };
+    GGML_SYCL_DEBUG("[MoE] About to try COALESCED layout\n");
     if (try_mmvq_layout(GGML_LAYOUT_COALESCED)) {
         GGML_SYCL_DEBUG("[MoE] GPU-side MMVQ (coalesced) dispatch successful for type %d\n", src0->type);
         return;
 
     }
+    GGML_SYCL_DEBUG("[MoE] About to try SOA layout\n");
     if (try_mmvq_layout(GGML_LAYOUT_SOA)) {
         GGML_SYCL_DEBUG("[MoE] GPU-side MMVQ (SoA) dispatch successful for type %d\n", src0->type);
         return;
     }
+    GGML_SYCL_DEBUG("[MoE] About to try AOS layout\n");
     if (try_mmvq_layout(GGML_LAYOUT_AOS)) {
 
         GGML_SYCL_DEBUG("[MoE] GPU-side MMVQ (AoS) dispatch successful for type %d\n", src0->type);
         return;
 
     }
-    GGML_SYCL_DEBUG("[MoE] Falling back to host-side routing for type %d\n", src0->type);
+    GGML_SYCL_DEBUG("[MoE] All MMVQ layouts failed, falling back to host routing\n");
+    GGML_LOG_INFO("[MoE] Falling back to host-side routing for type %d\n", src0->type);
     // Host-side routing requires synchronization which is incompatible with graph recording.
 
     // If we reach here during graph recording, we must abort because no graph-compatible
@@ -18005,9 +18239,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     }
 
                     if (!expert_ptr) {
-                        GGML_LOG_ERROR("[MoE] Missing cached pointer for L%d:E%d\n", layer_id, (int) i02);
+                        // Cannot use mmap fallback - GPU cannot access non-USM memory
+                        // Skip this expert instead of crashing with DEVICE_LOST
+                        GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached - memory exhausted, skipping\n", layer_id, (int) i02);
 
-                        expert_ptr = src0_original + i02 * expert_size;
+                        continue;
                     }
                 } else {
                     expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;
@@ -18135,9 +18371,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                     expert_ptr = expert_ptrs_host[i02];
                 }
                 if (!expert_ptr) {
-                    GGML_LOG_ERROR("[MoE] Missing cached pointer for L%d:E%d (batch)\n", layer_id, (int) i02);
-
-                    expert_ptr = src0_original + i02 * expert_size;
+                    // Cannot use mmap fallback - GPU cannot access non-USM memory
+                    // Skip this expert instead of crashing with DEVICE_LOST
+                    GGML_LOG_ERROR("[MoE] Expert L%d:E%d not cached (batch) - memory exhausted, skipping\n", layer_id, (int) i02);
+                    continue;
                 }
             } else {
                 expert_ptr = static_cast<const char *>(src0_layout_base) + i02 * expert_size;

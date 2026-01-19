@@ -57,17 +57,19 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   const int32_t* src2_d = (const int32_t*)src2->data;
   float* dst_d = (float*)dst->data;
 
-  // Check if src1 is mmap'd (not USM-accessible) - GPU cannot read mmap'd memory directly
+  // Check if src1 needs staging - GPU can only directly access device memory
+  // CRITICAL: Stage ALL non-device pointers due to Level Zero driver bug that reports
+  // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST
   const sycl::usm::alloc src1_type = sycl::get_pointer_type(src1->data, q.get_context());
-  const bool src1_is_mmap = (src1_type == sycl::usm::alloc::unknown);
+  const bool src1_needs_staging = (src1_type != sycl::usm::alloc::device);
 
   const float* src1_d = nullptr;
   void* src1_staging = nullptr;
   void* host_staging = nullptr;
   sycl::event copy_event;
 
-  if (src1_is_mmap) {
-    // Mmap'd source - stage to device memory via pinned host buffer
+  if (src1_needs_staging) {
+    // Non-device source - stage to device memory via pinned host buffer
     // Calculate total size of src1 tensor
     const size_t src1_bytes = ggml_nbytes(src1);
 
@@ -93,9 +95,9 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     copy_event = q.memcpy(src1_staging, host_staging, src1_bytes);
 
     src1_d = (const float*)src1_staging;
-    GGML_SYCL_DEBUG("[ADD_ID] Staged mmap src1 to device (%zu bytes)\n", src1_bytes);
+    GGML_SYCL_DEBUG("[ADD_ID] Staged non-device src1 to device (%zu bytes, type=%d)\n", src1_bytes, (int)src1_type);
   } else {
-    // USM-accessible (host, device, or shared) - use directly
+    // Device memory - use directly
     src1_d = (const float*)src1->data;
   }
 
@@ -103,7 +105,7 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
   // Submit kernel with dependency on copy event if staging was needed
   sycl::event kernel_event;
-  if (src1_is_mmap) {
+  if (src1_needs_staging) {
     // Kernel depends on copy completing
     kernel_event = q.submit([&](sycl::handler& cgh) {
       cgh.depends_on(copy_event);
