@@ -3110,52 +3110,56 @@ void ggml_gemm_q5_K_8x8_q8_K(int                        n,
                         uint8x16_t qs_cp_3 = vld1q_u8(q5_ptr[b].qs + sb * QK_K + 16 * cp + 192);  // 24..31 & 56..63
 
                         // This is the only part of the algorithm that differs with Q4_K
-                        // High bits
-                        uint8x16_t hbit_lo_0 = vshlq_n_u8(vandq_u8(qh[cp][0], mone), 4);
-                        uint8x16_t hbit_lo_1 = vshlq_n_u8(vandq_u8(qh[cp][1], mone), 4);
-                        uint8x16_t hbit_lo_2 = vshlq_n_u8(vandq_u8(qh[cp][2], mone), 4);
-                        uint8x16_t hbit_lo_3 = vshlq_n_u8(vandq_u8(qh[cp][3], mone), 4);
-                        uint8x16_t hbit_hi_0 = vshlq_n_u8(vandq_u8(qh[cp][0], mtwo), 3);
-                        uint8x16_t hbit_hi_1 = vshlq_n_u8(vandq_u8(qh[cp][1], mtwo), 3);
-                        uint8x16_t hbit_hi_2 = vshlq_n_u8(vandq_u8(qh[cp][2], mtwo), 3);
-                        uint8x16_t hbit_hi_3 = vshlq_n_u8(vandq_u8(qh[cp][3], mtwo), 3);
+                        // Extract High bits and pack into 5 bit weights
+                        uint8x16_t hbit_lo_0    = vandq_u8(qh[cp][0], mone);
+                        uint8x16_t hbit_hi_0    = vshlq_n_u8(vandq_u8(qh[cp][0], mtwo), 3);
+                        qh[cp][0]               = vshrq_n_u8(qh[cp][0], 2);
+                        // Same as Q4_K, i8mm to dequantize the weights.
+                        const int8x16_t qs_lo_0 = vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(qs_cp_0, m4b), hbit_lo_0, 4));
+                        int32x4_t       acc_0   = sb_acc[0];
+                        acc_0                   = vmmlaq_s32(acc_0, qs_lo_0, q8s[0][0]);
+                        int32x4_t acc_2 = sb_acc[2];
+                        acc_2           = vmmlaq_s32(acc_2, qs_lo_0, q8s[1][0]);
+                        const int8x16_t qs_hi_0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_0, 4), hbit_hi_0));
+                        int32x4_t       acc_1   = sb_acc[1];
+                        acc_1                   = vmmlaq_s32(acc_1, qs_hi_0, q8s[0][4]);
+                        int32x4_t acc_3         = sb_acc[3];
+                        acc_3                   = vmmlaq_s32(acc_3, qs_hi_0, q8s[1][4]);
 
-                        qh[cp][0] = vshrq_n_u8(qh[cp][0], 2);
-                        qh[cp][1] = vshrq_n_u8(qh[cp][1], 2);
-                        qh[cp][2] = vshrq_n_u8(qh[cp][2], 2);
-                        qh[cp][3] = vshrq_n_u8(qh[cp][3], 2);
+                        // Repeat for the other 3 columns (8..15, 16..23, 24..31)
+                        uint8x16_t hbit_hi_1    = vshlq_n_u8(vandq_u8(qh[cp][1], mtwo), 3);
+                        uint8x16_t hbit_lo_1    = vandq_u8(qh[cp][1], mone);
+                        qh[cp][1]               = vshrq_n_u8(qh[cp][1], 2);
+                        const int8x16_t qs_lo_1 = vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(qs_cp_1, m4b), hbit_lo_1, 4));
+                        acc_0                   = vmmlaq_s32(acc_0, qs_lo_1, q8s[0][1]);
+                        acc_2                   = vmmlaq_s32(acc_2, qs_lo_1, q8s[1][1]);
+                        const int8x16_t qs_hi_1 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_1, 4), hbit_hi_1));
+                        acc_1                   = vmmlaq_s32(acc_1, qs_hi_1, q8s[0][5]);
+                        acc_3                   = vmmlaq_s32(acc_3, qs_hi_1, q8s[1][5]);
 
-                        // Combine 4-bit values with high bits to get 5-bit values
-                        const int8x16_t q5_nibbles[2][4] = {
-                            {
-                             vreinterpretq_s8_u8(vorrq_u8(vandq_u8(qs_cp_0, m4b), hbit_lo_0)),
-                             vreinterpretq_s8_u8(vorrq_u8(vandq_u8(qs_cp_1, m4b), hbit_lo_1)),
-                             vreinterpretq_s8_u8(vorrq_u8(vandq_u8(qs_cp_2, m4b), hbit_lo_2)),
-                             vreinterpretq_s8_u8(vorrq_u8(vandq_u8(qs_cp_3, m4b), hbit_lo_3)),
-                             },
-                            {
-                             vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_0, 4), hbit_hi_0)),
-                             vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_1, 4), hbit_hi_1)),
-                             vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_2, 4), hbit_hi_2)),
-                             vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_3, 4), hbit_hi_3)),
-                             }
-                        };
-                        // From here, it's the same as Q4_K
+                        uint8x16_t hbit_hi_2    = vshlq_n_u8(vandq_u8(qh[cp][2], mtwo), 3);
+                        uint8x16_t hbit_lo_2    = vandq_u8(qh[cp][2], mone);
+                        qh[cp][2]               = vshrq_n_u8(qh[cp][2], 2);
+                        const int8x16_t qs_lo_2 = vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(qs_cp_2, m4b), hbit_lo_2, 4));
+                        acc_0                   = vmmlaq_s32(acc_0, qs_lo_2, q8s[0][2]);
+                        acc_2                   = vmmlaq_s32(acc_2, qs_lo_2, q8s[1][2]);
+                        const int8x16_t qs_hi_2 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_2, 4), hbit_hi_2));
+                        acc_1                   = vmmlaq_s32(acc_1, qs_hi_2, q8s[0][6]);
+                        acc_3                   = vmmlaq_s32(acc_3, qs_hi_2, q8s[1][6]);
 
-                        // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
-                        // for each of the internal 32 qs subblock (blk)
-                        for (int rp = 0; rp < 2; rp++) {
-                            for (int blk = 0; blk < 2; blk++) {
-                                const int8x16_t * q8  = &q8s[rp][4 * blk];
-                                const int8x16_t * q5  = q5_nibbles[blk];
-                                int32x4_t         acc = sb_acc[2 * rp + blk];
-                                // mul add for each qs in the same subblock
-                                for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
-                                    acc = vmmlaq_s32(acc, q5[qs_offset], q8[qs_offset]);
-                                }
-                                sb_acc[2 * rp + blk] = acc;
-                            }
-                        }
+                        uint8x16_t hbit_lo_3    = vandq_u8(qh[cp][3], mone);
+                        uint8x16_t hbit_hi_3    = vshlq_n_u8(vandq_u8(qh[cp][3], mtwo), 3);
+                        qh[cp][3]               = vshrq_n_u8(qh[cp][3], 2);
+                        const int8x16_t qs_lo_3 = vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(qs_cp_3, m4b), hbit_lo_3, 4));
+                        acc_0                   = vmmlaq_s32(acc_0, qs_lo_3, q8s[0][3]);
+                        sb_acc[0]               = acc_0;
+                        acc_2                   = vmmlaq_s32(acc_2, qs_lo_3, q8s[1][3]);
+                        sb_acc[2]               = acc_2;
+                        const int8x16_t qs_hi_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_3, 4), hbit_hi_3));
+                        acc_1                   = vmmlaq_s32(acc_1, qs_hi_3, q8s[0][7]);
+                        sb_acc[1]               = acc_1;
+                        acc_3                   = vmmlaq_s32(acc_3, qs_hi_3, q8s[1][7]);
+                        sb_acc[3]               = acc_3;
 
                         // Scales[i] corresponds to column i
                         const int scale_offset = cp * 2;
