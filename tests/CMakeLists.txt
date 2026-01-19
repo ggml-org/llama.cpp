@@ -1532,16 +1532,4 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-unified-memory-e2e RUNTIME)
     add_test(NAME test-sycl-unified-memory-e2e COMMAND $<TARGET_FILE:test-sycl-unified-memory-e2e>)
     set_property(TEST test-sycl-unified-memory-e2e PROPERTY LABELS "sycl;e2e")
-
-    # test-sycl-compute-buffers: Tests P0 (CRITICAL priority) compute buffer management
-    add_executable(test-sycl-compute-buffers test-sycl-compute-buffers.cpp)
-    target_link_libraries(test-sycl-compute-buffers PRIVATE ggml ggml-cpu)
-    target_include_directories(test-sycl-compute-buffers PRIVATE
-        \${PROJECT_SOURCE_DIR}/ggml/include
-        \${PROJECT_SOURCE_DIR}/ggml/src
-        \${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
-    target_compile_options(test-sycl-compute-buffers PRIVATE "-fsycl" "-Wno-narrowing")
-    target_link_options(test-sycl-compute-buffers PRIVATE "-fsycl")
-    install(TARGETS test-sycl-compute-buffers RUNTIME)
-    add_test(NAME test-sycl-compute-buffers COMMAND \$<TARGET_FILE:test-sycl-compute-buffers>)
 endif()

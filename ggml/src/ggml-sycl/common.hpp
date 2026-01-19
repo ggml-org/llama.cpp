@@ -552,7 +552,8 @@ inline tensor_usage infer_tensor_usage(const char * name) {
     }
 
     // Attention weights
-    if (strstr(name, "attn_q") || strstr(name, "attn_k") || strstr(name, "attn_v") || strstr(name, "attn_output")) {
+    if (strstr(name, "attn_q") || strstr(name, "attn_k") || strstr(name, "attn_v") ||
+        strstr(name, "attn_output") || strstr(name, "attn_sinks")) {
         return tensor_usage::ATTENTION_WEIGHT;
     }
 
