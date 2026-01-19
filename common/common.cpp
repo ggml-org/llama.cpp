@@ -1537,7 +1537,19 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         }
     }
 
-    if (params.warmup) {
+    // Check if warmup should be skipped for SYCL tiered mode
+    // During warmup, n_expert_used is set to n_expert (ALL experts) which causes
+    // memory exhaustion for large MoE models (128 experts) in tiered mode.
+    // Skip warmup since tiered mode already streams weights from host.
+    bool skip_warmup_tiered = false;
+#if defined(GGML_USE_SYCL)
+    if (params.warmup && ggml_backend_sycl_is_tiered_enabled(nullptr)) {
+        LOG_WRN("%s: skipping warmup for SYCL tiered mode (model > VRAM, weights streamed from host)\n", __func__);
+        skip_warmup_tiered = true;
+    }
+#endif
+
+    if (params.warmup && !skip_warmup_tiered) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         llama_set_warmup(lctx, true);
