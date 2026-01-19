@@ -23,6 +23,8 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { ServerModelStatus } from '$lib/enums';
 	import { AGENTIC_TAGS, REASONING_TAGS } from '$lib/constants/agentic';
 
 	interface Props {
@@ -179,7 +181,20 @@
 		{#if displayedModel}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
-					<ModelsSelector currentModel={displayedModel} disabled={isLoading()} />
+					<ModelsSelector
+						currentModel={displayedModel}
+						disabled={isLoading()}
+						onModelChange={async (modelId, modelName) => {
+							const status = modelsStore.getModelStatus(modelId);
+
+							if (status !== ServerModelStatus.LOADED) {
+								await modelsStore.loadModel(modelId);
+							}
+
+							onRegenerate(modelName);
+							return true;
+						}}
+					/>
 				{:else}
 					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
 				{/if}
