@@ -9,7 +9,7 @@ extern "C" {
 #include "kernels.inc"
 }
 
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
 
 // helper macros for runtime kernel dispatch
 

@@ -32,7 +32,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_0 * GGML_RESTRICT y = vy;
 
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
 
     size_t vl = QK8_0;
 
@@ -72,7 +72,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 
     block_q8_1 * GGML_RESTRICT y = vy;
 
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
 
     size_t vl = QK8_1;
 
@@ -118,7 +118,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -173,7 +173,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -224,7 +224,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -278,7 +278,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -347,7 +347,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
-#if defined(__riscv_v)
+#if defined(__riscv_v) && __riscv_v >= 1000000
     size_t vl = qk;
 
     for (; ib < nb; ++ib) {
@@ -488,7 +488,7 @@ void ggml_vec_dot_q2_K_q8_K_071(int n, float * GGML_RESTRICT s, size_t bs, const
     *s = sumf;
 }
 
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && __riscv_v >= 1000000
 
 void ggml_vec_dot_q2_K_q8_K_256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
@@ -885,7 +885,7 @@ void ggml_vec_dot_q3_K_q8_K_071(int n, float * GGML_RESTRICT s, size_t bs, const
     *s = sumf;
 }
 
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && __riscv_v >= 1000000
 
 void ggml_vec_dot_q3_K_q8_K_256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
@@ -1291,7 +1291,7 @@ void ggml_vec_dot_q4_K_q8_K_071(int n, float * GGML_RESTRICT s, size_t bs, const
     *s = sumf;
 }
 
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && __riscv_v >= 1000000
 
 void ggml_vec_dot_q4_K_q8_K_256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
@@ -1590,7 +1590,7 @@ void ggml_vec_dot_q4_K_q8_K_128(int n, float * GGML_RESTRICT s, size_t bs, const
 
 #endif // ggml_vec_dot_q4_K_q8_K
 
-#if defined __riscv_v
+#if defined(__riscv_v) && __riscv_v >= 1000000
 
 void ggml_vec_dot_q5_K_q8_K_128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
     assert(n % QK_K == 0);
@@ -1793,7 +1793,7 @@ void ggml_vec_dot_q6_K_q8_K_071(int n, float * GGML_RESTRICT s, size_t bs, const
     *s = sumf;
 }
 
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && __riscv_v >= 1000000
 
 void ggml_vec_dot_q6_K_q8_K_256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
