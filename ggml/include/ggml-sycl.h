@@ -160,6 +160,12 @@ GGML_BACKEND_API void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, 
 GGML_BACKEND_API struct ggml_sycl_cache_id ggml_backend_sycl_get_weight_cache_key(const struct ggml_tensor * tensor,
                                                                                   int                        device);
 
+// Get a cache identity for ANY tensor (weight or non-weight) on the specified device.
+// Uses data pointer as unique identifier for non-GGUF tensors. Suitable for caching
+// mmap'd non-weight tensors like MoE ids, get_rows indices, etc.
+GGML_BACKEND_API struct ggml_sycl_cache_id ggml_backend_sycl_get_tensor_cache_key(const struct ggml_tensor * tensor,
+                                                                                  int                        device);
+
 GGML_BACKEND_API void ggml_backend_sycl_print_sycl_devices(void);
 GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int * id_list, int max_len);
 GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device, char * description, size_t description_size);

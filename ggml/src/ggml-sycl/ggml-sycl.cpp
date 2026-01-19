@@ -1362,6 +1362,50 @@ ggml_sycl_cache_id ggml_backend_sycl_get_weight_cache_key(const ggml_tensor * te
     return id;
 }
 
+// Get a cache identity for ANY tensor (weight or non-weight).
+// For non-weight tensors (MoE ids, get_rows indices, etc.), uses data pointer as unique identifier.
+// This enables caching of mmap'd non-weight tensors to prevent DEVICE_LOST errors.
+ggml_sycl_cache_id ggml_backend_sycl_get_tensor_cache_key(const ggml_tensor * tensor, int device) {
+    ggml_sycl_cache_id id{};
+    if (tensor == nullptr) {
+        return id;
+    }
+
+    // Check if this is a weight tensor - if so, delegate to the weight-specific function
+    // which has richer identity information (GGUF file offsets, etc.)
+    if (ggml_sycl_tensor_is_weight(tensor)) {
+        return ggml_backend_sycl_get_weight_cache_key(tensor, device);
+    }
+
+    // For non-weight tensors, create a pointer-based cache key.
+    // Use tensor->data pointer as the unique identifier since these tensors
+    // don't have GGUF metadata.
+    const char * raw_name  = ggml_get_name(tensor);
+    std::string  name      = (raw_name && raw_name[0]) ? std::string(raw_name) : std::string("nonweight");
+    uint64_t     name_hash = static_cast<uint64_t>(std::hash<std::string>()(name));
+
+    id.valid    = true;
+    id.model_id = 0;  // No model ID for non-weight tensors
+    id.has_gguf = false;
+    id.file_idx = 0;
+    id.file_offs = 0;
+    id.nbytes   = ggml_nbytes(tensor);
+    id.name_hash = name_hash;
+    id.type     = tensor->type;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        id.ne[i]           = tensor->ne[i];
+        id.tp_local_ne[i]  = 0;
+        id.tp_offset_ne[i] = 0;
+    }
+    id.tp_sharded    = false;
+    id.tp_rank       = 0;
+    id.tp_world_size = 1;
+    // Use pointer address as aux_id for uniqueness (essential for non-GGUF tensors)
+    id.aux_id = reinterpret_cast<uint64_t>(tensor->data);
+
+    return id;
+}
+
 void ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, layout_mode target, const char * context) {
     if (!tensor || !ggml_sycl_tensor_is_weight(tensor)) {
         return;
@@ -20525,6 +20569,159 @@ static void ggml_sycl_xmx_moe_pre_allocate_buffers(ggml_backend_sycl_context & c
 
 #endif
 
+// Pre-stage all non-device tensors in a compute graph before SYCL graph recording.
+// This ensures that all non-device (mmap'd) tensors are uploaded to device memory
+// BEFORE graph recording begins, since we cannot use .wait() during recording.
+//
+// IMPORTANT: The cgraph->leafs array may be empty (scheduler may not populate it),
+// so we must also scan ALL source tensors from ALL nodes in the graph to find
+// non-device memory that needs staging.
+static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const ggml_cgraph * cgraph) {
+    GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Entering: cgraph=%p n_nodes=%d n_leafs=%d\n",
+                    (void*)cgraph, cgraph ? cgraph->n_nodes : -1, cgraph ? cgraph->n_leafs : -1);
+    if (!cgraph || cgraph->n_nodes == 0) {
+        GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Early exit: no nodes\n");
+        return;
+    }
+
+    const int device = ctx->device;
+    int staged_count = 0;
+    int already_device_count = 0;
+    int cache_hit_count = 0;
+    int skipped_weight_count = 0;
+
+    // Get the unified cache for this device
+    ggml_sycl::unified_cache * cache = nullptr;
+    if (ggml_sycl::unified_cache_enabled()) {
+        cache = ggml_sycl::get_unified_cache_for_device(device);
+    }
+
+    // Get context for pointer type checking
+    sycl::context ctx_storage;
+    sycl::context * sycl_ctx = nullptr;
+    try {
+        ctx_storage = dpct::dev_mgr::instance().get_device(device).default_queue().get_context();
+        sycl_ctx = &ctx_storage;
+    } catch (...) {
+        GGML_LOG_ERROR("[GRAPH-PRESTAGE] Failed to get SYCL context for device %d\n", device);
+        return;
+    }
+
+    // Track already-staged pointers to avoid duplicates
+    std::unordered_set<void *> staged_pointers;
+
+    // Helper lambda to stage a tensor
+    auto stage_tensor = [&](const ggml_tensor * tensor, const char * source_desc) {
+        if (!tensor || !tensor->data) {
+            return;
+        }
+
+        // Skip if already staged (same data pointer)
+        if (staged_pointers.count(tensor->data)) {
+            return;
+        }
+
+        // Skip weight tensors - they're handled by the weight cache with layout transformations
+        if (ggml_sycl_tensor_is_weight(tensor)) {
+            skipped_weight_count++;
+            return;
+        }
+
+        // Check if this is already device memory
+        sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *sycl_ctx);
+        if (ptr_type == sycl::usm::alloc::device) {
+            already_device_count++;
+            staged_pointers.insert(tensor->data);
+            return;
+        }
+
+        // Non-device memory - needs staging
+        size_t nbytes = ggml_nbytes(tensor);
+
+        // Try unified cache first
+        if (cache) {
+            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_tensor_cache_key(tensor, device);
+            if (cache_key.valid) {
+                // DEBUG: Log full cache key during pre-staging
+                GGML_SYCL_DEBUG("[CACHE-KEY-PRESTAGE] %s: name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] aux_id=%llu data=%p\n",
+                    source_desc,
+                    tensor->name,
+                    (unsigned long long)cache_key.name_hash,
+                    (int)cache_key.type,
+                    cache_key.nbytes,
+                    (long long)cache_key.ne[0], (long long)cache_key.ne[1], (long long)cache_key.ne[2], (long long)cache_key.ne[3],
+                    (unsigned long long)cache_key.aux_id,
+                    tensor->data);
+
+                // Check if already cached
+                void * cached = cache->get(cache_key, GGML_LAYOUT_AOS);
+                if (cached) {
+                    cache_hit_count++;
+                    staged_pointers.insert(tensor->data);
+                    return;
+                }
+
+                // Upload to cache (uses .wait() which is OK since we're not in graph recording yet)
+                void * uploaded = cache->ensure_cached(
+                    cache_key,
+                    tensor->data,
+                    nbytes,
+                    ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                    -1, -1,
+                    GGML_LAYOUT_AOS,
+                    false
+                );
+                if (uploaded) {
+                    staged_count++;
+                    staged_pointers.insert(tensor->data);
+                    GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Staged %s tensor %s (data=%p, %zu bytes) -> %p\n",
+                                    source_desc, tensor->name, tensor->data, nbytes, uploaded);
+                    return;
+                }
+            }
+        }
+
+        // Fall back to staging cache
+        void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+        if (staged) {
+            staged_count++;
+            staged_pointers.insert(tensor->data);
+            GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Staged %s tensor %s (data=%p, %zu bytes) via staging cache -> %p\n",
+                            source_desc, tensor->name, tensor->data, nbytes, staged);
+        } else {
+            GGML_LOG_WARN("[GRAPH-PRESTAGE] Failed to stage %s tensor %s (data=%p, %zu bytes)\n",
+                          source_desc, tensor->name, tensor->data, nbytes);
+        }
+    };
+
+    // Stage tensors from cgraph->leafs (if any)
+    for (int i = 0; i < cgraph->n_leafs; i++) {
+        stage_tensor(cgraph->leafs[i], "leaf");
+    }
+
+    // CRITICAL: Also scan ALL source tensors from ALL nodes in the graph.
+    // The cgraph->leafs array may be empty even when nodes reference non-device tensors.
+    // This is the ROOT CAUSE of the DEVICE_LOST error - leaf tensors like "leaf_5" are
+    // referenced by nodes but not in cgraph->leafs, so they weren't being pre-staged.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (!node) {
+            continue;
+        }
+
+        // Check all source tensors
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            const ggml_tensor * src = node->src[j];
+            if (src) {
+                stage_tensor(src, "node_src");
+            }
+        }
+    }
+
+    GGML_SYCL_DEBUG("[GRAPH-PRESTAGE] Complete: %d staged, %d cache hits, %d already device, %d weights skipped\n",
+                    staged_count, cache_hit_count, already_device_count, skipped_weight_count);
+}
+
 static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
     if (!cgraph) {
 
@@ -20918,6 +21115,15 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     sycl_ctx->pre_allocate_scratchpad(max_scratchpad, sycl_ctx->stream());
                 }
 #    endif
+
+                // Pre-stage all leaf tensors BEFORE graph recording begins.
+                // This is critical because warmup uses different batch sizes than inference,
+                // so leaf tensors cached during warmup have DIFFERENT data pointers than
+                // those used during graph recording. We must stage the actual leaf tensors
+                // that will be accessed during graph recording BEFORE recording starts,
+                // since we cannot use .wait() calls during recording.
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-staging leaf tensors before recording...\n");
+                graph_prestage_leaf_tensors(sycl_ctx, cgraph);
 
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] begin_recording...\n");
                 sycl_ctx->fa_graph_ptrs.clear();
