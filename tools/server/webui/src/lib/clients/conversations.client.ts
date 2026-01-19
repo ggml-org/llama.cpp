@@ -433,14 +433,12 @@ export class ConversationsClient {
 
 	/**
 	 * Checks if an MCP server is enabled for the active conversation.
-	 * Per-chat override takes precedence over global setting.
 	 * @param serverId - The server ID to check
-	 * @param globalEnabled - The global enabled state from settings
 	 * @returns True if server is enabled for this conversation
 	 */
-	isMcpServerEnabledForChat(serverId: string, globalEnabled: boolean): boolean {
+	isMcpServerEnabledForChat(serverId: string): boolean {
 		const override = this.getMcpServerOverride(serverId);
-		return override !== undefined ? override.enabled : globalEnabled;
+		return override?.enabled ?? false;
 	}
 
 	/**
@@ -500,18 +498,17 @@ export class ConversationsClient {
 	/**
 	 * Toggles MCP server enabled state for the active conversation.
 	 * @param serverId - The server ID to toggle
-	 * @param globalEnabled - The global enabled state from settings
 	 */
-	async toggleMcpServerForChat(serverId: string, globalEnabled: boolean): Promise<void> {
-		const currentEnabled = this.isMcpServerEnabledForChat(serverId, globalEnabled);
+	async toggleMcpServerForChat(serverId: string): Promise<void> {
+		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
 		await this.setMcpServerOverride(serverId, !currentEnabled);
 	}
 
 	/**
-	 * Resets MCP server to use global setting (removes per-chat override).
-	 * @param serverId - The server ID to reset
+	 * Removes MCP server override for the active conversation.
+	 * @param serverId - The server ID to remove override for
 	 */
-	async resetMcpServerToGlobal(serverId: string): Promise<void> {
+	async removeMcpServerOverride(serverId: string): Promise<void> {
 		await this.setMcpServerOverride(serverId, undefined);
 	}
 

@@ -192,22 +192,26 @@ function buildServerConfig(
 }
 
 /**
- * Checks if a server is enabled considering per-chat overrides.
- * Per-chat override takes precedence over global setting.
+ * Checks if a server is enabled for the current chat.
+ * Server must be available (server.enabled) AND have a per-chat override enabling it.
  * Pure helper function - no side effects.
  */
 export function checkServerEnabled(
 	server: MCPServerSettingsEntry,
 	perChatOverrides?: McpServerOverride[]
 ): boolean {
-	if (perChatOverrides) {
-		const override = perChatOverrides.find((o) => o.serverId === server.id);
-		if (override !== undefined) {
-			return override.enabled;
-		}
+	// Server must be available in settings first
+	if (!server.enabled) {
+		return false;
 	}
 
-	return server.enabled;
+	// Then check if it's enabled for this chat via override
+	if (perChatOverrides) {
+		const override = perChatOverrides.find((o) => o.serverId === server.id);
+		return override?.enabled ?? false;
+	}
+
+	return false;
 }
 
 /**
