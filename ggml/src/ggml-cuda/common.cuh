@@ -1123,6 +1123,7 @@ struct ggml_tensor_extra_gpu {
 struct ggml_cuda_graph_node_properties {
     void * node_address;
     ggml_op node_op;
+    int32_t flags;
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
     void * src_address[GGML_MAX_SRC];
