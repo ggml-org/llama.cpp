@@ -38,7 +38,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libssl-dev
           # Install git-clang-format script for formatting only changed code
           wget -O /tmp/git-clang-format https://raw.githubusercontent.com/llvm/llvm-project/release/18.x/clang/tools/clang-format/git-clang-format
           sudo cp /tmp/git-clang-format /usr/local/bin/git-clang-format

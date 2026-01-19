@@ -2,27 +2,20 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <HAP_ps.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
-#include <qurt_thread.h>
 #include <string.h>
+
+#include "hex-dma.h"
+#include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "hvx-utils.h"
-#include "ops-utils.h"
 
 #define htp_act_preamble3              \
     const uint32_t ne00 = src0->ne[0]; \
@@ -76,7 +69,7 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
+static void glu_swiglu_f32_per_thread(const struct htp_tensor * src0,
                                        const struct htp_tensor * src1,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
@@ -124,9 +117,9 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
         data_src1 += swapped ? 0 : nc_in_bytes;
     }
 
-    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
 
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
@@ -175,9 +168,9 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
             float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
             //swiglu(x) = x1 * sigmoid(x0)
-            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
-            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
-                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, nc);
+            hvx_mul_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, nc);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
@@ -203,7 +196,7 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
+static void glu_swiglu_oai_f32_per_thread(const struct htp_tensor * src0,
                                            const struct htp_tensor * src1,
                                            struct htp_tensor *       dst,
                                            const int32_t *           op_params,
@@ -249,9 +242,9 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
         data_src1 += swapped ? 0 : nc_in_bytes;
     }
 
-    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
 
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
@@ -304,18 +297,18 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
             float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
             // x (src0_spad_data) = std::min(src0_p[k], limit);
-            hvx_min_scalar_f32((const uint8_t *) src0_spad_ptr, limit, (uint8_t *) src0_spad_ptr, nc);
+            hvx_min_scalar_f32((uint8_t *) src0_spad_ptr, (const uint8_t *) src0_spad_ptr, limit, nc);
             // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
-            hvx_clamp_scalar_f32((const uint8_t *) src1_spad_ptr, -limit, limit, (uint8_t *) src1_spad_ptr, nc);
+            hvx_clamp_scalar_f32((uint8_t *) src1_spad_ptr, (const uint8_t *) src1_spad_ptr, -limit, limit, nc);
             // y (src1_spad_data)  = y1 + 1.f
-            hvx_add_scalar_f32((const uint8_t *) src1_spad_ptr, 1.0, (uint8_t *) src1_spad_ptr, nc);
+            hvx_add_scalar_f32((uint8_t *) src1_spad_ptr, (const uint8_t *) src1_spad_ptr, 1.0, nc);
             // x1 (dst_spad_data) = alpha * (x)
-            hvx_mul_scalar_f32((const uint8_t *) src0_spad_ptr, alpha, (uint8_t *) dst_spad_ptr, nc);
+            hvx_mul_scalar_f32((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, alpha, nc);
             // x2 (dst_spad_data) = sigmoid(x1) = 1/(1+exp(-x1))
-            hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, nc);
             // out = x * sigmoid(alpha * x) * (y + 1.f)
-            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
-                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+            hvx_mul_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, nc);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
@@ -342,7 +335,7 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
 }
 
 
-static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
+static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
                                        struct htp_spad *         src0_spad,
@@ -358,8 +351,8 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
-    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
 
@@ -415,9 +408,9 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
             float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
             // gelu = x * sigmoid(1.702 * x) // current implementation
-            hvx_mul_scalar_f32((const uint8_t *) src0_spad_ptr, (float) 1.702, (uint8_t *) dst_spad_ptr, ne0);
-            hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
-            hvx_mul_f32_opt((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_scalar_f32((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (float) 1.702, ne0);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
@@ -442,15 +435,15 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_gelu_fp32(unsigned int n, unsigned int i, void * data) {
+static void unary_gelu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_gelu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
+    unary_gelu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
                                octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 
 
-static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
+static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
                                        struct htp_spad *         src0_spad,
@@ -466,8 +459,8 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
-    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
 
@@ -522,8 +515,8 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
             float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
             // silu = x * sigmoid(x)
-            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
-            hvx_mul_f32_opt((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
+            hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, ne0);
+            hvx_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
@@ -548,25 +541,25 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_silu_fp32(unsigned int n, unsigned int i, void * data) {
+static void unary_silu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_silu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
+    unary_silu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
                                octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static void glu_swiglu_fp32(unsigned int n, unsigned int i, void * data) {
+static void glu_swiglu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
+    glu_swiglu_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
                                &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static void glu_swiglu_oai_fp32(unsigned int n, unsigned int i, void * data) {
+static void glu_swiglu_oai_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_oai_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
+    glu_swiglu_oai_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
                                    &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static int execute_op_activations_fp32(struct htp_ops_context * octx) {
+static int execute_op_activations_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
     const struct htp_tensor * src0 = &octx->src0;
@@ -583,21 +576,21 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_UNARY_SILU:
-            act_op_func = unary_silu_fp32;
+            act_op_func = unary_silu_f32;
             op_type     = "silu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU:
-            act_op_func = glu_swiglu_fp32;
+            act_op_func = glu_swiglu_f32;
             op_type     = "swiglu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU_OAI:
-            act_op_func = glu_swiglu_oai_fp32;
+            act_op_func = glu_swiglu_oai_f32;
             op_type     = "swiglu-oai-f32";
             break;
         case HTP_OP_UNARY_GELU:
-            act_op_func = unary_gelu_fp32;
+            act_op_func = unary_gelu_f32;
             op_type     = "gelu-f32";
             break;
         default:
@@ -617,9 +610,9 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
         src1_row_size = src0_row_size;
     }
 
-    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
-    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+    const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_row_size, VLEN);
     // VTCM scratchpads for all tensors
     // N rows per thread, padded to HVX vector size
 
@@ -670,7 +663,7 @@ int op_activations(struct htp_ops_context * octx) {
 
     switch (octx->src0.type) {
         case HTP_TYPE_F32:
-            err = execute_op_activations_fp32(octx);
+            err = execute_op_activations_f32(octx);
             break;
 
         default:
