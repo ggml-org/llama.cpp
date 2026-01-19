@@ -227,6 +227,48 @@ static void test_conditionals(testing & t) {
         {{"y", ""}},
         "yes"
     );
+
+    test_template(t, "is 0 falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        {{"y", 0}},
+        "yes"
+    );
+
+    test_template(t, "is 0.0 falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        {{"y", 0.0}},
+        "yes"
+    );
+
+    test_template(t, "is non-empty array truthy",
+        "{{ 'yes' if y else 'no' }}",
+        {{"y", json::array({""})}},
+        "yes"
+    );
+
+    test_template(t, "is non-empty object truthy",
+        "{{ 'yes' if y else 'no' }}",
+        {{"y", {"x", false}}},
+        "yes"
+    );
+
+    test_template(t, "is non-empty string truthy",
+        "{{ 'yes' if y else 'no' }}",
+        {{"y", "0"}},
+        "yes"
+    );
+
+    test_template(t, "is 1 truthy",
+        "{{ 'yes' if y else 'no' }}",
+        {{"y", 1}},
+        "yes"
+    );
+
+    test_template(t, "is 1.0 thruthy",
+        "{{ 'yes' if y else 'no' }}",
+        {{"y", 1.0}},
+        "yes"
+    );
 }
 
 static void test_loops(testing & t) {
