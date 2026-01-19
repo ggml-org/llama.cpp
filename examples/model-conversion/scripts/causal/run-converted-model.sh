@@ -5,9 +5,14 @@ set -e
 # First try command line argument, then environment variable, then file
 CONVERTED_MODEL="${1:-"$CONVERTED_MODEL"}"
 MODEL_TESTING_PROMPT="${2:-"$MODEL_TESTING_PROMPT"}"
+BUILD_DIR="${3:-"$BUILD_DIR"}"
 
-if [ -z "$MODEL_TESTING_PROMPT"]; then
+if [ -z "$MODEL_TESTING_PROMPT" ]; then
     MODEL_TESTING_PROMPT="Hello, my name is"
+fi
+
+if [ -z "$BUILD_DIR" ]; then
+    BUILD_DIR="../../build"
 fi
 
 # Final check if we have a model path
@@ -21,6 +26,6 @@ fi
 echo $CONVERTED_MODEL
 echo $MODEL_TESTING_PROMPT
 
-cmake --build ../../build --target llama-debug -j8
+cmake --build ${BUILD_DIR} --target llama-debug -j8
 
-../../build/bin/llama-debug -m "$CONVERTED_MODEL" -p "$MODEL_TESTING_PROMPT" --save-logits
+${BUILD_DIR}/bin/llama-debug -m "$CONVERTED_MODEL" -p "$MODEL_TESTING_PROMPT" --save-logits
