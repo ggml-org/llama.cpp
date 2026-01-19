@@ -127,18 +127,18 @@
 		/>
 
 		{#if isError && errorMessage}
-			<p class="mt-2 text-xs text-destructive">{errorMessage}</p>
+			<p class="text-xs text-destructive">{errorMessage}</p>
 		{/if}
 
 		{#if isConnected && serverInfo?.description}
-			<p class="mt-3 line-clamp-2 text-xs text-muted-foreground">
+			<p class="line-clamp-2 text-xs text-muted-foreground">
 				{serverInfo.description}
 			</p>
 		{/if}
 
-		<div class="mt-2 grid gap-3">
+		<div class="grid gap-3">
 			{#if isConnected && instructions}
-				<McpServerInfo {instructions} class="mt-3" />
+				<McpServerInfo {instructions} />
 			{/if}
 
 			{#if tools.length > 0}
@@ -150,7 +150,7 @@
 			{/if}
 		</div>
 
-		<div class="mt-4 flex justify-between gap-4">
+		<div class="flex justify-between gap-4">
 			{#if protocolVersion}
 				<div class="flex flex-wrap items-center gap-1">
 					<span class="text-[10px] text-muted-foreground">
