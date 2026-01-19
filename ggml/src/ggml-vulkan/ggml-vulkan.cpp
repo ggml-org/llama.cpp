@@ -3174,8 +3174,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
         std::vector<uint32_t> target_specilization_constants = specialization_constants;
         if (gpu_config_found && param_found) {
             // We have a GPU configuration and a specific parameter for this pipeline.
-            // We overwrite all parameters assuming the setting creator knows what they are doing.
-            required_subgroup_size = pipeline_param.subgroup_size;
+            // We overwrite all valid parameters assuming the setting creator knows what they are doing.
+            if (pipeline_param.subgroup_size) {
+                required_subgroup_size = pipeline_param.subgroup_size;
+            }
             if (pipeline_param.require_full_subgroup.has_value()) {
                 require_full_subgroups = pipeline_param.require_full_subgroup.value();
             }
