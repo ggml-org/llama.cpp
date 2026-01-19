@@ -805,7 +805,7 @@ value member_expression::execute_impl(context & ctx) {
         } else if (is_val<value_string>(property)) {
             auto key = property->as_string().str();
             JJ_DEBUG("Accessing %s built-in '%s'", is_val<value_array>(object) ? "array" : "string", key.c_str());
-            val = try_builtin_func(ctx, key, object);
+            val = try_builtin_func(ctx, key, object, true);
         } else {
             throw std::runtime_error("Cannot access property with non-string/non-number: got " + property->type());
         }
@@ -814,7 +814,7 @@ value member_expression::execute_impl(context & ctx) {
             throw std::runtime_error("Cannot access property with non-string: got " + property->type());
         }
         auto key = property->as_string().str();
-        val = try_builtin_func(ctx, key, object);
+        val = try_builtin_func(ctx, key, object, true);
     }
 
     if (ctx.is_get_stats && val && object && property) {

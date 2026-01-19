@@ -203,6 +203,9 @@ struct value_int_t : public value_t {
     virtual int64_t as_int() const override { return val_int; }
     virtual double as_float() const override { return static_cast<double>(val_int); }
     virtual string as_string() const override { return std::to_string(val_int); }
+    virtual bool as_bool() const override {
+        return val_int != 0;
+    }
     virtual const func_builtins & get_builtins() const override;
 };
 using value_int = std::shared_ptr<value_int_t>;
@@ -218,6 +221,9 @@ struct value_float_t : public value_t {
         out.erase(out.find_last_not_of('0') + 1, std::string::npos); // remove trailing zeros
         if (out.back() == '.') out.push_back('0'); // leave one zero if no decimals
         return out;
+    }
+    virtual bool as_bool() const override {
+        return val_flt != 0.0;
     }
     virtual const func_builtins & get_builtins() const override;
 };
