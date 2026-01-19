@@ -2843,11 +2843,12 @@ struct PipelineConfigParameter {
     // True if we require full subgroup for this pipeline,
     // False if not required. Empty means don't care (use default)
     std::optional<bool> require_full_subgroup;
-    // Specialization constants used for a specific pipeline.
+    // Calculate specialization constants used for a specific pipeline.
     // If empty we use the default.
     // Some kernels must calculate specialization constants
     // based on subgroup size so we have an interface to override the default here.
-    std::vector<uint32_t> specialization_constants;
+    std::function<std::vector<uint32_t>(const PipelineConfigParameter &, const std::vector<uint32_t> &)>
+        calc_specialization_constants;
 };
 
 // Pipeline configuration for a target GPU.
@@ -2868,27 +2869,36 @@ struct GpuPipelineConfig {
 
 // Pipeline configuration for RDNA1 GPUs.
 static const std::unordered_map<std::string, PipelineConfigParameter> rdna1_pipelines = {
-    {"soft_max",            {64, {}}},
-    {"im2col",              {64, {}}},
-    {"argmax",              {64, {}}},
-    {"mul_mat_vec",         {64, {}}},
-    {"mul_mat_vec_f16",     {32, {}}},
-    {"mul_mat_vec_f32_f16", {32, {}}},
+    {"soft_max",            {64}},
+    {"im2col",              {64}},
+    {"argmax",              {64}},
+    {"mul_mat_vec",         {64}},
+    {"mul_mat_vec_f16",     {32}},
+    {"mul_mat_vec_f32_f16", {32}},
 };
 
 // Pipeline configuration for RDNA2 GPUs.
 static const std::unordered_map<std::string, PipelineConfigParameter> rdna2_pipelines = {
-    {"soft_max", {64, {}}},
-    {"im2col",   {64, {}}},
+    {"soft_max", {64}},
+    {"im2col",   {64}},
 };
 
 static constexpr uint32_t RDNA_DEFAULT_SUBGROUP_SIZE = 32;
 
+
+static std::vector<uint32_t> calc_specialization_constant_intel_xe2_onward(const PipelineConfigParameter& config, const std::vector<uint32_t>& current) {
+    std::vector<uint32_t> output = current;
+    // replacing subgroup_size_8 with new value for l_warptile_mmq and m_warptile_mmq
+    output[4] = config.subgroup_size;
+    output[10] = config.subgroup_size;
+    return output;
+}
+
 static const std::unordered_map<std::string, PipelineConfigParameter> xe2_onward_pipelines = {
-    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_m", {16, {}}},
-    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_l", {16, {}}},
-    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_m", {16, {}}},
-    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_l", {16, {}}},
+    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_m", {16, {}, calc_specialization_constant_intel_xe2_onward}},
+    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_l", {16, {}, calc_specialization_constant_intel_xe2_onward}},
+    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_m", {16, {}, calc_specialization_constant_intel_xe2_onward}},
+    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_l", {16, {}, calc_specialization_constant_intel_xe2_onward}},
 };
 
 // Intel GPU can use subgroup 8, 16, or 32 depending on architeture.
@@ -3181,8 +3191,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
             if (pipeline_param.require_full_subgroup.has_value()) {
                 require_full_subgroups = pipeline_param.require_full_subgroup.value();
             }
-            if (!pipeline_param.specialization_constants.empty()) {
-                target_specilization_constants = pipeline_param.specialization_constants;
+            if (pipeline_param.calc_specialization_constants) {
+                target_specilization_constants = pipeline_param.calc_specialization_constants(pipeline_param, specialization_constants);
             }
         } else if (gpu_config_found && !param_found) {
             // Only GPU config was given. Just update the default subgroup size
