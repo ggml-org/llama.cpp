@@ -2860,7 +2860,7 @@ struct GpuPipelineConfig {
     vk_device_architecture arch;
 
     // Mapping of pipeline names to their specific configuration parameters.
-    // Example: {"soft_max_f32", {64, {}}
+    // Example: {"soft_max_f32", {64}}
     std::unordered_map<std::string, PipelineConfigParameter> pipelines;
 
     // Default subgroup size for this GPU.
@@ -2907,47 +2907,38 @@ static const std::unordered_map<std::string, PipelineConfigParameter> xe2_onward
 static constexpr uint32_t INTEL_DEFAULT_SUBGROUP_SIZE = 32;
 
 // Define configurations for different GPUs.
-static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {};
-
-// Initialize vendor/pipeline specific parameters to be used when creating pipelines
-static void init_gpu_pipeline_configs(std::vector<GpuPipelineConfig>& config) {
-    if (!config.empty()) {
-        // Already setup
-        return;
+static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
+    {
+        vk_device_architecture::AMD_RDNA1,
+        {
+            rdna1_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA2,
+        {
+            rdna2_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::INTEL_PRE_XE2,
+        {
+        },
+        INTEL_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::INTEL_XE2_ONWARD,
+        {
+            xe2_onward_pipelines,
+        },
+        INTEL_DEFAULT_SUBGROUP_SIZE
     }
-    config.insert(config.end(),{
-        {
-            vk_device_architecture::AMD_RDNA1,
-            {
-                rdna1_pipelines,
-            },
-            RDNA_DEFAULT_SUBGROUP_SIZE
-        },
-        {
-            vk_device_architecture::AMD_RDNA2,
-            {
-                rdna2_pipelines,
-            },
-            RDNA_DEFAULT_SUBGROUP_SIZE
-        },
-        {
-            vk_device_architecture::INTEL_PRE_XE2,
-            {
-            },
-            INTEL_DEFAULT_SUBGROUP_SIZE
-        },
-        {
-            vk_device_architecture::INTEL_XE2_ONWARD,
-            {
-                xe2_onward_pipelines,
-            },
-            INTEL_DEFAULT_SUBGROUP_SIZE
-        }
-    });
-}
+};
 
-static bool get_gpu_pipeline_config(GpuPipelineConfig* output, const std::vector<GpuPipelineConfig>& pipeline_configs, const vk_device_architecture& arch) {
-    for (const auto & config : pipeline_configs) {
+static bool get_gpu_pipeline_config(GpuPipelineConfig* output, const vk_device_architecture& arch) {
+    for (const auto & config : gpu_pipeline_configs) {
         if (config.arch == arch) {
             *output = config;
             return true;
@@ -3171,7 +3162,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         GpuPipelineConfig gpu_config = {};
         PipelineConfigParameter pipeline_param = {};
         bool param_found = false;
-        auto gpu_config_found = get_gpu_pipeline_config(&gpu_config, gpu_pipeline_configs, device->architecture);
+        auto gpu_config_found = get_gpu_pipeline_config(&gpu_config, device->architecture);
         if (gpu_config_found) {
             param_found = get_pipeline_config_parameter(&pipeline_param, gpu_config, std::string(name));
         }
@@ -5466,7 +5457,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
     uint32_t default_subgroup_size = 0;
     GpuPipelineConfig gpu_config = {};
-    auto config_found = get_gpu_pipeline_config(&gpu_config, gpu_pipeline_configs, device_architecture);
+    auto config_found = get_gpu_pipeline_config(&gpu_config, device_architecture);
     if (config_found) {
         default_subgroup_size = gpu_config.default_subgroup_size;
     }
@@ -5721,7 +5712,6 @@ static void ggml_vk_instance_init() {
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
 
-    init_gpu_pipeline_configs(gpu_pipeline_configs);
     for (size_t i = 0; i < vk_instance.device_indices.size(); i++) {
         vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
         std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
