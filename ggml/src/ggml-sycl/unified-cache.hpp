@@ -493,6 +493,11 @@ class unified_cache {
     void * get(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
     cache_ptr_view get_view(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
+    // Get device pointer, waiting for IN_PROGRESS entries to complete.
+    // Returns nullptr only if entry doesn't exist at all.
+    // This prevents returning mmap'd pointers when cache fill is in flight.
+    void * get_or_wait(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
+
     // Remove a cache entry (free device memory).
     void remove(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
                 ggml_layout_mode layout);

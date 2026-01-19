@@ -1,4 +1,5 @@
 #include <sycl/sycl.hpp>
+#include <cstring>  // for std::memcpy
 #include "common.hpp"
 #include "add-id.hpp"
 
@@ -50,28 +51,111 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   GGML_ASSERT(nb10 == sizeof(float));
   GGML_ASSERT(nb20 == sizeof(int32_t));
 
+  sycl::queue& q = *ctx.stream();
+
   const float* src0_d = (const float*)src0->data;
-  const float* src1_d = (const float*)src1->data;
   const int32_t* src2_d = (const int32_t*)src2->data;
   float* dst_d = (float*)dst->data;
 
+  // Check if src1 is mmap'd (not USM-accessible) - GPU cannot read mmap'd memory directly
+  const sycl::usm::alloc src1_type = sycl::get_pointer_type(src1->data, q.get_context());
+  const bool src1_is_mmap = (src1_type == sycl::usm::alloc::unknown);
+
+  const float* src1_d = nullptr;
+  void* src1_staging = nullptr;
+  void* host_staging = nullptr;
+  sycl::event copy_event;
+
+  if (src1_is_mmap) {
+    // Mmap'd source - stage to device memory via pinned host buffer
+    // Calculate total size of src1 tensor
+    const size_t src1_bytes = ggml_nbytes(src1);
+
+    // Allocate pinned host staging buffer
+    host_staging = sycl::malloc_host(src1_bytes, q);
+    if (!host_staging) {
+      GGML_LOG_ERROR("[ADD_ID] Failed to allocate host staging for mmap src1 (%zu bytes)\n", src1_bytes);
+      return;
+    }
+
+    // CPU memcpy from mmap to pinned host
+    std::memcpy(host_staging, src1->data, src1_bytes);
+
+    // Allocate device staging buffer
+    src1_staging = sycl::malloc_device(src1_bytes, q);
+    if (!src1_staging) {
+      GGML_LOG_ERROR("[ADD_ID] Failed to allocate device staging for mmap src1 (%zu bytes)\n", src1_bytes);
+      sycl::free(host_staging, q);
+      return;
+    }
+
+    // DMA from pinned host to device - NO .wait()! Use event chaining instead
+    copy_event = q.memcpy(src1_staging, host_staging, src1_bytes);
+
+    src1_d = (const float*)src1_staging;
+    GGML_SYCL_DEBUG("[ADD_ID] Staged mmap src1 to device (%zu bytes)\n", src1_bytes);
+  } else {
+    // USM-accessible (host, device, or shared) - use directly
+    src1_d = (const float*)src1->data;
+  }
+
   int threads = std::min((int)ne00, 768);  // cols
-  ctx.stream()->parallel_for(
-      sycl::nd_range<3>(
-          sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
-          sycl::range<3>(1, 1, threads)),
-      [=](sycl::nd_item<3> item_ct1) {
-        add_id_kernel(
-            src0_d,
-            src1_d,
-            src2_d,
-            dst_d,
-            ne0,
-            ne1,
-            nb01,
-            nb02,
-            nb11,
-            nb21,
-            item_ct1);
+
+  // Submit kernel with dependency on copy event if staging was needed
+  sycl::event kernel_event;
+  if (src1_is_mmap) {
+    // Kernel depends on copy completing
+    kernel_event = q.submit([&](sycl::handler& cgh) {
+      cgh.depends_on(copy_event);
+      cgh.parallel_for(
+          sycl::nd_range<3>(
+              sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
+              sycl::range<3>(1, 1, threads)),
+          [=](sycl::nd_item<3> item_ct1) {
+            add_id_kernel(
+                src0_d,
+                src1_d,
+                src2_d,
+                dst_d,
+                ne0,
+                ne1,
+                nb01,
+                nb02,
+                nb11,
+                nb21,
+                item_ct1);
+          });
+    });
+  } else {
+    // No staging needed, submit kernel directly
+    kernel_event = q.parallel_for(
+        sycl::nd_range<3>(
+            sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
+            sycl::range<3>(1, 1, threads)),
+        [=](sycl::nd_item<3> item_ct1) {
+          add_id_kernel(
+              src0_d,
+              src1_d,
+              src2_d,
+              dst_d,
+              ne0,
+              ne1,
+              nb01,
+              nb02,
+              nb11,
+              nb21,
+              item_ct1);
+        });
+  }
+
+  // Async cleanup via host_task - NO .wait()! Cleanup after kernel completes
+  if (src1_staging) {
+    q.submit([&](sycl::handler& cgh) {
+      cgh.depends_on(kernel_event);
+      cgh.host_task([src1_staging, host_staging, &q]() {
+        sycl::free(src1_staging, q);
+        sycl::free(host_staging, q);
       });
+    });
+  }
 }

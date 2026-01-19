@@ -1483,14 +1483,29 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
         }
     }
 
-    // In TP mode, tensor->data might be mmap'd memory that can't be accessed by shared-context queues.
-    // Stage it to device-local USM memory for each device (since Intel Arc lacks P2P).
-    // BUT: If tensor->data is already HOST or SHARED USM memory, use it directly (no staging needed).
-    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 && tensor->data != nullptr) {
-        // Check if the pointer is already HOST or SHARED USM - these are device-accessible
-        sycl::context * tp_ctx = ggml_sycl_get_tp_context();
-        if (tp_ctx != nullptr) {
-            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *tp_ctx);
+    // Check if tensor->data is mmap'd memory (non-USM) that can't be accessed by GPU kernels.
+    // This applies to BOTH TP mode and non-TP mode - mmap'd weights need staging either way.
+    // USM types: unknown=3 (mmap'd/heap), device=1, host=0, shared=2
+    // Only host(0) and shared(2) are device-accessible without staging.
+    if (tensor->data != nullptr) {
+        // Get context for USM type checking - use TP context if available, otherwise device default
+        sycl::context ctx_storage;  // Local storage to avoid taking address of temporary
+        sycl::context * ctx = nullptr;
+        if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+            ctx = ggml_sycl_get_tp_context();
+        }
+        if (ctx == nullptr) {
+            // Use device's default queue context for non-TP mode
+            try {
+                ctx_storage = dpct::dev_mgr::instance().get_device(device).default_queue().get_context();
+                ctx = &ctx_storage;
+            } catch (...) {
+                ctx = nullptr;
+            }
+        }
+
+        if (ctx != nullptr) {
+            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *ctx);
             if (ptr_type == sycl::usm::alloc::host || ptr_type == sycl::usm::alloc::shared) {
                 // HOST or SHARED USM - directly accessible from device, no staging needed
                 GGML_SYCL_DEBUG(
@@ -1498,23 +1513,50 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
                     tensor->name, device, tensor->data, (int) ptr_type);
                 return tensor->data;
             }
-        }
 
-        // Not HOST/SHARED USM - need to stage to device-local memory
-        size_t nbytes = ggml_nbytes(tensor);
-        void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
-        if (staged != nullptr) {
-            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged %p -> %p (%zu bytes)\n", tensor->name,
-                            device, tensor->data, staged, nbytes);
-            return staged;
+            // Non-USM memory (unknown/device-local) - try unified cache first, then staging
+            // This handles mmap'd weights that the GPU kernel cannot read directly
+            if (ptr_type == sycl::usm::alloc::unknown) {
+                // Check if this is a weight tensor (inline check to avoid forward declaration)
+                const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
+                                       ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+
+                // Try to get from unified cache (already uploaded weights)
+                // Use get_or_wait() to block for IN_PROGRESS entries - prevents mmap fallback
+                if (ggml_sycl::unified_cache_enabled() && is_weight) {
+                    if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+                        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                        if (cache_key.valid) {
+                            // get_or_wait waits for IN_PROGRESS entries to complete
+                            // This prevents returning mmap pointer while cache fill is in flight
+                            void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
+                            if (cached) {
+                                GGML_SYCL_DEBUG(
+                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, non-USM fallback to cache=%p\n",
+                                    tensor->name, device, cached);
+                                return cached;
+                            }
+                        }
+                    }
+                }
+
+                // Not cached - need to stage to device-local USM memory
+                size_t nbytes = ggml_nbytes(tensor);
+                void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+                if (staged != nullptr) {
+                    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-USM %p -> %p (%zu bytes)\n",
+                                    tensor->name, device, tensor->data, staged, nbytes);
+                    return staged;
+                }
+                // Staging failed - fall through and return original pointer (will likely fail)
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-USM, using tensor->data=%p\n",
+                                tensor->name, device, tensor->data);
+            }
         }
-        // Staging failed - fall through and return original pointer (will likely fail)
-        GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED, using tensor->data=%p\n",
-                        tensor->name, device, tensor->data);
-    } else {
-        GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using tensor->data=%p\n", tensor->name, device,
-                        tensor->data);
     }
+
+    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using tensor->data=%p\n", tensor->name, device,
+                    tensor->data);
     return tensor->data;
 }
 
@@ -1757,6 +1799,8 @@ struct ggml_backend_sycl_context {
         std::vector<int32_t> host_ids;
         void *               device_ids   = nullptr;
         size_t               device_bytes = 0;
+        void *               staging_ids   = nullptr;  // Pinned host staging for non-USM sources
+        size_t               staging_bytes = 0;
     };
 
     std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> moe_ids_cache;

@@ -12,9 +12,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <thread>
 
 #if defined(_WIN32)
 #    include <windows.h>
@@ -2208,6 +2210,86 @@ void * unified_cache::get(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
     return entry.device_ptr;
 }
 
+void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
+    if (!key_id.valid) {
+        return nullptr;
+    }
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return nullptr;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return nullptr;
+    }
+    auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return nullptr;
+    }
+
+    // Wait for IN_PROGRESS entries to complete (prevents mmap fallback)
+    while (entry_it->second.state == cache_entry_state::IN_PROGRESS) {
+        auto & e = entry_it->second;
+        if (e.has_ready_event) {
+            // Wait on the ready event (release lock during wait)
+            sycl::event evt = e.ready_event;
+            lock.unlock();
+            try {
+                evt.wait();
+            } catch (const sycl::exception & ex) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] get_or_wait event wait failed: %s\n", ex.what());
+                return nullptr;
+            }
+            lock.lock();
+
+            // Re-lookup after releasing lock
+            id_it = id_to_key_.find(key_id);
+            if (id_it == id_to_key_.end()) {
+                return nullptr;
+            }
+            entry_it = entries_.find(id_it->second);
+            if (entry_it == entries_.end()) {
+                return nullptr;
+            }
+            if (entry_it->second.layout != layout) {
+                return nullptr;
+            }
+
+            // Update state if event completed
+            if (entry_it->second.state == cache_entry_state::IN_PROGRESS &&
+                entry_it->second.has_ready_event &&
+                event_complete(entry_it->second.ready_event)) {
+                entry_it->second.state           = cache_entry_state::READY;
+                entry_it->second.has_ready_event = false;
+            }
+        } else {
+            // No event yet - spin wait briefly then check again
+            // This handles the case where entry is created but event not yet assigned
+            lock.unlock();
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+            lock.lock();
+
+            // Re-lookup
+            id_it = id_to_key_.find(key_id);
+            if (id_it == id_to_key_.end()) {
+                return nullptr;
+            }
+            entry_it = entries_.find(id_it->second);
+            if (entry_it == entries_.end()) {
+                return nullptr;
+            }
+        }
+    }
+
+    if (entry_it->second.state == cache_entry_state::FAILED) {
+        return nullptr;
+    }
+
+    return entry_it->second.device_ptr;
+}
+
 cache_ptr_view unified_cache::get_view(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
     cache_ptr_view view{};
     if (!key_id.valid) {
@@ -2570,8 +2652,15 @@ sycl::event unified_cache::copy_to_device_async(void *                          
     if (dst_type == sycl::usm::alloc::unknown && cache_assert_enabled()) {
         GGML_ABORT("copy_to_device_async called with non-USM destination");
     }
-    if (src_type == sycl::usm::alloc::unknown) {
-        // Stage mmap'd or non-USM pointers through host memory.
+    // Stage any non-device source memory through host buffer.
+    // This handles:
+    // - unknown: mmap'd or non-USM pointers
+    // - shared: can fail on Level Zero if allocated on different context
+    // - host: generally works, but staging is safer
+    // Only device-to-device copies skip staging.
+    const bool needs_staging = (src_type != sycl::usm::alloc::device);
+    if (needs_staging) {
+        // Stage through host memory.
         // NOTE: We perform synchronous staging to avoid complex event dependency chains
         // that can cause issues with Level Zero driver's event handling.
 
