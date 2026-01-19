@@ -677,8 +677,8 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
 static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
-    constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
-    constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
+    constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string"; // TODO @ngxson : remove this, replace with oaicompat_content_parse()
+    constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data"; // TODO @ngxson : remove this, replace with oaicompat_content_parse()
     const bool has_mtmd = mctx != nullptr;
     if (json_prompt.is_string() || json_is_array_of_mixed_numbers_strings(json_prompt)) {
         // string or mixed
@@ -828,6 +828,79 @@ static void handle_media(
     }
 }
 
+void oaicompat_content_parse(
+        json & content,
+        const oaicompat_parser_options & opt,
+        std::vector<raw_buffer> & out_files,
+        bool allow_null,
+        bool force_output_string) {
+    if (content.is_string()) {
+        return; // already valid
+    }
+
+    if (content.is_null()) {
+        if (allow_null) {
+            return;
+        }
+        throw std::invalid_argument("'content' cannot be null");
+    }
+
+    if (!content.is_array()) {
+        throw std::invalid_argument("Expected 'content' to be a string or an array");
+    }
+
+    for (auto & p : content) {
+        std::string type = json_value(p, "type", std::string());
+        if (type == "image_url") {
+            if (!opt.allow_image) {
+                throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            json image_url = json_value(p, "image_url", json::object());
+            handle_media(out_files, image_url, opt.media_path);
+
+            // replace this chunk with a marker
+            p["type"] = "text";
+            p["text"] = mtmd_default_marker();
+            p.erase("image_url");
+
+        } else if (type == "input_audio") {
+            if (!opt.allow_audio) {
+                throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            json input_audio   = json_value(p, "input_audio", json::object());
+            std::string data   = json_value(input_audio, "data", std::string());
+            std::string format = json_value(input_audio, "format", std::string());
+            // while we also support flac, we don't allow it here so we matches the OAI spec
+            if (format != "wav" && format != "mp3") {
+                throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
+            }
+            auto decoded_data = base64_decode(data); // expected to be base64 encoded
+            out_files.push_back(decoded_data);
+
+            // TODO: add audio_url support by reusing handle_media()
+
+            // replace this chunk with a marker
+            p["type"] = "text";
+            p["text"] = mtmd_default_marker();
+            p.erase("input_audio");
+
+        } else if (type != "text") {
+            throw std::invalid_argument("unsupported content[].type");
+        }
+    }
+
+    if (force_output_string) {
+        // concatenate all text chunks into a single string
+        std::ostringstream oss;
+        for (const auto & p : content) {
+            oss << json_value(p, "text", std::string());
+        }
+        content = oss.str();
+    }
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
@@ -899,55 +972,7 @@ json oaicompat_chat_params_parse(
             }
         }
         json & content = msg.at("content");
-        if (content.is_string() || content.is_null()) {
-            continue;
-        }
-
-        if (!content.is_array()) {
-            throw std::invalid_argument("Expected 'content' to be a string or an array");
-        }
-
-        for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
-            if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("image_url");
-
-            } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
-
-                // replace this chunk with a marker
-                p["type"] = "text";
-                p["text"] = mtmd_default_marker();
-                p.erase("input_audio");
-
-            } else if (type != "text") {
-                throw std::invalid_argument("unsupported content[].type");
-            }
-        }
+        oaicompat_content_parse(content, opt, out_files, true, false);
     }
 
     common_chat_templates_inputs inputs;

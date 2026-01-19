@@ -4030,12 +4030,38 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
-    for (const auto & tokens : tokenized_prompts) {
-        // this check is necessary for models that do not add BOS token to the input
-        if (tokens.empty()) {
-            res->error(format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
-            return res;
+    // handle multimodal inputs
+    // true if input is an array && at least one item is an object
+    // TODO: may need to support multiple multimodal inputs (array of array of objects)
+    bool has_multimodal_input = false;
+    if (prompt.is_array()) {
+        for (const auto & item : prompt) {
+            if (item.is_object()) {
+                has_multimodal_input = true;
+                break;
+            }
+        }
+    }
+
+    std::vector<raw_buffer> files;
+    std::vector<server_tokens> inputs;
+
+    if (has_multimodal_input) {
+        // process multimodal inputs
+        if (!ctx_server.mctx)
+        oaicompat_content_parse(prompt, ctx_server.oai_parser_opt, files, false, true);
+        GGML_ASSERT(prompt.is_string());
+        inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+
+    } else {
+        // no multimodal inputs
+        auto inputs = tokenize_input_prompts(ctx_server.vocab, nullptr, prompt, true, true);
+        for (const auto & tokens : inputs) {
+            // this check is necessary for models that do not add BOS token to the input
+            if (tokens.empty()) {
+                res->error(format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
         }
     }
 
@@ -4052,11 +4078,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
     auto & rd = res->rd;
     {
         std::vector<server_task> tasks;
-        for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+        for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
 
             task.id     = rd.get_new_id();
-            task.tokens = std::move(tokenized_prompts[i]);
+            task.tokens = std::move(inputs[i]);
 
             // OAI-compat
             task.params.res_type = res_type;
