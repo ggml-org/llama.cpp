@@ -53,7 +53,7 @@
 </script>
 
 <div class="space-y-4">
-	<div class="flex items-center justify-between gap-4">
+	<div class="flex items-start justify-between gap-4">
 		<div>
 			<h4 class="text-base font-semibold">Manage Servers</h4>
 		</div>

@@ -74,7 +74,7 @@ class MCPStore {
 	}
 
 	/**
-	 * Update health check state from MCPClient
+	 * Update health check state from MCPClient.
 	 */
 	updateHealthCheck(serverId: string, state: HealthCheckState): void {
 		this._healthChecks = { ...this._healthChecks, [serverId]: state };
@@ -136,7 +136,7 @@ class MCPStore {
 	}
 
 	/**
-	 * Clear health check state for a specific server
+	 * Clear health check state for a specific server.
 	 */
 	clearHealthCheck(serverId: string): void {
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -145,7 +145,7 @@ class MCPStore {
 	}
 
 	/**
-	 * Clear all health check states
+	 * Clear all health check states.
 	 */
 	clearAllHealthChecks(): void {
 		this._healthChecks = {};
