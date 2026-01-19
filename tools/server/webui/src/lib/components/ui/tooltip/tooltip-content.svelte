@@ -9,11 +9,11 @@
 		side = 'top',
 		children,
 		arrowClasses,
-		noPortal = false,
+		usePortal = true,
 		...restProps
 	}: TooltipPrimitive.ContentProps & {
 		arrowClasses?: string;
-		noPortal?: boolean;
+		usePortal?: boolean;
 	} = $props();
 
 	const contentClass = $derived(
@@ -52,10 +52,10 @@
 	</TooltipPrimitive.Content>
 {/snippet}
 
-{#if noPortal}
-	{@render tooltipContent()}
-{:else}
+{#if usePortal}
 	<TooltipPrimitive.Portal>
 		{@render tooltipContent()}
 	</TooltipPrimitive.Portal>
+{:else}
+	{@render tooltipContent()}
 {/if}

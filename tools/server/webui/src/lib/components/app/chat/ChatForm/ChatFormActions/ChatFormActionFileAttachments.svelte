@@ -4,7 +4,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
-	import { FileTypeCategory } from '$lib/enums';
+	import { McpLogo } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -13,6 +13,7 @@
 		hasVisionModality?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
 		onSystemPromptClick?: () => void;
+		onMcpServersClick?: () => void;
 	}
 
 	let {
@@ -21,18 +22,26 @@
 		hasAudioModality = false,
 		hasVisionModality = false,
 		onFileUpload,
-		onSystemPromptClick
+		onSystemPromptClick,
+		onMcpServersClick
 	}: Props = $props();
 
-	const fileUploadTooltipText = 'Add files or context';
+	let dropdownOpen = $state(false);
 
-	function handleFileUpload(fileType?: FileTypeCategory) {
-		onFileUpload?.(fileType);
+	function handleMcpServersClick() {
+		dropdownOpen = false;
+		onMcpServersClick?.();
 	}
+
+	const fileUploadTooltipText = $derived.by(() => {
+		return !hasVisionModality
+			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
+			: 'Add files, prompts and MCP Servers';
+	});
 </script>
 
 <div class="flex items-center gap-1 {className}">
-	<DropdownMenu.Root>
+	<DropdownMenu.Root bind:open={dropdownOpen}>
 		<DropdownMenu.Trigger name="Attach files" {disabled}>
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -68,7 +77,7 @@
 				</Tooltip.Trigger>
 
 				{#if !hasVisionModality}
-					<Tooltip.Content>
+					<Tooltip.Content usePortal={false}>
 						<p>Images require vision models to be processed</p>
 					</Tooltip.Content>
 				{/if}
@@ -88,7 +97,7 @@
 				</Tooltip.Trigger>
 
 				{#if !hasAudioModality}
-					<Tooltip.Content>
+					<Tooltip.Content usePortal={false}>
 						<p>Audio files require audio models to be processed</p>
 					</Tooltip.Content>
 				{/if}
@@ -116,7 +125,7 @@
 				</Tooltip.Trigger>
 
 				{#if !hasVisionModality}
-					<Tooltip.Content>
+					<Tooltip.Content usePortal={false}>
 						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 					</Tooltip.Content>
 				{/if}
@@ -135,8 +144,26 @@
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
-				<Tooltip.Content>
+				<Tooltip.Content usePortal={false}>
 					<p>Add a custom system message for this conversation</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			<DropdownMenu.Separator />
+			<Tooltip.Root>
+				<Tooltip.Trigger class="w-full">
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={handleMcpServersClick}
+					>
+						<McpLogo class="h-4 w-4" />
+
+						<span>MCP Servers</span>
+					</DropdownMenu.Item>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content usePortal={false}>
+					<p>Configure MCP servers for agentic tool execution</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
 		</DropdownMenu.Content>

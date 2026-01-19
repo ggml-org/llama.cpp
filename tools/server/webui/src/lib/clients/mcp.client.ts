@@ -495,6 +495,36 @@ export class MCPClient {
 	}
 
 	/**
+	 * Run health checks for multiple servers that don't have a recent check.
+	 * Useful for lazy-loading health checks when UI is opened.
+	 * @param servers - Array of servers to check
+	 * @param skipIfChecked - If true, skip servers that already have a health check result
+	 */
+	async runHealthChecksForServers(
+		servers: {
+			id: string;
+			enabled: boolean;
+			url: string;
+			requestTimeoutSeconds: number;
+			headers?: string;
+		}[],
+		skipIfChecked = true
+	): Promise<void> {
+		const serversToCheck = skipIfChecked
+			? servers.filter((s) => !mcpStore.hasHealthCheck(s.id) && s.url.trim())
+			: servers.filter((s) => s.url.trim());
+
+		if (serversToCheck.length === 0) return;
+
+		const BATCH_SIZE = 5;
+
+		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
+			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
+			await Promise.all(batch.map((server) => this.runHealthCheck(server)));
+		}
+	}
+
+	/**
 	 * Run health check for a specific server configuration.
 	 * Creates a temporary connection to test connectivity and list tools.
 	 * Tracks connection phases and collects detailed connection info.

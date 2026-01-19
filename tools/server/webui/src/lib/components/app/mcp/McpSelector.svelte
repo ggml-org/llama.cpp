@@ -11,8 +11,7 @@
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { onMount } from 'svelte';
-	import { mcpClient } from '$lib/clients';
+	import { mcpClient } from '$lib/clients/mcp.client';
 
 	interface Props {
 		class?: string;
@@ -94,22 +93,18 @@
 		await conversationsStore.toggleMcpServerForChat(serverId);
 	}
 
+	function handleDropdownOpen(open: boolean) {
+		if (open) {
+			mcpClient.runHealthChecksForServers(mcpServers);
+		}
+	}
+
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, 3)
 			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
 			.filter((f) => f.url !== null)
 	);
-
-	let serversWithUrls = $derived(mcpServers.filter((s) => s.url.trim()));
-
-	onMount(() => {
-		for (const server of serversWithUrls) {
-			if (!mcpStore.hasHealthCheck(server.id)) {
-				mcpClient.runHealthCheck(server);
-			}
-		}
-	});
 </script>
 
 {#if hasMcpServers}
@@ -119,6 +114,7 @@
 		emptyMessage="No servers found"
 		isEmpty={filteredMcpServers().length === 0}
 		{disabled}
+		onOpenChange={handleDropdownOpen}
 	>
 		{#snippet trigger()}
 			<button

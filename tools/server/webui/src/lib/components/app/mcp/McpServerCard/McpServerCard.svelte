@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
 	import { getMcpServerLabel } from '$lib/utils/mcp';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -26,9 +27,11 @@
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(getMcpServerLabel(server, healthState));
+	let isIdle = $derived(healthState.status === HealthCheckStatus.Idle);
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.Connecting);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.Success);
 	let isError = $derived(healthState.status === HealthCheckStatus.Error);
+	let showSkeleton = $derived(isIdle || isHealthChecking);
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.Error ? healthState.message : undefined
 	);
@@ -64,12 +67,6 @@
 	let isEditing = $state(!server.url.trim());
 	let showDeleteDialog = $state(false);
 	let editFormRef: McpServerCardEditForm | null = $state(null);
-
-	onMount(() => {
-		if (!mcpStore.hasHealthCheck(server.id) && server.enabled && server.url.trim()) {
-			mcpClient.runHealthCheck(server);
-		}
-	});
 
 	function handleHealthCheck() {
 		mcpClient.runHealthCheck(server);
@@ -137,21 +134,44 @@
 		{/if}
 
 		<div class="grid gap-3">
-			{#if isConnected && instructions}
-				<McpServerInfo {instructions} />
-			{/if}
+			{#if showSkeleton}
+				<div class="space-y-2">
+					<div class="flex items-center gap-2">
+						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="h-3 w-24" />
+					</div>
+					<div class="flex flex-wrap gap-1.5">
+						<Skeleton class="h-5 w-16 rounded-full" />
+						<Skeleton class="h-5 w-20 rounded-full" />
+						<Skeleton class="h-5 w-14 rounded-full" />
+					</div>
+				</div>
 
-			{#if tools.length > 0}
-				<McpServerCardToolsList {tools} />
-			{/if}
+				<div class="space-y-1.5">
+					<div class="flex items-center gap-2">
+						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="h-3 w-32" />
+					</div>
+				</div>
+			{:else}
+				{#if isConnected && instructions}
+					<McpServerInfo {instructions} />
+				{/if}
 
-			{#if connectionLogs.length > 0}
-				<McpConnectionLogs logs={connectionLogs} {connectionTimeMs} />
+				{#if tools.length > 0}
+					<McpServerCardToolsList {tools} />
+				{/if}
+
+				{#if connectionLogs.length > 0}
+					<McpConnectionLogs logs={connectionLogs} {connectionTimeMs} />
+				{/if}
 			{/if}
 		</div>
 
 		<div class="flex justify-between gap-4">
-			{#if protocolVersion}
+			{#if showSkeleton}
+				<Skeleton class="h-3 w-28" />
+			{:else if protocolVersion}
 				<div class="flex flex-wrap items-center gap-1">
 					<span class="text-[10px] text-muted-foreground">
 						Protocol version: {protocolVersion}
