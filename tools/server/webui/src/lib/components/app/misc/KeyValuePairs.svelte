@@ -48,7 +48,7 @@
 </script>
 
 <div>
-	<div class="mb-1 flex items-center justify-between">
+	<div class="mb-2 flex items-center justify-between">
 		{#if sectionLabel}
 			<span class="text-xs font-medium">
 				{sectionLabel}
@@ -60,7 +60,7 @@
 
 		<button
 			type="button"
-			class="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+			class="inline-flex cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
 			onclick={addPair}
 		>
 			<Plus class="h-3 w-3" />
@@ -68,9 +68,9 @@
 		</button>
 	</div>
 	{#if pairs.length > 0}
-		<div class="space-y-2">
+		<div class="space-y-3">
 			{#each pairs as pair, index (index)}
-				<div class="flex items-start gap-2">
+				<div class="flex items-center gap-2">
 					<Input
 						type="text"
 						placeholder={keyPlaceholder}
@@ -78,6 +78,7 @@
 						oninput={(e) => updatePairKey(index, e.currentTarget.value)}
 						class="flex-1"
 					/>
+
 					<textarea
 						placeholder={valuePlaceholder}
 						value={pair.value}
@@ -88,9 +89,10 @@
 						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-sm leading-5 placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
 						rows="1"
 					></textarea>
+
 					<button
 						type="button"
-						class="shrink-0 p-1 text-muted-foreground hover:text-destructive"
+						class="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
 						onclick={() => removePair(index)}
 						aria-label="Remove item"
 					>

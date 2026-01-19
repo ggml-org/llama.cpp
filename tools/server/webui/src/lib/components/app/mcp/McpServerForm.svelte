@@ -32,11 +32,12 @@
 	}
 </script>
 
-<div class="space-y-3">
+<div class="grid gap-3">
 	<div>
-		<label for="server-url-{id}" class="mb-1 block text-xs font-medium">
+		<label for="server-url-{id}" class="mb-2 block text-xs font-medium">
 			Server URL <span class="text-destructive">*</span>
 		</label>
+
 		<Input
 			id="server-url-{id}"
 			type="url"
@@ -45,8 +46,9 @@
 			oninput={(e) => onUrlChange(e.currentTarget.value)}
 			class={urlError ? 'border-destructive' : ''}
 		/>
+
 		{#if urlError}
-			<p class="mt-1 text-xs text-destructive">{urlError}</p>
+			<p class="mt-1.5 text-xs text-destructive">{urlError}</p>
 		{/if}
 	</div>
 

@@ -21,7 +21,7 @@
 			md:h-[80vh] md:max-h-[80vh] md:min-h-0 md:rounded-lg"
 		style="max-width: 56rem;"
 	>
-		<div class="border-b p-4 md:p-6">
+		<div class="border-b border-border/30 p-4 md:p-6">
 			<Dialog.Title class="inline-flex items-center text-lg font-semibold">
 				<McpLogo class="mr-2 inline h-4 w-4" />
 
@@ -36,7 +36,7 @@
 			<McpSettingsSection />
 		</div>
 
-		<div class="flex items-center justify-end gap-3 border-t p-4 md:p-6">
+		<div class="flex items-center justify-end gap-3 border-t border-border/30 p-4 md:p-6">
 			<Button onclick={handleClose}>Close</Button>
 		</div>
 	</Dialog.Content>
