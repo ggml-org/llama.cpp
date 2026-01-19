@@ -329,7 +329,7 @@ struct common_params {
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    int32_t n_gpu_layers       = -1;               // number of layers to store in VRAM (-1 - use default)
+    int32_t n_gpu_layers       = 99;               // number of layers to store in VRAM (99 - offload all, unified cache handles memory)
     int32_t main_gpu           = 0;                // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};              // how split tensors should be distributed across GPUs
     bool    fit_params         = false;            // disabled by default - SYCL tiered memory handles large models
