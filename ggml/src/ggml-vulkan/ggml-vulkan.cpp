@@ -2889,7 +2889,7 @@ static constexpr uint32_t RDNA_DEFAULT_SUBGROUP_SIZE = 32;
 
 static std::vector<uint32_t> calc_specialization_constant_intel_xe2_onward(const PipelineConfigParameter& config, const std::vector<uint32_t>& current) {
     std::vector<uint32_t> output = current;
-    // replacing subgroup_size_8 with new value for l_warptile_mmq and m_warptile_mmq
+    // replacing subgroup_size_8 with current subgroup size for m_warptile_mmq
     output[4] = config.subgroup_size;
     output[10] = config.subgroup_size;
     return output;
@@ -2897,14 +2897,12 @@ static std::vector<uint32_t> calc_specialization_constant_intel_xe2_onward(const
 
 static const std::unordered_map<std::string, PipelineConfigParameter> xe2_onward_pipelines = {
     {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_m", {16, {}, calc_specialization_constant_intel_xe2_onward}},
-    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_l", {16, {}, calc_specialization_constant_intel_xe2_onward}},
     {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_m", {16, {}, calc_specialization_constant_intel_xe2_onward}},
-    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_l", {16, {}, calc_specialization_constant_intel_xe2_onward}},
 };
 
 // Intel GPU can use subgroup 8, 16, or 32 depending on architeture.
 // Pre-Xe2 is 8, 16, or 32. Xe2 onward is 16 or 32. 32 is the default if nothing is specified.
-static constexpr uint32_t INTEL_DEFAULT_SUBGROUP_SIZE = 16;
+static constexpr uint32_t INTEL_DEFAULT_SUBGROUP_SIZE = 32;
 
 // Define configurations for different GPUs.
 static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
