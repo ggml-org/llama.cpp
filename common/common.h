@@ -57,6 +57,8 @@ extern const char * LLAMA_COMMIT;
 extern const char * LLAMA_COMPILER;
 extern const char * LLAMA_BUILD_TARGET;
 
+const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
+
 struct common_control_vector_load_info;
 
 //
