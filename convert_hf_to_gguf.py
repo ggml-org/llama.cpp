@@ -2010,7 +2010,7 @@ class GPTNeoXModel(TextModel):
             )
             logger.info("re-format attention.linear_qkv.bias")
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("BloomForCausalLM", "BloomModel")
@@ -2061,7 +2061,7 @@ class BloomModel(TextModel):
             )
             logger.info("re-format attention.linear_qkv.bias")
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("MPTForCausalLM")
@@ -2263,7 +2263,7 @@ class XverseModel(TextModel):
         if name.endswith("k_proj.weight"):
             data_torch = self._reverse_hf_permute(data_torch, head_count, head_count_kv)
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def _reverse_hf_permute(self, weights: Tensor, n_head: int, n_kv_head: int | None = None) -> Tensor:
         if n_kv_head is not None and n_head != n_kv_head:
@@ -2321,7 +2321,7 @@ class FalconModel(TextModel):
             v = qkv[:, [-1]].reshape(n_head_kv * head_dim, head_dim * n_head)
             data_torch = torch.cat((q, k, v)).reshape_as(data_torch)
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("GPTBigCodeForCausalLM")
@@ -2460,7 +2460,7 @@ class StableLMModel(TextModel):
             else:
                 return []
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def _stack_qk_norm(self, bid: int, n_head: int, norms: dict[str, Tensor], layer_name: str = "q_layernorm"):
         datas: list[Tensor] = []
@@ -2473,7 +2473,7 @@ class StableLMModel(TextModel):
 
         merged_name = f"model.layers.{bid}.self_attn.{layer_name}.weight"
 
-        return super().modify_tensors(data_torch, merged_name, bid)
+        yield from super().modify_tensors(data_torch, merged_name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -2831,7 +2831,7 @@ class LlavaVisionModel(MmprojModel):
                 data_torch = LlamaModel.permute(data_torch, n_head, n_head)
             if name.endswith(("k_proj.weight", "k_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
-            return super().modify_tensors(data_torch, name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
 
         embed_key = "embed_tokens.weight" if not self.is_mistral_format else "tok_embeddings.weight"
         if self.img_break_tok_id > 0 and embed_key in name:
@@ -2839,7 +2839,7 @@ class LlavaVisionModel(MmprojModel):
             # for pixtral model, we need to extract the [IMG_BREAK] token embedding
             img_break_embd = data_torch[self.img_break_tok_id]
             name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK]
-            return super().modify_tensors(img_break_embd, name, bid)
+            yield from super().modify_tensors(img_break_embd, name, bid)
 
         return []  # skip other tensors
 
@@ -2875,7 +2875,7 @@ class SmolVLMModel(MmprojModel):
         is_vision_tensor = "vision_tower" in name or "vision_model" in name or "model.connector" in name
 
         if is_vision_tensor:
-            return super().modify_tensors(data_torch, name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
 
         return []  # skip other tensors
 
@@ -3118,7 +3118,7 @@ class DeciModel(TextModel):
             data_torch = DeciModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):
             data_torch = DeciModel.permute(data_torch, n_head, n_kv_head)
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if rope_params := self.rope_parameters.get("full_attention", self.rope_parameters):
@@ -3414,7 +3414,7 @@ class MiniCPMModel(TextModel):
         if name.endswith(("k_proj.weight")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("MiniCPM3ForCausalLM")
@@ -3843,7 +3843,7 @@ class Qwen2VLModel(TextModel):
                 name.startswith("talker") or name.startswith("token2wav"):
             # skip multimodal tensors
             return []
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -4062,7 +4062,7 @@ class WavTokenizerDecModel(TextModel):
 
         logger.info(f"{self.map_tensor_name(name)} -> {data_torch.shape}")
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def set_vocab(self):
         self._set_vocab_none()
@@ -4865,7 +4865,7 @@ class PlamoModel(TextModel):
         elif new_name.endswith("attn_output.weight"):
             data_torch = self.shuffle_attn_output_weight(data_torch)
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Plamo2ForCausalLM", "PLaMo2ForCausalLM")
@@ -4954,7 +4954,7 @@ class Plamo2Model(TextModel):
         elif name.endswith(".norm.weight"):
             data_torch += 1.0
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
@@ -5003,7 +5003,7 @@ class Plamo3Model(TextModel):
         elif name.endswith(".norm.weight"):
             data_torch = data_torch + 1.0
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("CodeShellForCausalLM")
@@ -5241,7 +5241,7 @@ class InternLM3Model(TextModel):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
@@ -5323,7 +5323,7 @@ class BertModel(TextModel):
             if name == "classifier.bias":
                 name = "classifier.out_proj.bias"
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def _xlmroberta_tokenizer_init(self) -> None:
         # we need the pad_token_id to know how to chop down position_embd matrix
@@ -5480,7 +5480,7 @@ class DistilBertModel(BertModel):
         if name.startswith("vocab_"):
             return []
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
@@ -5523,7 +5523,7 @@ class RobertaModel(BertModel):
             if self._position_offset is not None:
                 data_torch = data_torch[self._position_offset:,:]
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("NomicBertModel")
@@ -5587,7 +5587,7 @@ class NomicBertModel(BertModel):
             data_torch = data_torch.transpose(1, 2)
             name += ".weight"
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -5632,7 +5632,7 @@ class NeoBert(BertModel):
         if name.startswith("model."):
             name = name[6:]
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
@@ -5707,7 +5707,7 @@ class XLMRobertaModel(BertModel):
 
             return []
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -5776,7 +5776,7 @@ class GemmaModel(TextModel):
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Gemma2ForCausalLM")
@@ -5820,7 +5820,7 @@ class Gemma2Model(TextModel):
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
@@ -5876,7 +5876,7 @@ class Gemma3Model(TextModel):
         if name.endswith("norm.weight"):
             data_torch = data_torch + self.norm_shift
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Gemma3TextModel")
@@ -5997,7 +5997,7 @@ class Gemma3VisionModel(MmprojModel):
                 logger.info(f"Correcting norm value for '{name}'")
                 data_torch = data_torch + 1
 
-            return super().modify_tensors(data_torch, name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
 
         return []  # skip other tensors
 
@@ -6148,7 +6148,7 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if (ConformerAudioModel.is_audio_tensor(name)):
             name = name.replace("model.audio_tower.conformer.", "conformer.layers.")
-            return super().modify_tensors(data_torch, name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
 
         # Gemma3n uses
         # - model.embed_vision.* for projection layers
@@ -6303,7 +6303,7 @@ class Gemma3NModel(Gemma3Model):
             else:
                 return []
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Starcoder2ForCausalLM")
@@ -6954,7 +6954,7 @@ class OlmoModel(TextModel):
         if name.endswith("k_proj.weight"):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("SeedOssForCausalLM")
@@ -7621,7 +7621,7 @@ class MiniMaxM2Model(TextModel):
             del self._experts_cache[bid]
             return tensors
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("MiMoV2FlashForCausalLM")
@@ -7781,7 +7781,7 @@ class PLMModel(TextModel):
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -8217,7 +8217,7 @@ class Glm4Model(TextModel):
                 data_torch = Glm4Model.normal_to_neox(data_torch, n_head, n_head, head_dim, self.partial_rotary_factor)
             if name.endswith(("k_proj.weight", "k_proj.bias")):
                 data_torch = Glm4Model.normal_to_neox(data_torch, n_head, n_kv_head, head_dim, self.partial_rotary_factor)
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Glm4MoeForCausalLM", "Glm4vMoeForConditionalGeneration")
@@ -8561,7 +8561,7 @@ class NemotronModel(TextModel):
         if name.endswith("norm.weight"):
             data_torch = data_torch + 1
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("ExaoneForCausalLM")
@@ -8854,7 +8854,7 @@ class GraniteMoeModel(GraniteModel):
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), data_torch)
             ]
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("GraniteMoeHybridForCausalLM", "BambaForCausalLM")
@@ -8948,7 +8948,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             return Mamba2Model.modify_tensors(self, data_torch, name, bid)
         elif bid in self._attn_layers:
             return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def set_gguf_parameters(self):
         """This method merges params from both parents and some that are
@@ -10194,7 +10194,7 @@ class LFM2ColBertModel(LFM2Model):
         if not name.startswith(self.dense_tensor_name):
             name = "model." + name
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # dense tensor is stored in a separate safetensors file
@@ -10703,7 +10703,7 @@ class LightOnOCRVisionModel(LlavaVisionModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         name = name.replace("model.vision_encoder.", "vision_tower.")
         name = name.replace("model.vision_projection.", "multi_modal_projector.")
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("KimiVLForConditionalGeneration")
