@@ -222,7 +222,7 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *     tensor,
 
 // max batch size to use MMQ kernels when tensor cores are available
 // MMQ ESIMD is optimal for small batches. Dequantize path is 2-3x faster for large batches.
-#define MMQ_MAX_BATCH_SIZE 32
+#define MMQ_MAX_BATCH_SIZE 2048
 
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
