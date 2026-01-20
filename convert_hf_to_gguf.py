@@ -9183,8 +9183,7 @@ class NemotronHModel(GraniteHybridModel):
                 return [(mapped_name, reshaped_data)]
 
             if name.endswith("mixer.norm.weight"):
-                n_groups = self.hparams["n_groups"]
-                reshaped_data = data_torch.reshape(n_groups, -1)
+                reshaped_data = data_torch.reshape(self.n_group, -1)
                 mapped_name = self.map_tensor_name(name)
                 return [(mapped_name, reshaped_data)]
 
