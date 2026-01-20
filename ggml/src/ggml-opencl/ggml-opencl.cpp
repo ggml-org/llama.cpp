@@ -8086,22 +8086,25 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_mem mem_src0 = extra0->data_device;
                 cl_mem mem_src1 = extra1->data_device;
 
-                cl_ulong nb00_cont;
-                cl_ulong nb01_cont;
-                cl_ulong nb02_cont;
-                cl_ulong nb03_cont;
+                cl_ulong nb00_cont = nb00;
+                cl_ulong nb01_cont = nb01;
+                cl_ulong nb02_cont = nb02;
+                cl_ulong nb03_cont = nb03;
 
-                cl_ulong nb10_cont;
-                cl_ulong nb11_cont;
-                cl_ulong nb12_cont;
-                cl_ulong nb13_cont;
+                cl_ulong nb10_cont = nb10;
+                cl_ulong nb11_cont = nb11;
+                cl_ulong nb12_cont = nb12;
+                cl_ulong nb13_cont = nb13;
+
+                cl_ulong offset0_cont = offset0;
+                cl_ulong offset1_cont = offset1;
 
                 if (!ggml_is_contiguous(src0)) {
                     backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
                         nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
-                    offset0 = 0;
+                    offset0_cont = 0;
                 }
 
                 if (!ggml_is_contiguous(src1)) {
@@ -8109,13 +8112,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
                         nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
-                    offset1 = 0;
+                    offset1_cont = 0;
                 }
 
                 CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
                 CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
                 CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
                 CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
                 CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
@@ -8150,22 +8153,25 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_mem mem_src0 = extra0->data_device;
                 cl_mem mem_src1 = extra1->data_device;
 
-                cl_ulong nb00_cont;
-                cl_ulong nb01_cont;
-                cl_ulong nb02_cont;
-                cl_ulong nb03_cont;
+                cl_ulong nb00_cont = nb00;
+                cl_ulong nb01_cont = nb01;
+                cl_ulong nb02_cont = nb02;
+                cl_ulong nb03_cont = nb03;
 
-                cl_ulong nb10_cont;
-                cl_ulong nb11_cont;
-                cl_ulong nb12_cont;
-                cl_ulong nb13_cont;
+                cl_ulong nb10_cont = nb10;
+                cl_ulong nb11_cont = nb11;
+                cl_ulong nb12_cont = nb12;
+                cl_ulong nb13_cont = nb13;
+
+                cl_ulong offset0_cont = offset0;
+                cl_ulong offset1_cont = offset1;
 
                 if (!ggml_is_contiguous(src0)) {
                     backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
                         nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
-                    offset0 = 0;
+                    offset0_cont = 0;
                 }
 
                 if (!ggml_is_contiguous(src1)) {
@@ -8173,13 +8179,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
                             nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
-                    offset1 = 0;
+                    offset1_cont = 0;
                 }
 
                 CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
                 CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
                 CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
                 CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
                 CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
