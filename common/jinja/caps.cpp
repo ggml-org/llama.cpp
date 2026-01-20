@@ -97,7 +97,7 @@ caps caps_get(jinja::program & prog) {
             return json{nullptr};
         },
         [&](bool, value & messages, value &) {
-            auto & content = messages->at(0)->at(mk_val<value_string>("content"));
+            auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (has_op(content, "selectattr") || has_op(content, "array_access")) {
                 // accessed as an array
@@ -128,7 +128,7 @@ caps caps_get(jinja::program & prog) {
             return json::array();
         },
         [&](bool, value & messages, value &) {
-            auto & content = messages->at(0)->at(mk_val<value_string>("content"));
+            auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (!content->stats.used) {
                 result.supports_system_role = false;
@@ -208,20 +208,20 @@ caps caps_get(jinja::program & prog) {
                 return;
             }
 
-            auto & tool_name = tools->at(0)->at(mk_val<value_string>("function"))->at(mk_val<value_string>("name"));
+            auto & tool_name = tools->at(0)->at("function")->at("name");
             caps_print_stats(tool_name, "tools[0].function.name");
             if (!tool_name->stats.used) {
                 result.supports_tools = false;
             }
 
-            auto & tool_calls = messages->at(1)->at(mk_val<value_string>("tool_calls"));;
+            auto & tool_calls = messages->at(1)->at("tool_calls");;
             caps_print_stats(tool_calls, "messages[1].tool_calls");
             if (!tool_calls->stats.used) {
                 result.supports_tool_calls = false;
             }
 
             // check for second tool call usage
-            auto & tool_call_1 = tool_calls->at(1)->at(mk_val<value_string>("function"));
+            auto & tool_call_1 = tool_calls->at(1)->at("function");
             caps_print_stats(tool_call_1, "messages[1].tool_calls[1].function");
             if (!tool_call_1->stats.used) {
                 result.supports_parallel_tool_calls = false;

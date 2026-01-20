@@ -18,6 +18,11 @@ namespace jinja {
 struct value_t;
 using value = std::shared_ptr<value_t>;
 
+struct value_array_t;
+using value_array = std::shared_ptr<value_array_t>;
+
+struct value_object_t;
+using value_object = std::shared_ptr<value_object_t>;
 
 // Helper to check the type of a value
 template<typename T>
@@ -112,48 +117,10 @@ struct value_t {
         std::map<std::string, value> unordered;
         std::vector<std::tuple<std::string, value, value>> ordered;
         std::string make_key_index(const value & key) {
-            std::string key_type = key->type();
-            std::string key_str;
-            // Arrays and Objects are usually not hashable, but tuples are (our tuples are arrays)
-            // Support single level Arrays and Objects with hashable types (for future namedtuple)
-            const auto is_hashable = [&](const value & val) -> bool {
-                const std::string val_type = val->type();
-                return !key->is_undefined() && val_type != "Array" && val_type != "Object";
-            };
-            if (key_type == "Array") {
-                const auto & vec = key->as_array();
-                if (std::all_of(vec.begin(), vec.end(), is_hashable)) {
-                    key_type = "Tuple";
-                    key_str = key->as_repr();
-                }
-            } else if (key_type == "Object") {
-                const auto & vec = key->as_ordered_object();
-                if (std::all_of(vec.begin(), vec.end(), [&](auto ikv) -> bool {
-                    return is_hashable(std::get<2>(ikv));
-                })) {
-                    key_type = "NamedTuple";
-                    key_str = key->as_repr();
-                }
-            } else if (key_type == "Float") {
-                // Non-fractional Floats overwrite Integers
-                const auto & f = key->as_float();
-                if (std::trunc(f) == f) {
-                    key_type = "Integer";
-                    key_str = std::to_string(key->as_int());
-                }
-            } else if (key_type == "Boolean") {
-                // Booleans overwrite Integers
-                key_type = "Integer";
-                key_str = std::to_string(key->as_int());
-            } else if (key_type == "String") {
-                key_str = key->as_string().str();
-            } else {
-                key_str = key->as_repr();
+            if (!key->is_hashable()) {
+                throw std::runtime_error("Object key of unhashable type: " + key->type());
             }
-            if (key->is_undefined() || key_type == "Array" || key_type == "Object") {
-                throw std::runtime_error("Object key of unhashable type: " + key_type);
-            }
-            return key_type + "." + key_str;
+            return key->unique_hash();
         }
         bool has_key_index(const std::string & key_idx) {
             return unordered.find(key_idx) != unordered.end();
@@ -209,43 +176,17 @@ struct value_t {
         throw std::runtime_error("No builtins available for type " + type());
     }
 
-    virtual bool has_key(const value & key) {
-        return val_obj.has_key(key);
-    }
-    virtual value & at(const value & key, value & default_val) {
-        const std::string key_idx = val_obj.make_key_index(key);
-        if (!val_obj.has_key_index(key_idx)) {
-            return default_val;
-        }
-        return val_obj.unordered.at(key_idx);
-    }
-    virtual value & at(const value & key) {
-        const std::string key_idx = val_obj.make_key_index(key);
-        if (!val_obj.has_key_index(key_idx)) {
-            throw std::runtime_error("Key '" + key->as_string().str() + "' not found in value of type " + type());
-        }
-        return val_obj.unordered.at(key_idx);
-    }
-    virtual value & at(int64_t index, value & default_val) {
-        if (index < 0) {
-            index += val_arr.size();
-        }
-        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
-            return default_val;
-        }
-        return val_arr[index];
-    }
-    virtual value & at(int64_t index) {
-        if (index < 0) {
-            index += val_arr.size();
-        }
-        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
-            throw std::runtime_error("Index " + std::to_string(index) + " out of bounds for array of size " + std::to_string(val_arr.size()));
-        }
-        return val_arr[index];
-    }
+    virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const value &, value &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const value &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const std::string &, value &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const std::string &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(int64_t, value &) { throw std::runtime_error(type() + " is not an array value"); }
+    virtual value & at(int64_t) { throw std::runtime_error(type() + " is not an array value"); }
 
     virtual std::string as_repr() const { return as_string().str(); }
+    virtual bool is_hashable() const { return false; }
+    virtual std::string unique_hash() const { return type() + "." + as_repr(); }
 };
 
 //
@@ -262,6 +203,8 @@ struct value_int_t : public value_t {
         return val_int != 0;
     }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override { return true; }
+    virtual std::string unique_hash() const { return "Int." + as_string().str(); }
 };
 using value_int = std::shared_ptr<value_int_t>;
 
@@ -281,6 +224,13 @@ struct value_float_t : public value_t {
         return val_flt != 0.0;
     }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override { return true; }
+    virtual std::string unique_hash() const {
+        if (std::trunc(val_flt) == val_flt) {
+            return "Int." + std::to_string(as_int());
+        }
+        return type() + "." + std::to_string(val_flt);
+    }
 };
 using value_float = std::shared_ptr<value_float_t>;
 
@@ -302,6 +252,8 @@ struct value_string_t : public value_t {
         return val_str.length() > 0;
     }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override { return true; }
+    virtual std::string unique_hash() const { return type() + "." + as_string().str(); }
     void mark_input() {
         val_str.mark_input();
     }
@@ -316,6 +268,8 @@ struct value_bool_t : public value_t {
     virtual bool as_bool() const override { return val_bool; }
     virtual string as_string() const override { return std::string(val_bool ? "True" : "False"); }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override { return true; }
+    virtual std::string unique_hash() const { return "Int." + std::to_string(as_int()); }
 };
 using value_bool = std::shared_ptr<value_bool_t>;
 
@@ -359,9 +313,34 @@ struct value_array_t : public value_t {
     virtual bool as_bool() const override {
         return !val_arr.empty();
     }
+    virtual value & at(int64_t index, value & default_val) override {
+        if (index < 0) {
+            index += val_arr.size();
+        }
+        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
+            return default_val;
+        }
+        return val_arr[index];
+    }
+    virtual value & at(int64_t index) override {
+        if (index < 0) {
+            index += val_arr.size();
+        }
+        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
+            throw std::runtime_error("Index " + std::to_string(index) + " out of bounds for array of size " + std::to_string(val_arr.size()));
+        }
+        return val_arr[index];
+    }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override {
+        if (std::all_of(val_arr.begin(), val_arr.end(), [&](auto & val) -> bool {
+            return !val->is_undefined() && !is_val<value_array>(val) && !is_val<value_object>(val);
+        })) {
+            return true;
+        }
+        return false;
+    }
 };
-using value_array = std::shared_ptr<value_array_t>;
 
 
 struct value_object_t : public value_t {
@@ -403,9 +382,42 @@ struct value_object_t : public value_t {
     virtual bool as_bool() const override {
         return !val_obj.unordered.empty();
     }
+    virtual bool has_key(const value & key) override {
+        return val_obj.has_key(key);
+    }
+    virtual value & at(const value & key, value & default_val) override {
+        const std::string key_idx = val_obj.make_key_index(key);
+        if (!val_obj.has_key_index(key_idx)) {
+            return default_val;
+        }
+        return val_obj.unordered.at(key_idx);
+    }
+    virtual value & at(const value & key) override {
+        const std::string key_idx = val_obj.make_key_index(key);
+        if (!val_obj.has_key_index(key_idx)) {
+            throw std::runtime_error("Key '" + key->as_string().str() + "' not found in value of type " + type());
+        }
+        return val_obj.unordered.at(key_idx);
+    }
+    virtual value & at(const std::string & key, value & default_val) override {
+        value key_val = mk_val<value_string>(key);
+        return at(key_val, default_val);
+    }
+    virtual value & at(const std::string & key) override {
+        value key_val = mk_val<value_string>(key);
+        return at(key_val);
+    }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override {
+            if (std::all_of(val_obj.ordered.begin(), val_obj.ordered.end(), [&](auto ikv) -> bool {
+                const auto & val = std::get<2>(ikv);
+                return !val->is_undefined() && !is_val<value_array>(val) && !is_val<value_object>(val);
+            })) {
+                return true;
+            }
+            return false;
+    }
 };
-using value_object = std::shared_ptr<value_object_t>;
 
 //
 // null and undefined types
@@ -418,6 +430,7 @@ struct value_none_t : public value_t {
     virtual string as_string() const override { return string(type()); }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_hashable() const override { return true; }
 };
 using value_none = std::shared_ptr<value_none_t>;
 
@@ -511,6 +524,7 @@ struct value_func_t : public value_t {
     }
     virtual std::string type() const override { return "Function"; }
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
+    virtual bool is_hashable() const override { return true; }
 };
 using value_func = std::shared_ptr<value_func_t>;
 
@@ -521,6 +535,7 @@ struct value_kwarg_t : public value_t {
     value_kwarg_t(const std::string & k, const value & v) : key(k), val(v) {}
     virtual std::string type() const override { return "KwArg"; }
     virtual std::string as_repr() const override { return type(); }
+    virtual bool is_hashable() const override { return true; }
 };
 using value_kwarg = std::shared_ptr<value_kwarg_t>;
 

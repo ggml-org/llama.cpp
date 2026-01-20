@@ -80,7 +80,7 @@ struct context {
 
     value get_val(const std::string & name) {
         value default_val = mk_val<value_undefined>(name);
-        return env->at(mk_val<value_string>(name), default_val);
+        return env->at(name, default_val);
     }
 
     void set_val(const std::string & name, const value & val) {
