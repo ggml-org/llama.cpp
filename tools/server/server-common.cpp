@@ -922,6 +922,18 @@ json oaicompat_chat_params_parse(
                 p["text"] = mtmd_default_marker();
                 p.erase("image_url");
 
+            } else if (type == "image") {
+                if (!opt.allow_image) {
+                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                handle_media(out_files, p, opt.media_path);
+
+                // replace this chunk with a marker
+                p["type"] = "text";
+                p["text"] = mtmd_default_marker();
+                p.erase("url");
+
             } else if (type == "input_audio") {
                 if (!opt.allow_audio) {
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
