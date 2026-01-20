@@ -7713,20 +7713,20 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     const int  ne02 = src0 ? src0->ne[2] : 0;
     const int  ne03 = src0 ? src0->ne[3] : 0;
 
-    cl_ulong nb00 = src0 ? src0->nb[0] : 0;
-    cl_ulong nb01 = src0 ? src0->nb[1] : 0;
-    cl_ulong nb02 = src0 ? src0->nb[2] : 0;
-    cl_ulong nb03 = src0 ? src0->nb[3] : 0;
+    const cl_ulong nb00 = src0 ? src0->nb[0] : 0;
+    const cl_ulong nb01 = src0 ? src0->nb[1] : 0;
+    const cl_ulong nb02 = src0 ? src0->nb[2] : 0;
+    const cl_ulong nb03 = src0 ? src0->nb[3] : 0;
 
     const int  ne10 = src1 ? src1->ne[0] : 0;
     const int  ne11 = src1 ? src1->ne[1] : 0;
     const int  ne12 = src1 ? src1->ne[2] : 0;
     const int  ne13 = src1 ? src1->ne[3] : 0;
 
-    cl_ulong nb10 = src1 ? src1->nb[0] : 0;
-    cl_ulong nb11 = src1 ? src1->nb[1] : 0;
-    cl_ulong nb12 = src1 ? src1->nb[2] : 0;
-    cl_ulong nb13 = src1 ? src1->nb[3] : 0;
+    const cl_ulong nb10 = src1 ? src1->nb[0] : 0;
+    const cl_ulong nb11 = src1 ? src1->nb[1] : 0;
+    const cl_ulong nb12 = src1 ? src1->nb[2] : 0;
+    const cl_ulong nb13 = src1 ? src1->nb[3] : 0;
 
     const int  ne0 = dst ? dst->ne[0] : 0;
     const int  ne1 = dst ? dst->ne[1] : 0;
@@ -8086,10 +8086,20 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_mem mem_src0 = extra0->data_device;
                 cl_mem mem_src1 = extra1->data_device;
 
+                cl_ulong nb00_cont;
+                cl_ulong nb01_cont;
+                cl_ulong nb02_cont;
+                cl_ulong nb03_cont;
+
+                cl_ulong nb10_cont;
+                cl_ulong nb11_cont;
+                cl_ulong nb12_cont;
+                cl_ulong nb13_cont;
+
                 if (!ggml_is_contiguous(src0)) {
                     backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
-                        nb00, nb01, nb02, nb03);
+                        nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
                     offset0 = 0;
                 }
@@ -8097,7 +8107,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 if (!ggml_is_contiguous(src1)) {
                     backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
-                            nb10, nb11, nb12, nb13);
+                        nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
                     offset1 = 0;
                 }
@@ -8140,10 +8150,20 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 cl_mem mem_src0 = extra0->data_device;
                 cl_mem mem_src1 = extra1->data_device;
 
+                cl_ulong nb00_cont;
+                cl_ulong nb01_cont;
+                cl_ulong nb02_cont;
+                cl_ulong nb03_cont;
+
+                cl_ulong nb10_cont;
+                cl_ulong nb11_cont;
+                cl_ulong nb12_cont;
+                cl_ulong nb13_cont;
+
                 if (!ggml_is_contiguous(src0)) {
                     backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
                     ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
-                        nb00, nb01, nb02, nb03);
+                        nb00_cont, nb01_cont, nb02_cont, nb03_cont);
                     mem_src0 = backend_ctx->prealloc_src0.buffer;
                     offset0 = 0;
                 }
@@ -8151,7 +8171,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 if (!ggml_is_contiguous(src1)) {
                     backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
                     ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
-                            nb10, nb11, nb12, nb13);
+                            nb10_cont, nb11_cont, nb12_cont, nb13_cont);
                     mem_src1 = backend_ctx->prealloc_src1.buffer;
                     offset1 = 0;
                 }
