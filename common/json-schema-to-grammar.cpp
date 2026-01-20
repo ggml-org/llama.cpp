@@ -1018,6 +1018,9 @@ public:
             return _add_rule(rule_name, out.str());
         } else if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
+        } else if (schema_type.is_null()) {
+            // Schema has no type field - per JSON Schema, this accepts any value
+            return _add_rule(rule_name, _add_primitive("value", PRIMITIVE_RULES.at("value")));
         } else {
             if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
                 _errors.push_back("Unrecognized schema: " + schema.dump());

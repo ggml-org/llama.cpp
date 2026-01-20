@@ -349,6 +349,12 @@ When working in `packages/frontend/`, both files are loaded with the frontend on
 
 The agent supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers, allowing you to extend its capabilities with external tools.
 
+> **Note:** MCP servers using HTTPS (like HuggingFace) require SSL support. If you see `'https' scheme is not supported`, rebuild with:
+> ```bash
+> cmake -B build -DLLAMA_BUILD_LIBRESSL=ON
+> cmake --build build -t llama-agent -j
+> ```
+
 Create an `mcp.json` file in your working directory or at `~/.llama-agent/mcp.json`:
 
 ```json
