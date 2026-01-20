@@ -1,4 +1,5 @@
 #include "ggml-remoting.h"
+#include "../../include/ggml-virtgpu.h"
 
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
     UNUSED(backend);
@@ -60,7 +61,7 @@ ggml_backend_t ggml_backend_remoting_device_init(ggml_backend_dev_t dev, const c
     ggml_backend_t remoting_backend = new ggml_backend{
         /* .guid      = */ ggml_backend_remoting_guid(),
         /* .interface = */ ggml_backend_remoting_interface,
-        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_remoting_frontend_reg(), ctx->device),
+        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_virtgpu_reg(), ctx->device),
         /* .context   = */ ctx,
     };
 

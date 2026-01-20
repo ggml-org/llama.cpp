@@ -4,8 +4,8 @@
 #include "virtgpu-shm.h"
 #include "virtgpu-apir.h"
 
-#include "../ggml-remotingbackend/shared/api_remoting.h"
-#include "../ggml-remotingbackend/shared/apir_cs.h"
+#include "backend/shared/api_remoting.h"
+#include "backend/shared/apir_cs.h"
 
 #include <fcntl.h>
 #include <stdbool.h>

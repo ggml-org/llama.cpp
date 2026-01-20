@@ -1,8 +1,8 @@
 #include "virtgpu.h"
 
 #include "ggml-remoting.h"
-#include "../ggml-remotingbackend/shared/apir_backend.h"
-#include "../ggml-remotingbackend/shared/apir_cs_ggml.h"
+#include "backend/shared/apir_backend.h"
+#include "backend/shared/apir_cs_ggml.h"
 
 #include "ggml-backend-impl.h"
 

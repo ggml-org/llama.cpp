@@ -3,7 +3,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
-#include "ggml-remoting-frontend.h"
 #include "virtgpu.h"
 
 #include <memory>

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 cmake_policy(SET CMP0114 NEW)
 
-message(STATUS "Enable API Remoting backend")
+message(STATUS "Enable the VirtGPU/Virglrenderer backend library")
 
 ggml_add_backend_library(ggml-remotingbackend
                          backend.cpp
@@ -16,3 +16,6 @@ ggml_add_backend_library(ggml-remotingbackend
                          apir_cs_ggml-rpc-back.cpp)
 
 target_compile_options(ggml-remotingbackend PRIVATE -std=c++20)
+
+# Add include directory for ggml-backend-impl.h and other core headers
+target_include_directories(ggml-remotingbackend PRIVATE ../..)

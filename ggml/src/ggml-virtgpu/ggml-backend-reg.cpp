@@ -1,4 +1,5 @@
 #include "ggml-remoting.h"
+#include "ggml-virtgpu.h"
 
 #include <iostream>
 #include <mutex>
@@ -102,10 +103,10 @@ static const ggml_backend_reg_i ggml_backend_remoting_reg_i = {
     /* .get_proc_address = */ NULL,
 };
 
-ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
+ggml_backend_reg_t ggml_backend_virtgpu_reg() {
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_ERROR("apir_initialize failed\n");
+        GGML_LOG_ERROR("virtgpu_apir_initialize failed\n");
         return NULL;
     }
 
@@ -128,4 +129,4 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     return &reg;
 }
 
-GGML_BACKEND_DL_IMPL(ggml_backend_remoting_frontend_reg)
+GGML_BACKEND_DL_IMPL(ggml_backend_virtgpu_reg)

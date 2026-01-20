@@ -1,4 +1,4 @@
-#include "../ggml-remotingbackend/shared/apir_cs_rpc.h"
+#include "backend/shared/apir_cs_rpc.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml-remoting.h"
