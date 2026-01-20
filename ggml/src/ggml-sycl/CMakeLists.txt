@@ -317,3 +317,72 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_compile_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
     target_link_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
 endif()
+
+# =============================================================================
+# XMX ESIMD Tests
+# =============================================================================
+option(GGML_SYCL_BUILD_XMX_TESTS "Build XMX ESIMD unit tests" OFF)
+
+if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
+    message(STATUS "Building XMX ESIMD unit tests")
+
+    # Common SYCL compile/link options for tests
+    set(XMX_TEST_SYCL_OPTIONS
+        "-fsycl"
+        "-fsycl-targets=intel_gpu_bmg_g21,spir64"
+        "-Wno-narrowing"
+    )
+
+    # Test 1: XMX Hardware Detection Tests
+    # This test is standalone and only needs xmx-esimd-common.hpp
+    add_executable(test-xmx-hardware-detect
+        tests/test-xmx-hardware-detect.cpp
+    )
+    target_include_directories(test-xmx-hardware-detect PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-hardware-detect PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-hardware-detect PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-hardware-detect PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        XMX_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-hardware-detect PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+
+    # Test 2: XMX ESIMD Basic Operations Tests
+    # This test is standalone and only needs xmx-esimd-common.hpp
+    add_executable(test-xmx-esimd-basic
+        tests/test-xmx-esimd-basic.cpp
+    )
+    target_include_directories(test-xmx-esimd-basic PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-esimd-basic PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-esimd-basic PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-esimd-basic PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        XMX_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-esimd-basic PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+
+    # Register tests with CTest
+    include(CTest)
+    add_test(NAME xmx-hardware-detect COMMAND test-xmx-hardware-detect)
+    add_test(NAME xmx-esimd-basic COMMAND test-xmx-esimd-basic)
+
+    # Set test properties
+    set_tests_properties(xmx-hardware-detect xmx-esimd-basic PROPERTIES
+        LABELS "sycl;xmx"
+        TIMEOUT 120
+    )
+endif()
