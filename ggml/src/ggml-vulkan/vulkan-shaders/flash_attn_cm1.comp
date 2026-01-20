@@ -275,6 +275,107 @@ void main() {
             Lf[r] = eMf[r]*Lf[r];
         }
 
+#if 1
+        const uint psh_stride = Br / 4; // No space for padding, maybe increase Qf size?
+
+        // Calculate and store Pf in Qf
+        [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            const uint col = c * cols_per_iter + col_tid;
+
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
+                const uint row = tile_row(r);
+                f16vec4 Pfvec;
+                [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                    const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
+                    Lf[r + vec_idx] += Pf;
+                    Pfvec[vec_idx] = Pf;
+                }
+                Qf[col * psh_stride + row / 4] = Pfvec;
+            }
+        }
+
+        const uint num_hsv_tiles = HSV / MatBc / row_split;
+
+        // Each subgroup handles HSV/4 columns
+        [[unroll]] for (uint32_t hsv_tile = 0; hsv_tile < num_hsv_tiles; ++hsv_tile) {
+            const uint hsv_offset = (hsv_tile * row_split + gl_SubgroupID) * 16;
+
+            SfMat = coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBr, MatBc, gl_MatrixUseAccumulator>(0);
+
+#if BLOCK_SIZE > 1
+            // Preload V tiles for [Bc, 16 * num subgroups]
+            const uint v_rows = Bc;
+            const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * number of subgroups
+            const uint v_total = v_rows * v_cols;
+            const uint v_loads_per_thread = v_total / gl_WorkGroupSize.x;
+
+            const uint vsh_stride = v_cols;
+
+            [[unroll]] for (uint32_t i = 0; i < v_loads_per_thread; ++i) {
+                const uint idx = i * gl_WorkGroupSize.x + tid;
+                const uint row = idx / v_cols;
+                const uint col = idx % v_cols;
+
+                const uint v_row = j * Bc + row;
+                const uint v_col = hsv_tile * MatBc * row_split + col * 4;
+
+                const uint coord = v_row * v_stride * BLOCK_SIZE + v_col;
+                const uint ib = coord / BLOCK_SIZE;
+                const uint iqs = coord % BLOCK_SIZE;
+
+                ksh[row * vsh_stride + col] = f16vec4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
+            }
+
+            barrier();
+#endif
+
+            [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {
+                coopMatLoad(KMat, Qf, bc_chunk * MatBc * psh_stride, psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
+
+#if BLOCK_SIZE > 1
+                const uint v_tile_offset = bc_chunk * MatBr * v_cols + gl_SubgroupID * (MatBc / 4);
+                coopMatLoad(QMat, ksh, v_tile_offset, vsh_stride, gl_CooperativeMatrixLayoutRowMajor);
+#else
+                // F16 values can be loaded directly from global memory
+                const uint v_tile_row = j * Bc + bc_chunk * MatBc;
+                const uint v_tile_offset = v_offset / 4 + v_tile_row * v_stride / 4 + hsv_offset / 4;
+                coopMatLoad(QMat, data_vv4, v_tile_offset, v_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+#endif
+
+                SfMat = coopMatMulAdd(KMat, QMat, SfMat);
+            }
+
+            // Store SfMat to sfsh and load into Of
+            const uint osh_stride = row_split * MatBc + 8;
+            const uint o_offset = gl_SubgroupID * MatBc;
+            coopMatStore(SfMat, sfsh, o_offset, osh_stride, gl_CooperativeMatrixLayoutRowMajor);
+
+            barrier();
+
+            const uint hsv_per_tile = row_split * MatBc;
+            const uint hsv_base = hsv_tile * hsv_per_tile;
+            const uint d_values_per_tile = hsv_per_tile / 4 / D_split;
+
+            const uint d_start = hsv_tile * d_values_per_tile;
+            const uint d_end = d_start + d_values_per_tile;
+
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                const uint row = tile_row(r);
+
+                [[unroll]] for (uint32_t d = d_start; d < d_end; ++d) {
+                    const uint hsv_col = 4 * (d * D_split + d_tid);
+                    const uint local_hsv = hsv_col - hsv_base;
+
+                    Of[r][d] += ACC_TYPEV4(
+                        sfsh[row * osh_stride + local_hsv],
+                        sfsh[row * osh_stride + local_hsv + 1],
+                        sfsh[row * osh_stride + local_hsv + 2],
+                        sfsh[row * osh_stride + local_hsv + 3]
+                    );
+                }
+            }
+        }
+#else
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
             if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
                 continue;
@@ -298,6 +399,7 @@ void main() {
                 }
             }
         }
+#endif
 
         barrier();
     }
