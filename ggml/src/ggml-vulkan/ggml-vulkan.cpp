@@ -3061,7 +3061,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t tk_m = device->coopmat_support ? device->coopmat_k : 1;
         const uint32_t tk_s = device->coopmat_support ? device->coopmat_k : 1;
 
-        const uint32_t s_warptile_wm = default_subgroup_size == 8 ? 8 : 32;
+        const uint32_t s_warptile_wm = default_subgroup_size < 32 ? default_subgroup_size : 32;
 
         l_warptile = { 128,             128, 128, 16, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
         m_warptile = { 128,              64,  64, 16, subgroup_size_8,     32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
