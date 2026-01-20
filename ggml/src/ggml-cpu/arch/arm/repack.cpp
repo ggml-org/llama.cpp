@@ -3155,24 +3155,26 @@ void ggml_gemm_q5_K_8x8_q8_K(int                        n,
                         sb_acc[0]               = acc_0;
                         acc_2                   = vmmlaq_s32(acc_2, qs_lo_3, q8s[1][3]);
                         sb_acc[2]               = acc_2;
+
+                        // Scales[i] corresponds to column i
+                        const int       scale_offset = cp * 2;
+                        const int32_t   s0           = q5sb_scales[0][scale_offset];
+                        const int32_t   s1           = q5sb_scales[0][scale_offset + 1];
+                        const int32x4_t block_scale  = vcombine_s32(vdup_n_s32(s0), vdup_n_s32(s1));
+                        acc[cp]                      = vmlaq_s32(acc[cp], sb_acc[0], block_scale);
+                        acc[cp + 4]                  = vmlaq_s32(acc[cp + 4], sb_acc[2], block_scale);
+
                         const int8x16_t qs_hi_3 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_3, 4), hbit_hi_3));
                         acc_1                   = vmmlaq_s32(acc_1, qs_hi_3, q8s[0][7]);
                         sb_acc[1]               = acc_1;
                         acc_3                   = vmmlaq_s32(acc_3, qs_hi_3, q8s[1][7]);
                         sb_acc[3]               = acc_3;
 
-                        // Scales[i] corresponds to column i
-                        const int scale_offset = cp * 2;
-                        for (int blk = 0; blk < 2; blk++) {
-                            const int32x4_t block_scale = {
-                                (int32_t) q5sb_scales[blk][scale_offset],
-                                (int32_t) q5sb_scales[blk][scale_offset],
-                                (int32_t) q5sb_scales[blk][scale_offset + 1],
-                                (int32_t) q5sb_scales[blk][scale_offset + 1],
-                            };
-                            acc[cp]     = vmlaq_s32(acc[cp], sb_acc[blk], block_scale);
-                            acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc[blk + 2], block_scale);
-                        }
+                        const int32_t   s2           = q5sb_scales[1][scale_offset];
+                        const int32_t   s3           = q5sb_scales[1][scale_offset + 1];
+                        const int32x4_t block_scale2 = vcombine_s32(vdup_n_s32(s2), vdup_n_s32(s3));
+                        acc[cp]                      = vmlaq_s32(acc[cp], sb_acc[1], block_scale2);
+                        acc[cp + 4]                  = vmlaq_s32(acc[cp + 4], sb_acc[3], block_scale2);
                     }
 
                     // Multiply Acc bsum + mins
