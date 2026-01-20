@@ -109,7 +109,11 @@ permission_state permission_manager::check_permission(const permission_request &
     }
 
     // Check session overrides first
-    std::string key = request.tool_name + ":" + request.details;
+    // For MCP tools, use tool name only (arguments vary per call)
+    // For other tools, include details for more granular control
+    std::string key = request.tool_name.rfind("mcp__", 0) == 0
+        ? request.tool_name
+        : request.tool_name + ":" + request.details;
     auto it = session_overrides_.find(key);
     if (it != session_overrides_.end()) {
         return it->second;
@@ -171,12 +175,18 @@ permission_response permission_manager::prompt_user(const permission_request & r
     }
     if (ch == 'a' || ch == 'A') {
         // Store session override
-        std::string key = request.tool_name + ":" + request.details;
+        // For MCP tools, use tool name only (arguments vary per call)
+        std::string key = request.tool_name.rfind("mcp__", 0) == 0
+            ? request.tool_name
+            : request.tool_name + ":" + request.details;
         session_overrides_[key] = permission_state::ALLOW_SESSION;
         return permission_response::ALLOW_ALWAYS;
     }
     if (ch == 'd' || ch == 'D') {  // 'd' for deny always (since 'N' is deny once)
-        std::string key = request.tool_name + ":" + request.details;
+        // For MCP tools, use tool name only (arguments vary per call)
+        std::string key = request.tool_name.rfind("mcp__", 0) == 0
+            ? request.tool_name
+            : request.tool_name + ":" + request.details;
         session_overrides_[key] = permission_state::DENY_SESSION;
         return permission_response::DENY_ALWAYS;
     }
