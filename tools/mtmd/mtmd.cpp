@@ -111,6 +111,8 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* cb_eval           */ nullptr,
+        /* cb_eval_user_data */ nullptr,
     };
     return params;
 }
@@ -146,8 +148,6 @@ struct mtmd_context {
     bool        tok_row_end_trail = false;
     bool        ov_img_first      = false;
 
-    bool use_mrope = false; // for Qwen2VL, we need to use M-RoPE
-
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -178,6 +178,8 @@ struct mtmd_context {
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
             /* warmup            */ ctx_params.warmup,
+            /* cb_eval           */ ctx_params.cb_eval,
+            /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
@@ -217,7 +219,6 @@ struct mtmd_context {
 
     void init_vision() {
         GGML_ASSERT(ctx_v != nullptr);
-        use_mrope = clip_is_mrope(ctx_v);
 
         projector_type proj = clip_get_projector_type(ctx_v);
         int minicpmv_version = clip_is_minicpmv(ctx_v);
@@ -627,7 +628,7 @@ struct mtmd_tokenizer {
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-                if (ctx->use_mrope) {
+                if (mtmd_decode_use_mrope(ctx)) {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, batch_f32.entries[0].get());
                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, batch_f32.entries[0].get());
@@ -863,10 +864,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
     switch (ctx->proj_type_v()) {
-        case PROJECTOR_TYPE_QWEN2VL:
-        case PROJECTOR_TYPE_QWEN25VL:
-        case PROJECTOR_TYPE_QWEN3VL:
-        case PROJECTOR_TYPE_YOUTUVL:
+        case PROJECTOR_TYPE_GEMMA3:
             return true;
         default:
             return false;
@@ -874,7 +872,15 @@ bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
 }
 
 bool mtmd_decode_use_mrope(mtmd_context * ctx) {
-    return ctx->use_mrope;
+    switch (ctx->proj_type_v()) {
+        case PROJECTOR_TYPE_QWEN2VL:
+        case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_GLM4V:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool mtmd_support_vision(mtmd_context * ctx) {

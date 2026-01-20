@@ -2,14 +2,9 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
 #include <string.h>
 
@@ -19,7 +14,6 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
-#include "ops-utils.h"
 
 #define get_rows_preamble \
     const uint32_t ne00 = octx->src0.ne[0]; \
@@ -72,7 +66,7 @@ static int get_rows_thread_f32_f32(struct htp_ops_context * octx, const int nth,
 
         const uintptr_t src0_ptr = octx->src0.data + i01*nb01 + i11*nb02 + i12*nb03;
         const uintptr_t dst_ptr  = octx->dst.data  + i10*nb1  + i11*nb2  + i12*nb3;
-        hvx_copy_fp32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
+        hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
     }
 
     return HTP_STATUS_OK;

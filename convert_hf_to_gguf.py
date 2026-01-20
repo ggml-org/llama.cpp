@@ -1078,6 +1078,9 @@ class TextModel(ModelBase):
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"
+        if chkhsh == "cdf5f35325780597efd76153d4d1c16778f766173908894c04afc20108536267":
+            # ref: https://huggingface.co/zai-org/GLM-4.7-Flash
+            res = "glm4"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1252,6 +1255,9 @@ class TextModel(ModelBase):
         if chkhsh == "16389f0a1f51ee53e562ffd51c371dc508639ab0e4261502071836e50e223e91":
             # ref: https://huggingface.co/upstage/Solar-Open-100B
             res = "solar-open"
+        if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
+            # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
+            res = "exaone-moe"
 
         if res is None:
             logger.warning("\n")
@@ -7455,7 +7461,7 @@ class DeepseekModel(TextModel):
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
     "YoutuForCausalLM",
-    "YoutuVLForConditionalGeneration"
+    "YoutuVLForConditionalGeneration",
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -8443,6 +8449,32 @@ class Glm4MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("Glm4MoeLiteForCausalLM")
+class Glm4MoeLiteModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+
+    # copied from Glm4MoeModel
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        # Special tokens
+        # Note: Using <|endoftext|> (151329) for eot causes endless generation
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # 151331
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # 151336
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"]) # 151329
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
+
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHATGLM
@@ -8746,6 +8778,102 @@ class Exaone4Model(TextModel):
                         rope_factors.append(1 / ((1 - smooth) / factor + smooth))
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
+
+@ModelBase.register("ExaoneMoEForCausalLM")
+class ExaoneMoEModel(Exaone4Model):
+    model_arch = gguf.MODEL_ARCH.EXAONE_MOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+        moe_intermediate_size = self.hparams["moe_intermediate_size"]
+        num_shared_experts = self.hparams["num_shared_experts"]
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        self.gguf_writer.add_expert_shared_count(num_shared_experts)
+        self.gguf_writer.add_expert_shared_feed_forward_length(moe_intermediate_size * num_shared_experts)
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        n_dense_layer = self.hparams.get("first_k_dense_replace", self.hparams.get("first_last_k_dense_replace", 0))
+        self.gguf_writer.add_leading_dense_block_count(n_dense_layer)
+        self.gguf_writer.add_nextn_predict_layers(self.hparams.get("num_nextn_predict_layers", 0))
+
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            if name.find("layers.") != -1:
+                # `mtp.layers.0.[module_name]` format
+                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + self.hparams['num_hidden_layers']}")
+            else:
+                # mtp fc/norm weights
+                remapper = {
+                    "mtp.fc": "model.layers.{bid}.eh_proj",
+                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
+                    "mtp.pre_fc_norm_hidden": "model.layers.{bid}.hnorm",
+                    "mtp.norm": "model.layers.{bid}.shared_head.norm",
+                }
+                _n = Path(name)
+                new_name = remapper[_n.stem] + _n.suffix
+
+                # set shared weights for all NextN/MTP layers
+                tensors = []
+                for bid in range(self.hparams['num_hidden_layers'], self.block_count):
+                    new_name = new_name.format(bid=bid)
+                    tensors.append((self.map_tensor_name(new_name), data_torch))
+                return tensors
+
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("GraniteForCausalLM")
@@ -9084,7 +9212,7 @@ class NemotronHModel(GraniteHybridModel):
                 return [(mapped_name, reshaped_data)]
 
             if name.endswith("mixer.norm.weight"):
-                reshaped_data = data_torch.reshape(8, 512)
+                reshaped_data = data_torch.reshape(self.n_group, -1)
                 mapped_name = self.map_tensor_name(name)
                 return [(mapped_name, reshaped_data)]
 

@@ -2918,6 +2918,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, ggml_tensor * node) {
     props->node_address = node->data;
     props->node_op = node->op;
+    props->flags = node->flags;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         props->ne[i] = node->ne[i];
         props->nb[i] = node->nb[i];
@@ -2958,6 +2959,10 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
 
     if ((node->op == GGML_OP_SCALE || node->op == GGML_OP_GLU) &&
         memcmp(props->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
+        return false;
+    }
+
+    if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) != (props->flags & GGML_TENSOR_FLAG_COMPUTE)) {
         return false;
     }
 
@@ -3378,6 +3383,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
+                if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                    continue;
+                }
 
                 // start of fusion operations
                 static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
@@ -3730,13 +3738,16 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx) {
 
     if (cuda_ctx->cuda_graph->graph == nullptr) {
         if (ggml_cuda_info().devices[cuda_ctx->device].cc < GGML_CUDA_CC_AMPERE) {
+            if (!cuda_ctx->cuda_graph->disable_due_to_gpu_arch) {
+                GGML_LOG_DEBUG("%s: disabling CUDA graphs due to GPU architecture\n", __func__);
+            }
             cuda_ctx->cuda_graph->disable_due_to_gpu_arch = true;
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to GPU architecture\n", __func__);
         }
     }
 
     return cuda_ctx->cuda_graph->is_enabled();
 #else
+    GGML_UNUSED(cuda_ctx);
     return false;
 #endif // USE_CUDA_GRAPH
 }
@@ -4550,7 +4561,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_L2_NORM:
             return true;
         case GGML_OP_RMS_NORM_BACK:
-            return ggml_is_contiguous(op->src[0]) && op->ne[0] % WARP_SIZE == 0;
+            return ggml_is_contiguous(op->src[0]);
             break;
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:

@@ -531,6 +531,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_q6_K_f32;
     cl_kernel kernel_mul_mv_mxfp4_f32, kernel_mul_mv_mxfp4_f32_flat;
     cl_kernel kernel_mul_mv_q8_0_f32, kernel_mul_mv_q8_0_f32_flat;
+    cl_kernel kernel_solve_tri_f32;
     cl_kernel kernel_im2col_f32, kernel_im2col_f16;
     cl_kernel kernel_argsort_f32_i32;
     cl_kernel kernel_sum_rows_f32;
@@ -950,6 +951,23 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_get_rows_f16  = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_get_rows_q4_0 = clCreateKernel(backend_ctx->program_get_rows, "kernel_get_rows_q4_0", &err), err));
         GGML_LOG_CONT(".");
+    }
+
+    // solve_tri_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "solve_tri.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("solve_tri.cl");
+#endif
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_solve_tri_f32 = clCreateKernel(prog, "kernel_solve_tri_f32", &err), err));
+        GGML_LOG_CONT(".");
+        CL_CHECK(clReleaseProgram(prog));
     }
 
     // im2col_f32
@@ -3040,6 +3058,10 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
             continue;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         if (!backend_ctx->disable_fusion && ggml_opencl_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD })) {
             ggml_opencl_op_norm_fused(backend, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
             i += 2;
@@ -3266,6 +3288,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
             return true;
         }
+        case GGML_OP_SOLVE_TRI:
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
         case GGML_OP_IM2COL:
             return true;
         case GGML_OP_ARGSORT: {
@@ -9474,6 +9498,72 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_solve_tri(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(src1);
+    GGML_ASSERT(src1->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_kernel kernel = backend_ctx->kernel_solve_tri_f32;
+    GGML_ASSERT(kernel != nullptr);
+
+    const int n = src0->ne[0];
+    const int k = src1->ne[0];
+
+    const cl_ulong nb00 = src0->nb[0];
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
+
+    const cl_ulong nb10 = src1->nb[0];
+    const cl_ulong nb11 = src1->nb[1];
+    const cl_ulong nb12 = src1->nb[2];
+    const cl_ulong nb13 = src1->nb[3];
+
+    const cl_ulong nb0 = dst->nb[0];
+    const cl_ulong nb1 = dst->nb[1];
+    const cl_ulong nb2 = dst->nb[2];
+    const cl_ulong nb3 = dst->nb[3];
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &k));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &nb00));
+    CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),&nb02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong),&nb03));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong),&nb10));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong),&nb11));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong),&nb12));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong),&nb13));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong),&nb0));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong),&nb1));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong),&nb2));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong),&nb3));
+
+    size_t global_work_size[3]= { (size_t)k, (size_t)dst->ne[2], (size_t)dst->ne[3]};
+    size_t local_work_size[] = {16, 4, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
 static void ggml_cl_im2col(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src1);
@@ -10038,6 +10128,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_rope;
+            break;
+        case GGML_OP_SOLVE_TRI:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_solve_tri;
             break;
         case GGML_OP_IM2COL:
             if (!any_on_device) {

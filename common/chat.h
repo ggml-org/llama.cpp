@@ -125,6 +125,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_APRIEL_1_5,
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
     COMMON_CHAT_FORMAT_SOLAR_OPEN,
+    COMMON_CHAT_FORMAT_EXAONE_MOE,
 
     // These are intended to be parsed by the PEG parser
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
@@ -144,7 +145,7 @@ struct common_chat_templates_inputs {
     std::vector<common_chat_tool> tools;
     common_chat_tool_choice tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     bool parallel_tool_calls = false;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
     bool enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     std::map<std::string, std::string> chat_template_kwargs;
@@ -164,14 +165,21 @@ struct common_chat_params {
     std::string                         parser;
 };
 
-struct common_chat_syntax {
+// per-message parsing syntax
+// should be derived from common_chat_params
+struct common_chat_parser_params {
     common_chat_format       format                = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-    common_reasoning_format  reasoning_format      = COMMON_REASONING_FORMAT_NONE;
+    common_reasoning_format  reasoning_format      = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                     reasoning_in_content  = false;
     bool                     thinking_forced_open  = false;
     bool                     parse_tool_calls      = true;
     common_peg_arena         parser                = {};
+    common_chat_parser_params() = default;
+    common_chat_parser_params(const common_chat_params & chat_params) {
+        format               = chat_params.format;
+        thinking_forced_open = chat_params.thinking_forced_open;
+    }
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
@@ -190,7 +198,7 @@ common_chat_templates_ptr common_chat_templates_init(
                                            const std::string & eos_token_override = "");
 
 bool         common_chat_templates_was_explicit(const struct common_chat_templates * tmpls);
-const char * common_chat_templates_source(const struct common_chat_templates * tmpls, const char * variant = nullptr);
+std::string  common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
 
 struct common_chat_params      common_chat_templates_apply(
@@ -212,10 +220,12 @@ std::string common_chat_format_example(
     const std::map<std::string, std::string> & chat_template_kwargs);
 
 const char*               common_chat_format_name(common_chat_format format);
-const char*               common_reasoning_format_name(common_reasoning_format format);
-common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
-common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
-common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & syntax);
+common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_parser_params & syntax);
+
+// used by arg and server
+const char *             common_reasoning_format_name(common_reasoning_format format);
+common_reasoning_format  common_reasoning_format_from_name(const std::string & format);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 

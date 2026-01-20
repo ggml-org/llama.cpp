@@ -3441,7 +3441,8 @@ struct ggml_tensor * ggml_cast(
 
     result->op     = GGML_OP_CPY;
     result->src[0] = a;
-    result->src[1] = result;
+    result->src[1] = result; // note: this self-reference might seem redundant, but it's actually needed by some
+                             //       backends for consistency with ggml_cpy_impl() above
 
     return result;
 }
@@ -4838,6 +4839,8 @@ struct ggml_tensor * ggml_pool_1d(
         a->ne[2],
         a->ne[3],
     };
+    GGML_ASSERT(ne[0] > 0);
+
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     int32_t params[] = { op, k0, s0, p0 };
@@ -4868,6 +4871,9 @@ struct ggml_tensor * ggml_pool_2d(
         a->ne[2],
         a->ne[3],
     };
+    GGML_ASSERT(ne[0] > 0);
+    GGML_ASSERT(ne[1] > 0);
+
     result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
 
     int32_t params[] = { op, k0, k1, s0, s1, p0, p1 };
@@ -6720,19 +6726,34 @@ static void ggml_compute_backward(
     GGML_ASSERT(!src2_needs_grads || ggml_are_same_shape(src2, cgraph->grads[isrc2]));
 }
 
-static size_t ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor * node) {
-    // check if already visited
-    size_t node_hash_pos = ggml_hash_find(&cgraph->visited_hash_set, node);
+static size_t ggml_visit_parents_graph(struct ggml_cgraph * cgraph, struct ggml_tensor * node, bool compute) {
+    if (node->op != GGML_OP_NONE && compute) {
+        node->flags |= GGML_TENSOR_FLAG_COMPUTE;
+    }
+
+    const size_t node_hash_pos = ggml_hash_find(&cgraph->visited_hash_set, node);
     GGML_ASSERT(node_hash_pos != GGML_HASHSET_FULL);
-    if (!ggml_bitset_get(cgraph->visited_hash_set.used, node_hash_pos)) {
-        // This is the first time we see this node in the current graph.
-        cgraph->visited_hash_set.keys[node_hash_pos] = node;
-        ggml_bitset_set(cgraph->visited_hash_set.used, node_hash_pos);
-        cgraph->use_counts[node_hash_pos] = 0;
-    } else {
+
+    if (ggml_bitset_get(cgraph->visited_hash_set.used, node_hash_pos)) {
         // already visited
+
+        if (compute) {
+            // update the compute flag regardless
+            for (int i = 0; i < GGML_MAX_SRC; ++i) {
+                struct ggml_tensor * src = node->src[i];
+                if (src && ((src->flags & GGML_TENSOR_FLAG_COMPUTE) == 0)) {
+                    ggml_visit_parents_graph(cgraph, src, true);
+                }
+            }
+        }
+
         return node_hash_pos;
     }
+
+    // This is the first time we see this node in the current graph.
+    cgraph->visited_hash_set.keys[node_hash_pos] = node;
+    ggml_bitset_set(cgraph->visited_hash_set.used, node_hash_pos);
+    cgraph->use_counts[node_hash_pos] = 0;
 
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         const int k =
@@ -6742,7 +6763,7 @@ static size_t ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor
 
         struct ggml_tensor * src = node->src[k];
         if (src) {
-            size_t src_hash_pos = ggml_visit_parents(cgraph, src);
+            const size_t src_hash_pos = ggml_visit_parents_graph(cgraph, src, compute);
 
             // Update the use count for this operand.
             cgraph->use_counts[src_hash_pos]++;
@@ -6773,17 +6794,17 @@ static size_t ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor
     return node_hash_pos;
 }
 
-static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor, bool expand) {
+static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor, bool expand, bool compute) {
     if (!expand) {
         // TODO: this branch isn't accessible anymore, maybe move this to ggml_build_forward_expand
         ggml_graph_clear(cgraph);
     }
 
-    const int n0 = cgraph->n_nodes;
+    const int n_old = cgraph->n_nodes;
 
-    ggml_visit_parents(cgraph, tensor);
+    ggml_visit_parents_graph(cgraph, tensor, compute);
 
-    const int n_new = cgraph->n_nodes - n0;
+    const int n_new = cgraph->n_nodes - n_old;
     GGML_PRINT_DEBUG("%s: visited %d new nodes\n", __func__, n_new);
 
     if (n_new > 0) {
@@ -6792,8 +6813,22 @@ static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_ten
     }
 }
 
+struct ggml_tensor * ggml_build_forward_select(
+        struct ggml_cgraph  * cgraph,
+        struct ggml_tensor ** tensors,
+        int                   n_tensors,
+        int                   idx) {
+    GGML_ASSERT(idx >= 0 && idx < n_tensors);
+
+    for (int i = 0; i < n_tensors; i++) {
+        ggml_build_forward_impl(cgraph, tensors[i], true, i == idx ? true : false);
+    }
+
+    return tensors[idx];
+}
+
 void ggml_build_forward_expand(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor) {
-    ggml_build_forward_impl(cgraph, tensor, true);
+    ggml_build_forward_impl(cgraph, tensor, true, true);
 }
 
 void ggml_build_backward_expand(
@@ -7224,6 +7259,10 @@ bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
             return false;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            return false;
+        }
+
         if (ggml_node_list_find_tensor(cgraph, outputs, num_outputs, node) != -1) {
             continue;
         }
@@ -7305,7 +7344,7 @@ static void ggml_graph_dump_dot_leaf_edge(FILE * fp, struct ggml_tensor * node, 
             label);
 }
 
-void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph * gf, const char * filename) {
+void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph * cgraph, const char * filename) {
     char color[16];
 
     FILE * fp = ggml_fopen(filename, "w");
@@ -7326,7 +7365,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         if (node->flags & GGML_TENSOR_FLAG_PARAM) {
             snprintf(color, sizeof(color), "yellow");
         } else if (grad) {
-            if (ggml_graph_find(gf, node)) {
+            if (ggml_graph_find(cgraph, node)) {
                 snprintf(color, sizeof(color), "green");
             } else {
                 snprintf(color, sizeof(color), "lightblue");

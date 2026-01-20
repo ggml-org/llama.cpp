@@ -68,10 +68,10 @@ json task_params::to_json(bool only_metrics) const {
             {"stream",                    stream},
             {"n_probs",                   sampling.n_probs},
             {"min_keep",                  sampling.min_keep},
-            {"chat_format",               common_chat_format_name(oaicompat_chat_syntax.format)},
-            {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
-            {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
-            {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+            {"chat_format",               common_chat_format_name(chat_parser_params.format)},
+            {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
+            {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
+            {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
             {"samplers",                  samplers},
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
@@ -127,10 +127,10 @@ json task_params::to_json(bool only_metrics) const {
         {"grammar_lazy",              sampling.grammar_lazy},
         {"grammar_triggers",          grammar_triggers},
         {"preserved_tokens",          sampling.preserved_tokens},
-        {"chat_format",               common_chat_format_name(oaicompat_chat_syntax.format)},
-        {"reasoning_format",          common_reasoning_format_name(oaicompat_chat_syntax.reasoning_format)},
-        {"reasoning_in_content",      oaicompat_chat_syntax.reasoning_in_content},
-        {"thinking_forced_open",      oaicompat_chat_syntax.thinking_forced_open},
+        {"chat_format",               common_chat_format_name(chat_parser_params.format)},
+        {"reasoning_format",          common_reasoning_format_name(chat_parser_params.reasoning_format)},
+        {"reasoning_in_content",      chat_parser_params.reasoning_in_content},
+        {"thinking_forced_open",      chat_parser_params.thinking_forced_open},
         {"samplers",                  samplers},
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
@@ -160,6 +160,7 @@ task_params server_task::params_from_json_cmpl(
     defaults.n_keep        = params_base.n_keep;
     defaults.n_predict     = params_base.n_predict;
     defaults.n_cache_reuse = params_base.n_cache_reuse;
+    defaults.cache_prompt  = params_base.cache_prompt;
     defaults.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
@@ -169,7 +170,7 @@ task_params server_task::params_from_json_cmpl(
     params.stream           = json_value(data,       "stream",             false);
     auto stream_opt         = json_value(data,       "stream_options",     json::object());
     params.include_usage    = json_value(stream_opt, "include_usage",      false);
-    params.cache_prompt     = json_value(data,       "cache_prompt",       true);
+    params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
     params.return_tokens    = json_value(data,       "return_tokens",      false);
     params.return_progress  = json_value(data,       "return_progress",    false);
     params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
@@ -203,6 +204,8 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.mirostat           = json_value(data, "mirostat",            defaults.sampling.mirostat);
     params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",        defaults.sampling.mirostat_tau);
     params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
+    params.sampling.adaptive_target    = json_value(data, "adaptive_target",     defaults.sampling.adaptive_target);
+    params.sampling.adaptive_decay     = json_value(data, "adaptive_decay",      defaults.sampling.adaptive_decay);
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
@@ -288,21 +291,21 @@ task_params server_task::params_from_json_cmpl(
     {
         auto it = data.find("chat_format");
         if (it != data.end()) {
-            params.oaicompat_chat_syntax.format = static_cast<common_chat_format>(it->get<int>());
-            SRV_INF("Chat format: %s\n", common_chat_format_name(params.oaicompat_chat_syntax.format));
+            params.chat_parser_params.format = static_cast<common_chat_format>(it->get<int>());
+            SRV_INF("Chat format: %s\n", common_chat_format_name(params.chat_parser_params.format));
         } else {
-            params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
+            params.chat_parser_params.format = defaults.chat_parser_params.format;
         }
         common_reasoning_format reasoning_format = params_base.reasoning_format;
         if (data.contains("reasoning_format")) {
             reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
         }
-        params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
-        params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
-        params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
-        params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+        params.chat_parser_params.reasoning_format = reasoning_format;
+        params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+        params.chat_parser_params.thinking_forced_open = json_value(data, "thinking_forced_open", false);
+        params.chat_parser_params.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         if (data.contains("chat_parser")) {
-            params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+            params.chat_parser_params.parser.load(data.at("chat_parser").get<std::string>());
         }
     }
 
@@ -719,7 +722,7 @@ common_chat_msg task_result_state::update_chat_msg(
     auto new_msg = common_chat_parse(
         generated_text,
         is_partial,
-        oaicompat_chat_syntax);
+        chat_parser_params);
     if (!new_msg.empty()) {
         new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
         chat_msg = new_msg;
