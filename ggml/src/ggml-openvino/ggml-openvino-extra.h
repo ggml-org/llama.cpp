@@ -1,0 +1,159 @@
+#pragma once
+
+#include "ggml.h"
+#include "openvino/runtime/core.hpp"
+
+#define CL_TARGET_OPENCL_VERSION 300
+#include <CL/cl.h>
+
+#include <cstdlib>
+#include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/runtime/remote_context.hpp>
+#include <openvino/runtime/tensor.hpp>
+#include <optional>
+#include <string>
+
+// ExtraQuantType enum - defines requantization target formats
+enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
+
+ov::Core & ov_singleton_core();
+
+// Get the remote context for the current device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
+
+// Get the compile config for the current device
+const ov::AnyMap & ggml_openvino_get_compile_config();
+
+// Get the OpenCL command queue for GPU operations (returns nullptr for CPU/NPU)
+cl_command_queue ggml_openvino_get_cl_queue();
+
+// Intel USM extension function type
+typedef cl_int(CL_API_CALL * clEnqueueMemFillINTEL_fn)(cl_command_queue queue,
+                                                       void * dst_ptr,
+                                                       const void * pattern,
+                                                       size_t pattern_size,
+                                                       size_t size,
+                                                       cl_uint num_events_in_wait_list,
+                                                       const cl_event * event_wait_list,
+                                                       cl_event * event);
+
+typedef cl_int(CL_API_CALL * clEnqueueMemcpyINTEL_fn)(cl_command_queue queue,
+                                                      cl_bool blocking,
+                                                      void * dst_ptr,
+                                                      const void * src_ptr,
+                                                      size_t size,
+                                                      cl_uint num_events_in_wait_list,
+                                                      const cl_event * event_wait_list,
+                                                      cl_event * event);
+
+// Get the clEnqueueMemFillINTEL function pointer (returns nullptr if not available)
+clEnqueueMemFillINTEL_fn ggml_openvino_get_clEnqueueMemFillINTEL();
+
+// Get the clEnqueueMemcpyINTEL function pointer (returns nullptr if not available)
+clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
+
+// =====================================================
+// Global Device Configuration (singleton)
+// =====================================================
+// Initialized once during backend init from GGML_OPENVINO_DEVICE env var
+
+struct ggml_openvino_device_config {
+    std::string device_name = "CPU";
+    bool is_npu = false;
+    bool initialized = false;
+    std::optional<ov::RemoteContext> remote_context;
+    ov::AnyMap compile_config;
+    cl_command_queue cl_queue = nullptr;
+
+    void init();
+    ~ggml_openvino_device_config();
+};
+
+// Get the global device config singleton
+ggml_openvino_device_config & ggml_openvino_get_device_config();
+
+// Initialize device config (call during backend init)
+void ggml_openvino_init_device_config();
+
+// Get the device name
+const std::string & ggml_openvino_get_device_name();
+
+// Check if running on NPU
+bool ggml_openvino_is_npu();
+
+// Get requantization type for a tensor type (returns nullopt if no requant needed)
+std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor);
+
+// =====================================================
+// OpenVINO Tensor Extra Types
+// =====================================================
+// These types are stored in tensor->extra by the OpenVINO backend buffer.
+// They allow:
+// 1. Pre-built ov::Constant nodes for weights (avoiding memcpy during graph construction)
+// 2. ov::Tensor wrappers for KV cache / compute tensors (for direct use with infer_request)
+
+// Base class for OpenVINO tensor extra data
+struct ggml_openvino_extra_base {
+    enum class Type { WEIGHT, QUANTIZED_WEIGHT, TENSOR };
+    Type type;
+    virtual ~ggml_openvino_extra_base() = default;
+protected:
+    explicit ggml_openvino_extra_base(Type t) : type(t) {}
+};
+
+// Extra data for F16/F32/BF16 weight tensors - stores the pre-built ov::Constant node
+struct ggml_openvino_weight_extra : public ggml_openvino_extra_base {
+    std::shared_ptr<ov::Node> constant;  // Pre-built OpenVINO Constant node
+
+    explicit ggml_openvino_weight_extra(std::shared_ptr<ov::Node> c)
+        : ggml_openvino_extra_base(Type::WEIGHT), constant(std::move(c)) {}
+};
+
+// Extra data for quantized weight tensors - stores extracted weights/scales/biases and ov::Constant
+struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
+    ov::Tensor weights;   // U4 or U8 extracted weights
+    ov::Tensor scales;    // F16 scales
+    ov::Tensor biases;    // F16 biases (zero points)
+    std::shared_ptr<ov::Node> constant;  // Pre-built OpenVINO weight subgraph
+
+    ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor b, std::shared_ptr<ov::Node> c)
+        : ggml_openvino_extra_base(Type::QUANTIZED_WEIGHT),
+          weights(std::move(w)), scales(std::move(s)), biases(std::move(b)), constant(std::move(c)) {}
+};
+
+// Extra data for KV cache / compute tensors - stores ov::Tensor for infer_request
+struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
+    std::shared_ptr<ov::Tensor> tensor;  // For direct use with infer_request
+
+    explicit ggml_openvino_tensor_extra(std::shared_ptr<ov::Tensor> t)
+        : ggml_openvino_extra_base(Type::TENSOR), tensor(std::move(t)) {}
+};
+
+// =====================================================
+// Extracted Size Calculation for Quantized Tensors
+// =====================================================
+// For quantized tensors, we need extra space to store extracted weights, scales, and biases.
+// Returns the total size needed in the buffer for extracted data.
+
+struct ggml_openvino_extracted_layout {
+    size_t total_size;        // Total bytes needed
+    size_t weights_offset;    // Offset to weights in buffer
+    size_t weights_size;      // Size of weights in bytes
+    size_t scales_offset;     // Offset to scales in buffer
+    size_t scales_size;       // Size of scales in bytes
+    size_t biases_offset;     // Offset to biases in buffer
+    size_t biases_size;       // Size of biases in bytes
+    bool is_u4;               // true for U4 weights, false for U8
+    int64_t weights_per_block;// weights per scale/bias block
+    bool is_symmetric;        // true for symmetric quantization
+
+    // Requantization info
+    bool is_requant;                              // true if this tensor needs requantization
+    std::optional<ExtraQuantType> requant_type;   // target requant type if is_requant
+};
+
+// Calculate the buffer layout for extracted quantized data
+ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor);
+
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
