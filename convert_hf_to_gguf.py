@@ -514,8 +514,7 @@ class ModelBase:
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
+        del bid # unused
         return [(self.map_tensor_name(name), data_torch)]
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
@@ -2096,15 +2095,13 @@ class MPTModel(TextModel):
             self.gguf_writer.add_max_alibi_bias(0.0)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
         if "scales" in name:
             new_name = self.map_tensor_name(name, try_suffixes=(".weight", ".bias", ".scales"))
             new_name = new_name.replace("scales", "act.scales")
         else:
             new_name = self.map_tensor_name(name, try_suffixes=(".weight", ".bias"))
 
-        return [(new_name, data_torch)]
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
 
 @ModelBase.register("OrionForCausalLM")
@@ -2445,7 +2442,7 @@ class StableLMModel(TextModel):
             if len(self._q_norms[bid]) >= n_head:
                 return self._stack_qk_norm(bid, n_head, self._q_norms[bid], "q_layernorm")
             else:
-                return []
+                return
 
         if name.find("k_layernorm.norms") != -1:
             assert bid is not None
@@ -2458,7 +2455,7 @@ class StableLMModel(TextModel):
             if len(self._k_norms[bid]) >= n_kv_head:
                 return self._stack_qk_norm(bid, n_kv_head, self._k_norms[bid], "k_layernorm")
             else:
-                return []
+                return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -3267,11 +3264,11 @@ class GrokModel(TextModel):
             if name in self._experts[bid]:
                 self._cur_expert = name
                 self._experts[bid][name].append(data_torch)
-                return []
+                return
             elif is_expert:
                 self._cur_expert = name
                 self._experts[bid][name] = [data_torch]
-                return []
+                return
             else:
                 self._cur_expert = ""
 
@@ -3328,8 +3325,6 @@ class DbrxModel(TextModel):
         logger.info(f"gguf: file type = {self.ftype}")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
         n_expert = self.hparams["ffn_config"]["moe_num_experts"]
         n_ff = self.hparams["ffn_config"]["ffn_hidden_size"]
         n_embd = self.hparams["d_model"]
@@ -3360,7 +3355,7 @@ class DbrxModel(TextModel):
         # https://huggingface.co/databricks/dbrx-instruct/blob/main/model.safetensors.index.json#L15
         new_name = self.map_tensor_name(name if not experts else name + ".weight", try_suffixes=(".weight",))
 
-        return [(new_name, data_torch)]
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del name, new_name, bid  # unused
@@ -3842,7 +3837,7 @@ class Qwen2VLModel(TextModel):
         if name.startswith("visual") or name.startswith("audio") or \
                 name.startswith("talker") or name.startswith("token2wav"):
             # skip multimodal tensors
-            return []
+            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -4058,7 +4053,7 @@ class WavTokenizerDecModel(TextModel):
                 name.endswith("codebook.embed_avg") or \
                 name.endswith("codebook.inited"):
             logger.debug(f"Skipping {name!r}")
-            return []
+            return
 
         logger.info(f"{self.map_tensor_name(name)} -> {data_torch.shape}")
 
@@ -4406,7 +4401,7 @@ class Qwen3VLVisionModel(MmprojModel):
         assert self.hparams_vision is not None
         # Skip text model tensors - they go in the text model file
         if name.startswith("model.language_model.") or name.startswith("lm_head."):
-            return []
+            return
 
         if name.startswith("model.visual."):
             name = name.replace("model.visual.", "visual.", 1)
@@ -4431,7 +4426,8 @@ class Qwen3VLVisionModel(MmprojModel):
                 raise ValueError(f"Unexpected deepstack tensor: {name}")
 
             new_name = self.format_tensor_name(tensor_type, idx, suffix=f".{suffix}")
-            return [(new_name, data_torch)]
+            yield from super().modify_tensors(data_torch, new_name, bid)
+            return
 
         if name.startswith("visual.merger."):
             suffix = name.split(".", 2)[2]
@@ -5165,7 +5161,7 @@ class InternLM2Model(TextModel):
         name = name.replace("language_model.", "") # InternVL
         if name.startswith("mlp") or name.startswith("vision_model"):
             # skip visual tensors
-            return []
+            return
 
         if bid is not None and f"model.layers.{bid}.attention.wqkv" in name:
             qkv = data_torch
@@ -5178,13 +5174,11 @@ class InternLM2Model(TextModel):
             k = LlamaModel.permute(k.reshape((-1, k.shape[-1])), num_heads, num_kv_heads)
             v = v.reshape((-1, v.shape[-1]))
 
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), q),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), k),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), v),
-            ]
+            yield from super().modify_tensors(q, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), bid)
+            yield from super().modify_tensors(k, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), bid)
+            yield from super().modify_tensors(v, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), bid)
         else:
-            return [(self.map_tensor_name(name), data_torch)]
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("InternLM3ForCausalLM")
@@ -5236,7 +5230,7 @@ class InternLM3Model(TextModel):
         name = name.replace("language_model.", "") # InternVL
         if name.startswith("mlp") or name.startswith("vision_model"):
             # skip visual tensors
-            return []
+            return
         if name.endswith(("q_proj.weight", "q_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):
@@ -5627,7 +5621,7 @@ class NeoBert(BertModel):
 
     def modify_tensors(self, data_torch, name, bid):
         if name.startswith("decoder."):
-            return []
+            return
 
         if name.startswith("model."):
             name = name[6:]
@@ -5770,7 +5764,7 @@ class GemmaModel(TextModel):
         # To prevent errors, skip loading lm_head.weight.
         if name == "lm_head.weight":
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
-            return []
+            return
 
         # ref: https://github.com/huggingface/transformers/blob/fc37f38915372c15992b540dfcbbe00a916d4fc6/src/transformers/models/gemma/modeling_gemma.py#L89
         if name.endswith("norm.weight"):
@@ -5814,7 +5808,7 @@ class Gemma2Model(TextModel):
         # To prevent errors, skip loading lm_head.weight.
         if name == "lm_head.weight":
             logger.debug(f"Skipping get tensor {name!r} in safetensors so that convert can end normally.")
-            return []
+            return
 
         # ref: https://github.com/huggingface/transformers/blob/fc37f38915372c15992b540dfcbbe00a916d4fc6/src/transformers/models/gemma/modeling_gemma.py#L89
         if name.endswith("norm.weight"):
@@ -6034,10 +6028,9 @@ class ConformerAudioModel(MmprojModel):
 
             a = weight / torch.sqrt(running_var + eps)
             b = bias - running_mean * a
-            return [
-                (self.map_tensor_name(f"conformer.layers.{bid}.conv.batch_norm.weight"), a),
-                (self.map_tensor_name(f"conformer.layers.{bid}.conv.batch_norm.bias"), b),
-            ]
+            yield from super().modify_tensors(a, f"conformer.layers.{bid}.conv.batch_norm.weight", bid)
+            yield from super().modify_tensors(b,f"conformer.layers.{bid}.conv.batch_norm.bias", bid)
+            return
 
         # reshape conv weights
         if name.startswith("conformer.pre_encode.conv.") and name.endswith(".bias"):
@@ -6049,7 +6042,7 @@ class ConformerAudioModel(MmprojModel):
             assert data_torch.shape[2] == 1
             data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[1])
 
-        return [(self.map_tensor_name(name), data_torch)]
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Gemma3nForConditionalGeneration")
@@ -6155,7 +6148,7 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
         # - model.vision_tower.* for vision encoder
         # Skip non-vision tensors
         if not (name.startswith("model.embed_vision.") or name.startswith("model.vision_tower.")):
-            return []
+            return
 
         if name.startswith("model.vision_tower.timm_model.blocks."):
             # Double-indexed block tensors through custom logic
@@ -6267,7 +6260,7 @@ class Gemma3NModel(Gemma3Model):
 
             # Continue with normal processing
             name = name.replace("language_model.", "")
-            return [(self.map_tensor_name(name), data_torch)]
+            yield from super().modify_tensors(data_torch, name, bid)
 
         if "altup_unembed_projections" in name:
             data_torch = data_torch.to(device="cpu")
@@ -6283,7 +6276,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_unembd)
             if out is not None:
-                return [(self.map_tensor_name("model.altup_unembed_projections.weight"), out)]
+                yield from super().modify_tensors(data_torch, "model.altup_unembed_projections.weight", bid)
             else:
                 return
 
@@ -6299,7 +6292,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_proj)
             if out is not None:
-                return [(self.map_tensor_name("model.altup_projections.weight"), out)]
+                yield from super().modify_tensors(data_torch, "model.altup_projections.weight", bid)
             else:
                 return
 
@@ -6686,11 +6679,11 @@ class MambaModel(TextModel):
         if self._tok_embd is not None and new_name == output_name:
             if torch.equal(self._tok_embd, data_torch):
                 logger.debug(f"{output_name} is equivalent to {tok_embd_name}, omitting")
-                return []
+                return
         elif new_name == tok_embd_name:
             self._tok_embd = data_torch
 
-        return [(new_name, data_torch)]
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
 
 @ModelBase.register("Mamba2ForCausalLM")
@@ -7602,7 +7595,7 @@ class MiniMaxM2Model(TextModel):
 
             # not enough expert weights to merge
             if len(expert_cache) < n_experts * len(expert_weights):
-                return []
+                return
 
             tensors: list[tuple[str, Tensor]] = []
             for w_name in expert_weights:
@@ -8204,7 +8197,7 @@ class Glm4Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("model.visual."): # ignore visual part of Glm4v
-            return []
+            return
         elif name.startswith("model.language_model."):
             name = name.replace("language_model.", "") # for Glm4v
         if self.use_mrope:
@@ -8756,9 +8749,9 @@ class ExaoneMoEModel(Exaone4Model):
                     tensors.append((new_name, data_torch))
                 return tensors
             else:
-                return []
+                return
 
-        return [(self.map_tensor_name(name), data_torch)]
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -8840,19 +8833,16 @@ class GraniteMoeModel(GraniteModel):
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
             gate, up = data_torch.split(ffn_dim, dim=-2)
             if has_experts:
-                return [
-                    (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
-                    (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
-                ]
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), up),
-            ]
+                yield from super().modify_tensors(gate,self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
+                yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+                return
+            yield from super().modify_tensors(gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), bid)
+            yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), bid)
+            return
 
         if not has_experts and name.endswith("shared_mlp.output_linear.weight"):
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), data_torch)
-            ]
+            yield from super().modify_tensors(data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), bid)
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -9199,11 +9189,10 @@ class BailingMoeModel(TextModel):
         elif name.endswith("query_key_value.weight"):
             q, k, v = data_torch.split([n_head * head_dim, n_kv_head * head_dim, n_kv_head * head_dim], dim=-2)
 
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), BailingMoeModel.permute(q, n_head, n_head)),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), BailingMoeModel.permute(k, n_head, n_kv_head)),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), v)
-            ]
+            yield from super().modify_tensors(BailingMoeModel.permute(q, n_head, n_head), self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), bid)
+            yield from super().modify_tensors(BailingMoeModel.permute(k, n_head, n_kv_head), self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), bid)
+            yield from super().modify_tensors(v,self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), bid)
+            return
         elif name.find("mlp.experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
