@@ -401,6 +401,26 @@ static void test_set_statement(testing & t) {
         json::object(),
         "1"
     );
+
+    test_template(t, "set dict with mixed type keys",
+        "{% set d = {0: 1, none: 2, 1.0: 3, '0': 4, (0, 0): 5, false: 6, 1: 7} %}{{ d[(0, 0)] + d[0] + d[none] + d['0'] + d[false] + d[1.0] + d[1] }}",
+        json::object(),
+        "37"
+    );
+
+    // TODO: Print tuples correctly
+    test_template(t, "print dict with mixed type keys",
+        "{% set d = {0: 1, none: 2, 1.0: 3, '0': 4, true: 5} %}{{ d|string }}",
+        json::object(),
+        "{0: 1, None: 2, 1.0: 5, '0': 4}"
+    );
+
+    // TODO: Print tuples correctly
+    test_template(t, "print array with mixed types",
+        "{% set d = [0, none, 1.0, '0', true] %}{{ d|string }}",
+        json::object(),
+        "[0, None, 1.0, '0', True]"
+    );
 }
 
 static void test_filters(testing & t) {
