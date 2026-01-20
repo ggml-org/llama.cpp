@@ -71,7 +71,7 @@ struct context {
         // inherit variables (for example, when entering a new scope)
         auto & pvar = parent.env->as_ordered_object();
         for (const auto & pair : pvar) {
-            set_val(pair.first, pair.second);
+            set_val(std::get<1>(pair), std::get<2>(pair));
         }
         current_time = parent.current_time;
         is_get_stats = parent.is_get_stats;
@@ -79,15 +79,15 @@ struct context {
     }
 
     value get_val(const std::string & name) {
-        auto it = env->val_obj.unordered.find(name);
-        if (it != env->val_obj.unordered.end()) {
-            return it->second;
-        } else {
-            return mk_val<value_undefined>(name);
-        }
+        value default_val = mk_val<value_undefined>(name);
+        return env->at(mk_val<value_string>(name), default_val);
     }
 
     void set_val(const std::string & name, const value & val) {
+        env->insert(name, val);
+    }
+
+    void set_val(const value & name, const value & val) {
         env->insert(name, val);
     }
 

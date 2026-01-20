@@ -3,6 +3,7 @@
 #include "string.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -108,21 +109,75 @@ struct value_t {
     std::vector<value> val_arr;
 
     struct map {
-        // once set to true, all keys must be numeric
-        // caveat: we only allow either all numeric keys or all non-numeric keys
-        // for now, this only applied to for_statement in case of iterating over object keys/items
-        bool is_key_numeric = false;
         std::map<std::string, value> unordered;
-        std::vector<std::pair<std::string, value>> ordered;
-        void insert(const std::string & key, const value & val) {
-            if (unordered.find(key) != unordered.end()) {
-                // if key exists, remove from ordered list
-                ordered.erase(std::remove_if(ordered.begin(), ordered.end(),
-                    [&](const std::pair<std::string, value> & p) { return p.first == key; }),
-                    ordered.end());
+        std::vector<std::tuple<std::string, value, value>> ordered;
+        std::string make_key_index(const value & key) {
+            std::string key_type = key->type();
+            std::string key_str;
+            // Arrays and Objects are usually not hashable, but tuples are (our tuples are arrays)
+            // Support single level Arrays and Objects with hashable types (for future namedtuple)
+            const auto is_hashable = [&](const value & val) -> bool {
+                const std::string val_type = val->type();
+                return !key->is_undefined() && val_type != "Array" && val_type != "Object";
+            };
+            if (key_type == "Array") {
+                const auto & vec = key->as_array();
+                if (std::all_of(vec.begin(), vec.end(), is_hashable)) {
+                    key_type = "Tuple";
+                    key_str = key->as_repr();
+                }
+            } else if (key_type == "Object") {
+                const auto & vec = key->as_ordered_object();
+                if (std::all_of(vec.begin(), vec.end(), [&](auto ikv) -> bool {
+                    return is_hashable(std::get<2>(ikv));
+                })) {
+                    key_type = "NamedTuple";
+                    key_str = key->as_repr();
+                }
+            } else if (key_type == "Float") {
+                // Non-fractional Floats overwrite Integers
+                const auto & f = key->as_float();
+                if (std::trunc(f) == f) {
+                    key_type = "Integer";
+                    key_str = std::to_string(key->as_int());
+                }
+            } else if (key_type == "Boolean") {
+                // Booleans overwrite Integers
+                key_type = "Integer";
+                key_str = std::to_string(key->as_int());
+            } else if (key_type == "String") {
+                key_str = key->as_string().str();
+            } else {
+                key_str = key->as_repr();
             }
-            unordered[key] = val;
-            ordered.push_back({key, val});
+            if (key->is_undefined() || key_type == "Array" || key_type == "Object") {
+                throw std::runtime_error("Object key of unhashable type: " + key_type);
+            }
+            return key_type + "." + key_str;
+        }
+        bool has_key_index(const std::string & key_idx) {
+            return unordered.find(key_idx) != unordered.end();
+        }
+        bool has_key(const value & key) {
+            return has_key_index(make_key_index(key));
+        }
+        void insert(const value & key, const value & val) {
+            const std::string key_idx = make_key_index(key);
+            bool replaced = false;
+            if (has_key_index(key_idx)) {
+                // if key exists, replace value in ordered list instead of appending
+                for (auto & ikv : ordered) {
+                    if (std::get<0>(ikv) == key_idx) {
+                        std::get<2>(ikv) = val;
+                        replaced = true;
+                        break;
+                    }
+                }
+            }
+            unordered[key_idx] = val;
+            if (!replaced) {
+                ordered.push_back({key_idx, key, val});
+            }
         }
     } val_obj;
 
@@ -146,7 +201,7 @@ struct value_t {
     virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
     virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
     virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
-    virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
+    virtual const std::vector<std::tuple<std::string, value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
     virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
     virtual bool is_none() const { return false; }
     virtual bool is_undefined() const { return false; }
@@ -154,22 +209,22 @@ struct value_t {
         throw std::runtime_error("No builtins available for type " + type());
     }
 
-    virtual bool has_key(const std::string & key) {
-        return val_obj.unordered.find(key) != val_obj.unordered.end();
+    virtual bool has_key(const value & key) {
+        return val_obj.has_key(key);
     }
-    virtual value & at(const std::string & key, value & default_val) {
-        auto it = val_obj.unordered.find(key);
-        if (it == val_obj.unordered.end()) {
+    virtual value & at(const value & key, value & default_val) {
+        const std::string key_idx = val_obj.make_key_index(key);
+        if (!val_obj.has_key_index(key_idx)) {
             return default_val;
         }
-        return val_obj.unordered.at(key);
+        return val_obj.unordered.at(key_idx);
     }
-    virtual value & at(const std::string & key) {
-        auto it = val_obj.unordered.find(key);
-        if (it == val_obj.unordered.end()) {
-            throw std::runtime_error("Key '" + key + "' not found in value of type " + type());
+    virtual value & at(const value & key) {
+        const std::string key_idx = val_obj.make_key_index(key);
+        if (!val_obj.has_key_index(key_idx)) {
+            throw std::runtime_error("Key '" + key->as_string().str() + "' not found in value of type " + type());
         }
-        return val_obj.unordered.at(key);
+        return val_obj.unordered.at(key_idx);
     }
     virtual value & at(int64_t index, value & default_val) {
         if (index < 0) {
@@ -257,6 +312,7 @@ using value_string = std::shared_ptr<value_string_t>;
 struct value_bool_t : public value_t {
     value_bool_t(bool v) { val_bool = v; }
     virtual std::string type() const override { return "Boolean"; }
+    virtual int64_t as_int() const override { return static_cast<int64_t>(val_bool); }
     virtual bool as_bool() const override { return val_bool; }
     virtual string as_string() const override { return std::string(val_bool ? "True" : "False"); }
     virtual const func_builtins & get_builtins() const override;
@@ -293,7 +349,9 @@ struct value_array_t : public value_t {
         ss << "[";
         for (size_t i = 0; i < val_arr.size(); i++) {
             if (i > 0) ss << ", ";
-            ss << val_arr.at(i)->as_repr();
+            value val = val_arr.at(i);
+            // FIXME: Flip quotes and/or escape string depending on content
+            ss << (is_val<value_string>(val) ? "'" + val->as_string().str() + "'" : val->as_repr());
         }
         ss << "]";
         return ss.str();
@@ -312,21 +370,36 @@ struct value_object_t : public value_t {
     value_object_t(value & v) {
         val_obj = v->val_obj;
     }
-    value_object_t(const std::map<std::string, value> & obj) {
+    value_object_t(const std::map<value, value> & obj) {
         for (const auto & pair : obj) {
             val_obj.insert(pair.first, pair.second);
         }
     }
-    value_object_t(const std::vector<std::pair<std::string, value>> & obj) {
+    value_object_t(const std::vector<std::pair<value, value>> & obj) {
         for (const auto & pair : obj) {
             val_obj.insert(pair.first, pair.second);
         }
     }
-    void insert(const std::string & key, const value & val) {
+    void insert(const value & key, const value & val) {
         val_obj.insert(key, val);
     }
+    void insert(const std::string & key, const value & val) {
+        val_obj.insert(mk_val<value_string>(key), val);
+    }
     virtual std::string type() const override { return "Object"; }
-    virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const override { return val_obj.ordered; }
+    virtual const std::vector<std::tuple<std::string, value, value>> & as_ordered_object() const override { return val_obj.ordered; }
+    virtual string as_string() const override {
+        std::ostringstream ss;
+        ss << "{";
+        for (size_t i = 0; i < val_obj.ordered.size(); i++) {
+            if (i > 0) ss << ", ";
+            auto & [idx, key, val] = val_obj.ordered.at(i);
+            // FIXME: Flip quotes and/or escape string depending on content
+            ss << (is_val<value_string>(key) ? "'" + key->as_string().str() + "'" : key->as_repr()) << ": " << (is_val<value_string>(val) ? "'" + val->as_string().str() + "'" : val->as_repr());
+        }
+        ss << "}";
+        return ss.str();
+    }
     virtual bool as_bool() const override {
         return !val_obj.unordered.empty();
     }
@@ -342,6 +415,7 @@ struct value_none_t : public value_t {
     virtual std::string type() const override { return "None"; }
     virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
+    virtual string as_string() const override { return string(type()); }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
 };
@@ -436,7 +510,7 @@ struct value_func_t : public value_t {
         return val_func(new_args);
     }
     virtual std::string type() const override { return "Function"; }
-    virtual std::string as_repr() const override { return type(); }
+    virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
 };
 using value_func = std::shared_ptr<value_func_t>;
 

@@ -95,20 +95,10 @@ value identifier::execute_impl(context & ctx) {
 value object_literal::execute_impl(context & ctx) {
     auto obj = mk_val<value_object>();
     for (const auto & pair : val) {
-        value key_val = pair.first->execute(ctx);
-        if (!is_val<value_string>(key_val) && !is_val<value_int>(key_val)) {
-            throw std::runtime_error("Object literal: keys must be string or int values, got " + key_val->type());
-        }
-        std::string key = key_val->as_string().str();
+        value key = pair.first->execute(ctx);
         value val = pair.second->execute(ctx);
-        JJ_DEBUG("Object literal: setting key '%s' with value type %s", key.c_str(), val->type().c_str());
+        JJ_DEBUG("Object literal: setting key '%s' with value type %s", key->as_string().str().c_str(), val->type().c_str());
         obj->insert(key, val);
-
-        if (is_val<value_int>(key_val)) {
-            obj->val_obj.is_key_numeric = true;
-        } else if (obj->val_obj.is_key_numeric) {
-            throw std::runtime_error("Object literal: cannot mix numeric and non-numeric keys");
-        }
     }
     return obj;
 }
@@ -265,10 +255,9 @@ value binary_expression::execute_impl(context & ctx) {
         }
     }
 
-    // String in object
-    if (is_val<value_string>(left_val) && is_val<value_object>(right_val)) {
-        auto key = left_val->as_string().str();
-        bool has_key = right_val->has_key(key);
+    // Value key in object
+    if (is_val<value_object>(right_val)) {
+        bool has_key = right_val->has_key(left_val);
         if (op.value == "in") {
             return mk_val<value_bool>(has_key);
         } else if (op.value == "not in") {
@@ -466,12 +455,8 @@ value for_statement::execute_impl(context & ctx) {
         auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
             auto tuple = mk_val<value_array>();
-            if (iterable_val->val_obj.is_key_numeric) {
-                tuple->push_back(mk_val<value_int>(std::stoll(p.first)));
-            } else {
-                tuple->push_back(mk_val<value_string>(p.first));
-            }
-            tuple->push_back(p.second);
+            tuple->push_back(std::get<1>(p));
+            tuple->push_back(std::get<2>(p));
             items.push_back(tuple);
         }
         if (ctx.is_get_stats) {
@@ -774,11 +759,8 @@ value member_expression::execute_impl(context & ctx) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
         return val;
     } else if (is_val<value_object>(object)) {
-        if (!is_val<value_string>(property)) {
-            throw std::runtime_error("Cannot access object with non-string: got " + property->type());
-        }
         auto key = property->as_string().str();
-        val = object->at(key, val);
+        val = object->at(property, val);
         if (is_val<value_undefined>(val)) {
             val = try_builtin_func(ctx, key, object, true);
         }
