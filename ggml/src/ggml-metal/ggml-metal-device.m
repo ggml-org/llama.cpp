@@ -926,6 +926,59 @@ void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev) {
     atomic_store_explicit(&dev->rsets->d_loop, 2*dev->rsets->keep_alive_s, memory_order_relaxed);
 }
 
+struct ggml_metal_event {
+    void * obj; // id<MTLEvent>
+
+    atomic_int value;
+};
+
+void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf_raw) {
+    id<MTLEvent> event = (id<MTLEvent>)ev->obj;
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    [cmd_buf encodeSignalEvent:event value:atomic_fetch_add_explicit(&ev->value, 1, memory_order_relaxed) + 1];
+}
+
+void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf_raw) {
+    id<MTLEvent> event = (id<MTLEvent>)ev->obj;
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+}
+
+ggml_metal_event_t ggml_metal_device_event_new(ggml_metal_device_t dev) {
+    id<MTLEvent> event = [dev->mtl_device newEvent];
+
+    ggml_metal_event_t ev = calloc(1, sizeof(struct ggml_metal_event));
+
+    ev->obj = (__bridge void *)event;
+    ev->value = 0;
+
+    return ev;
+}
+
+void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
+    id<MTLEvent> event = ev->obj;
+    [event release];
+
+    free(ev);
+
+    GGML_UNUSED(dev);
+}
+
+void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
+    @autoreleasepool {
+        id<MTLEvent> event = ev->obj;
+
+        id<MTLCommandBuffer> cmd_buf = [dev->mtl_queue commandBuffer];
+        [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+    }
+}
+
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
         *total = dev->mtl_device.recommendedMaxWorkingSetSize;

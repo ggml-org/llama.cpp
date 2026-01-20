@@ -281,8 +281,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
         // wrap the source data into a Metal buffer
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
         id<MTLBuffer> buf_src = [device newBufferWithBytes:data
-                                                         length:size
-                                                        options:MTLResourceStorageModeShared];
+                                                    length:size
+                                                   options:MTLResourceStorageModeShared];
 
         GGML_ASSERT(buf_src);
 
@@ -324,9 +324,9 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
     @autoreleasepool {
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
         id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
+                                                          length:size
+                                                         options:MTLResourceStorageModeShared
+                                                     deallocator:nil];
 
         GGML_ASSERT(buf_dst);
 
@@ -536,6 +536,38 @@ void ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf) {
     }
 
     //printf("%s: graph optimize took %.3f ms\n", __func__, (ggml_time_us() - t_start) / 1000.0);
+}
+
+void ggml_metal_event_record(ggml_metal_t ctx, ggml_metal_event_t ev) {
+    @autoreleasepool {
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+        id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+
+        ggml_metal_event_encode_signal(ev, cmd_buf);
+
+        [cmd_buf commit];
+
+        [ctx->cmd_bufs_ext addObject:cmd_buf];
+        ctx->cmd_buf_last = cmd_buf;
+
+        [cmd_buf retain];
+    }
+}
+
+void ggml_metal_event_wait(ggml_metal_t ctx, ggml_metal_event_t ev) {
+    @autoreleasepool {
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+        id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+
+        ggml_metal_event_encode_wait(ev, cmd_buf);
+
+        [cmd_buf commit];
+
+        [ctx->cmd_bufs_ext addObject:cmd_buf];
+        ctx->cmd_buf_last = cmd_buf;
+
+        [cmd_buf retain];
+    }
 }
 
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
