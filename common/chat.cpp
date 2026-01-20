@@ -2720,11 +2720,18 @@ static common_chat_params common_chat_params_init_translategemma(
     const struct templates_params & inputs) {
     common_chat_params data;
 
+    static const std::string kMtmdMediaMarker = "<__media__>";
+    static const std::string kMtmdImageMarker = "<__image__>";
+    const auto is_mtmd_marker = [&](const std::string & text) {
+        return text == kMtmdMediaMarker || text == kMtmdImageMarker;
+    };
+
     std::string default_source_lang_code = "en";
     std::string default_target_lang_code = "zh";
     bool has_default_source = false;
     bool has_default_target = false;
     bool used_fallback_default = false;
+    bool replace_image_marker = false;
     if (inputs.extra_context.is_object()) {
         if (inputs.extra_context.contains("source_lang_code") && inputs.extra_context.at("source_lang_code").is_string()) {
             auto val = inputs.extra_context.at("source_lang_code").get<std::string>();
@@ -2785,6 +2792,24 @@ static common_chat_params common_chat_params_init_translategemma(
             if (arr.size() == 1 && arr[0].is_object()) {
                 const auto & obj = arr[0];
                 if (obj.contains("type") && obj.contains("source_lang_code") && obj.contains("target_lang_code")) {
+                    if (obj.at("type") == "text" && obj.contains("text") && obj.at("text").is_string()) {
+                        const auto text_val = obj.at("text").get<std::string>();
+                        if (is_mtmd_marker(text_val)) {
+                            auto adjusted = msg;
+                            adjusted["content"] = json::array({
+                                {
+                                    {"type", "image"},
+                                    {"source_lang_code", source_lang_code},
+                                    {"target_lang_code", target_lang_code},
+                                    {"text", nullptr},
+                                    {"image", text_val},
+                                }
+                            });
+                            adjusted_messages.push_back(adjusted);
+                            replace_image_marker = true;
+                            continue;
+                        }
+                    }
                     adjusted_messages.push_back(msg);
                     continue;
                 }
@@ -2820,15 +2845,28 @@ static common_chat_params common_chat_params_init_translategemma(
         }
 
         auto adjusted = msg;
-        adjusted["content"] = json::array({
-            {
-                {"type", "text"},
-                {"source_lang_code", source_lang_code},
-                {"target_lang_code", target_lang_code},
-                {"text", text},
-                {"image", nullptr},
-            }
-        });
+        if (is_mtmd_marker(text)) {
+            adjusted["content"] = json::array({
+                {
+                    {"type", "image"},
+                    {"source_lang_code", source_lang_code},
+                    {"target_lang_code", target_lang_code},
+                    {"text", nullptr},
+                    {"image", text},
+                }
+            });
+            replace_image_marker = true;
+        } else {
+            adjusted["content"] = json::array({
+                {
+                    {"type", "text"},
+                    {"source_lang_code", source_lang_code},
+                    {"target_lang_code", target_lang_code},
+                    {"text", text},
+                    {"image", nullptr},
+                }
+            });
+        }
         adjusted_messages.push_back(adjusted);
     }
 
@@ -2836,8 +2874,11 @@ static common_chat_params common_chat_params_init_translategemma(
         LOG_WRN("%s: missing source_lang_code/target_lang_code, defaulting to '%s' -> '%s' (override via --chat-template-kwargs)\n",
             __func__, default_source_lang_code.c_str(), default_target_lang_code.c_str());
     }
-
+    // This function is used to construct the input prompts needed for the model.
     data.prompt = apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    if (replace_image_marker) {
+        string_replace_all(data.prompt, "<start_of_image>", kMtmdMediaMarker);
+    }
     data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     data.grammar_lazy = false;
     if (!inputs.json_schema.is_null()) {
