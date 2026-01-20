@@ -2841,7 +2841,7 @@ class LlavaVisionModel(MmprojModel):
             name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK]
             yield from super().modify_tensors(img_break_embd, name, bid)
 
-        return []  # skip other tensors
+        return # skip other tensors
 
 
 @ModelBase.register("Idefics3ForConditionalGeneration", "SmolVLMForConditionalGeneration")
@@ -2877,7 +2877,7 @@ class SmolVLMModel(MmprojModel):
         if is_vision_tensor:
             yield from super().modify_tensors(data_torch, name, bid)
 
-        return []  # skip other tensors
+        return # skip other tensors
 
 
 @ModelBase.register(
@@ -5307,13 +5307,13 @@ class BertModel(TextModel):
 
         # we are only using BERT for embeddings so we don't need the pooling layer
         if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
-            return []  # we don't need these
+            return # we don't need these
 
         if name.startswith("cls.predictions"):
-            return []
+            return
 
         if name.startswith("cls.seq_relationship"):
-            return []
+            return
 
         if self.cls_out_labels:
             # For BertForSequenceClassification (direct projection layer)
@@ -5478,7 +5478,7 @@ class DistilBertModel(BertModel):
 
         # These layers act as MLM head, so we don't need them
         if name.startswith("vocab_"):
-            return []
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -5576,7 +5576,7 @@ class NomicBertModel(BertModel):
     def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
         # If the tensor is an experts bias tensor, skip it by returning an empty list.
         if "mlp.experts.bias" in name:
-            return []  # Explicitly return.
+            return # Explicitly return.
 
         if "mlp.experts.mlp.w1" in name:
             data_torch = data_torch.view(self.hparams["num_experts"], self.hparams["n_inner"], self.hparams["n_embd"])
@@ -5689,7 +5689,7 @@ class XLMRobertaModel(BertModel):
 
         if name.endswith(".0.lora_A") or name.endswith(".0.lora_B"):
             if name.startswith("pooler.dense"):
-                return []
+                return
 
             num_loras = data_torch.size(0)
             assert num_loras == len(self._lora_names)
@@ -5705,7 +5705,7 @@ class XLMRobertaModel(BertModel):
                     new_name = new_name[:-1] + ("a" if new_name[-1:] == "b" else "b")
                 lora_writer.add_tensor(new_name, data.float().numpy(), raw_dtype=gguf.GGMLQuantizationType.F32)
 
-            return []
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -5860,7 +5860,7 @@ class Gemma3Model(TextModel):
 
         elif name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
                 or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
-            return []  # skip vision tensors
+            return # skip vision tensors
 
         # remove OOV (out-of-vocabulary) rows in token_embd
         if "embed_tokens.weight" in name:
@@ -5983,7 +5983,7 @@ class Gemma3VisionModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if "vision_model.head." in name:
-            return []  # skip redundant tensors for tinygemma3
+            return # skip redundant tensors for tinygemma3
 
         if name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
                 or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
@@ -5999,7 +5999,7 @@ class Gemma3VisionModel(MmprojModel):
 
             yield from super().modify_tensors(data_torch, name, bid)
 
-        return []  # skip other tensors
+        return # skip other tensors
 
 
 class ConformerAudioModel(MmprojModel):
@@ -6245,7 +6245,7 @@ class Gemma3NModel(Gemma3Model):
         # TODO: implement self.prediction_coefs.weight.clamp_(...)
 
         if "language_model." not in name:
-            return [] # skip non-language model tensors
+            return # skip non-language model tensors
 
         # Pad token embeddings for vision/audio special tokens (262144-262399)
         if "embed_tokens.weight" in name or "embed_tokens_per_layer" in name:
@@ -6285,7 +6285,7 @@ class Gemma3NModel(Gemma3Model):
             if out is not None:
                 return [(self.map_tensor_name("model.altup_unembed_projections.weight"), out)]
             else:
-                return []
+                return
 
         if "altup_projections" in name:
             data_torch = data_torch.to(device="cpu")
@@ -6301,7 +6301,7 @@ class Gemma3NModel(Gemma3Model):
             if out is not None:
                 return [(self.map_tensor_name("model.altup_projections.weight"), out)]
             else:
-                return []
+                return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
