@@ -559,7 +559,20 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     // Display tool execution (only for main agent)
     if (!is_subagent_) {
         console::set_display(DISPLAY_TYPE_INFO);
-        console::log("\n› %s ", call.name.c_str());
+        // Show tool name with relevant details
+        if (call.name == "bash") {
+            std::string cmd = args.value("command", "");
+            // Truncate long commands for display
+            if (cmd.length() > 100) {
+                cmd = cmd.substr(0, 100) + "...";
+            }
+            console::log("\n› %s %s", call.name.c_str(), cmd.c_str());
+        } else if (call.name == "read" || call.name == "write" || call.name == "edit") {
+            std::string path = args.value("path", args.value("file_path", ""));
+            console::log("\n› %s %s", call.name.c_str(), path.c_str());
+        } else {
+            console::log("\n› %s ", call.name.c_str());
+        }
         console::spinner::start();
         console::set_display(DISPLAY_TYPE_RESET);
     }
