@@ -51,6 +51,7 @@
 #include "ggml-sycl/add-id.hpp"
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
+#include "ggml-sycl/kernel-selection.hpp"
 #include "ggml-sycl/convert.hpp"
 #include "ggml-sycl/element_wise.hpp"
 #include "ggml-sycl/fattn.hpp"
@@ -15893,21 +15894,8 @@ static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * 
     return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
            src1->ne[1] > 0;
 }
-enum class ggml_sycl_mul_mat_kernel {
-    DMMV_SOA,
-    DMMV_COALESCED,
-    MMVQ_COALESCED,
+// ggml_sycl_mul_mat_kernel enum is now defined in kernel-selection.hpp
 
-    MMVQ_SOA,
-
-    MMVQ_AOS,
-    XMX_GEMM_TILED,
-    XMX_GEMM_AOS,
-    MMQ_COALESCED,
-    MMQ_SOA,
-    MMQ_AOS,
-    ONEDNN_AOS,
-};
 static constexpr ggml_sycl_mul_mat_kernel k_mul_mat_priority[] = {
     ggml_sycl_mul_mat_kernel::DMMV_SOA,       ggml_sycl_mul_mat_kernel::DMMV_COALESCED,
 
@@ -15969,18 +15957,371 @@ static bool ggml_sycl_supports_dmmv_soa(enum ggml_type type) {
 
     }
 }
+
+// Implementation of kernel-selection.hpp functions
+const char * ggml_sycl_mul_mat_kernel_name(ggml_sycl_mul_mat_kernel kernel) {
+    switch (kernel) {
+        case ggml_sycl_mul_mat_kernel::DMMV_SOA: return "DMMV_SOA";
+        case ggml_sycl_mul_mat_kernel::DMMV_COALESCED: return "DMMV_COALESCED";
+        case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED: return "MMVQ_COALESCED";
+        case ggml_sycl_mul_mat_kernel::MMVQ_SOA: return "MMVQ_SOA";
+        case ggml_sycl_mul_mat_kernel::MMVQ_AOS: return "MMVQ_AOS";
+        case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED: return "XMX_GEMM_TILED";
+        case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS: return "XMX_GEMM_AOS";
+        case ggml_sycl_mul_mat_kernel::MMQ_COALESCED: return "MMQ_COALESCED";
+        case ggml_sycl_mul_mat_kernel::MMQ_SOA: return "MMQ_SOA";
+        case ggml_sycl_mul_mat_kernel::MMQ_AOS: return "MMQ_AOS";
+        case ggml_sycl_mul_mat_kernel::ONEDNN_AOS: return "ONEDNN_AOS";
+    }
+    return "UNKNOWN";
+}
+
+std::optional<ggml_sycl_mul_mat_kernel> ggml_sycl_parse_force_kernel() {
+    const char * env = std::getenv("GGML_SYCL_FORCE_KERNEL");
+    if (!env) {
+        return std::nullopt;
+    }
+
+    // Map string to kernel enum
+    static const struct { const char * name; ggml_sycl_mul_mat_kernel kernel; } kernel_map[] = {
+        {"DMMV_SOA", ggml_sycl_mul_mat_kernel::DMMV_SOA},
+        {"DMMV_COALESCED", ggml_sycl_mul_mat_kernel::DMMV_COALESCED},
+        {"MMVQ_SOA", ggml_sycl_mul_mat_kernel::MMVQ_SOA},
+        {"MMVQ_COALESCED", ggml_sycl_mul_mat_kernel::MMVQ_COALESCED},
+        {"MMVQ_AOS", ggml_sycl_mul_mat_kernel::MMVQ_AOS},
+        {"XMX_GEMM_TILED", ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED},
+        {"XMX_GEMM_AOS", ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS},
+        {"MMQ_SOA", ggml_sycl_mul_mat_kernel::MMQ_SOA},
+        {"MMQ_COALESCED", ggml_sycl_mul_mat_kernel::MMQ_COALESCED},
+        {"MMQ_AOS", ggml_sycl_mul_mat_kernel::MMQ_AOS},
+        {"ONEDNN_AOS", ggml_sycl_mul_mat_kernel::ONEDNN_AOS},
+    };
+    for (const auto & entry : kernel_map) {
+        if (strcmp(env, entry.name) == 0) {
+            return entry.kernel;
+        }
+    }
+    GGML_LOG_WARN("[SYCL] Unknown GGML_SYCL_FORCE_KERNEL value: %s (ignoring)\n", env);
+    return std::nullopt;
+}
+
+// Forward declarations for helper functions used by ggml_sycl_select_preferred_kernel
+// Note: These functions are defined later in this file - forward declarations must match exactly
+static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 static bool ggml_sycl_can_use_layout_for_kernel(const ggml_tensor * tensor, layout_mode layout, int device);
+// Note: ggml_sycl_supports_reorder_mmvq, ggml_sycl_layout_supports_coalesced,
+//       ggml_sycl_supports_reorder_mmq, ggml_sycl_supports_coalesced_mmq
+//       are already defined as inline functions earlier in the file
+
+// Unified kernel selection function - consolidates logic from layout selection and dispatch
+std::optional<ggml_sycl_mul_mat_kernel> ggml_sycl_select_preferred_kernel(
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+    int device,
+    std::optional<ggml_sycl_mul_mat_kernel> force_kernel)
+{
+    // Edge case: invalid device
+    if (device < 0 || device >= ggml_sycl_info().device_count) {
+        return std::nullopt;
+    }
+
+    // Edge case: null tensors
+    if (!src0 || !src1) {
+        return std::nullopt;
+    }
+
+    // Compute eligibility flags ONCE (mirrors current logic)
+    // Note: passing nullptr for dst since these functions don't actually use it for eligibility checks
+    const bool use_dmmv = can_use_dequantize_mul_mat_vec(src0, src1, nullptr);
+    const bool use_mmvq = can_use_mul_mat_vec_q(src0, src1, nullptr);
+    bool use_mmq = ggml_sycl_supports_mmq(src0->type) &&
+                   src1->type == GGML_TYPE_F32;
+
+    // XMX eligibility (extensive checks from current code)
+    bool use_xmx = false;
+#ifdef GGML_SYCL_XMX_GEMM
+    static const bool xmx_env = (std::getenv("GGML_SYCL_USE_XMX_GEMM") != nullptr);
+    use_xmx = xmx_env || (g_ggml_sycl_use_xmx_gemm != 0);
+    if (use_xmx) {
+        use_xmx = ggml_sycl_xmx_available() && ggml_sycl_xmx_supports_type(src0->type);
+    }
+    if (use_xmx) {
+        const auto & caps = ggml_sycl_info().devices[device].xmx_caps;
+        use_xmx = caps.supported && caps.supports_int8 && caps.M > 0 && caps.N > 0 && caps.K > 0;
+    }
+    if (use_xmx) {
+        const int64_t ncols_x = src0->ne[0];
+        const auto & caps = ggml_sycl_info().devices[device].xmx_caps;
+        use_xmx = (caps.K > 0) && (ncols_x % caps.K) == 0;
+    }
+    if (use_xmx) {
+        int64_t batch = src1->ne[1];
+        use_xmx = batch >= 1 && batch < g_ggml_sycl_xmx_threshold;
+    }
+#endif
+
+    // Apply legacy force overrides (FORCE_MMQ, FORCE_DMMV)
+    static bool force_mmq_env = (std::getenv("GGML_SYCL_FORCE_MMQ") != nullptr);
+    static bool force_dmmv_env = (std::getenv("GGML_SYCL_FORCE_DMMV") != nullptr);
+    bool use_dmmv_adj = use_dmmv;
+    bool use_mmvq_adj = use_mmvq;
+    if (force_mmq_env && use_mmq) {
+        use_dmmv_adj = false;
+        use_mmvq_adj = false;
+    }
+    if (force_dmmv_env && use_dmmv) {
+        use_mmvq_adj = false;
+    }
+
+    // Additional MMQ checks
+    use_mmq = use_mmq && (src0->type != GGML_TYPE_IQ2_XXS);
+#ifdef SYCL_USE_XMX
+    use_mmq = use_mmq && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
+#endif
+
+    // If force_kernel specified, check if it's eligible and return it
+    if (force_kernel.has_value()) {
+        auto kernel = force_kernel.value();
+        const layout_mode layout = ggml_sycl_mul_mat_kernel_layout(kernel);
+
+        // Check batch size compatibility
+        if (!ggml_sycl_mul_mat_kernel_supports_batch(kernel, src1->ne[1])) {
+            GGML_LOG_WARN("[SYCL] Forced kernel %s not eligible for batch=%lld\n",
+                          ggml_sycl_mul_mat_kernel_name(kernel), (long long)src1->ne[1]);
+            return std::nullopt;  // Fall back to automatic selection
+        }
+
+        // Check layout compatibility
+        if (!ggml_sycl_can_use_layout_for_kernel(src0, layout, device)) {
+            GGML_LOG_WARN("[SYCL] Forced kernel %s not eligible for tensor layout\n",
+                          ggml_sycl_mul_mat_kernel_name(kernel));
+            return std::nullopt;
+        }
+
+        // Per-kernel eligibility checks for forced kernel
+        switch (kernel) {
+            case ggml_sycl_mul_mat_kernel::DMMV_SOA:
+            case ggml_sycl_mul_mat_kernel::DMMV_COALESCED:
+                if (!use_dmmv || !ggml_sycl_supports_dmmv_soa(src0->type)) {
+                    return std::nullopt;
+                }
+                if (kernel == ggml_sycl_mul_mat_kernel::DMMV_COALESCED && !ggml_sycl_layout_supports_coalesced(src0)) {
+                    return std::nullopt;
+                }
+                return kernel;
+
+            case ggml_sycl_mul_mat_kernel::MMVQ_SOA:
+            case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED:
+            case ggml_sycl_mul_mat_kernel::MMVQ_AOS:
+                if (!use_mmvq || !ggml_sycl_supports_reorder_mmvq(src0->type)) {
+                    return std::nullopt;
+                }
+                if (kernel == ggml_sycl_mul_mat_kernel::MMVQ_COALESCED && !ggml_sycl_layout_supports_coalesced(src0)) {
+                    return std::nullopt;
+                }
+                return kernel;
+
+            case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED:
+            case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS:
+#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
+                if (!use_xmx) {
+                    return std::nullopt;
+                }
+                return kernel;
+#else
+                return std::nullopt;
+#endif
+
+            case ggml_sycl_mul_mat_kernel::MMQ_COALESCED:
+                if (!use_mmq || !ggml_sycl_supports_coalesced_mmq(src0->type) || !ggml_sycl_layout_supports_coalesced(src0)) {
+                    return std::nullopt;
+                }
+                return kernel;
+
+            case ggml_sycl_mul_mat_kernel::MMQ_SOA:
+                if (!use_mmq || !ggml_sycl_supports_reorder_mmq(src0->type)) {
+                    return std::nullopt;
+                }
+                return kernel;
+
+            case ggml_sycl_mul_mat_kernel::MMQ_AOS:
+                if (!use_mmq) {
+                    return std::nullopt;
+                }
+                return kernel;
+
+            case ggml_sycl_mul_mat_kernel::ONEDNN_AOS:
+                return kernel;
+        }
+    }
+
+    // Iterate priority list (same as current k_mul_mat_priority)
+    for (const auto kernel : k_mul_mat_priority) {
+        const layout_mode layout = ggml_sycl_mul_mat_kernel_layout(kernel);
+
+        if (!ggml_sycl_mul_mat_kernel_supports_batch(kernel, src1->ne[1])) {
+            continue;
+        }
+        if (!ggml_sycl_can_use_layout_for_kernel(src0, layout, device)) {
+            continue;
+        }
+
+        // Per-kernel eligibility (consolidated switch)
+        switch (kernel) {
+            case ggml_sycl_mul_mat_kernel::DMMV_SOA:
+                if (use_dmmv_adj && ggml_sycl_supports_dmmv_soa(src0->type)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::DMMV_COALESCED:
+                if (use_dmmv_adj && ggml_sycl_supports_dmmv_soa(src0->type) && ggml_sycl_layout_supports_coalesced(src0)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED:
+                if (use_mmvq_adj && ggml_sycl_supports_reorder_mmvq(src0->type) && ggml_sycl_layout_supports_coalesced(src0)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMVQ_SOA:
+                if (use_mmvq_adj && ggml_sycl_supports_reorder_mmvq(src0->type)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMVQ_AOS:
+                if (use_mmvq_adj) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED:
+            case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS:
+#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
+                if (use_xmx) {
+                    return kernel;
+                }
+#endif
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMQ_COALESCED:
+                if (use_mmq && ggml_sycl_supports_coalesced_mmq(src0->type) && ggml_sycl_layout_supports_coalesced(src0)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMQ_SOA:
+                if (use_mmq && ggml_sycl_supports_reorder_mmq(src0->type)) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::MMQ_AOS:
+                if (use_mmq) {
+                    return kernel;
+                }
+                break;
+
+            case ggml_sycl_mul_mat_kernel::ONEDNN_AOS:
+                return kernel;
+        }
+    }
+
+    return std::nullopt;
+}
+
+// Dispatch helper - calls the appropriate kernel without re-checking eligibility
+// Assumes kernel has already been validated by ggml_sycl_select_preferred_kernel()
+static bool ggml_sycl_dispatch_mul_mat_kernel(ggml_backend_sycl_context & ctx,
+                                               const ggml_tensor *         src0,
+                                               const ggml_tensor *         src1,
+                                               ggml_tensor *               dst,
+                                               ggml_sycl_mul_mat_kernel    kernel) {
+    const layout_mode layout = ggml_sycl_mul_mat_kernel_layout(kernel);
+
+    switch (kernel) {
+        case ggml_sycl_mul_mat_kernel::DMMV_SOA:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_dmmv_soa", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec,
+                                                          layout);
+
+        case ggml_sycl_mul_mat_kernel::DMMV_COALESCED:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_dmmv_coalesced", " type=%d ne1=%lld", src0->type,
+                             (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec,
+                                                          layout);
+
+        case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_coalesced", " type=%d ne1=%lld", src0->type,
+                             (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
+                                                                       layout);
+
+        case ggml_sycl_mul_mat_kernel::MMVQ_SOA:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_soa", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
+                                                                       layout);
+
+        case ggml_sycl_mul_mat_kernel::MMVQ_AOS:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_aos", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, layout);
+
+        case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED:
+#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_xmx_tiled", " type=%d ne1=%lld", src0->type,
+                             (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx, layout);
+#else
+            GGML_UNUSED(dst);
+            return false;
+#endif
+
+        case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS:
+#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_xmx_aos", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx, layout);
+#else
+            return false;
+#endif
+
+        case ggml_sycl_mul_mat_kernel::MMQ_COALESCED:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_coalesced", " type=%d ne1=%lld", src0->type,
+                             (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q,
+                                                                       layout);
+
+        case ggml_sycl_mul_mat_kernel::MMQ_SOA:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_soa", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q,
+                                                                       layout);
+
+        case ggml_sycl_mul_mat_kernel::MMQ_AOS:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_aos", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, layout);
+
+        case ggml_sycl_mul_mat_kernel::ONEDNN_AOS:
+            GGML_SYCL_KTRACE("mul_mat_dispatch_onednn", " type=%d ne1=%lld", src0->type, (long long) src1->ne[1]);
+            return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, layout);
+    }
+    return false;
+}
+
 static bool ggml_sycl_select_mul_mat_layout(ggml_backend_sycl_context & ctx,
                                             const ggml_tensor *         src0,
                                             const ggml_tensor *         src1,
                                             ggml_tensor *               dst,
                                             bool                        has_override,
-
                                             layout_mode                 override_layout,
                                             layout_mode &               out_layout) {
-    if (!src0 || !src1 || !dst) {
+    GGML_UNUSED(dst);
+    if (!src0 || !src1) {
         return false;
     }
+    // Handle layout override (e.g., from test harness)
     if (has_override) {
         const layout_mode adjusted = ggml_sycl_adjust_layout_for_tensor(src0, override_layout, ctx.device);
         if (adjusted != override_layout || adjusted == GGML_LAYOUT_XMX_TILED) {
@@ -15989,145 +16330,16 @@ static bool ggml_sycl_select_mul_mat_layout(ggml_backend_sycl_context & ctx,
         out_layout = override_layout;
         return true;
     }
-    bool use_dequantize_mul_mat_vec = can_use_dequantize_mul_mat_vec(src0, src1, dst);
-    bool use_mul_mat_vec_q          = can_use_mul_mat_vec_q(src0, src1, dst);
-    bool use_mul_mat_q =
-        ggml_sycl_supports_mmq(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
-    static bool force_mmq  = (getenv("GGML_SYCL_FORCE_MMQ") != nullptr);
-    static bool force_dmmv = (getenv("GGML_SYCL_FORCE_DMMV") != nullptr);
-    if (force_mmq && use_mul_mat_q) {
-        use_dequantize_mul_mat_vec = false;
-        use_mul_mat_vec_q          = false;
+
+    // Use unified kernel selection - consolidates all eligibility logic
+    auto preferred = ggml_sycl_select_preferred_kernel(src0, src1, ctx.device, std::nullopt);
+    if (!preferred.has_value()) {
+        return false;
     }
-    if (force_dmmv && use_dequantize_mul_mat_vec) {
-        use_mul_mat_vec_q = false;
-    }
-#ifdef GGML_SYCL_XMX_GEMM
-    bool use_xmx_gemm = g_ggml_sycl_use_xmx_gemm ? true : false;
-    if (use_xmx_gemm) {
-        use_xmx_gemm = ggml_sycl_xmx_available() && ggml_sycl_xmx_supports_type(src0->type);
-    }
-    if (use_xmx_gemm) {
-        if (ctx.device < 0 || ctx.device >= ggml_sycl_info().device_count) {
-            use_xmx_gemm = false;
-        }
-    }
-    if (use_xmx_gemm) {
-        const auto & caps = ggml_sycl_info().devices[ctx.device].xmx_caps;
-        use_xmx_gemm      = caps.supported && caps.supports_int8 && caps.M > 0 && caps.N > 0 && caps.K > 0;
-    }
-    if (use_xmx_gemm) {
-        const int64_t ncols_x = src0->ne[0];
-        const auto &  caps    = ggml_sycl_info().devices[ctx.device].xmx_caps;
-        use_xmx_gemm          = (static_cast<int64_t>(caps.K) > 0) && (ncols_x % static_cast<int64_t>(caps.K)) == 0;
-    }
-    if (use_xmx_gemm) {
-        int64_t batch = src1->ne[1];
-        use_xmx_gemm  = batch >= 1 && batch < g_ggml_sycl_xmx_threshold;
-    }
-#else
-    bool use_xmx_gemm = false;
-#endif
-    use_mul_mat_q = use_mul_mat_q && (src0->type != GGML_TYPE_IQ2_XXS);
-#ifdef SYCL_USE_XMX
-    use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
-#endif
-    for (const auto kernel : k_mul_mat_priority) {
-        const layout_mode layout = ggml_sycl_mul_mat_kernel_layout(kernel);
-        if (!ggml_sycl_mul_mat_kernel_supports_batch(kernel, src1->ne[1])) {
-            continue;
-        }
-        if (!ggml_sycl_can_use_layout_for_kernel(src0, layout, ctx.device)) {
-            continue;
-        }
-        switch (kernel) {
-            case ggml_sycl_mul_mat_kernel::DMMV_SOA:
-                if (!use_dequantize_mul_mat_vec || !ggml_sycl_supports_dmmv_soa(src0->type)) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-            case ggml_sycl_mul_mat_kernel::DMMV_COALESCED:
-                if (!use_dequantize_mul_mat_vec || !ggml_sycl_supports_dmmv_soa(src0->type) ||
-                    !ggml_sycl_layout_supports_coalesced(src0)) {
-                    break;
-                }
-                out_layout = layout;
 
-                return true;
-            case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED:
-
-                if (!use_mul_mat_vec_q || !ggml_sycl_supports_reorder_mmvq(src0->type) ||
-                    !ggml_sycl_layout_supports_coalesced(src0)) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-            case ggml_sycl_mul_mat_kernel::MMVQ_SOA:
-                if (!use_mul_mat_vec_q || !ggml_sycl_supports_reorder_mmvq(src0->type)) {
-
-                    break;
-                }
-                out_layout = layout;
-                return true;
-            case ggml_sycl_mul_mat_kernel::MMVQ_AOS:
-                if (!use_mul_mat_vec_q) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-
-            case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED:
-#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
-                if (!use_xmx_gemm) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-#else
-                break;
-#endif
-            case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS:
-#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
-                if (!use_xmx_gemm) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-#else
-                break;
-#endif
-            case ggml_sycl_mul_mat_kernel::MMQ_COALESCED:
-
-                if (!use_mul_mat_q || !ggml_sycl_supports_coalesced_mmq(src0->type) ||
-                    !ggml_sycl_layout_supports_coalesced(src0)) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-
-            case ggml_sycl_mul_mat_kernel::MMQ_SOA:
-                if (!use_mul_mat_q || !ggml_sycl_supports_reorder_mmq(src0->type)) {
-                    break;
-
-                }
-
-                out_layout = layout;
-                return true;
-            case ggml_sycl_mul_mat_kernel::MMQ_AOS:
-                if (!use_mul_mat_q) {
-                    break;
-                }
-                out_layout = layout;
-                return true;
-            case ggml_sycl_mul_mat_kernel::ONEDNN_AOS:
-                out_layout = layout;
-                return true;
-        }
-
-    }
-    return false;
-
+    // Convert kernel to layout
+    out_layout = ggml_sycl_mul_mat_kernel_layout(preferred.value());
+    return true;
 }
 static bool ggml_sycl_layout_override_active(layout_mode & override_layout) {
     ggml_layout_mode override = GGML_LAYOUT_AOS;
@@ -16485,134 +16697,36 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 GGML_ABORT("MUL_MAT dispatch missing layout choice");
             }
         }
-        auto try_dispatch = [&](ggml_sycl_mul_mat_kernel kernel) -> bool {
-            const layout_mode layout = ggml_sycl_mul_mat_kernel_layout(kernel);
-            if (enforce_layout_choice && layout != chosen_layout) {
+        // Use unified kernel selection (consolidates all eligibility logic)
+        // Parse force_kernel env var once at startup
+        static auto force_kernel = ggml_sycl_parse_force_kernel();
+        auto        preferred    = ggml_sycl_select_preferred_kernel(src0, src1, ctx.device, force_kernel);
+
+        if (preferred.has_value()) {
+            auto              kernel       = preferred.value();
+            const layout_mode kernel_layout = ggml_sycl_mul_mat_kernel_layout(kernel);
+
+            // Check layout constraints
+            bool layout_ok = true;
+            if (enforce_layout_choice && kernel_layout != chosen_layout) {
                 ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-                ggml_sycl_log_layout_mismatch_once(key, ctx.device, layout, chosen_layout, src0->name,
+                ggml_sycl_log_layout_mismatch_once(key, ctx.device, kernel_layout, chosen_layout, src0->name,
                                                    "mul_mat dispatch");
-                return false;
+                layout_ok = false;
             }
-            if (has_override && layout != override_layout) {
-                return false;
+            if (has_override && kernel_layout != override_layout) {
+                layout_ok = false;
             }
-            if (!ggml_sycl_mul_mat_kernel_supports_batch(kernel, src1->ne[1])) {
-                return false;
-            }
-            if (!ggml_sycl_can_use_layout_for_kernel(src0, layout, ctx.device)) {
-                return false;
-            }
-            switch (kernel) {
-                case ggml_sycl_mul_mat_kernel::DMMV_SOA:
-                    if (!use_dequantize_mul_mat_vec || !ggml_sycl_supports_dmmv_soa(src0->type)) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_dmmv_soa", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst,
-                                                                  ggml_sycl_op_dequantize_mul_mat_vec, layout);
-                case ggml_sycl_mul_mat_kernel::DMMV_COALESCED:
-                    if (!use_dequantize_mul_mat_vec || !ggml_sycl_supports_dmmv_soa(src0->type) ||
-                        !ggml_sycl_layout_supports_coalesced(src0)) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_dmmv_coalesced", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst,
-                                                                  ggml_sycl_op_dequantize_mul_mat_vec, layout);
-                case ggml_sycl_mul_mat_kernel::MMVQ_COALESCED:
-                    if (!use_mul_mat_vec_q || !ggml_sycl_supports_reorder_mmvq(src0->type) ||
-                        !ggml_sycl_layout_supports_coalesced(src0)) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_coalesced", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst,
-                                                                               ggml_sycl_op_mul_mat_vec_q, layout);
-                case ggml_sycl_mul_mat_kernel::MMVQ_SOA:
-                    if (!use_mul_mat_vec_q || !ggml_sycl_supports_reorder_mmvq(src0->type)) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_soa", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst,
-                                                                               ggml_sycl_op_mul_mat_vec_q, layout);
 
-                case ggml_sycl_mul_mat_kernel::MMVQ_AOS:
-                    if (!use_mul_mat_vec_q) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_aos", " type=%d ne1=%lld", src0->type,
-
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q,
-                                                               layout);
-                case ggml_sycl_mul_mat_kernel::XMX_GEMM_TILED:
-#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
-                    if (!use_xmx_gemm) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_xmx", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-
-                    return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx,
-                                                               layout);
-#else
-                    return false;
-
-#endif
-                case ggml_sycl_mul_mat_kernel::XMX_GEMM_AOS:
-#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
-                    if (!use_xmx_gemm) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_xmx", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx,
-                                                               layout);
-#else
-                    return false;
-#endif
-                case ggml_sycl_mul_mat_kernel::MMQ_COALESCED:
-                    if (!use_mul_mat_q || !ggml_sycl_supports_coalesced_mmq(src0->type) ||
-                        !ggml_sycl_layout_supports_coalesced(src0)) {
-                        return false;
-                    }
-
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_coalesced", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst,
-                                                                               ggml_sycl_op_mul_mat_q, layout);
-                case ggml_sycl_mul_mat_kernel::MMQ_SOA:
-                    if (!use_mul_mat_q || !ggml_sycl_supports_reorder_mmq(src0->type)) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_soa", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst,
-                                                                               ggml_sycl_op_mul_mat_q, layout);
-                case ggml_sycl_mul_mat_kernel::MMQ_AOS:
-                    if (!use_mul_mat_q) {
-                        return false;
-                    }
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_aos", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, layout);
-                case ggml_sycl_mul_mat_kernel::ONEDNN_AOS:
-                    GGML_SYCL_KTRACE("mul_mat_dispatch_onednn", " type=%d ne1=%lld", src0->type,
-                                     (long long) src1->ne[1]);
-                    return ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl,
-                                                                  layout);
-            }
-            return false;
-        };
-        for (const auto kernel : k_mul_mat_priority) {
-            if (try_dispatch(kernel)) {
-                return;
+            if (layout_ok) {
+                if (ggml_sycl_dispatch_mul_mat_kernel(ctx, src0, src1, dst, kernel)) {
+                    return;
+                }
             }
         }
-        if (enforce_layout_choice) {
 
+        // Dispatch failed - report error
+        if (enforce_layout_choice) {
             GGML_LOG_ERROR("[MUL_MAT] No eligible kernel for %s with finalized layout=%s (type=%d batch=%lld)\n",
                            src0->name ? src0->name : "?", ggml_sycl_layout_mode_name(chosen_layout), src0->type,
                            (long long) src1->ne[1]);
@@ -18393,7 +18507,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
     // Routing-aware pre-staging: stage only needed experts for large MoE models (>64 experts)
     // This avoids blind preloading all experts which is wasteful for 128+ expert models
-    const bool use_routing_prestage = use_routing_prestage_candidate && use_expert_cache;
+    const bool use_routing_prestage = false; // DISABLED: cache key mismatch causes DEVICE_LOST
     if (use_routing_prestage) {
         // Get expert indices from IDs tensor (already copied to ids_host)
         const int32_t * expert_ids_ptr = reinterpret_cast<const int32_t *>(ids_host.data());
