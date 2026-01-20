@@ -44,14 +44,14 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
     const dim3 grid_size((ncols + block_size - 1) / block_size, nrows);
     init_indices<<<grid_size, block_size, 0, stream>>>(temp_indices, ncols, nrows);
 
-#    ifdef STRIDED_ITERATOR_AVAILABLE
+#ifdef STRIDED_ITERATOR_AVAILABLE
     auto offset_iterator = cuda::make_strided_iterator(cuda::make_counting_iterator(0), ncols);
-#    else
+#else
     ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows + 1);
     int *                     offset_iterator = offsets_alloc.get();
     const dim3                offset_grid((nrows + block_size - 1) / block_size);
     init_offsets<<<offset_grid, block_size, 0, stream>>>(offset_iterator, ncols, nrows);
-#    endif
+#endif
     CUDA_CHECK(cudaMemcpyAsync(temp_keys, x, ncols * nrows * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
     size_t temp_storage_bytes = 0;
