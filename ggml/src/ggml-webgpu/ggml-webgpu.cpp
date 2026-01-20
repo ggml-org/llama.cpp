@@ -322,7 +322,7 @@ struct webgpu_context_struct {
     uint32_t sg_mat_n;
     uint32_t sg_mat_k;
 
-    std::recursive_mutex mutex;
+    // std::recursive_mutex mutex;
     std::atomic_uint     inflight_threads = 0;
 
     webgpu_buf_pool set_rows_error_buf_pool;
@@ -392,6 +392,8 @@ struct webgpu_global_context {
     wgpu::Device device;
     // Shared buffer to move data from device to host
     wgpu::Buffer get_tensor_staging_buf;
+    // Mutex to lock get_tensor_staging_buf
+    std::recursive_mutex mutex;
     webgpu_capabilities capabilities;
 } ;
 
@@ -1155,7 +1157,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         pipeline  = it->second;
         decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
     } else {
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         it = ctx->flash_attn_pipelines.find(key);
         if (it != ctx->flash_attn_pipelines.end()) {
             pipeline  = it->second;
@@ -1799,7 +1801,7 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
         final_size = size + (4 - (size % 4));
     }
 
-    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
+    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->global_ctx->mutex);
 
     if (webgpu_ctx->global_ctx->get_tensor_staging_buf == nullptr || webgpu_ctx->global_ctx->get_tensor_staging_buf.GetSize() < final_size) {
         // Create a new staging buffer if it doesn't exist or is too small
