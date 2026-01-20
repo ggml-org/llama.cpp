@@ -99,11 +99,6 @@ jobs:
           Get-ChildItem -Path .\build\bin\Release\*.dll | Copy-Item -Destination .\upload\
           Copy-Item .\build\bin\Release\llama-server.exe .\upload\boxed-logic-engine.exe
 
-      - name: Verify artifacts
-        run: |
-          Write-Host "Files prepared for upload:"
-          Get-ChildItem -Path .\upload\ -Recurse | ForEach-Object { Write-Host $_.FullName }
-
       - name: Install Python and AWS CLI
         run: |
           python -m pip install --upgrade pip
