@@ -267,51 +267,6 @@ struct webgpu_command {
 #endif
 };
 
-<<<<<<< HEAD
-struct flash_attn_pipeline_key {
-    int      q_type;
-    int      kv_type;
-    int      dst_type;
-    uint32_t head_dim_qk;
-    uint32_t head_dim_v;
-    bool     kv_direct;
-    bool     has_mask;
-    bool     has_sinks;
-    bool     uses_logit_softcap;
-
-    bool operator==(const flash_attn_pipeline_key & other) const {
-        return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
-               head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
-               has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap;
-    }
-};
-
-// Same hash combine function as in boost
-template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
-    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
-struct flash_attn_pipeline_key_hash {
-    size_t operator()(const flash_attn_pipeline_key & key) const {
-        size_t seed = 0;
-        ggml_webgpu_hash_combine(seed, key.q_type);
-        ggml_webgpu_hash_combine(seed, key.kv_type);
-        ggml_webgpu_hash_combine(seed, key.dst_type);
-        ggml_webgpu_hash_combine(seed, key.head_dim_qk);
-        ggml_webgpu_hash_combine(seed, key.head_dim_v);
-        ggml_webgpu_hash_combine(seed, key.kv_direct);
-        ggml_webgpu_hash_combine(seed, key.has_mask);
-        ggml_webgpu_hash_combine(seed, key.has_sinks);
-        ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
-        return seed;
-    }
-};
-
-// Forward declaration
-struct webgpu_global_context;
-=======
->>>>>>> upstream/master
 // All the base objects needed to run operations on a WebGPU device
 struct webgpu_context_struct {
     // Points to global instances owned by ggml_backend_webgpu_reg_context
@@ -900,7 +855,7 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
     webgpu_pipeline pipeline;
     {
         // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->pad_pipelines.find(pipeline_key);
         if (it != ctx->pad_pipelines.end()) {
             pipeline = it->second;
@@ -982,7 +937,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
     webgpu_pipeline pipeline;
     // TODO: remove guard once pipeline caches are per-thread
     {
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->set_rows_pipelines.find(key);
         if (it != ctx->set_rows_pipelines.end()) {
             pipeline = it->second;
@@ -1294,7 +1249,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     webgpu_pipeline                         pipeline;
     // TODO: remove guard once pipeline caches are per-thread
     {
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->flash_attn_pipelines.find(key);
         if (it != ctx->flash_attn_pipelines.end()) {
             pipeline  = it->second;
@@ -1339,7 +1294,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     webgpu_pipeline pipeline;
     {
         // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->unary_pipelines.find(pipeline_key);
         if (it != ctx->unary_pipelines.end()) {
             pipeline = it->second;
@@ -1770,7 +1725,7 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
     webgpu_pipeline pipeline;
     {
         // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->argmax_pipelines.find(shader_lib_ctx.vec4);
         if (it != ctx->argmax_pipelines.end()) {
             pipeline = it->second;
@@ -1796,7 +1751,7 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
                                                                   ctx->limits.maxComputeWorkgroupStorageSize,
                                                               .order = order };
 
-    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
     webgpu_pipeline                       argsort_pipeline;
     auto                                  it = ctx->argsort_pipelines.find(order);
     if (it != ctx->argsort_pipelines.end()) {
@@ -1985,7 +1940,7 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
     webgpu_pipeline pipeline;
     // TODO: remove guard once pipeline caches are per-thread
     {
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->cumsum_pipelines.find(1);
         if (it != ctx->cumsum_pipelines.end()) {
             pipeline = it->second;
@@ -2030,7 +1985,7 @@ static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * s
     webgpu_pipeline pipeline;
     {
         // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->sum_rows_pipelines.find(1);
         if (it != ctx->sum_rows_pipelines.end()) {
             pipeline = it->second;
