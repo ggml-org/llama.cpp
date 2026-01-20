@@ -128,6 +128,7 @@ static size_t ggml_sycl_layout_bytes_for_dims(ggml_type   type,
                                               layout_mode layout,
                                               int         device);
 static size_t ggml_sycl_layout_bytes_coalesced_for_dims(ggml_type type, int64_t ncols, int64_t nrows);
+static int ggml_sycl_layout_priority(layout_mode mode);
 
 static constexpr size_t  k_reorder_guard_bytes   = 64;
 static constexpr uint8_t k_reorder_guard_pattern = 0xA5;
@@ -924,11 +925,19 @@ static void ggml_sycl_register_layout_choice(const ggml_sycl_cache_id & key_id,
         return;
     }
     if (it->second != layout) {
-        GGML_LOG_ERROR("[LAYOUT] choice mismatch for %s model=%llu name_hash=0x%llx device=%d cached=%s new=%s\n",
-                       name ? name : "unknown", (unsigned long long) key_id.model_id,
-                       (unsigned long long) key_id.name_hash, device, ggml_sycl_layout_mode_name(it->second),
-                       ggml_sycl_layout_mode_name(layout));
-        GGML_ASSERT(it->second == layout);
+        // When layouts conflict, keep the higher-priority one. This can happen when
+        // benchmarks or applications run multiple batch sizes without reloading the model.
+        // Priority order: XMX_GEMM_TILED > XMX_TILED > COALESCED > SOA > AOS
+        if (ggml_sycl_layout_priority(layout) > ggml_sycl_layout_priority(it->second)) {
+            GGML_SYCL_DEBUG("[LAYOUT] upgrading %s from %s to %s (higher priority)\n",
+                            name ? name : "unknown", ggml_sycl_layout_mode_name(it->second),
+                            ggml_sycl_layout_mode_name(layout));
+            it->second = layout;
+        } else if (g_ggml_sycl_debug) {
+            GGML_SYCL_DEBUG("[LAYOUT] keeping %s at %s (ignoring lower-priority %s)\n",
+                            name ? name : "unknown", ggml_sycl_layout_mode_name(it->second),
+                            ggml_sycl_layout_mode_name(layout));
+        }
     }
 }
 
