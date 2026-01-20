@@ -204,7 +204,7 @@ struct value_int_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const { return "Int." + as_string().str(); }
+    virtual std::string unique_hash() const override { return "Int." + as_string().str(); }
 };
 using value_int = std::shared_ptr<value_int_t>;
 
@@ -225,7 +225,7 @@ struct value_float_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const {
+    virtual std::string unique_hash() const override {
         if (std::trunc(val_flt) == val_flt) {
             return "Int." + std::to_string(as_int());
         }
@@ -253,7 +253,7 @@ struct value_string_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const { return type() + "." + as_string().str(); }
+    virtual std::string unique_hash() const override { return type() + "." + as_string().str(); }
     void mark_input() {
         val_str.mark_input();
     }
@@ -269,7 +269,7 @@ struct value_bool_t : public value_t {
     virtual string as_string() const override { return std::string(val_bool ? "True" : "False"); }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const { return "Int." + std::to_string(as_int()); }
+    virtual std::string unique_hash() const override { return "Int." + std::to_string(as_int()); }
 };
 using value_bool = std::shared_ptr<value_bool_t>;
 
@@ -536,6 +536,7 @@ struct value_kwarg_t : public value_t {
     virtual std::string type() const override { return "KwArg"; }
     virtual std::string as_repr() const override { return type(); }
     virtual bool is_hashable() const override { return true; }
+    virtual std::string unique_hash() const override { return type() + "." + key + ":" + val->as_repr(); }
 };
 using value_kwarg = std::shared_ptr<value_kwarg_t>;
 
