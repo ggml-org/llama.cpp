@@ -1149,6 +1149,18 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-layout-choice RUNTIME)
     add_test(NAME test-sycl-layout-choice COMMAND $<TARGET_FILE:test-sycl-layout-choice>)
 
+    # test-sycl-kernel-selection: Verifies unified kernel selection logic.
+    add_executable(test-sycl-kernel-selection test-sycl-kernel-selection.cpp)
+    target_link_libraries(test-sycl-kernel-selection PRIVATE ggml)
+    target_include_directories(test-sycl-kernel-selection PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-kernel-selection PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-kernel-selection PRIVATE "-fsycl")
+    install(TARGETS test-sycl-kernel-selection RUNTIME)
+    add_test(NAME test-sycl-kernel-selection COMMAND $<TARGET_FILE:test-sycl-kernel-selection>)
+
     # test-sycl-weight-key-stability: key should remain stable across repeated lookups.
     add_executable(test-sycl-weight-key-stability test-sycl-weight-key-stability.cpp)
     target_link_libraries(test-sycl-weight-key-stability PRIVATE ggml)
