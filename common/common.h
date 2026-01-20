@@ -284,6 +284,7 @@ struct common_params_diffusion {
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
+// only used by server
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_AUTO,            // Same as deepseek, using `message.reasoning_content`

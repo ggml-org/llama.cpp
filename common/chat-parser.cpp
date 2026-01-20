@@ -129,7 +129,7 @@ static void parse_json_tool_calls(
     }
 }
 
-common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax)
+common_chat_msg_parser::common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax)
     : input_(input), is_partial_(is_partial), syntax_(syntax)
 {
     result_.role = "assistant";
@@ -1611,7 +1611,7 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
     builder.finish();
 }
 
-common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & syntax) {
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
         syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
@@ -1635,7 +1635,7 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     return msg;
 }
 
-common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
+common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_parser_params & syntax) {
     if (parser.empty()) {
         throw std::runtime_error("Failed to parse due to missing parser definition.");
     }

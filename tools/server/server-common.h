@@ -274,6 +274,7 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
+// global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
     bool prefill_assistant;
