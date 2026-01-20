@@ -12,8 +12,9 @@
 
 #define APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV "APIR_LLAMA_CPP_GGML_LIBRARY_PATH"
 #define APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV  "APIR_LLAMA_CPP_GGML_LIBRARY_REG"
-#define APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV "APIR_LLAMA_CPP_GGML_LIBRARY_INIT"
 #define APIR_LLAMA_CPP_LOG_TO_FILE_ENV       "APIR_LLAMA_CPP_LOG_TO_FILE"
+
+#define GGML_DEFAULT_BACKEND_REG "ggml_backend_init"
 
 static void * backend_library_handle = NULL;
 static FILE * apir_logfile = NULL;
@@ -54,7 +55,6 @@ void apir_backend_deinit(uint32_t virgl_ctx_id) {
 
 #define APIR_GGML_LIBRARY_PATH_KEY "ggml.library.path"
 #define APIR_GGML_LIBRARY_REG_KEY "ggml.library.reg"
-#define APIR_GGML_LIBRARY_INIT_KEY "ggml.library.init"
 
 ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct virgl_apir_callbacks *virgl_cbs) {
     const char * dlsym_error;
@@ -70,10 +70,8 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
     }
 
     const char * library_name = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_PATH_KEY);
-    const char * library_reg  = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_REG_KEY);
-    const char * library_init = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_INIT_KEY);
-
-    GGML_LOG_INFO("%s: loading %s (%s|%s)\n", __func__, library_name, library_reg, library_init);
+    const char * virgl_library_reg = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_REG_KEY);
+    const char * library_reg = virgl_library_reg ? virgl_library_reg : GGML_DEFAULT_BACKEND_REG;
 
     if (!library_name) {
         GGML_LOG_ERROR("cannot open the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
@@ -104,22 +102,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
         return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
     }
 
-    if (!library_init) {
-        GGML_LOG_ERROR("cannot initialize the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV);
-
-        return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
-    }
-
-    void * ggml_backend_init_fct = dlsym(backend_library_handle, library_init);
-    dlsym_error                  = dlerror();
-    if (dlsym_error) {
-        GGML_LOG_ERROR("cannot find the GGML backend init symbol '%s' (from %s): %s\n", library_init,
-              APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV, dlsym_error);
-
-        return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
-    }
-
-    uint32_t ret = backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
+    uint32_t ret = backend_dispatch_initialize(ggml_backend_reg_fct);
 
     return (ApirLoadLibraryReturnCode) (APIR_LOAD_LIBRARY_INIT_BASE_INDEX + ret);
 }
