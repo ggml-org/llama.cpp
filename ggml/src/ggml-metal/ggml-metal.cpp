@@ -510,6 +510,20 @@ static enum ggml_status ggml_backend_metal_graph_compute(ggml_backend_t backend,
     return ggml_metal_graph_compute(ctx, cgraph);
 }
 
+static void ggml_backend_metal_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+    ggml_metal_event_t ev = (ggml_metal_event_t)event->context;
+
+    ggml_metal_event_record(ctx, ev);
+}
+
+static void ggml_backend_metal_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+    ggml_metal_event_t ev = (ggml_metal_event_t)event->context;
+
+    ggml_metal_event_wait(ctx, ev);
+}
+
 static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_metal_t ctx = (ggml_metal_t)backend->context;
 
@@ -536,12 +550,8 @@ static ggml_backend_i ggml_backend_metal_i = {
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_metal_graph_compute,
-
-    // the events API is needed only for multi-GPU setups, so likely no need to implement it for Metal
-    // in any case, these docs seem relevant if we ever decide to implement it:
-    // https://developer.apple.com/documentation/metal/mtlcommandbuffer#Synchronizing-Passes-with-Events
-    /* .event_record            = */ NULL,
-    /* .event_wait              = */ NULL,
+    /* .event_record            = */ ggml_backend_metal_event_record,
+    /* .event_wait              = */ ggml_backend_metal_event_wait,
     /* .graph_optimize          = */ ggml_backend_metal_graph_optimize,
 };
 
@@ -638,10 +648,10 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
     ggml_backend_metal_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
     props->caps = {
-        /* .async                 = */ true,
-        /* .host_buffer           = */ false,
-        /* .buffer_from_host_ptr  = */ true,
-        /* .events                = */ false,
+        /* .async                = */ true,
+        /* .host_buffer          = */ false,
+        /* .buffer_from_host_ptr = */ true,
+        /* .events               = */ true,
     };
 }
 
@@ -723,6 +733,38 @@ static bool ggml_backend_metal_device_offload_op(ggml_backend_dev_t dev, const g
             get_op_batch_size(op) >= ggml_metal_device_get_props(ctx_dev)->op_offload_min_batch_size;
 }
 
+static ggml_backend_event_t ggml_backend_metal_device_event_new(ggml_backend_dev_t dev) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+
+    ggml_metal_event_t event = ggml_metal_device_event_new(ctx_dev);
+    GGML_ASSERT(event);
+
+    ggml_backend_event_t ev = new ggml_backend_event {
+        /* .device  = */ dev,
+        /* .context = */ event,
+    };
+
+    return ev;
+}
+
+static void ggml_backend_metal_device_event_free(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+
+    ggml_metal_event_t ev = (ggml_metal_event_t)event->context;
+
+    ggml_metal_device_event_free(ctx_dev, ev);
+
+    delete event;
+}
+
+static void ggml_backend_metal_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
+
+    ggml_metal_event_t evt = (ggml_metal_event_t)event->context;
+
+    ggml_metal_device_event_synchronize(ctx_dev, evt);
+}
+
 static ggml_backend_device_i ggml_backend_metal_device_i = {
     /* .get_name             = */ ggml_backend_metal_device_get_name,
     /* .get_description      = */ ggml_backend_metal_device_get_description,
@@ -736,9 +778,9 @@ static ggml_backend_device_i ggml_backend_metal_device_i = {
     /* .supports_op          = */ ggml_backend_metal_device_supports_op,
     /* .supports_buft        = */ ggml_backend_metal_device_supports_buft,
     /* .offload_op           = */ ggml_backend_metal_device_offload_op,
-    /* .event_new            = */ NULL,
-    /* .event_free           = */ NULL,
-    /* .event_synchronize    = */ NULL,
+    /* .event_new            = */ ggml_backend_metal_device_event_new,
+    /* .event_free           = */ ggml_backend_metal_device_event_free,
+    /* .event_synchronize    = */ ggml_backend_metal_device_event_synchronize,
 };
 
 // backend registry
