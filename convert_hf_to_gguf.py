@@ -2979,7 +2979,11 @@ class Llama4VisionModel(MmprojModel):
         return []
 
 
-@ModelBase.register("Mistral3ForConditionalGeneration")
+@ModelBase.register(
+    "Mistral3ForConditionalGeneration",
+    "Ministral3ForCausalLM",
+)
+
 class Mistral3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.MISTRAL3
 
