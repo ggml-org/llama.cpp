@@ -40,21 +40,21 @@
 struct ggml_backend_sycl_context;
 
 struct ggml_sycl_fa_graph_snapshot {
-    const void * q_ptr = nullptr;
-    const void * k_ptr = nullptr;
-    const void * v_ptr = nullptr;
-    const void * mask_ptr = nullptr;
-    const void * sinks_ptr = nullptr;
-    const void * dst_ptr = nullptr;
-    const void * block_table = nullptr;
-    const void * seq_lens = nullptr;
-    int64_t      q_ne[GGML_MAX_DIMS] = { 0 };
-    int64_t      k_ne[GGML_MAX_DIMS] = { 0 };
+    const void * q_ptr                  = nullptr;
+    const void * k_ptr                  = nullptr;
+    const void * v_ptr                  = nullptr;
+    const void * mask_ptr               = nullptr;
+    const void * sinks_ptr              = nullptr;
+    const void * dst_ptr                = nullptr;
+    const void * block_table            = nullptr;
+    const void * seq_lens               = nullptr;
+    int64_t      q_ne[GGML_MAX_DIMS]    = { 0 };
+    int64_t      k_ne[GGML_MAX_DIMS]    = { 0 };
     int64_t      mask_ne[GGML_MAX_DIMS] = { 0 };
-    int32_t      use_paged_layout = 0;
-    int32_t      use_paged_attn = 0;
-    int32_t      block_size = 0;
-    int32_t      max_blocks_per_seq = 0;
+    int32_t      use_paged_layout       = 0;
+    int32_t      use_paged_attn         = 0;
+    int32_t      block_size             = 0;
+    int32_t      max_blocks_per_seq     = 0;
 };
 
 bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor * dst, const char * reason);
@@ -109,26 +109,25 @@ enum class ggml_sycl_layout_ptr_event : uint8_t {
 void ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event event);
 void ggml_sycl_layout_ptr_stats_dump();
 
-extern int g_ggml_sycl_debug;
-extern int g_ggml_sycl_debug_sync;
-extern int g_ggml_sycl_tp_debug;  // Tensor Parallelism debug output
-extern int g_ggml_sycl_prioritize_dmmv;
+extern int               g_ggml_sycl_debug;
+extern int               g_ggml_sycl_debug_sync;
+extern int               g_ggml_sycl_tp_debug;  // Tensor Parallelism debug output
+extern int               g_ggml_sycl_prioritize_dmmv;
 extern std::atomic<bool> g_ggml_sycl_debug_forced_off;
 
 // Track when SYCL graph recording is active
 extern thread_local bool g_ggml_sycl_graph_recording;
-extern std::atomic<int> g_ggml_sycl_graph_recording_depth;
+extern std::atomic<int>  g_ggml_sycl_graph_recording_depth;
 
 inline bool ggml_sycl_graph_recording_active() {
-    return g_ggml_sycl_graph_recording ||
-           g_ggml_sycl_graph_recording_depth.load(std::memory_order_acquire) > 0;
+    return g_ggml_sycl_graph_recording || g_ggml_sycl_graph_recording_depth.load(std::memory_order_acquire) > 0;
 }
 
 // Helper to check if we should add an event dependency.
 // During graph recording, we MUST always add depends_on() to capture the dependency edge.
 // Event status queries are unreliable during recording (events haven't executed yet).
 // Outside graph recording, we only add the dependency if the event is not complete.
-inline bool ggml_sycl_should_add_dependency(const sycl::event& dep_event) {
+inline bool ggml_sycl_should_add_dependency(const sycl::event & dep_event) {
     if (ggml_sycl_graph_recording_active()) {
         // During graph recording, always add dependency to ensure correct graph structure
         return true;
@@ -143,16 +142,14 @@ extern std::atomic<bool> g_tiered_enabled;
 
 // Get cached tensor pointer for tiered dispatch
 // Returns nullptr if not in tiered mode or tensor not cached
-void * get_cached_tensor_ptr(const char * tensor_name,
-                             ggml_sycl::memory_tier * tier_out,
-                             bool * found_in_inventory);
+void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out, bool * found_in_inventory);
 
 // Resolve cached tensor pointer and sync extra state with tiered cache location.
-void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *     tensor,
-                                           int                     device,
+void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
+                                           int                      device,
                                            ggml_sycl::memory_tier * tier_out,
-                                           bool *                  found_in_inventory,
-                                           sycl::usm::alloc *      alloc_out);
+                                           bool *                   found_in_inventory,
+                                           sycl::usm::alloc *       alloc_out);
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
@@ -163,11 +160,10 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *     tensor,
 #    define UNLIKELY(expr) (expr)
 #endif
 
-#define GGML_SYCL_DEBUG(...)                                                                     \
-    do {                                                                                         \
-        if (UNLIKELY(!g_ggml_sycl_debug_forced_off.load(std::memory_order_relaxed) &&            \
-                     g_ggml_sycl_debug))                                                         \
-            fprintf(stderr, __VA_ARGS__);                                                        \
+#define GGML_SYCL_DEBUG(...)                                                                              \
+    do {                                                                                                  \
+        if (UNLIKELY(!g_ggml_sycl_debug_forced_off.load(std::memory_order_relaxed) && g_ggml_sycl_debug)) \
+            fprintf(stderr, __VA_ARGS__);                                                                 \
     } while (0)
 
 // Tensor Parallelism debug output - controlled by GGML_SYCL_TP_DEBUG env var
@@ -406,11 +402,11 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 
 //////////////////////
 enum class reorder_mode : uint8_t {
-    NONE            = 0,  // Original AoS layout (Array of Structures)
-    SOA             = 1,  // SoA layout: all qs bytes contiguous, then all d values
-    COALESCED       = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
-    XMX_COALESCED   = 3,  // XMX-optimized layout for MoE GEMM (K_TILE=32 aligned rows)
-    XMX_GEMM_TILED  = 4,  // XMX GEMM tiled layout for quant weights
+    NONE           = 0,  // Original AoS layout (Array of Structures)
+    SOA            = 1,  // SoA layout: all qs bytes contiguous, then all d values
+    COALESCED      = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
+    XMX_COALESCED  = 3,  // XMX-optimized layout for MoE GEMM (K_TILE=32 aligned rows)
+    XMX_GEMM_TILED = 4,  // XMX GEMM tiled layout for quant weights
 };
 
 // =============================================================================
@@ -567,14 +563,14 @@ inline tensor_usage infer_tensor_usage(const char * name) {
     }
 
     // MoE intermediate tensors (probs, indices, expert selection)
-    if (strstr(name, "ffn_moe_probs") || strstr(name, "ffn_moe_") ||
-        strstr(name, "expert_ids") || strstr(name, "expert_weights")) {
+    if (strstr(name, "ffn_moe_probs") || strstr(name, "ffn_moe_") || strstr(name, "expert_ids") ||
+        strstr(name, "expert_weights")) {
         return tensor_usage::MOE_INTERMEDIATE;
     }
 
     // Attention weights
-    if (strstr(name, "attn_q") || strstr(name, "attn_k") || strstr(name, "attn_v") ||
-        strstr(name, "attn_output") || strstr(name, "attn_sinks")) {
+    if (strstr(name, "attn_q") || strstr(name, "attn_k") || strstr(name, "attn_v") || strstr(name, "attn_output") ||
+        strstr(name, "attn_sinks")) {
         return tensor_usage::ATTENTION_WEIGHT;
     }
 
@@ -597,26 +593,25 @@ inline tensor_usage infer_tensor_usage(const char * name) {
 }
 
 // Resolve usage from registered metadata (if available), else fall back to name inference.
-tensor_usage    ggml_sycl_get_tensor_usage(const ggml_tensor * tensor);
-layout_mode     ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device);
-layout_mode     ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int device, bool host_weights);
-bool            ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int device, layout_mode * out);
-void *          ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, layout_mode target);
-void            ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, layout_mode target,
-                                                const char * context);
-bool            ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
-                                               const ggml_tensor *          src0,
-                                               const ggml_tensor *          ids,
-                                               layout_mode                  layout,
-                                               sycl::event *                out_event,
-                                               bool                         allow_all_experts = false,
-                                               const std::vector<int32_t> * ids_host_override = nullptr,
-                                               bool                         skip_device_copy  = false,
-                                               bool                         force_cache_aos   = false);
-bool            ggml_sycl_moe_prepare_compact_list(ggml_backend_sycl_context & ctx,
-                                                   const ggml_tensor *         src0,
-                                                   int64_t                     total_batches,
-                                                   bool                        allow_alloc);
+tensor_usage ggml_sycl_get_tensor_usage(const ggml_tensor * tensor);
+layout_mode  ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device);
+layout_mode  ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int device, bool host_weights);
+bool         ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int device, layout_mode * out);
+void *       ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, layout_mode target);
+void ggml_sycl_enforce_layout_choice(const ggml_tensor * tensor, int device, layout_mode target, const char * context);
+bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
+                                    const ggml_tensor *          src0,
+                                    const ggml_tensor *          ids,
+                                    layout_mode                  layout,
+                                    sycl::event *                out_event,
+                                    bool                         allow_all_experts = false,
+                                    const std::vector<int32_t> * ids_host_override = nullptr,
+                                    bool                         skip_device_copy  = false,
+                                    bool                         force_cache_aos   = false);
+bool ggml_sycl_moe_prepare_compact_list(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor *         src0,
+                                        int64_t                     total_batches,
+                                        bool                        allow_alloc);
 const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx,
                                                  const ggml_tensor *         ids,
                                                  sycl::event *               out_event,
@@ -1370,7 +1365,7 @@ struct ggml_tensor_extra_gpu {
 
     // Unified layout descriptor (new system - coexists with optimize_feature during migration)
     tensor_layout_info layout;
-    bool               layout_dirty = false;  // Weight data overwritten; layout must be re-materialized
+    bool               layout_dirty = false;                // Weight data overwritten; layout must be re-materialized
 
     tp_layer_type tp_type        = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
     bool          tp_type_cached = false;                   // Whether tp_type has been computed
@@ -1510,7 +1505,7 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
     // Only host(0) and shared(2) are device-accessible without staging.
     if (tensor->data != nullptr) {
         // Get context for USM type checking - use TP context if available, otherwise device default
-        sycl::context ctx_storage;  // Local storage to avoid taking address of temporary
+        sycl::context   ctx_storage;  // Local storage to avoid taking address of temporary
         sycl::context * ctx = nullptr;
         if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
             ctx = ggml_sycl_get_tp_context();
@@ -1519,7 +1514,7 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
             // Use device's default queue context for non-TP mode
             try {
                 ctx_storage = dpct::dev_mgr::instance().get_device(device).default_queue().get_context();
-                ctx = &ctx_storage;
+                ctx         = &ctx_storage;
             } catch (...) {
                 ctx = nullptr;
             }
@@ -1530,9 +1525,8 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 
             // DEVICE memory - directly accessible, no staging needed
             if (ptr_type == sycl::usm::alloc::device) {
-                GGML_SYCL_DEBUG(
-                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
-                    tensor->name, device, tensor->data);
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
+                                tensor->name, device, tensor->data);
                 return tensor->data;
             }
 
@@ -1545,10 +1539,10 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
             // Debug: trace ALL non-device tensor access during warmup and graph recording
             static bool trace_nondevice = (std::getenv("GGML_SYCL_TRACE_NONDEVICE") != nullptr);
             if (trace_nondevice) {
-                static std::mutex trace_mtx;
+                static std::mutex           trace_mtx;
                 std::lock_guard<std::mutex> lk(trace_mtx);
-                fprintf(stderr, "[TRACE-NONDEV] tensor=%s data=%p nbytes=%zu type=%d graph=%d\n",
-                        tensor->name, tensor->data, ggml_nbytes(tensor), (int)ptr_type, graph_active ? 1 : 0);
+                fprintf(stderr, "[TRACE-NONDEV] tensor=%s data=%p nbytes=%zu type=%d graph=%d\n", tensor->name,
+                        tensor->data, ggml_nbytes(tensor), (int) ptr_type, graph_active ? 1 : 0);
             }
 
             // Try to get from unified cache for ALL tensor types (weights AND non-weights like MoE ids)
@@ -1560,21 +1554,19 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
                         // DEBUG: Log full cache key during lookup
                         if (graph_active) {
                             // Note: can't check is_weight here due to declaration order in header
-                            GGML_SYCL_DEBUG("[CACHE-KEY-LOOKUP] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] aux_id=%llu data=%p buffer=%p\n",
-                                tensor->name,
-                                (unsigned long long)cache_key.name_hash,
-                                (int)cache_key.type,
-                                cache_key.nbytes,
-                                (long long)cache_key.ne[0], (long long)cache_key.ne[1], (long long)cache_key.ne[2], (long long)cache_key.ne[3],
-                                (unsigned long long)cache_key.aux_id,
-                                tensor->data,
-                                (void*)tensor->buffer);
+                            GGML_SYCL_DEBUG(
+                                "[CACHE-KEY-LOOKUP] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] "
+                                "aux_id=%llu data=%p buffer=%p\n",
+                                tensor->name, (unsigned long long) cache_key.name_hash, (int) cache_key.type,
+                                cache_key.nbytes, (long long) cache_key.ne[0], (long long) cache_key.ne[1],
+                                (long long) cache_key.ne[2], (long long) cache_key.ne[3],
+                                (unsigned long long) cache_key.aux_id, tensor->data, (void *) tensor->buffer);
                         }
 
                         // During graph recording, only check if already cached (no waiting)
                         // Outside graph recording, use get_or_wait to block for IN_PROGRESS entries
-                        void * cached = graph_active ? cache->get(cache_key, GGML_LAYOUT_AOS)
-                                                     : cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
+                        void * cached = graph_active ? cache->get(cache_key, GGML_LAYOUT_AOS) :
+                                                       cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
                         if (cached) {
                             GGML_SYCL_DEBUG(
                                 "ggml_sycl_get_data_ptr: tensor=%s, device=%d, cache hit=%p (type=%d, graph=%d)\n",
@@ -1586,10 +1578,12 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
                         // This handles tensor name aliasing where same buffer has multiple names
                         // (e.g., "norm-1" staged but accessed as "attn_norm-1").
                         if (graph_active) {
-                            void * alias_ptr = cache->get_by_data_ptr(tensor->data, ggml_nbytes(tensor), GGML_LAYOUT_AOS);
+                            void * alias_ptr =
+                                cache->get_by_data_ptr(tensor->data, ggml_nbytes(tensor), GGML_LAYOUT_AOS);
                             if (alias_ptr) {
                                 GGML_SYCL_DEBUG(
-                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, alias cache hit=%p (type=%d, graph=%d)\n",
+                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, alias cache hit=%p (type=%d, "
+                                    "graph=%d)\n",
                                     tensor->name, device, alias_ptr, (int) ptr_type, graph_active);
                                 return alias_ptr;
                             }
@@ -1597,47 +1591,46 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 
                         // Debug: log cache miss with key details ALWAYS during graph mode
                         if (graph_active) {
-                            GGML_SYCL_DEBUG("[CACHE-MISS-GRAPH] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] aux_id=%llu data=%p\n",
-                                tensor->name,
-                                (unsigned long long)cache_key.name_hash,
-                                (int)cache_key.type,
-                                cache_key.nbytes,
-                                (long long)cache_key.ne[0], (long long)cache_key.ne[1], (long long)cache_key.ne[2], (long long)cache_key.ne[3],
-                                (unsigned long long)cache_key.aux_id,
-                                tensor->data);
+                            GGML_SYCL_DEBUG(
+                                "[CACHE-MISS-GRAPH] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] "
+                                "aux_id=%llu data=%p\n",
+                                tensor->name, (unsigned long long) cache_key.name_hash, (int) cache_key.type,
+                                cache_key.nbytes, (long long) cache_key.ne[0], (long long) cache_key.ne[1],
+                                (long long) cache_key.ne[2], (long long) cache_key.ne[3],
+                                (unsigned long long) cache_key.aux_id, tensor->data);
                         }
 
                         // Debug: log cache miss with key details
                         if (trace_nondevice) {
-                            static std::mutex trace_mtx;
+                            static std::mutex           trace_mtx;
                             std::lock_guard<std::mutex> lk(trace_mtx);
                             fprintf(stderr, "[TRACE-NONDEV] CACHE MISS: tensor=%s aux_id=%llu nbytes=%zu graph=%d\n",
-                                    tensor->name, (unsigned long long)cache_key.aux_id, cache_key.nbytes, graph_active ? 1 : 0);
+                                    tensor->name, (unsigned long long) cache_key.aux_id, cache_key.nbytes,
+                                    graph_active ? 1 : 0);
                         }
 
                         // Not in cache - upload it now ONLY if not in graph recording mode
                         // Graph mode uses .wait() internally which fails during recording
                         if (!graph_active) {
-                            size_t nbytes = ggml_nbytes(tensor);
+                            size_t nbytes   = ggml_nbytes(tensor);
                             void * uploaded = cache->ensure_cached(
-                                cache_key,
-                                tensor->data,
-                                nbytes,
+                                cache_key, tensor->data, nbytes,
                                 ggml_sycl::cache_entry_type::DENSE_WEIGHT,  // Use DENSE_WEIGHT for simple copy
-                                -1,   // layer_id
-                                -1,   // expert_id
+                                -1,                                         // layer_id
+                                -1,                                         // expert_id
                                 GGML_LAYOUT_AOS,
-                                false // validate_content
+                                false                                       // validate_content
                             );
                             if (uploaded) {
                                 GGML_SYCL_DEBUG(
-                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, uploaded to cache=%p (%zu bytes, type=%d)\n",
+                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, uploaded to cache=%p (%zu bytes, "
+                                    "type=%d)\n",
                                     tensor->name, device, uploaded, nbytes, (int) ptr_type);
                                 if (trace_nondevice) {
-                                    static std::mutex trace_mtx;
+                                    static std::mutex           trace_mtx;
                                     std::lock_guard<std::mutex> lk(trace_mtx);
                                     fprintf(stderr, "[TRACE-NONDEV] UPLOADED: tensor=%s aux_id=%llu -> %p\n",
-                                            tensor->name, (unsigned long long)cache_key.aux_id, uploaded);
+                                            tensor->name, (unsigned long long) cache_key.aux_id, uploaded);
                                 }
                                 return uploaded;
                             }
@@ -1652,13 +1645,15 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
                 size_t nbytes = ggml_nbytes(tensor);
                 void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
                 if (staged != nullptr) {
-                    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
-                                    tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
+                    GGML_SYCL_DEBUG(
+                        "ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, "
+                        "type=%d)\n",
+                        tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
                     if (trace_nondevice) {
-                        static std::mutex trace_mtx;
+                        static std::mutex           trace_mtx;
                         std::lock_guard<std::mutex> lk(trace_mtx);
-                        fprintf(stderr, "[TRACE-NONDEV] STAGED: tensor=%s data=%p -> %p\n",
-                                tensor->name, tensor->data, staged);
+                        fprintf(stderr, "[TRACE-NONDEV] STAGED: tensor=%s data=%p -> %p\n", tensor->name, tensor->data,
+                                staged);
                     }
                     return staged;
                 }
@@ -1667,11 +1662,15 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
             // During graph recording, we cannot upload/stage - log error and return mmap pointer
             // This will likely cause DEVICE_LOST, but at least we don't crash with .wait() error
             if (graph_active) {
-                GGML_LOG_ERROR("[SYCL] tensor=%s (data=%p, nbytes=%zu, type=%d) requires staging but graph recording is active - cannot upload\n",
-                               tensor->name, tensor->data, ggml_nbytes(tensor), (int)ptr_type);
+                GGML_LOG_ERROR(
+                    "[SYCL] tensor=%s (data=%p, nbytes=%zu, type=%d) requires staging but graph recording is active - "
+                    "cannot upload\n",
+                    tensor->name, tensor->data, ggml_nbytes(tensor), (int) ptr_type);
             }
-            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d, graph=%d), using tensor->data=%p\n",
-                            tensor->name, device, (int) ptr_type, graph_active, tensor->data);
+            GGML_SYCL_DEBUG(
+                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d, graph=%d), "
+                "using tensor->data=%p\n",
+                tensor->name, device, (int) ptr_type, graph_active, tensor->data);
         }
     }
 
@@ -1719,17 +1718,21 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
 
     layout_mode target = GGML_LAYOUT_AOS;
     if (ggml_sycl_tensor_is_weight(tensor)) {
-        const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
-        target                   = layout_policy::get_with_override(tensor->type, usage, device);
-        ggml_sycl_enforce_layout_choice(tensor, device, target, "ggml_sycl_get_layout_ptr");
+        // Use get_layout_choice_for_tensor which has fallback registration logic.
+        // This handles weight tensors that may not have been visited during finalize_layouts,
+        // such as norm scale weights accessed via fused operations (RMS_NORM+MUL).
+        if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &target)) {
+            // If no layout choice can be determined, fall back to AOS.
+            target = GGML_LAYOUT_AOS;
+        }
     }
 
-    const bool host_weights   = ggml_sycl_tensor_is_weight(tensor) && tensor->buffer &&
-                                ggml_backend_buffer_is_host(tensor->buffer);
-    const bool device_weights = ggml_sycl_tensor_is_weight(tensor) && tensor->buffer &&
-                                ggml_backend_buffer_is_sycl(tensor->buffer);
-    const bool cache_weights  = ggml_sycl::unified_cache_enabled() && (host_weights ||
-                                                                       (device_weights && target != GGML_LAYOUT_AOS));
+    const bool host_weights =
+        ggml_sycl_tensor_is_weight(tensor) && tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+    const bool device_weights =
+        ggml_sycl_tensor_is_weight(tensor) && tensor->buffer && ggml_backend_buffer_is_sycl(tensor->buffer);
+    const bool cache_weights =
+        ggml_sycl::unified_cache_enabled() && (host_weights || (device_weights && target != GGML_LAYOUT_AOS));
     if (cache_weights) {
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
         if (cached) {
@@ -1769,7 +1772,7 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
         ggml_sycl::unified_cache_enabled()) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
             ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-            layout_cached          = cache_key.valid && cache->is_cached(cache_key, layout->mode);
+            layout_cached                = cache_key.valid && cache->is_cached(cache_key, layout->mode);
         }
     }
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
@@ -1822,7 +1825,23 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         if (resolved != target) {
             return nullptr;
         }
-        ggml_sycl_enforce_layout_choice(tensor, device, target, "ggml_sycl_get_layout_ptr_for");
+        // Ensure layout choice is registered (with fallback for weights not visited during finalization).
+        // This handles weight tensors accessed via fused operations.
+        layout_mode registered_layout = GGML_LAYOUT_AOS;
+        if (!ggml_sycl_get_layout_choice_for_tensor(tensor, device, &registered_layout)) {
+            // Could not determine layout - treat as unavailable
+            if (out_source) {
+                *out_source = "no_layout_choice";
+            }
+            return nullptr;
+        }
+        // Verify the registered layout matches the requested target
+        if (registered_layout != target) {
+            if (out_source) {
+                *out_source = "layout_mismatch";
+            }
+            return nullptr;
+        }
     }
 
     const ggml_tensor_layout * layout        = ggml_sycl_get_layout_info(tensor);
@@ -1831,7 +1850,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         ggml_sycl::unified_cache_enabled()) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
             ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-            layout_cached          = cache_key.valid && cache->is_cached(cache_key, layout->mode);
+            layout_cached                = cache_key.valid && cache->is_cached(cache_key, layout->mode);
         }
     }
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
@@ -1853,12 +1872,12 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
         }
     }
 
-    const bool host_weights   = ggml_sycl_tensor_is_weight(tensor) && tensor->buffer &&
-                                ggml_backend_buffer_is_host(tensor->buffer);
-    const bool device_weights = ggml_sycl_tensor_is_weight(tensor) && tensor->buffer &&
-                                ggml_backend_buffer_is_sycl(tensor->buffer);
-    const bool cache_weights  = ggml_sycl::unified_cache_enabled() && (host_weights ||
-                                                                       (device_weights && target != GGML_LAYOUT_AOS));
+    const bool host_weights =
+        ggml_sycl_tensor_is_weight(tensor) && tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+    const bool device_weights =
+        ggml_sycl_tensor_is_weight(tensor) && tensor->buffer && ggml_backend_buffer_is_sycl(tensor->buffer);
+    const bool cache_weights =
+        ggml_sycl::unified_cache_enabled() && (host_weights || (device_weights && target != GGML_LAYOUT_AOS));
 
     if (cache_weights) {
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
@@ -1917,8 +1936,8 @@ struct ggml_backend_sycl_context {
     struct moe_ids_cache_entry {
         uint64_t             hash = 0;
         std::vector<int32_t> host_ids;
-        void *               device_ids   = nullptr;
-        size_t               device_bytes = 0;
+        void *               device_ids    = nullptr;
+        size_t               device_bytes  = 0;
         void *               staging_ids   = nullptr;  // Pinned host staging for non-USM sources
         size_t               staging_bytes = 0;
     };
@@ -1972,7 +1991,7 @@ struct ggml_backend_sycl_context {
 
     struct dnnl_scratchpad_entry {
         std::vector<std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> buffers;
-        ggml_sycl_pool_alloc<uint8_t> *                            current = nullptr;
+        ggml_sycl_pool_alloc<uint8_t> *                             current = nullptr;
     };
 
     dnnl::stream stream_dnnl(int device, int _stream) {
@@ -1997,7 +2016,7 @@ struct ggml_backend_sycl_context {
 
     dnnl::stream stream_dnnl(sycl::queue * qptr) {
         std::lock_guard<std::mutex> lock(dnnl_mutex);
-        auto it = stream_map.find(qptr);
+        auto                        it = stream_map.find(qptr);
         if (it == stream_map.end()) {
             auto eng         = engine_dnnl_unlocked(qptr);
             auto stream      = dnnl::sycl_interop::make_stream(eng, *qptr);
@@ -2018,7 +2037,7 @@ struct ggml_backend_sycl_context {
         if (scratchpad_size == 0) {
             return dnnl::memory();
         }
-        auto & entry           = scratchpad_map[q];
+        auto & entry = scratchpad_map[q];
 
         if (entry.current == nullptr || scratchpad_size > entry.current->actual_size) {
             auto buffer = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
@@ -2335,7 +2354,7 @@ struct ggml_backend_sycl_context {
     ggml_sycl_pool & host_pool() { return host_pool(device); }
 
     // Flag to disable graphs when weight streaming is active
-    bool                                                   weight_streaming_graphs_disabled = false;
+    bool                                                         weight_streaming_graphs_disabled = false;
     // Track graph-pinned cache entries (cache_id + layout) for unpinning.
     std::vector<std::pair<ggml_sycl_cache_id, ggml_layout_mode>> graph_pinned_entries;
 
@@ -2349,6 +2368,7 @@ struct ggml_backend_sycl_context {
         const void * block_table = nullptr;
         const void * seq_lens    = nullptr;
     };
+
     std::vector<fa_graph_ptr_snapshot> fa_graph_ptrs;
     bool                               fa_graph_ptrs_valid     = false;
     bool                               fa_graph_ptrs_recording = false;
@@ -2564,17 +2584,17 @@ inline void debug_check_tensor_ptr(const ggml_tensor * tensor, const char * tag)
         return;
     }
 
-    const size_t alloc = ggml_backend_buffer_get_alloc_size(tensor->buffer, tensor);
-    char * begin = static_cast<char *>(base);
-    char * end = begin + size;
-    char * data = static_cast<char *>(tensor->data);
-    const bool in_range = (data >= begin) && (data + alloc <= end);
+    const size_t alloc    = ggml_backend_buffer_get_alloc_size(tensor->buffer, tensor);
+    char *       begin    = static_cast<char *>(base);
+    char *       end      = begin + size;
+    char *       data     = static_cast<char *>(tensor->data);
+    const bool   in_range = (data >= begin) && (data + alloc <= end);
     if (!in_range) {
-        GGML_LOG_ERROR("[SYCL][PTR] %s tensor=%s data=%p alloc=%zu base=%p size=%zu end=%p\n",
-                       tag, tensor->name, tensor->data, alloc, base, size, end);
+        GGML_LOG_ERROR("[SYCL][PTR] %s tensor=%s data=%p alloc=%zu base=%p size=%zu end=%p\n", tag, tensor->name,
+                       tensor->data, alloc, base, size, end);
     } else if (g_ggml_sycl_debug >= 2) {
-        GGML_SYCL_DEBUG("[SYCL][PTR] %s tensor=%s data=%p alloc=%zu base=%p size=%zu\n",
-                        tag, tensor->name, tensor->data, alloc, base, size);
+        GGML_SYCL_DEBUG("[SYCL][PTR] %s tensor=%s data=%p alloc=%zu base=%p size=%zu\n", tag, tensor->name,
+                        tensor->data, alloc, base, size);
     }
 }
 
