@@ -90,6 +90,10 @@ for ncols in [8, 16, 32, 64]:
                 head_size_v = head_size_kq if head_size_kq != 576 else 512
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))
 
+# Extra case for Deepseek with gqa_ratio % 4 == 0 (but not % 16)
+with open("fattn-mma-f16-instance-ncols1_4-ncols2_4.cu", "a") as f:
+    f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=4, ncols2=4, head_size_kq=576, head_size_v=512))
+
 for type in TYPES_MMQ:
     with open(f"mmq-instance-{get_short_name(type)}.cu", "w") as f:
         f.write(SOURCE_MMQ.format(type=type))
