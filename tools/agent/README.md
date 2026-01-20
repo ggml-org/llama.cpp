@@ -33,7 +33,7 @@ cmake -B build
 cmake --build build --target llama-agent
 
 # Run (downloads model automatically)
-./build/bin/llama-agent -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M
+./build/bin/llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
 
 # Or with a local model
 ./build/bin/llama-agent -m model.gguf
@@ -48,7 +48,7 @@ cmake -B build -DLLAMA_HTTPLIB=ON
 cmake --build build --target llama-agent-server
 
 # Run API server
-./build/bin/llama-agent-server -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M --port 8081
+./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M --port 8081
 ```
 
 </details>
@@ -65,7 +65,7 @@ echo "export PATH=\"\$PATH:$(pwd)/build/bin\"" >> ~/.bashrc
 
 # Open a new terminal, then run from anywhere
 cd /path/to/your/project
-llama-agent -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M
+llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
 ```
 
 </details>
@@ -76,7 +76,7 @@ llama-agent -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M
 
 | Model | Command |
 |-------|---------|
-| Nemotron-3-Nano 30B | `-hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M` |
+| GLM-4.7-Flash | `-hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M` |
 
 ## Available Tools
 
@@ -424,7 +424,7 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 # Build & run
 cmake -B build -DLLAMA_HTTPLIB=ON
 cmake --build build --target llama-agent-server
-./build/bin/llama-agent-server -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M --port 8081
+./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M --port 8081
 ```
 
 ### Basic Usage
