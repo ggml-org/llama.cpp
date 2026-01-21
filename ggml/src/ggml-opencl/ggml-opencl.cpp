@@ -4171,36 +4171,40 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         cl_buffer_region region;
 
         // Subbuffer for ql
-        region.origin = extra_orig->offset + tensor->view_offs + offset;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
         region.size = size_ql;
         extra->ql = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
+        auto previous_origin = region.origin;
 
         // Subbuffer for qh
-        region.origin = extra_orig->offset + tensor->view_offs + offset + size_ql;
+        region.origin = align_to(previous_origin + size_ql, backend_ctx->alignment);
         region.size = size_qh;
         extra->qh = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
+        previous_origin = region.origin;
 
         // Subbuffer for scales
-        region.origin = extra_orig->offset + tensor->view_offs + offset + size_ql + size_qh;
+        region.origin = align_to(previous_origin + size_qh, backend_ctx->alignment);
         region.size = size_s;
         extra->s = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
+        previous_origin = region.origin;
 
         // Create subbuffer for d.
-        region.origin = extra_orig->offset + tensor->view_offs + offset + size_ql + size_qh + size_s;
+        region.origin = align_to(previous_origin + size_s, backend_ctx->alignment);
         region.size = size_d;
         extra->d = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
+        previous_origin = region.origin;
 
         // Flatten the weights
         cl_kernel kernel = backend_ctx->kernel_convert_block_q6_K;
