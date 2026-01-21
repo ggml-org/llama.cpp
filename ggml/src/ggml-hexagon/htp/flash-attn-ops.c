@@ -318,20 +318,21 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             uint32_t ic = 0;
 
             // Process in blocks of 32 (VLEN_FP32)
+            float __attribute__((aligned(VLEN))) scores_x4[FLASH_ATTN_BLOCK_SIZE];
+            float m_block = 0;
             for (; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32) {
                 // 1. Compute scores
-                float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
                 for (int j = 0; j < VLEN_FP32; ++j) {
                     const uint32_t cur_ic = ic + j;
                     const uint8_t * k_ptr = k_base + cur_ic * size_k_row_padded;
                     if (q->type == HTP_TYPE_F32) {
-                        hvx_dot_f32_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f32_f16_aa(&scores_x4[cur_ic], q_ptr_vtcm, k_ptr, DK, scale);
                     } else {
-                        hvx_dot_f16_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f16_f16_aa(&scores_x4[cur_ic], q_ptr_vtcm, k_ptr, DK, scale);
                     }
                 }
 
-                HVX_Vector scores = *(HVX_Vector *) scores_arr;
+                HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic];
 
                 // 2. Softcap
                 if (logit_softcap != 0.0f) {
@@ -356,10 +357,14 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     scores = Q6_Vsf_equals_Vqf32(scores);
                 }
 
-                // 4. Online Softmax Update
+                // 4. Online Softmax Update - part1: find max
                 HVX_Vector v_max = hvx_vec_reduce_max_f32(scores);
-                float m_block = hvx_vec_get_f32(v_max);
+                float m_curr = hvx_vec_get_f32(v_max);
+                m_block = (m_curr > m_block) ? m_curr : m_block;
+            }
 
+            {
+                // 5. Online Softmax Update - part2: update sum and VKQ32
                 float M_old = M;
                 float M_new = (m_block > M) ? m_block : M;
                 M = M_new;
@@ -370,22 +375,27 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 S = S * ms;
 
                 HVX_Vector M_new_vec = hvx_vec_splat_f32(M_new);
-                HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_new_vec);
-                HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
+                HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
+                for (uint32_t ic = 0; ic < FLASH_ATTN_BLOCK_SIZE; ic += VLEN_FP32) {
+                    HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic];
+                    HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_new_vec);
+                    HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
 
-                HVX_Vector p_sum_vec = hvx_vec_reduce_sum_f32(P);
-                float p_sum = hvx_vec_get_f32(p_sum_vec);
-                S += p_sum;
+                    p_sum_vec = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(p_sum_vec, P));
 
-                // 5. Accumulate V
-                float __attribute__((aligned(VLEN))) p_arr[VLEN_FP32];
-                *(HVX_Vector*)p_arr = P;
+                    // 6. Accumulate V
+                    float __attribute__((aligned(VLEN))) p_arr[VLEN_FP32];
+                    *(HVX_Vector*)p_arr = P;
 
-                for (int j = 0; j < VLEN_FP32; ++j) {
-                    const uint32_t cur_ic = ic + j;
-                    const uint8_t * v_ptr = v_base + cur_ic * size_v_row_padded;
-                    hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, p_arr[j]);
+                    for (int j = 0; j < VLEN_FP32; ++j) {
+                        const uint32_t cur_ic = ic + j;
+                        const uint8_t * v_ptr = v_base + cur_ic * size_v_row_padded;
+                        hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, p_arr[j]);
+                    }
                 }
+
+                p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
+                S += hvx_vec_get_f32(p_sum_vec);
             }
 
             // Leftover
