@@ -279,18 +279,20 @@ void main() {
         const uint psh_stride = Br / 4; // No space for padding, maybe increase Qf size?
 
         // Calculate and store Pf in Qf
-        [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
-            const uint col = c * cols_per_iter + col_tid;
+        if (d_tid == 0) {  // All other threads have the same P values
+            [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+                const uint col = c * cols_per_iter + col_tid;
 
-            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
-                const uint row = tile_row(r);
-                f16vec4 Pfvec;
-                [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
-                    const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
-                    Lf[r + vec_idx] += Pf;
-                    Pfvec[vec_idx] = Pf;
+                [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
+                    const uint row = tile_row(r);
+                    f16vec4 Pfvec;
+                    [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                        const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
+                        Lf[r + vec_idx] += Pf;
+                        Pfvec[vec_idx] = Pf;
+                    }
+                    Qf[col * psh_stride + row / 4] = Pfvec;
                 }
-                Qf[col * psh_stride + row / 4] = Pfvec;
             }
         }
 
