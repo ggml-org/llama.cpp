@@ -3054,10 +3054,10 @@ static webgpu_context get_per_thread_webgpu_context(ggml_backend_dev_t dev) {
     return webgpu_ctx;
 }
 
-static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
+static ggml_backend_t ggml_backend_webgpu_backend_init(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
 
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_device_init()");
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_backend_init()");
 
     ggml_backend_webgpu_device_context * dev_ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
 
@@ -3366,7 +3366,7 @@ static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
     /* .get_memory           = */ ggml_backend_webgpu_device_get_memory,
     /* .get_type             = */ ggml_backend_webgpu_device_get_type,
     /* .get_props            = */ ggml_backend_webgpu_device_get_props,
-    /* .init_backend         = */ ggml_backend_webgpu_device_init,
+    /* .init_backend         = */ ggml_backend_webgpu_backend_init,
     /* .get_buffer_type      = */ ggml_backend_webgpu_device_get_buffer_type,
     /* .get_host_buffer_type = */ NULL,
     /* .buffer_from_host_ptr = */ NULL,
@@ -3474,7 +3474,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
 ggml_backend_t ggml_backend_webgpu_init(void) {
     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_webgpu_reg(), 0);
 
-    return ggml_backend_webgpu_device_init(dev, nullptr);
+    return ggml_backend_webgpu_backend_init(dev, nullptr);
 }
 
 GGML_BACKEND_DL_IMPL(ggml_backend_webgpu_reg)
