@@ -10686,7 +10686,6 @@ static void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, con
     CL_CHECK(clSetKernelArg(kernel,   8, sizeof(int),      &axis));
     CL_CHECK(clSetKernelArg(kernel,   9, sizeof(int),      &exclusive));
     CL_CHECK(clSetKernelArg(kernel,   10, sizeof(int),      &reverse));
-    CL_CHECK(clSetKernelArg(kernel,   11, sizeof(int),      &lines));
 
     size_t global_work_size[1] = { (size_t)lines };
     size_t local_work_val = 256;
