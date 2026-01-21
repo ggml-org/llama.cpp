@@ -1,5 +1,5 @@
-#include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd.h"
 #include "runner.h"
 
 //
@@ -7,6 +7,8 @@
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
+
+#include <algorithm>
 
 namespace {
 std::vector<std::byte> load_file(const char * fname) {
@@ -65,6 +67,44 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+static std::vector<mtmd_output_modality> get_modalities_from_system_prompt(std::string const & system_prompt) {
+    if (system_prompt.empty()) {
+        LOG_ERR("ERR: -sys is required\n");
+        exit(1);
+    }
+
+    // modalities depend on system prompt
+    static constexpr const char *         asr_system_prompt         = "Perform ASR.";
+    static constexpr const char *         interleaved_system_prompt = "Respond with interleaved text and audio.";
+    static const std::vector<std::string> tts_system_prompts        = {
+        "Perform TTS. Use the US male voice.",
+        "Perform TTS. Use the UK male voice.",
+        "Perform TTS. Use the US female voice.",
+        "Perform TTS. Use the UK female voice.",
+    };
+    if (system_prompt == asr_system_prompt) {
+        return { MTMD_OUTPUT_MODALITY_TEXT };
+    }
+    if (system_prompt == interleaved_system_prompt) {
+        return { MTMD_OUTPUT_MODALITY_AUDIO, MTMD_OUTPUT_MODALITY_TEXT };
+    }
+    if (std::find(begin(tts_system_prompts), end(tts_system_prompts), system_prompt) != end(tts_system_prompts)) {
+        return { MTMD_OUTPUT_MODALITY_AUDIO };
+    }
+
+    // print error and exit
+    std::vector<std::string> prompts = tts_system_prompts;
+    prompts.push_back(asr_system_prompt);
+    prompts.push_back(interleaved_system_prompt);
+    std::string err = "Unsupported system prompt. Supported prompts are:\n";
+    for (const auto & p : prompts) {
+        err += " - " + p + "\n";
+    }
+
+    LOG_ERR("%s", err.c_str());
+    exit(1);
+}
+
 int main(int argc, char ** argv) {
     // Ctrl+C handling
     {
@@ -102,12 +142,10 @@ int main(int argc, char ** argv) {
         exit(1);
     }
 
+    auto modalities = get_modalities_from_system_prompt(params.system_prompt);
+
     // prepare inputs
     std::vector<liquid::audio::Runner::Message> messages;
-    if (params.system_prompt.empty()) {
-        LOG_ERR("ERR: -sys is required\n");
-        return 1;
-    }
     messages.push_back({ "system", params.system_prompt, {} });
     if (!params.prompt.empty()) {
         messages.push_back({ "user", params.prompt, {} });
@@ -126,7 +164,7 @@ int main(int argc, char ** argv) {
         generated_audio.insert(generated_audio.end(), audio.begin(), audio.end());
     };
 
-    if (0 != runner.generate(messages, params.n_predict, text_cb, audio_cb)) {
+    if (0 != runner.generate(messages, params.n_predict, text_cb, audio_cb, modalities)) {
         exit(1);
     }
 
@@ -138,7 +176,8 @@ int main(int argc, char ** argv) {
             LOG_ERR("ERR: --output is required for audio generation\n");
             return 1;
         }
-        if (!mtmd_helper_save_wav(params.out_file.c_str(), generated_audio.data(), generated_audio.size(), runner.get_output_sample_rate())) {
+        if (!mtmd_helper_save_wav(params.out_file.c_str(), generated_audio.data(), generated_audio.size(),
+                                  runner.get_output_sample_rate())) {
             exit(1);
         }
         LOG("=== GENERATED AUDIO ===\nSaved to %s\n\n", params.out_file.c_str());
