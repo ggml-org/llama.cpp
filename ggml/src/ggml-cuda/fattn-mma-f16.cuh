@@ -1728,7 +1728,11 @@ DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(128, 128,  64)
 DECL_FATTN_MMA_F16_CASE_ALL_NCOLS2(256, 256,  64)
 
 // The number of viable configurations for Deepseek is very limited:
-extern DECL_FATTN_MMA_F16_CASE(576, 512, 4,  4);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 1, 16);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 2, 16);
 extern DECL_FATTN_MMA_F16_CASE(576, 512, 4, 16);
+
+// For GLM 4.7 Flash
+extern DECL_FATTN_MMA_F16_CASE(576, 512,  4,  4);
+extern DECL_FATTN_MMA_F16_CASE(576, 512,  8,  4);
+extern DECL_FATTN_MMA_F16_CASE(576, 512, 16,  4);
