@@ -252,8 +252,7 @@ class Runner::RunnerImpl {
                 }
 
                 // output
-                {
-                    auto token_str = common_token_to_piece(ctx.lctx, next_text_token);
+                if (auto token_str = common_token_to_piece(ctx.lctx, next_text_token, false); !token_str.empty()) {
                     text_callback(token_str);
                     LOG("%s", token_str.c_str());
                     fflush(stdout);
