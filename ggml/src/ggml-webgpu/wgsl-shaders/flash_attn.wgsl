@@ -22,8 +22,8 @@ enable chromium_experimental_subgroup_matrix;
 #define K_UNROLL 2u
 
 // Default values
-#define HEAD_DIM_QK 64
-#define HEAD_DIM_V 64
+#define HEAD_DIM_QK 128
+#define HEAD_DIM_V 128
 
 // The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
 // Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
@@ -33,8 +33,8 @@ enable chromium_experimental_subgroup_matrix;
 
 // Each workgroup processes one subgroup matrix of Q rows
 #define Q_TILE SG_MAT_M
-#define KV_TILE 16
-#define WG_SIZE 64
+#define KV_TILE 64
+#define WG_SIZE 128
 
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
 #define KV_BLOCKS (KV_TILE / SG_MAT_N)
@@ -104,9 +104,9 @@ struct Params {
 };
 
 #if defined(KV_Q4_0) || defined(KV_Q8_0) || defined(KV_DIRECT)
-@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
-@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
-@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+@group(0) @binding(0) var<storage, read> Q: array<f32>;
+@group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
+@group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
 #else
 @group(0) @binding(0) var<storage, read_write> Q4: array<vec4<f32>>;
 @group(0) @binding(1) var<storage, read_write> K4: array<vec4<KV_TYPE>>;
@@ -132,7 +132,7 @@ struct Params {
 #define PARAMS_BINDING 4
 #endif
 
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<f32>>;
 @group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
 // Just a very small float value.
@@ -378,18 +378,19 @@ for (var c = local_id.x; c < K_TOTAL_CHUNKS; c += WG_SIZE) {
       // accumulate q block * k block into registers across the entire KV tile
       // TODO: this loop seems to be the current largest bottleneck
     if (subgroup_id < KV_BLOCKS) {
+    #ifdef KV_DIRECT
+            let k_block_row = kv_tile + subgroup_id * SG_MAT_N;
+            var k_global_offset = k_head_offset + k_block_row * params.stride_k1;
+#else
+            var k_block_offset = subgroup_id * SG_MAT_N * HEAD_DIM_QK;
+#endif
         for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
             let inter_offset = kv_block * SG_MAT_N;
 
             var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(
                     &inter_shmem, inter_offset, false, KV_TILE);
 
-#ifdef KV_DIRECT
-            let k_block_row = kv_tile + kv_block * SG_MAT_N;
-            let k_global_offset = k_head_offset + k_block_row * params.stride_k1;
-#else
-            let k_block_offset = kv_block * SG_MAT_N * HEAD_DIM_QK;
-#endif
+
 
             const HQ: u32 = u32(HEAD_DIM_QK);
             const SGK: u32 = u32(SG_MAT_K);
@@ -406,164 +407,6 @@ var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
     &kv_shmem, k_block_offset + 0u, true, HQ);
 #endif
 
-
-#if HEAD_DIM_QK == 128
-
-    // step h=8
-    var q1 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 8u, false, HQ);
-#ifdef KV_DIRECT
-    var k1 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 8u, true, params.stride_k1);
-#else
-    var k1 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 8u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q1;  k_cur = k1;
-
-    // step h=16
-    var q2 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 16u, false, HQ);
-#ifdef KV_DIRECT
-    var k2 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 16u, true, params.stride_k1);
-#else
-    var k2 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 16u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q2;  k_cur = k2;
-
-    // step h=24
-    var q3 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 24u, false, HQ);
-#ifdef KV_DIRECT
-    var k3 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 24u, true, params.stride_k1);
-#else
-    var k3 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 24u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q3;  k_cur = k3;
-
-    // step h=32
-    var q4 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 32u, false, HQ);
-#ifdef KV_DIRECT
-    var k4 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 32u, true, params.stride_k1);
-#else
-    var k4 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 32u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q4;  k_cur = k4;
-
-    // step h=40
-    var q5 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 40u, false, HQ);
-#ifdef KV_DIRECT
-    var k5 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 40u, true, params.stride_k1);
-#else
-    var k5 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 40u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q5;  k_cur = k5;
-
-    // step h=48
-    var q6 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 48u, false, HQ);
-#ifdef KV_DIRECT
-    var k6 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 48u, true, params.stride_k1);
-#else
-    var k6 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 48u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q6;  k_cur = k6;
-
-    // step h=56
-    var q7 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 56u, false, HQ);
-#ifdef KV_DIRECT
-    var k7 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 56u, true, params.stride_k1);
-#else
-    var k7 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 56u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q7;  k_cur = k7;
-
-    // step h=64
-    var q8 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 64u, false, HQ);
-#ifdef KV_DIRECT
-    var k8 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 64u, true, params.stride_k1);
-#else
-    var k8 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 64u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q8;  k_cur = k8;
-
-    // step h=72
-    var q9 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 72u, false, HQ);
-#ifdef KV_DIRECT
-    var k9 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 72u, true, params.stride_k1);
-#else
-    var k9 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 72u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q9;  k_cur = k9;
-
-    // step h=80
-    var q10 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 80u, false, HQ);
-#ifdef KV_DIRECT
-    var k10 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 80u, true, params.stride_k1);
-#else
-    var k10 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 80u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q10;  k_cur = k10;
-
-    // step h=88
-    var q11 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 88u, false, HQ);
-#ifdef KV_DIRECT
-    var k11 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 88u, true, params.stride_k1);
-#else
-    var k11 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 88u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q11;  k_cur = k11;
-
-    // step h=96
-    var q12 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 96u, false, HQ);
-#ifdef KV_DIRECT
-    var k12 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 96u, true, params.stride_k1);
-#else
-    var k12 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 96u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q12;  k_cur = k12;
-
-    // step h=104
-    var q13 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 104u, false, HQ);
-#ifdef KV_DIRECT
-    var k13 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 104u, true, params.stride_k1);
-#else
-    var k13 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 104u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q13;  k_cur = k13;
-
-    // step h=112
-    var q14 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 112u, false, HQ);
-#ifdef KV_DIRECT
-    var k14 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 112u, true, params.stride_k1);
-#else
-    var k14 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 112u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q14;  k_cur = k14;
-
-    // step h=120
-    var q15 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 120u, false, HQ);
-#ifdef KV_DIRECT
-    var k15 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 120u, true, params.stride_k1);
-#else
-    var k15 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 120u, true, HQ);
-#endif
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-    q_cur = q15;  k_cur = k15;
-
-    // final MAC for tile 120
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-
-#else
-    // Generic path 
     var t: u32 = 1u;
     for (; t + 1u < TILES; t += 2u) {
         let h0 = t * SGK;
@@ -603,9 +446,12 @@ var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
     }
 
     acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
+// #endif
+#ifdef KV_DIRECT
+        k_global_offset  += num_subgroups * SG_MAT_N * params.stride_k1;
+#else
+        k_block_offset   += num_subgroups * SG_MAT_N * HEAD_DIM_QK;
 #endif
-
-
             subgroupMatrixStore(&inter_shmem, inter_offset, acc, false, KV_TILE);
         }
     }
@@ -843,21 +689,59 @@ for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
 #endif
 
     // write output back to global memory
-    for (var q_tile_row = subgroup_id;
-         q_tile_row < Q_TILE;
-         q_tile_row += num_subgroups) {
-            let global_q_row = q_row_start + q_tile_row;
-            if (global_q_row >= params.seq_len_q) {
-                break;
-            }
+    // for (var q_tile_row = subgroup_id;
+    //      q_tile_row < Q_TILE;
+    //      q_tile_row += num_subgroups) {
+    //         let global_q_row = q_row_start + q_tile_row;
+    //         if (global_q_row >= params.seq_len_q) {
+    //             break;
+    //         }
 
-            let exp_sum = exp_sum_shmem[q_tile_row];
-            let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0);
+    //         let exp_sum = exp_sum_shmem[q_tile_row];
+    //         let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0);
 
-            for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
-                let o_val = o_shmem[q_tile_row * HEAD_DIM_V + elem_idx];
-                let scaled = f32(o_val) * scale;
-                dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
-            }
-    }
+    //         for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
+    //             let o_val = o_shmem[q_tile_row * HEAD_DIM_V + elem_idx];
+    //             let scaled = f32(o_val) * scale;
+    //             dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
+    //         }
+    // }
+// write output back to global memory (vectorized)
+for (var q_tile_row = subgroup_id;
+     q_tile_row < Q_TILE;
+     q_tile_row += num_subgroups) {
+
+  let global_q_row = q_row_start + q_tile_row;
+  if (global_q_row >= params.seq_len_q) { break; }
+
+  let exp_sum = exp_sum_shmem[q_tile_row];
+  let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
+
+  // row_base is in f32 elements
+  let row_base: u32 = dst_global_offset + q_tile_row * dst2_stride;
+
+  // Each lane writes one vec4, then strides by subgroup_size vec4s
+  for (var elem_base = sg_inv_id * 4u;
+       elem_base < HEAD_DIM_V;
+       elem_base += subgroup_size * 4u) {
+
+    // Load 4 values (f16) from shared and scale to f32
+    let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
+    let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
+    let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
+    let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
+
+    let v = vec4<f32>(
+      f32(o_shmem[i0]) * scale,
+      f32(o_shmem[i1]) * scale,
+      f32(o_shmem[i2]) * scale,
+      f32(o_shmem[i3]) * scale
+    );
+
+    // Convert f32-element index to vec4 index
+    let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
+    dst[dst_vec_index] = v;
+  }
+}
+
 }
