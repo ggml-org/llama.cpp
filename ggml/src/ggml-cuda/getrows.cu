@@ -11,6 +11,7 @@ static __global__ void k_get_rows(
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
+    GGML_CUDA_PDL_SYNC();
     for (int64_t z = blockIdx.z; z < ne11*ne12; z += gridDim.z) {
         for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
@@ -36,6 +37,7 @@ static __global__ void k_get_rows(
             dst_row[iybs + iqs + y_offset] = ggml_cuda_cast<dst_t>(v.y);
         }
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template<typename src0_t, typename dst_t>
@@ -47,6 +49,7 @@ static __global__ void k_get_rows_float(
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
+    GGML_CUDA_PDL_SYNC();
     for (int64_t z = blockIdx.z; z < ne11*ne12; z += gridDim.z) {
         for (int64_t i00 = blockIdx.y*blockDim.x + threadIdx.x; i00 < ne00; i00 += gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
@@ -55,6 +58,7 @@ static __global__ void k_get_rows_float(
             const int i12 = z % ne12;
 
             if (i00 >= ne00) {
+                GGML_CUDA_PDL_LC();
                 return;
             }
 
@@ -66,6 +70,7 @@ static __global__ void k_get_rows_float(
             dst_row[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
         }
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template<typename grad_t, typename dst_t>
@@ -74,6 +79,7 @@ static __global__ void k_get_rows_back_float(
     const int col = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (col >= ncols) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -81,6 +87,7 @@ static __global__ void k_get_rows_back_float(
 
     float sum = 0.0f;
 
+    GGML_CUDA_PDL_SYNC();
     for (int64_t i = 0; i < nrows_grad; ++i) {
         if (rows[i] != dst_row) {
             continue;
@@ -89,6 +96,7 @@ static __global__ void k_get_rows_back_float(
     }
 
     dst[dst_row*ncols + col] = sum;
+    GGML_CUDA_PDL_LC();
 }
 
 template<int qk, int qr, dequantize_kernel_t dq, typename dst_t>

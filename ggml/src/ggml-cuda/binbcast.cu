@@ -55,6 +55,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const uint32_t i3  = (blockDim.z * blockIdx.z + threadIdx.z) - (i2 * ne3.z);
 
     if (i0s >= (uint32_t)ne0 || i1 >= (uint32_t)ne1 || i2 >= (uint32_t)ne2 || i3 >= ne3.z) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -66,6 +67,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
+    GGML_CUDA_PDL_SYNC();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
@@ -81,6 +83,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
 
         dst_row[i0] = (dst_t) result;
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template <float (*bin_op)(const float, const float),
@@ -119,6 +122,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const uint32_t i0 = i - i3 * prod_012.z - i2 * prod_01.z - i1 * ne0.z;
 
     if (i0 >= ne0.z || i1 >= ne1.z || i2 >= ne2.z || i3 >= ne3) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -130,6 +134,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const size_t i_src1 = i13*s13 + i12*s12 + i11*s11;
     const size_t i_dst  =  i3*s3  +  i2*s2  +  i1*s1;
 
+    GGML_CUDA_PDL_SYNC();
     const src0_t * src0_row = src0 ? (src0 + i_src0) : nullptr;
     dst_t * dst_row = dst + i_dst;
 
@@ -143,6 +148,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     }
 
     dst_row[i0] = (dst_t) result;
+    GGML_CUDA_PDL_LC();
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>
@@ -327,10 +333,12 @@ static __global__ void k_repeat_back(
     const int64_t tid3  = tid23 / ne2;
 
     if (tid0 >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
     T sum = 0;
+    GGML_CUDA_PDL_SYNC();
     for (int64_t i3 = tid3; i3 < ne03; i3 += ne3) {
         for (int64_t i2 = tid2; i2 < ne02; i2 += ne2) {
             for (int64_t i1 = tid1; i1 < ne01; i1 += ne1) {
@@ -341,6 +349,7 @@ static __global__ void k_repeat_back(
         }
     }
     dst[tid3*ne2*ne1*ne0 + tid2*ne1*ne0 + tid1*ne0 + tid0] = sum;
+    GGML_CUDA_PDL_LC();
 }
 
 template <float (*bin_op)(const float, const float), int n_fuse = 1>

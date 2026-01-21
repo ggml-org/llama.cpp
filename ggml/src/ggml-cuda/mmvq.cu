@@ -162,6 +162,7 @@ static __global__ void mul_mat_vec_q(
     const     int blocks_per_row_x = ncols_x / qk;
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
+    GGML_CUDA_PDL_SYNC();
     const uint32_t channel_dst = blockIdx.y;
 
     uint32_t token_idx = 0;
@@ -287,6 +288,7 @@ static __global__ void mul_mat_vec_q(
     }
     __syncthreads();
     if (threadIdx.y > 0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -350,6 +352,7 @@ static __global__ void mul_mat_vec_q(
         }
     }
 
+    GGML_CUDA_PDL_LC();
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, active_glu, gate_bias, x_bias, tmp_gate);
     }

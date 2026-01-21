@@ -19,6 +19,7 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne
     const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -36,7 +37,9 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13 * nb13;
 
+    GGML_CUDA_PDL_SYNC();
     cpy_1(cx + x_offset, cdst + dst_offset);
+    GGML_CUDA_PDL_LC();
 }
 
 template <typename T>
@@ -58,6 +61,7 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
 
     __shared__ float tile[CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D+1];
 
+    GGML_CUDA_PDL_SYNC();
 #pragma unroll
     for (int i = 0; i < CUDA_CPY_BLOCK_NM; ++i) {
 
@@ -86,6 +90,7 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
             }
         }
     }
+    GGML_CUDA_PDL_LC();
 
     GGML_UNUSED_VARS(ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11,
         nb12, nb13);
@@ -124,6 +129,7 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst, const int64_t ne,
     const int64_t i = ((int64_t)blockDim.x*blockIdx.x + threadIdx.x)*qk;
 
     if (i >= ne) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -139,7 +145,9 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst, const int64_t ne,
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = (i10/qk)*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
+    GGML_CUDA_PDL_SYNC();
     cpy_blck(cx + x_offset, cdst + dst_offset);
+    GGML_CUDA_PDL_LC();
 }
 
 template <cpy_kernel_t cpy_blck, int qk>
@@ -150,6 +158,7 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst, const int64_t ne,
     const int64_t i = ((int64_t)blockDim.x*blockIdx.x + threadIdx.x)*qk;
 
     if (i >= ne) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -165,7 +174,9 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst, const int64_t ne,
     const int64_t i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
+    GGML_CUDA_PDL_SYNC();
     cpy_blck(cx + x_offset, cdst + dst_offset);
+    GGML_CUDA_PDL_LC();
 }
 
 template<typename src_t, typename dst_t>
@@ -173,13 +184,16 @@ static __global__ void cpy_scalar_contiguous(const char * cx, char * cdst, const
     const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
     const src_t * x = (const src_t *) cx;
     dst_t *     dst = (dst_t *) cdst;
 
+    GGML_CUDA_PDL_SYNC();
     dst[i] = ggml_cuda_cast<dst_t>(x[i]);
+    GGML_CUDA_PDL_LC();
 }
 
 template<typename src_t, typename dst_t>

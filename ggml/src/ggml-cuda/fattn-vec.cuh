@@ -44,6 +44,7 @@ static __global__ void flash_attn_ext_vec(
 
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
+        GGML_CUDA_PDL_LC();
         GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
             max_bias, m0, m1, n_head_log2, logit_softcap,
             ne00, ne01, ne02, ne03,
@@ -97,6 +98,7 @@ static __global__ void flash_attn_ext_vec(
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
+    GGML_CUDA_PDL_SYNC();
     Q += nb03*sequence + nb02* head              + nb01*ic0;
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
@@ -492,7 +494,9 @@ static __global__ void flash_attn_ext_vec(
     if (gridDim.y != 1 && tid < ncols && (ncols == 1 || ic0 + tid < int(ne01.z))) {
         dst_meta[((sequence*int(ne01.z) + ic0 + tid)*ne02 + head)*gridDim.y + blockIdx.y] = make_float2(KQ_max[tid], KQ_sum[tid]);
     }
+    GGML_CUDA_PDL_LC();
 #else
+    GGML_CUDA_PDL_LC();
     GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
         max_bias, m0, m1, n_head_log2, logit_softcap,
         ne00, ne01, ne02, ne03,

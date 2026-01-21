@@ -13,6 +13,7 @@ static __global__ void norm_f32(
     const int sample    = blockIdx.z;
     const int tid       = threadIdx.x;
 
+    GGML_CUDA_PDL_SYNC();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -35,6 +36,7 @@ static __global__ void norm_f32(
     for (int col = tid; col < ncols; col += block_size) {
         dst[col] = (x[col] - mean) * inv_std;
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template <int block_size>
@@ -46,6 +48,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
 
     float tmp = 0.0f; // partial sum for thread in warp
 
+    GGML_CUDA_PDL_SYNC();
     for (int j = start; j < end; j += block_size) {
         tmp += x[j];
     }
@@ -69,6 +72,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     for (int j = start; j < end; j += block_size) {
         dst[j] *= scale;
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template <int block_size, bool do_multiply = false, bool do_add = false>
@@ -105,6 +109,7 @@ static __global__ void rms_norm_f32(const float * x,
 
     static_assert(!do_add || do_multiply, "fusing add is not supported without multiplying");
 
+    GGML_CUDA_PDL_SYNC();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -148,6 +153,7 @@ static __global__ void rms_norm_f32(const float * x,
             dst[col] = scale * x[col];
         }
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template <int block_size>
@@ -156,6 +162,7 @@ static __global__ void rms_norm_back_f32(
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
+    GGML_CUDA_PDL_SYNC();
     grad += int64_t(row)*ncols;
     xf   += int64_t(row)*ncols;
     dst  += int64_t(row)*ncols;
@@ -200,6 +207,7 @@ static __global__ void rms_norm_back_f32(
     for (int col = tid; col < ncols; col += block_size) {
         dst[col] = scale_grad*grad[col] + scale_x*xf[col];
     }
+    GGML_CUDA_PDL_LC();
 }
 
 // template <int block_size>
@@ -248,6 +256,7 @@ static __global__ void l2_norm_f32(
     const int sample    = blockIdx.z;
     const int tid       = threadIdx.x;
 
+    GGML_CUDA_PDL_SYNC();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -268,6 +277,7 @@ static __global__ void l2_norm_f32(
     for (int col = tid; col < ncols; col += block_size) {
         dst[col] = scale * x[col];
     }
+    GGML_CUDA_PDL_LC();
 }
 
 static void norm_f32_cuda(

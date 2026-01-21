@@ -23,6 +23,7 @@ static __global__ void quantize_q8_1(
 
     const int64_t i_cont = ((i3*ne2.z + i2) * ne1 + i1) * ne0 + i0;
 
+    GGML_CUDA_PDL_SYNC();
     block_q8_1 * y = (block_q8_1 *) vy;
 
     const int64_t ib  = i_cont / QK8_1; // block index
@@ -45,6 +46,7 @@ static __global__ void quantize_q8_1(
     }
 
     y[ib].ds = make_half2(d, sum);
+    GGML_CUDA_PDL_LC();
 }
 
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
@@ -100,6 +102,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
     const int64_t i2 = blockIdx.z % ne2;
     const int64_t i3 = blockIdx.z / ne2;
 
+    GGML_CUDA_PDL_SYNC();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;
@@ -170,6 +173,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
         // Store 2 scales packed into 1 uint32
         y[ib].d4[quad_idx_in_block] = (scales[1] << 8) | scales[0];
     }
+    GGML_CUDA_PDL_LC();
 }
 
 template <mmq_q8_1_ds_layout ds_layout>
@@ -192,6 +196,7 @@ static __global__ void quantize_mmq_q8_1(
     const int64_t i3 = blockIdx.z / ne2;
 
     const int64_t i00 = i0;
+    GGML_CUDA_PDL_SYNC();
     const int64_t i01 = ids ? ids[i1] : i1;
     const int64_t i02 = i2;
     const int64_t i03 = i3;
@@ -268,6 +273,7 @@ static __global__ void quantize_mmq_q8_1(
     } else {
         y[ib].d4[iqs/32]  = d;
     }
+    GGML_CUDA_PDL_LC();
 }
 
 void quantize_row_q8_1_cuda(

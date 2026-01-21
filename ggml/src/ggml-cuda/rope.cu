@@ -127,6 +127,7 @@ static __global__ void rope_neox(const T *            x,
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -137,6 +138,7 @@ static __global__ void rope_neox(const T *            x,
 
     int       idst = row_dst * ne0 + i0 / 2;
     const int ix   = channel_x*s2 + row_x*s1 + i0/2;
+    GGML_CUDA_PDL_SYNC();
 
     // Fusion optimization: ROPE + VIEW + SET_ROWS.
     // The rope output is viewed as a 1D tensor and offset based on a row index in row_indices.
@@ -149,6 +151,7 @@ static __global__ void rope_neox(const T *            x,
         dst[idst + i0 / 2 + 0] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 0]);
         dst[idst + i0 / 2 + 1] = ggml_cuda_cast<D>(x[ix + i0 / 2 + 1]);
 
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -166,6 +169,7 @@ static __global__ void rope_neox(const T *            x,
 
     dst[idst + 0]          = ggml_cuda_cast<D>(x0 * cos_theta - x1 * sin_theta);
     dst[idst + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
+    GGML_CUDA_PDL_LC();
 }
 
 template<bool forward, bool has_ff, typename T>
@@ -176,6 +180,7 @@ static __global__ void rope_multi(
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -187,10 +192,12 @@ static __global__ void rope_multi(
     const int idst = row_dst*ne0 + i0/2;
     const int ix   = channel_x*s2 + row_x*s1 + i0/2;
 
+    GGML_CUDA_PDL_SYNC();
     if (i0 >= n_dims) {
         dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
         dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
 
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -236,6 +243,7 @@ static __global__ void rope_multi(
 
     dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
+    GGML_CUDA_PDL_LC();
 }
 
 template<bool forward, bool has_ff, typename T>
@@ -246,6 +254,7 @@ static __global__ void rope_vision(
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -257,6 +266,7 @@ static __global__ void rope_vision(
     const int idst = row_dst*ne0 + i0/2;
     const int ix   = channel_x*s2 + row_x*s1 + i0/2;
 
+    GGML_CUDA_PDL_SYNC();
     const int sect_dims = sections.v[0] + sections.v[1];
     const int sec_w = sections.v[1] + sections.v[0];
     const int sector = (i0 / 2) % sect_dims;
@@ -283,6 +293,7 @@ static __global__ void rope_vision(
 
     dst[idst + 0]      = x0*cos_theta - x1*sin_theta;
     dst[idst + n_dims] = x0*sin_theta + x1*cos_theta;
+    GGML_CUDA_PDL_LC();
 }
 
 template <bool forward, typename T, typename D>
