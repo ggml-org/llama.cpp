@@ -56,9 +56,62 @@ jobs:
           cd tools/server/tests
           pytest -v -x -m "not slow"
 
+  windows_cpu_x64:
+    name: Windows CPU x64
+    needs: [server_tests]
+    runs-on: windows-2025
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-cpu-x64
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install Ninja
+        run: choco install ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_OPENMP=ON ^
+            -DLLAMA_CURL=OFF ^
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Prepare CPU artifacts
+        run: |
+          New-Item -ItemType Directory -Force -Path .\cpu-artifacts
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\cpu-artifacts\
+          Get-ChildItem -Path .\build\bin\Release\ggml-cpu*.dll | Copy-Item -Destination .\cpu-artifacts\
+          Copy-Item .\build\bin\Release\ggml-base.dll .\cpu-artifacts\
+          Copy-Item .\build\bin\Release\ggml.dll .\cpu-artifacts\
+          Copy-Item .\build\bin\Release\ggml-rpc.dll .\cpu-artifacts\
+          Copy-Item .\build\bin\Release\llama.dll .\cpu-artifacts\
+          Copy-Item .\build\bin\Release\llama-server.exe .\cpu-artifacts\
+
+      - name: Upload CPU backends artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpu-backends
+          path: cpu-artifacts/
+          retention-days: 1
+
   windows_vulkan_x64:
     name: Windows Vulkan x64
-    needs: [server_tests]
+    needs: [windows_cpu_x64]
     runs-on: windows-2025
 
     env:
@@ -92,22 +145,24 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake ^
             -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
             -DGGML_BACKEND_DL=ON ^
-            -DGGML_CPU_ALL_VARIANTS=ON ^
-            -DGGML_VULKAN=ON ^
-            -DGGML_OPENMP=ON ^
-            -DLLAMA_CURL=OFF ^
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release
+            -DGGML_VULKAN=ON
+          cmake --build build --config Release --target ggml-vulkan
+
+      - name: Download CPU backends
+        uses: actions/download-artifact@v4
+        with:
+          name: cpu-backends
+          path: ./cpu-backends
 
       - name: Prepare artifacts
         run: |
           New-Item -ItemType Directory -Force -Path .\upload
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\upload\
-          Get-ChildItem -Path .\build\bin\Release\*.dll | Copy-Item -Destination .\upload\
-          Copy-Item .\build\bin\Release\llama-server.exe .\upload\boxed-logic-engine.exe
+          Copy-Item .\build\bin\Release\ggml-vulkan.dll .\upload\
+          Copy-Item .\cpu-backends\*.dll -Destination .\upload\
+          Copy-Item .\cpu-backends\llama-server.exe .\upload\boxed-logic-engine.exe
 
       - name: Install Python and AWS CLI
         run: |
@@ -127,7 +182,7 @@ jobs:
 
   windows_sycl_x64:
     name: Windows SYCL x64
-    needs: [server_tests]
+    needs: [windows_cpu_x64]
     runs-on: windows-2022
 
     env:
@@ -160,12 +215,10 @@ jobs:
             -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
-            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_CPU=OFF ^
             -DGGML_SYCL=ON ^
-            -DGGML_NATIVE=OFF ^
-            -DLLAMA_CURL=OFF ^
-            -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON
-          cmake --build build --config Release -j
+            -DGGML_NATIVE=OFF
+          cmake --build build --target ggml-sycl -j
 
       - name: Copy Intel oneAPI runtime DLLs
         shell: bash
@@ -192,13 +245,21 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/tcm/latest/bin/libhwloc-15.dll" ./build/bin/
           cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin/
 
+      - name: Download CPU backends
+        uses: actions/download-artifact@v4
+        with:
+          name: cpu-backends
+          path: ./cpu-backends
+
       - name: Prepare artifacts
         run: |
           New-Item -ItemType Directory -Force -Path .\upload
-          Get-ChildItem -Path .\build\bin\*.dll | Copy-Item -Destination .\upload\
-          Copy-Item .\build\bin\llama-server.exe .\upload\boxed-logic-engine.exe
+          Copy-Item .\build\bin\ggml-sycl.dll .\upload\
+          Get-ChildItem -Path .\build\bin\*.dll | Where-Object { $_.Name -ne 'ggml-sycl.dll' } | Copy-Item -Destination .\upload\
           Copy-Item .\build\bin\sycl-ls.exe .\upload\
           Get-ChildItem -Path .\build\bin\*.spv | Copy-Item -Destination .\upload\
+          Copy-Item .\cpu-backends\*.dll -Destination .\upload\
+          Copy-Item .\cpu-backends\llama-server.exe .\upload\boxed-logic-engine.exe
 
       - name: Install Python and AWS CLI
         run: |
