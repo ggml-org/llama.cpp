@@ -613,7 +613,7 @@ static void test_filters(testing & t) {
     test_template(t, "none to string",
         "{{ x|string }}",
         {{"x", nullptr}},
-        ""
+        "None"
     );
 }
 
