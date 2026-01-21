@@ -342,11 +342,11 @@ struct value_none_t : public value_t {
     virtual std::string type() const override { return "None"; }
     virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
+    virtual string as_string() const override { return string("None"); }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
 };
 using value_none = std::shared_ptr<value_none_t>;
-
 
 struct value_undefined_t : public value_t {
     std::string hint; // for debugging, to indicate where undefined came from
