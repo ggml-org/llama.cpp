@@ -1158,12 +1158,11 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
 }
 
 static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    ggml_sycl_host_free(buffer->context);
+    free(buffer->context);
 }
 
 static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * ptr = ggml_sycl_host_malloc(size);
-
+    void * ptr = aligned_alloc(TENSOR_ALIGNMENT, size);
     if (ptr == nullptr) {
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
