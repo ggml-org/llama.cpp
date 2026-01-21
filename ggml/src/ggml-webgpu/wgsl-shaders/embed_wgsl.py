@@ -18,13 +18,6 @@ def parse_decls(decls_text):
         decls[name.strip()] = code.strip()
     return decls
 
-def replace_repl_placeholders(variant, template_map):
-    for repl, code in variant["REPLS"].items():
-        for key, val in template_map.items():
-            # Match "key" and avoid matching subsequences using by using \b
-            code = re.sub(rf'\b{re.escape(str(key))}\b', str(val), code)
-        variant["REPLS"][repl] = code
-    return variant
 
 def replace_repl_placeholders(variant, template_map):
     for repl, code in variant["REPLS"].items():
