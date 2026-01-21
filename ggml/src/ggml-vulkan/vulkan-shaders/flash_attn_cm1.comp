@@ -453,6 +453,7 @@ void main() {
         barrier();
     }
 
+#if 0
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
 
@@ -470,6 +471,7 @@ void main() {
             barrier();
         }
     }
+#endif
 
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
