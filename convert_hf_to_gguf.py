@@ -2983,7 +2983,6 @@ class Llama4VisionModel(MmprojModel):
     "Mistral3ForConditionalGeneration",
     "Ministral3ForCausalLM",
 )
-
 class Mistral3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.MISTRAL3
 
