@@ -259,11 +259,25 @@ void main() {
             }
             float Moldf = Mf[r];
 
+            tmpsh[tid] = rowmaxf;
+            // Compute max across the row
+            barrier();
+            [[unroll]] for (int s = int(gl_WorkGroupSize.x / row_split) / 2; s >= D_split; s >>= 1) {
+                rowmaxf = max(rowmaxf, tmpsh[tid ^ s]);
+                barrier();
+                tmpsh[tid] = rowmaxf;
+                barrier();
+            }
+            rowmaxf = tmpsh[d_tid + row_tid * threads_per_rowgroup];
+            barrier();
+
             // M = max(rowmax, Mold)
             // P = e^(S - M)
             // eM = e^(Mold - M)
             Mf[r] = max(rowmaxf, Moldf);
             eMf[r] = exp(Moldf - Mf[r]);
+
+            Lf[r] = eMf[r]*Lf[r];
         }
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
@@ -271,26 +285,23 @@ void main() {
                 Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
             }
         }
-        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Lf[r] = eMf[r]*Lf[r];
-        }
 
 #if 1
         const uint psh_stride = Br / 4; // No space for padding, maybe increase Qf size?
 
         // Calculate and store Pf in Qf
-        if (d_tid == 0) {  // All other threads have the same P values
-            [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
-                const uint col = c * cols_per_iter + col_tid;
+        [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
+            const uint col = c * cols_per_iter + col_tid;
 
-                [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
-                    const uint row = tile_row(r);
-                    f16vec4 Pfvec;
-                    [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
-                        const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
-                        Lf[r + vec_idx] += Pf;
-                        Pfvec[vec_idx] = Pf;
-                    }
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; r += 4) {
+                const uint row = tile_row(r);
+                f16vec4 Pfvec;
+                [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
+                    const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
+                    Lf[r + vec_idx] += Pf;
+                    Pfvec[vec_idx] = Pf;
+                }
+                if (d_tid == 0) {  // All other threads have the same P values
                     Qf[col * psh_stride + row / 4] = Pfvec;
                 }
             }
@@ -406,40 +417,8 @@ void main() {
         barrier();
     }
 
-    // prevent race on tmpsh
-    barrier();
-
-    // reduce across threads
-
-    float rowmaxf[rows_per_thread], eMf[rows_per_thread], Moldf[rows_per_thread];
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        FLOAT_TYPE M = Mf[r];
-        tmpsh[tid] = M;
-        // Compute max across the row
-        barrier();
-        [[unroll]] for (int s = int(gl_WorkGroupSize.x / row_split) / 2; s >= D_split; s >>= 1) {
-            M = max(M, tmpsh[tid ^ s]);
-            barrier();
-            tmpsh[tid] = M;
-            barrier();
-        }
-        rowmaxf[r] = tmpsh[d_tid + row_tid * threads_per_rowgroup];
-        barrier();
-    }
-
-    [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        Moldf[r] = Mf[r];
-
-        // M = max(rowmax, Mold)
-        // eM = e^(Mold - M)
-        Mf[r] = max(rowmaxf[r], Moldf[r]);
-        eMf[r] = exp(Moldf[r] - Mf[r]);
-
-        Lf[r] = eMf[r]*Lf[r];
-    }
-
-    [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        FLOAT_TYPE L = Lf[r];
+        float L = Lf[r];
         tmpsh[tid] = L;
         // Compute sum across the row
         barrier();
@@ -452,26 +431,6 @@ void main() {
         Lf[r] = tmpsh[d_tid + row_tid * threads_per_rowgroup];
         barrier();
     }
-
-#if 0
-    [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-
-            Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
-            tmpshv4[tid] = Of[r][d];
-
-            barrier();
-            [[unroll]] for (int s = int(gl_WorkGroupSize.x / row_split) / 2; s >= D_split; s >>= 1) {
-                Of[r][d] += tmpshv4[tid ^ s];
-                barrier();
-                tmpshv4[tid] = Of[r][d];
-                barrier();
-            }
-            Of[r][d] = tmpshv4[d_tid + row_tid * threads_per_rowgroup];
-            barrier();
-        }
-    }
-#endif
 
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
