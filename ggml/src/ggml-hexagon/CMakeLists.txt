@@ -2,6 +2,7 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG "ggml-hexagon: enable HTP debug output" OFF)
+option(GGML_HEXAGON_HTP_CERT  "ggml-hexagon: enable HTP library signing using certificate" OFF)
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
 add_library(htp_iface OBJECT
@@ -79,3 +80,19 @@ install(FILES
     ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-v79.so
     ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-v81.so
     TYPE LIB)
+
+ if (CMAKE_SYSTEM_NAME MATCHES Windows AND GGML_HEXAGON_HTP_CERT)
+    find_program(MAKECAT  NAMES makecat.exe  PATHS ENV WINDOWS_SDK_ROOT REQUIRED)
+    find_program(SIGNTOOL NAMES signtool.exe PATHS ENV WINDOWS_SDK_ROOT REQUIRED)
+    set(LIBGGML_HTP_CAT ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp.cat)
+    add_custom_target(libggml-htp-cat
+        BYPRODUCTS ${LIBGGML_HTP_CAT}
+        DEPENDS libggml-htp.cdf htp-v73 htp-v75 htp-v79 htp-v81
+        COMMAND ${MAKECAT}  -v ${CMAKE_CURRENT_SOURCE_DIR}/libggml-htp.cdf
+        COMMAND ${SIGNTOOL} sign /fd sha256 /f ${GGML_HEXAGON_HTP_CERT} /t http://timestamp.digicert.com ${LIBGGML_HTP_CAT}
+        COMMENT "generating and signing libggml-htp.cat file"
+        VERBATIM
+    )
+    add_dependencies(${TARGET_NAME} libggml-htp-cat)
+    install(FILES ${LIBGGML_HTP_CAT} TYPE LIB)
+endif()
