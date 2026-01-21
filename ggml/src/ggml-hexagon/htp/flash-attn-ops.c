@@ -376,8 +376,8 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
                 HVX_Vector M_new_vec = hvx_vec_splat_f32(M_new);
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
-                for (uint32_t ic = 0; ic < FLASH_ATTN_BLOCK_SIZE; ic += VLEN_FP32) {
-                    HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic];
+                for (uint32_t ic2 = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32) {
+                    HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic2];
                     HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_new_vec);
                     HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
 
@@ -388,7 +388,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     *(HVX_Vector*)p_arr = P;
 
                     for (int j = 0; j < VLEN_FP32; ++j) {
-                        const uint32_t cur_ic = ic + j;
+                        const uint32_t cur_ic = ic2 + j;
                         const uint8_t * v_ptr = v_base + cur_ic * size_v_row_padded;
                         hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, p_arr[j]);
                     }
