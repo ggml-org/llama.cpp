@@ -248,6 +248,10 @@ static __global__ void mul_mat_vec_q(
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
 
+    if (!ids) {
+        GGML_CUDA_PDL_SYNC();
+    }
+
 #pragma unroll
         for (int j = 0; j < ncols_dst; ++j) {
 #pragma unroll
@@ -351,8 +355,8 @@ static __global__ void mul_mat_vec_q(
             dst[j*stride_col_dst + threadIdx.x] = result;
         }
     }
-
     GGML_CUDA_PDL_LC();
+
     if constexpr (!has_fusion) {
         GGML_UNUSED_VARS(use_gate, use_bias, use_gate_bias, active_glu, gate_bias, x_bias, tmp_gate);
     }

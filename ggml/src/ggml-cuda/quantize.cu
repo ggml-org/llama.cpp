@@ -9,6 +9,7 @@ static __global__ void quantize_q8_1(
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i0 >= ne0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -23,12 +24,12 @@ static __global__ void quantize_q8_1(
 
     const int64_t i_cont = ((i3*ne2.z + i2) * ne1 + i1) * ne0 + i0;
 
-    GGML_CUDA_PDL_SYNC();
     block_q8_1 * y = (block_q8_1 *) vy;
 
     const int64_t ib  = i_cont / QK8_1; // block index
     const int64_t iqs = i_cont % QK8_1; // quant index
 
+    GGML_CUDA_PDL_SYNC();
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);
     float sum = xi;
@@ -42,6 +43,7 @@ static __global__ void quantize_q8_1(
     y[ib].qs[iqs] = q;
 
     if (iqs > 0) {
+        GGML_CUDA_PDL_LC();
         return;
     }
 
