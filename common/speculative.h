@@ -22,9 +22,9 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 
 struct common_speculative * common_speculative_init(
+        struct common_params & params,
         struct llama_context * ctx_tgt,
-        struct llama_context * ctx_dft,
-        const std::vector<common_speculative_config> configs = {} // incubator config (options not yet in common_params)
+        struct llama_context * ctx_dft
 );
 
 void common_speculative_free(struct common_speculative * spec);

@@ -626,25 +626,33 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if (!params.speculative.tensor_buft_overrides.empty()) {
         params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
-    if (!params.speculative.model.path.empty()) {
-        bool found_draft = false;
-        bool found_eagle3 = false;
+    {
+        bool has_draft =!params.speculative.model.path.empty();
+        bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_lookup_caches = !params.lookup_cache_static.empty() && !params.lookup_cache_dynamic.empty();
+        bool found_config_draft = false;
+        bool found_config_eagle3 = false;
+        bool found_config_ngram_cache = false;
         for (const auto & config : params.speculative.configs) {
             if (config.type == COMMON_SPECULATIVE_TYPE_DRAFT) {
-                found_draft = true;
+                found_config_draft = true;
             }
             if (config.type == COMMON_SPECULATIVE_TYPE_EAGLE3) {
-                found_eagle3 = true;
-                break;
+                found_config_eagle3 = true;
+            }
+            if (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE) {
+                found_config_ngram_cache = true;
             }
         }
-        if (!found_draft) {
+        if (has_draft && !found_config_draft) {
             params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT));
         }
-        // TODO PR-18039: if params.speculative.eagle3
-        //if (!found_eagle3) {
-        //    params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT));
-        //}
+        if (has_draft_eagle3 && !found_config_eagle3) {
+            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3));
+        }
+        if (has_lookup_caches && !found_config_ngram_cache) {
+            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
+        }
     }
 
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
@@ -1239,14 +1247,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.lookup_cache_static = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LOOKUP}));
+    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-lcd", "--lookup-cache-dynamic"}, "FNAME",
         "path to dynamic lookup cache to use for lookup decoding (updated by generation)",
         [](common_params & params, const std::string & value) {
             params.lookup_cache_dynamic = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LOOKUP}));
+    ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-c", "--ctx-size"}, "N",
         string_format("size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx),

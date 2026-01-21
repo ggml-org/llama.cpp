@@ -775,8 +775,7 @@ private:
                     return false;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft,
-                        params_base.speculative.configs);
+                slot.spec = common_speculative_init(params_base, slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return false;
@@ -785,9 +784,7 @@ private:
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             } else if (params_base.speculative.configs.size() > 0) {
-                SLT_INF(slot, "init spec for speculative decoding without draft model, slot %d\n", i);
-                slot.spec = common_speculative_init(nullptr, nullptr,
-                        params_base.speculative.configs);
+                slot.spec = common_speculative_init(params_base, nullptr, nullptr);
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);

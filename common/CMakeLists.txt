@@ -73,6 +73,8 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    ngram-map.cpp
+    ngram-map.h
     peg-parser.cpp
     peg-parser.h
     preset.cpp
