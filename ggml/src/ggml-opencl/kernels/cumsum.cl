@@ -14,8 +14,7 @@ kernel void kernel_cumsum_f32(
         int ne3,
         int axis,
         int exclusive,
-        int reverse,
-        int lines
+        int reverse
 ) {
     src0 = (global float*)((global char*)src0 + offset0);
     dst = (global float*)((global char*)dst + offsetd);
