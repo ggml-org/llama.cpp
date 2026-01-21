@@ -5929,11 +5929,17 @@ class Gemma3Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
+        is_vision_tensor = (
+            "multi_modal_projector" in name
+            or "vision_tower" in name
+            or "multimodal_projector" in name
+            or "vision_model" in name
+        )
+
         if "language_model." in name:
             name = name.replace("language_model.", "")
 
-        elif name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
-                or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
+        elif is_vision_tensor:
             return [] # skip vision tensors
 
         # remove OOV (out-of-vocabulary) rows in token_embd
