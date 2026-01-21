@@ -56,11 +56,11 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     m_model_params(model_params),
     m_compute_params(compute_params) {
     if (auto * env = getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS"); env && std::string(env) != "0") {
-        #ifdef _WIN32
-		    _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
-	    #else
-		    unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
-	    #endif
+#ifdef _WIN32
+        _putenv_s("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", "");
+#else
+        unsetenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS");
+#endif
         print_tensor_address_map(cgraph);
     }
 
@@ -106,8 +106,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
             if (output_name_set.find(src_name) == output_name_set.end() &&
                 m_model_weights.find(src_name) == m_model_weights.end() &&
                 m_model_inputs.find(src_name) == m_model_inputs.end()) {
-                auto param_node =
-                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(src_node), ov::Shape(get_shape(src_node)));
+                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src_node), get_shape(src_node));
                 param_node->set_friendly_name(src_name);
                 param_node->output(0).get_tensor().set_names({src_name});
                 m_model_inputs[src_name] = param_node;
@@ -163,7 +162,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
-                    if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name); it == m_model_params.kv_names.end()) {
+                    if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name);
+                        it == m_model_params.kv_names.end()) {
                         m_model_params.kv_names.push_back(src_name);
                         if (is_stateful()) {
                             // TODO: The shape modification for stateful model below is not validated for all supported models yet. More generic solution might be needed
@@ -719,7 +719,7 @@ void print_tensor_address_map(const ggml_cgraph * cgraph) {
     }
 }
 
-std::vector<size_t> GgmlOvDecoder::get_shape(const ggml_tensor * tensor) {
+ov::Shape GgmlOvDecoder::get_shape(const ggml_tensor * tensor) {
     std::vector<size_t> shape;
     for (int i = GGML_MAX_DIMS - 1; i >= 0; --i) {
         shape.push_back(static_cast<size_t>(tensor->ne[i]));

@@ -207,7 +207,7 @@ public:
     bool m_is_prefill = false;
     int m_prefill_chunk_size = 0;
 
-    static std::vector<size_t> get_shape(const ggml_tensor * tensor);
+    static ov::Shape get_shape(const ggml_tensor * tensor);
     static std::vector<size_t> get_stride(const ggml_tensor * tensor);
     static ov::element::Type get_ov_type(const ggml_tensor * tensor);
     static std::string compute_op_type(const ggml_tensor * node);
