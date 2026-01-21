@@ -1,3 +1,4 @@
+#include "log.h"
 #include "value.h"
 #include "runtime.h"
 #include "caps.h"
@@ -16,7 +17,7 @@ using json = nlohmann::ordered_json;
 namespace jinja {
 
 using caps_json_fn = std::function<json()>;
-using caps_analyze_fn = std::function<void(bool, value &, value &)>;
+using caps_analyze_fn = std::function<void(bool, value &, value &, const std::string &)>;
 
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
@@ -36,16 +37,20 @@ static void caps_try_execute(jinja::program & prog,
     auto tools = ctx.get_val("tools");
 
     bool success = false;
+    std::string result;
     try {
         jinja::runtime runtime(ctx);
-        runtime.execute(prog);
+        auto results = runtime.execute(prog);
+        auto parts = jinja::runtime::gather_string_parts(results);
+        std::string result = parts->as_string().str();
         success = true;
     } catch (const std::exception & e) {
         JJ_DEBUG("Exception during execution: %s", e.what());
+        result = "";
         // ignore exceptions during capability analysis
     }
 
-    analyze_fn(success, messages, tools);
+    analyze_fn(success, messages, tools, result);
 }
 
 // for debugging only
@@ -141,7 +146,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json::array();
         },
-        [&](bool, value & messages, value &) {
+        [&](bool, value & messages, value &, const std::string &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (!content->stats.used) {
@@ -187,6 +192,15 @@ caps caps_get(jinja::program & prog) {
                     })}
                 },
                 {
+                    {"role", "tool"},
+                    {"content", "Tool response"},
+                    {"tool_call_id", "call00001"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "The tool response was 'tool response'"}
+                },
+                {
                     {"role", "user"},
                     {"content", "User message"},
                 },
@@ -215,7 +229,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & tools) {
+        [&](bool success, value & messages, value & tools, const std::string & res) {
             if (!success) {
                 result.supports_tool_calls = false;
                 result.supports_tools = false;
@@ -224,8 +238,11 @@ caps caps_get(jinja::program & prog) {
 
             auto & tool_name = tools->at(0)->at("function")->at("name");
             caps_print_stats(tool_name, "tools[0].function.name");
+            caps_print_stats(tools, "tools");
             if (!tool_name->stats.used) {
-                result.supports_tools = false;
+                if (!tools->stats.used && res.find(tool_name->as_string().str()) == std::string::npos) {
+                    result.supports_tools = false;
+                }
             }
 
             auto & tool_calls = messages->at(1)->at("tool_calls");;
@@ -242,83 +259,6 @@ caps caps_get(jinja::program & prog) {
             }
         }
     );
-
-    // case: requires non-null content in tool calls
-    if (result.supports_tool_calls) {
-        caps_try_execute(
-            prog,
-            [&]() {
-                // messages
-                return json::array({
-                    {
-                        { "role", "user" },
-                        { "content", "User message" },
-                    },
-                    {
-                        { "role", "assistant" },
-                        { "tool_calls",
-                            json::array({
-                                {
-                                    { "id", "call00001" },
-                                    { "type", "function" },
-                                    { "function",
-                                        {
-                                            { "name", "tool1" },
-                                            { "arguments",
-                                                {
-                                                    { "arg", "value" }
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                            })
-                        }
-                    },
-                    {
-                        { "role", "user" },
-                        { "content", "User message" },
-                    },
-                });
-            },
-            [&]() {
-                // tools
-                return json::array({
-                    {
-                        { "name", "tool" },
-                        { "type", "function" },
-                        { "function",
-                            {
-                                { "name", "tool1" },
-                                { "description", "Tool description" },
-                                { "parameters",
-                                    {
-                                        { "type", "object" },
-                                        { "properties",
-                                            {
-                                                { "arg",
-                                                    {
-                                                        { "type", "string" },
-                                                        { "description", "Arg description" },
-                                                    }
-                                                },
-                                            }
-                                        },
-                                        { "required", json::array({ "arg" }) },
-                                    }
-                                },
-                            }
-                        },
-                    },
-                });
-            },
-            [&](bool success, value & /* messages */, value & /* tools */) {
-                if (!success) {
-                    result.requires_non_null_content = true;
-                }
-            }
-        );
-    }
 
     // case: preserve reasoning content in chat history
     caps_try_execute(
@@ -345,7 +285,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json::array();
         },
-        [&](bool, value & messages, value &) {
+        [&](bool, value & messages, value &, const std::string &) {
             auto & content = messages->at(1)->at("reasoning_content");
             caps_print_stats(content, "messages[1].reasoning_content");
             if (content->stats.used) {

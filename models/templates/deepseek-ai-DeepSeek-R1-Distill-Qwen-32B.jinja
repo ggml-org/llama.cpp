@@ -11,7 +11,7 @@
   {%- if message['role'] == 'user' -%}
     {%- set ns.is_tool = false -%}{{'<｜User｜>' + message['content']}}
   {%- endif -%}
-  {%- if message['role'] == 'assistant' and message['content'] is none -%}
+  {%- if message['role'] == 'assistant' and message['tool_calls'] -%}
     {%- set ns.is_tool = false -%}
     {%- for tool in message['tool_calls']-%}
       {%- if not ns.is_first -%}

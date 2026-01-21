@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <vector>
 
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
@@ -63,65 +64,43 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
 
     // Low-level tag methods
     common_peg_parser tool(const common_peg_parser & p) { return tag(TOOL, p); }
-
     common_peg_parser tool_open(const common_peg_parser & p) { return atomic(tag(TOOL_OPEN, p)); }
-
     common_peg_parser tool_close(const common_peg_parser & p) { return atomic(tag(TOOL_CLOSE, p)); }
-
     common_peg_parser tool_id(const common_peg_parser & p) { return atomic(tag(TOOL_ID, p)); }
-
     common_peg_parser tool_name(const common_peg_parser & p) { return atomic(tag(TOOL_NAME, p)); }
-
     common_peg_parser tool_args(const common_peg_parser & p) { return tag(TOOL_ARGS, p); }
-
     common_peg_parser tool_arg(const common_peg_parser & p) { return tag(TOOL_ARG, p); }
-
     common_peg_parser tool_arg_open(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_OPEN, p)); }
-
     common_peg_parser tool_arg_close(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_CLOSE, p)); }
-
     common_peg_parser tool_arg_name(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_NAME, p)); }
-
     common_peg_parser tool_arg_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
     // Use for schema-declared string types - won't be treated as potential JSON container
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
-
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
-
-    // High-level building methods
-
-    // Build reasoning block based on ContentStructure
-    common_peg_parser build_reasoning_block(const content_structure & cs,
-                                            common_reasoning_format  reasoning_format,
-                                            bool                     thinking_forced_open);
-
-    // Build content block based on ContentStructure
-    common_peg_parser build_content_block(const content_structure & cs,
-                                         common_reasoning_format reasoning_format,
-                                         const std::string &    tool_section_start = "");
-
-    // Build complete tool section based on ToolCallStructure
-    common_peg_parser build_tool_section(const tool_call_structure & ts,
-                                         const nlohmann::json &    tools,
-                                         bool                      parallel_tool_calls,
-                                         bool                      force_tool_calls);
-
-    // Build single function parser based on ToolCallStructure
-    common_peg_parser build_function(const tool_call_structure & ts,
-                                     const std::string &       name,
-                                     const nlohmann::json &    schema);
-
-    // Build arguments parser based on ToolCallStructure
-    common_peg_parser build_arguments(const tool_call_structure & ts, const nlohmann::json & params);
 
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
-    common_peg_parser standard_json_tools(const std::string &    section_start,
-                                          const std::string &    section_end,
-                                          const nlohmann::json & tools,
-                                          bool                   parallel_tool_calls,
-                                          bool                   force_tool_calls);
+    // name_key/args_key: JSON key names for function name and arguments
+    //   Empty or "name"/"arguments" will accept both common variations
+    //   Supports dot notation for nested objects (e.g., "function.name")
+    // array_wrapped: if true, tool calls are wrapped in JSON array [...]
+    // function_is_key: if true, function name is the JSON key (e.g., {"func_name": {...}})
+    // call_id_key: JSON key for string call ID (e.g., "id")
+    // gen_call_id_key: JSON key for generated integer call ID (e.g., "tool_call_id")
+    // parameters_order: order in which JSON fields should be parsed
+    common_peg_parser standard_json_tools(const std::string &              section_start,
+                                          const std::string &              section_end,
+                                          const nlohmann::json &           tools,
+                                          bool                             parallel_tool_calls,
+                                          bool                             force_tool_calls,
+                                          const std::string &              name_key = "",
+                                          const std::string &              args_key = "",
+                                          bool                             array_wrapped = false,
+                                          bool                             function_is_key = false,
+                                          const std::string &              call_id_key = "",
+                                          const std::string &              gen_call_id_key = "",
+                                          const std::vector<std::string> & parameters_order = {});
 
     // Legacy-compatible helper for building XML/tagged style tool calls
     // Used by tests and manual parsers

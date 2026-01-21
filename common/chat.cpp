@@ -1,15 +1,12 @@
 #include "chat.h"
 
-#include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "common.h"
 #include "ggml.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "regex-partial.h"
 
-#include "jinja/parser.h"
 #include "jinja/value.h"
 #include "jinja/runtime.h"
 #include "jinja/caps.h"
@@ -1057,6 +1054,114 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
+// Functionary v3.2 - uses recipient-based format: >>>recipient\n{content}
+static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template &    tmpl,
+                                                                   const struct templates_params & inputs) {
+    common_chat_params data;
+
+    data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
+    data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.preserved_tokens = {
+        ">>>all",
+    };
+
+    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+
+    auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
+        // Functionary v3.2 format:
+        // - Normal content: >>>all\n{content}
+        // - Tool calls: >>>function_name\n{json_args}
+        // Generation prompt ends with ">>>" so model outputs recipient immediately
+
+        // Build content parser for >>>all\n{content}
+        // When tools are present, content stops before the next ">>>" (tool call)
+        // When no tools, content goes until end
+        auto content_until_tool = p.literal(">>>all\n") + p.content(p.until(">>>"));
+        auto content_until_end  = p.literal(">>>all\n") + p.content(p.rest());
+
+        // If no tools or tool_choice is NONE, just parse content
+        if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // When no tools, just match the prefix and capture everything after
+            return content_until_end + p.end();
+        }
+
+        // Build tool call parsers for each available function
+        auto tool_choice = p.choice();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string  name     = function.at("name");
+            const auto & schema   = function.at("parameters");
+
+            // Tool format: >>>function_name\n{json_args}
+            auto tool_parser = p.tool(
+                p.tool_open(p.literal(">>>") + p.tool_name(p.literal(name)) + p.literal("\n")) +
+                p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema))
+            );
+
+            tool_choice |= p.rule("tool-" + name, tool_parser);
+        });
+
+        // The model can output:
+        // 1. Just content: >>>all\n{content}
+        // 2. Just tool call(s): >>>function_name\n{json_args}
+        // 3. Both: >>>all\n{content}>>>function_name\n{json_args}
+        
+        // Option 1: Content only (no following tool call)
+        auto content_only = content_until_end;
+        
+        // Option 2: Content followed by tool call(s)
+        auto content_and_tools = content_until_tool + p.one_or_more(tool_choice);
+        
+        // Option 3: Just tool call(s) (no content)
+        auto tools_only = p.one_or_more(tool_choice);
+
+        if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+            // Must have at least one tool call
+            if (inputs.parallel_tool_calls) {
+                // Multiple tool calls allowed
+                return p.choice({ content_and_tools, tools_only }) + p.end();
+            } else {
+                // Single tool call only
+                return p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
+            }
+        } else {
+            // Tool calls are optional (auto mode)
+            if (inputs.parallel_tool_calls) {
+                // Multiple tool calls allowed
+                return p.choice({ content_and_tools, content_only, tools_only }) + p.end();
+            } else {
+                // Single tool call at most
+                auto content_and_tool = content_until_tool + tool_choice;
+                return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
+            }
+        }
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto         schema   = function.at("parameters");
+                builder.resolve_refs(schema);
+            });
+            parser.build_grammar(builder, data.grammar_lazy);
+        });
+
+        // Grammar trigger for when the model starts outputting a tool call
+        // (after the initial ">>>" in the generation prompt)
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, ">>>" }
+        };
+    }
+
+    return data;
+}
+
 namespace workaround {
 
 // if first message is system and template does not support it, merge it with next message
@@ -1105,6 +1210,8 @@ static void func_args_not_string(json & messages) {
     }
 }
 
+}
+
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     templates_params params;
@@ -1128,7 +1235,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         workaround::system_message_not_supported(params.messages);
     }
 
-    if (!tmpl.original_caps().requires_non_null_content) {
+    if (tmpl.original_caps().supports_tool_calls) {
+        // some templates will require the content field in tool call messages
+        // to still be non-null, this puts an empty string everywhere where the 
+        // content field is null
         workaround::requires_non_null_content(params.messages);
     }
 
@@ -1163,20 +1273,26 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
-        LOG_INF("Using specialized template: Ministral/Magistral Large 3\n");
+        LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
-        LOG_INF("Using specialized template: GPT-OSS\n");
+        LOG_DBG("Using specialized template: GPT-OSS\n");
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 
+    // Functionary v3.2 - uses recipient-based format with >>>recipient\n{content}
+    // Detection: template has ">>>all" for content and ">>>" prefix for tool calls
+    if (src.find(">>>all") != std::string::npos && src.find(">>>${recipient}") != std::string::npos) {
+        LOG_DBG("Using specialized template: Functionary v3.2\n");
+        return common_chat_params_init_functionary_v3_2(tmpl, params);
+    }
+
     try {
-        LOG_INF("Using autoparser for template analysis\n");
-        template_analysis_result analysis    = template_analyzer::analyze_template(tmpl);
-        auto                     auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
+        LOG_DBG("Using differential autoparser\n");
+        auto auto_params = universal_peg_generator::generate_parser(tmpl, params);
         return auto_params;
     } catch (const std::exception & e) {
         LOG_WRN("Automatic parser generation failed: %s\n", e.what());
@@ -1258,22 +1374,24 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
                               common_chat_templates_apply_legacy(tmpls, inputs);
 }
 
-common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
-    return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
+common_chat_msg common_chat_parse(const std::string &               input,
+                                  bool                              is_partial,
+                                  const common_chat_parser_params & params) {
+    return common_chat_peg_parse(params.parser, input, is_partial, params);
 }
 
-common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
-                                      const std::string &        input,
-                                      bool                       is_partial,
-                                      const common_chat_syntax & syntax) {
+common_chat_msg common_chat_peg_parse(const common_peg_arena &          parser,
+                                      const std::string &               input,
+                                      bool                              is_partial,
+                                      const common_chat_parser_params & params) {
     if (parser.empty()) {
         throw std::runtime_error("Failed to parse due to missing parser definition.");
     }
 
-    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
+    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
 
     common_peg_parse_context ctx(input, is_partial);
-    ctx.debug   = syntax.debug;
+    ctx.debug   = params.debug;
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
@@ -1283,13 +1401,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
             // Try to extract any partial results from what was successfully parsed
             common_chat_msg msg;
             msg.role = "assistant";
-            if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
-                auto mapper = common_chat_peg_unified_mapper(msg);
-                mapper.from_ast(ctx.ast, result);
-            } else {
-                auto mapper = common_chat_peg_mapper(msg);
-                mapper.from_ast(ctx.ast, result);
-            }
+            auto mapper = common_chat_peg_unified_mapper(msg);
+            mapper.from_ast(ctx.ast, result);
+
             if (ctx.debug) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
@@ -1303,21 +1417,16 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
     common_chat_msg msg;
     msg.role = "assistant";
 
-    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
-        auto mapper = common_chat_peg_unified_mapper(msg);
-        mapper.from_ast(ctx.ast, result);
-    } else {
-        // Generic mapper
-        auto mapper = common_chat_peg_mapper(msg);
-        mapper.from_ast(ctx.ast, result);
-    }
+    auto mapper = common_chat_peg_unified_mapper(msg);
+    mapper.from_ast(ctx.ast, result);
+
     if (ctx.debug) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
         fflush(stderr);
     }
 
     if (!is_partial) {
-        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({ msg }).at(0).dump().c_str());
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat({ msg }).at(0).dump().c_str());
     }
     return msg;
 }
@@ -1327,3 +1436,4 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
+

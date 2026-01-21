@@ -1,15 +1,19 @@
 #include "../src/llama-grammar.h"
 #include "chat-auto-parser.h"
+#include "chat-diff-analyzer.h"
 #include "chat.h"
 #include "common.h"
 #include "gguf.h"
+#include "jinja/runtime.h"
 #include "log.h"
 
 #include <fstream>
+#include <numeric>
 #include <sstream>
 #include <string>
 
 #include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 using json = nlohmann::ordered_json;
 
@@ -239,7 +243,7 @@ static json build_tools_definition() {
         { "type",        "string"           },
         { "description", "Second parameter" }
     });
-    parameters_schema["required"]             = json::array({ "param1", "param2" });
+    parameters_schema["required"]             = json::array({ "param1" });
 
     return json::array({
         json{ { "type", "function" },
@@ -324,67 +328,20 @@ static void render_all_scenarios(const common_chat_template & tmpl,
     }
 }
 
-static const char * reasoning_mode_to_str(content_structure::reasoning_mode_type mode) {
-    switch (mode) {
-        case content_structure::REASONING_NONE:
-            return "NONE";
-        case content_structure::REASONING_OPTIONAL:
-            return "OPTIONAL";
-        case content_structure::REASONING_FORCED_OPEN:
-            return "FORCED_OPEN";
-    }
-    return "UNKNOWN";
-}
-
-static const char * content_mode_to_str(content_structure::content_mode_type mode) {
-    switch (mode) {
-        case content_structure::CONTENT_PLAIN:
-            return "PLAIN";
-        case content_structure::CONTENT_ALWAYS_WRAPPED:
-            return "ALWAYS_WRAPPED";
-        case content_structure::CONTENT_WRAPPED_WITH_REASONING:
-            return "WRAPPED_WITH_REASONING";
-    }
-    return "UNKNOWN";
-}
-
-static const char * function_format_to_str(enum tool_call_structure::function_format fmt) {
-    switch (fmt) {
-        case tool_call_structure::FUNC_JSON_OBJECT:
-            return "JSON_OBJECT";
-        case tool_call_structure::FUNC_TAG_WITH_NAME:
-            return "TAG_WITH_NAME";
-        case tool_call_structure::FUNC_TAG_NAME_ONLY:
-            return "TAG_NAME_ONLY";
-        case tool_call_structure::FUNC_PREFIXED_INDEXED:
-            return "PREFIXED_INDEXED";
-        case tool_call_structure::FUNC_NAME_AS_KEY:
-            return "NAME_AS_KEY";
-        case tool_call_structure::FUNC_BRACKET_TAG:
-            return "BRACKET_TAG";
-        case tool_call_structure::FUNC_RECIPIENT_BASED:
-            return "RECIPIENT_BASED";
-        case tool_call_structure::FUNC_MARKDOWN_CODE_BLOCK:
-            return "MARKDOWN_CODE_BLOCK";
-    }
-    return "UNKNOWN";
-}
-
-static const char * argument_format_to_str(enum tool_call_structure::argument_format fmt) {
-    switch (fmt) {
-        case tool_call_structure::ARGS_JSON:
-            return "JSON";
-        case tool_call_structure::ARGS_TAGGED:
-            return "TAGGED";
-        case tool_call_structure::ARGS_KEY_VALUE_TAGS:
-            return "KEY_VALUE_TAGS";
-    }
-    return "UNKNOWN";
+template <typename T>
+static std::string mode_to_str(T mode) {
+    std::ostringstream os;
+    os << mode;
+    return os.str();
 }
 
 int main(int argc, char ** argv) {
     // Set log level to most verbose to capture all debug output
     common_log_set_verbosity_thold(99);
+
+    if (std::getenv("LLAMA_DEBUG_JINJA") != nullptr) {
+        jinja::enable_debug(true);
+    }
 
     debug_options opts;
     if (!parse_options(argc, argv, opts)) {
@@ -434,48 +391,7 @@ int main(int argc, char ** argv) {
             LOG_ERR("                           TEMPLATE ANALYSIS\n");
             LOG_ERR("================================================================================\n");
 
-            template_analysis_result analysis = template_analyzer::analyze_template(chat_template);
-
-            LOG_ERR("\n=== Analysis Results ===\n");
-
-            LOG_ERR("\n--- Content Structure (Phase 1) ---\n");
-            LOG_ERR("reasoning_mode: %s\n", reasoning_mode_to_str(analysis.content.reasoning_mode));
-            LOG_ERR("reasoning_start: '%s'\n", analysis.content.reasoning_start.c_str());
-            LOG_ERR("reasoning_end: '%s'\n", analysis.content.reasoning_end.c_str());
-            LOG_ERR("content_mode: %s\n", content_mode_to_str(analysis.content.content_mode));
-            LOG_ERR("content_start: '%s'\n", analysis.content.content_start.c_str());
-            LOG_ERR("content_end: '%s'\n", analysis.content.content_end.c_str());
-
-            LOG_ERR("\n--- Tool Structure (Phase 2) ---\n");
-            LOG_ERR("supports_tools: %s\n", analysis.tools.supports_tools ? "true" : "false");
-            LOG_ERR("function_format: %s\n", function_format_to_str(analysis.tools.function_format));
-            LOG_ERR("argument_format: %s\n", argument_format_to_str(analysis.tools.argument_format));
-            LOG_ERR("tool_section_start: '%s'\n", analysis.tools.tool_section_start.c_str());
-            LOG_ERR("tool_section_end: '%s'\n", analysis.tools.tool_section_end.c_str());
-            LOG_ERR("function_prefix: '%s'\n", analysis.tools.function_prefix.c_str());
-            LOG_ERR("function_suffix: '%s'\n", analysis.tools.function_suffix.c_str());
-            LOG_ERR("function_close: '%s'\n", analysis.tools.function_close.c_str());
-            LOG_ERR("arg_prefix: '%s'\n", analysis.tools.arg_prefix.c_str());
-            LOG_ERR("arg_suffix: '%s'\n", analysis.tools.arg_suffix.c_str());
-            LOG_ERR("arg_close: '%s'\n", analysis.tools.arg_close.c_str());
-            LOG_ERR("name_field: '%s'\n", analysis.tools.name_field.c_str());
-            LOG_ERR("args_field: '%s'\n", analysis.tools.args_field.c_str());
-            LOG_ERR("id_field: '%s'\n", analysis.tools.id_field.c_str());
-
-            // Additional fields for special formats
-            if (analysis.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
-                LOG_ERR("\n--- Prefixed-Indexed Format Details ---\n");
-                LOG_ERR("per_call_start: '%s'\n", analysis.tools.per_call_start.c_str());
-                LOG_ERR("function_namespace: '%s'\n", analysis.tools.function_namespace.c_str());
-                LOG_ERR("args_marker: '%s'\n", analysis.tools.args_marker.c_str());
-                LOG_ERR("per_call_end: '%s'\n", analysis.tools.per_call_end.c_str());
-            }
-            if (analysis.tools.function_format == tool_call_structure::FUNC_BRACKET_TAG) {
-                LOG_ERR("\n--- Bracket-Tag Format Details ---\n");
-                LOG_ERR("per_call_start: '%s'\n", analysis.tools.per_call_start.c_str());
-                LOG_ERR("id_marker: '%s'\n", analysis.tools.id_marker.c_str());
-                LOG_ERR("args_marker: '%s'\n", analysis.tools.args_marker.c_str());
-            }
+            diff_analysis_result analysis = differential_analyzer::analyze(chat_template);
 
             // Generate Parser
             templates_params params;
@@ -494,10 +410,45 @@ int main(int argc, char ** argv) {
             }
             params.parallel_tool_calls = false;
 
-            auto parser_data = universal_peg_generator::generate_parser(analysis, chat_template, params);
+            auto parser_data = universal_peg_generator::generate_parser(chat_template, params, analysis);
+
+            LOG_ERR("\n=== Differential Analysis Results ===\n");
+
+            LOG_ERR("\n--- Reasoning & Content Structure ---\n");
+            LOG_ERR("reasoning_mode: %s\n", mode_to_str(analysis.reasoning).c_str());
+            LOG_ERR("reasoning_start: '%s'\n", analysis.markers.reasoning_start.c_str());
+            LOG_ERR("reasoning_end: '%s'\n", analysis.markers.reasoning_end.c_str());
+            LOG_ERR("content_mode: %s\n", mode_to_str(analysis.content).c_str());
+            LOG_ERR("content_start: '%s'\n", analysis.markers.content_start.c_str());
+            LOG_ERR("content_end: '%s'\n", analysis.markers.content_end.c_str());
+
+            LOG_ERR("\n--- Tool Call Structure ---\n");
+            LOG_ERR("tool_mode: %s\n", mode_to_str(analysis.tools).c_str());
+            LOG_ERR("supports_tools: %s\n", analysis.supports_tools ? "true" : "false");
+            LOG_ERR("supports_parallel_calls: %s\n", analysis.supports_parallel_calls ? "true" : "false");
+            LOG_ERR("tool_section_start: '%s'\n", analysis.markers.tool_section_start.c_str());
+            LOG_ERR("tool_section_end: '%s'\n", analysis.markers.tool_section_end.c_str());
+            LOG_ERR("per_call_start: '%s'\n", analysis.markers.per_call_start.c_str());
+            LOG_ERR("per_call_end: '%s'\n", analysis.markers.per_call_end.c_str());
+            LOG_ERR("func_name_prefix: '%s'\n", analysis.markers.func_name_prefix.c_str());
+            LOG_ERR("func_name_suffix: '%s'\n", analysis.markers.func_name_suffix.c_str());
+            LOG_ERR("func_close: '%s'\n", analysis.markers.func_close.c_str());
+            LOG_ERR("arg_name_prefix: '%s'\n", analysis.markers.arg_name_prefix.c_str());
+            LOG_ERR("arg_name_suffix: '%s'\n", analysis.markers.arg_name_suffix.c_str());
+            LOG_ERR("arg_value_prefix: '%s'\n", analysis.markers.arg_value_prefix.c_str());
+            LOG_ERR("arg_value_suffix: '%s'\n", analysis.markers.arg_value_suffix.c_str());
+            LOG_ERR("name_field: '%s'\n", analysis.name_field.c_str());
+            LOG_ERR("args_field: '%s'\n", analysis.args_field.c_str());
+            LOG_ERR("id_field: '%s'\n", analysis.id_field.c_str());
+            LOG_ERR("gen_id_field: '%s'\n", analysis.gen_id_field.c_str());
+            LOG_ERR("parameter_order: '%s'\n", std::accumulate(analysis.parameter_order.begin(), analysis.parameter_order.end(), 
+                std::string(""), [] (const std::string & a, const std::string & b) { return a.empty() ? b : a + ", " + b; }
+                ).c_str());
 
             LOG_ERR("\n=== Generated Parser ===\n");
-            LOG_ERR("%s\n", json::parse(parser_data.parser).dump(4).c_str());
+            common_peg_arena arena;
+            arena.load(parser_data.parser);
+            LOG_ERR("%s\n", arena.dump(arena.root()).c_str());
 
             LOG_ERR("\n=== Generated Grammar ===\n");
             LOG_ERR("%s\n", parser_data.grammar.c_str());

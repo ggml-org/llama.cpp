@@ -48,10 +48,11 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
-    chat-auto-parser-analyzer.cpp
     chat-auto-parser-generator.cpp
     chat-auto-parser-helpers.cpp
     chat-auto-parser.h
+    chat-diff-analyzer.cpp
+    chat-diff-analyzer.h
     chat-peg-parser.cpp
     chat-peg-parser.h
     chat.cpp
