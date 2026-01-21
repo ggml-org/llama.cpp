@@ -2155,11 +2155,9 @@ class BaichuanModel(TextModel):
         head_count = self.hparams["num_attention_heads"]
         head_count_kv = self.hparams.get("num_key_value_heads", head_count)
 
-        tensors: list[tuple[str, Tensor]] = []
-
         if bid is not None and name == f"model.layers.{bid}.self_attn.W_pack.weight":
             logger.info(f"Unpacking and permuting layer {bid}")
-            tensors = [
+            yield from [
                 (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid),
                     self._reverse_hf_permute_part(data_torch, 0, head_count, head_count)),
                 (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid),
@@ -2168,9 +2166,7 @@ class BaichuanModel(TextModel):
                     self._reverse_hf_part(data_torch, 2)),
             ]
         else:
-            tensors = [(self.map_tensor_name(name), data_torch)]
-
-        return tensors
+            yield from self.modify_tensors(data_torch, self.map_tensor_name(name), bid)
 
     def _reverse_hf_permute(self, weights: Tensor, n_head: int, n_kv_head: int | None = None) -> Tensor:
         if n_kv_head is not None and n_head != n_kv_head:
@@ -4550,22 +4546,17 @@ class GPT2Model(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
-        tensors: list[tuple[str, Tensor]] = []
-
         # we don't need these
         if name.endswith((".attn.bias", ".attn.masked_bias")):
-            return tensors
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
 
         if name.endswith((".c_attn.weight", ".c_proj.weight", ".c_fc.weight", ".c_proj.weight")):
             data_torch = data_torch.transpose(1, 0)
 
         new_name = self.map_tensor_name(name)
 
-        tensors.append((new_name, data_torch))
-
-        return tensors
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
 
 @ModelBase.register("PhiForCausalLM")
@@ -6018,7 +6009,7 @@ class ConformerAudioModel(MmprojModel):
             self._batch_norm_tensors[bid][name] = data_torch
 
             if len(self._batch_norm_tensors[bid]) < 5:
-                return []
+                return
 
             weight = self._batch_norm_tensors[bid][f"conformer.layers.{bid}.conv.batch_norm.weight"]
             bias = self._batch_norm_tensors[bid][f"conformer.layers.{bid}.conv.batch_norm.bias"]
@@ -6029,7 +6020,7 @@ class ConformerAudioModel(MmprojModel):
             a = weight / torch.sqrt(running_var + eps)
             b = bias - running_mean * a
             yield from super().modify_tensors(a, f"conformer.layers.{bid}.conv.batch_norm.weight", bid)
-            yield from super().modify_tensors(b,f"conformer.layers.{bid}.conv.batch_norm.bias", bid)
+            yield from super().modify_tensors(b, f"conformer.layers.{bid}.conv.batch_norm.bias", bid)
             return
 
         # reshape conv weights
@@ -6160,7 +6151,7 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
         if new_name.endswith("conv_stem.conv.bias") or new_name.endswith("layer_scale.gamma"):
             data_torch = data_torch.unsqueeze(0).unsqueeze(-1).unsqueeze(-1) # [1, C, 1, 1]
 
-        return [(new_name, data_torch)]
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
 
 @ModelBase.register("Gemma3nForCausalLM", "Gemma3nForConditionalGeneration")
@@ -6276,7 +6267,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_unembd)
             if out is not None:
-                yield from super().modify_tensors(data_torch, "model.altup_unembed_projections.weight", bid)
+                yield from super().modify_tensors(out, "model.altup_unembed_projections.weight", bid)
             else:
                 return
 
@@ -6292,7 +6283,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_proj)
             if out is not None:
-                yield from super().modify_tensors(data_torch, "model.altup_projections.weight", bid)
+                yield from super().modify_tensors(out, "model.altup_projections.weight", bid)
             else:
                 return
 
@@ -7597,7 +7588,6 @@ class MiniMaxM2Model(TextModel):
             if len(expert_cache) < n_experts * len(expert_weights):
                 return
 
-            tensors: list[tuple[str, Tensor]] = []
             for w_name in expert_weights:
                 datas: list[Tensor] = []
 
@@ -7609,10 +7599,10 @@ class MiniMaxM2Model(TextModel):
                 data_torch = torch.stack(datas, dim=0)
                 merged_name = f"model.layers.{bid}.block_sparse_moe.experts.{w_name}.weight"
                 new_name = self.map_tensor_name(merged_name)
-                tensors.append((new_name, data_torch))
+                yield from super().modify_tensors(data_torch, new_name, bid)
 
             del self._experts_cache[bid]
-            return tensors
+            return
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -7754,7 +7744,7 @@ class Dots1Model(Qwen2MoeModel):
         if "shared_experts" in name:
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
         else:
-            super().modify_tensors(data_torch, name, bid)
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("PLMForCausalLM")
@@ -8100,13 +8090,9 @@ class JaisModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
-        tensors: list[tuple[str, Tensor]] = []
-
         # we don't need these
         if name.endswith((".attn.bias")):
-            return tensors
+            return
 
         if name.endswith(("relative_pe.slopes")):
             # Calculate max ALiBi bias (this is the inverse of the ALiBi calculation)
@@ -8117,7 +8103,7 @@ class JaisModel(TextModel):
             first_val = float(data_torch[0].item())
             self.max_alibi_bias = -round(math.log2(first_val) * n_head_closest_log2)
 
-            return tensors
+            return
 
         if name.endswith((".c_attn.weight", ".c_proj.weight", ".c_fc.weight", ".c_fc2.weight")):
             data_torch = data_torch.transpose(1, 0)
@@ -8125,13 +8111,11 @@ class JaisModel(TextModel):
         new_name = self.map_tensor_name(name)
 
         if new_name == self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD):
-            tensors.append((new_name, data_torch * self.embeddings_scale))
+            yield from super().modify_tensors(data_torch * self.embeddings_scale, new_name, bid)
         elif new_name == self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT):
-            tensors.append((new_name, data_torch * self.width_scale))
+            yield from super().modify_tensors(data_torch * self.width_scale, new_name, bid)
         else:
-            tensors.append((new_name, data_torch))
-
-        return tensors
+            yield from super().modify_tensors(data_torch, new_name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -8729,8 +8713,6 @@ class ExaoneMoEModel(Exaone4Model):
             self._experts[bid][name] = data_torch
 
             if len(self._experts[bid]) >= n_experts * 3:
-                tensors: list[tuple[str, Tensor]] = []
-
                 # merge the experts into a single 3d tensor
                 for w_name in ["down_proj", "gate_proj", "up_proj"]:
                     datas: list[Tensor] = []
@@ -8746,8 +8728,8 @@ class ExaoneMoEModel(Exaone4Model):
 
                     new_name = self.map_tensor_name(merged_name)
 
-                    tensors.append((new_name, data_torch))
-                return tensors
+                    yield from super().modify_tensors(data_torch, new_name, bid)
+                return
             else:
                 return
 
@@ -8821,10 +8803,8 @@ class GraniteMoeModel(GraniteModel):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
             gate, up = data_torch.split(ffn_dim, dim=-2)
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
-            ]
+            yield from super().modify_tensors(gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
 
         has_experts = bool(self.hparams.get('num_local_experts'))
 
@@ -9185,7 +9165,7 @@ class BailingMoeModel(TextModel):
         output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
 
         if name.endswith("attention.dense.weight"):
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), data_torch)]
+            yield from super().modify_tensors(data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), bid)
         elif name.endswith("query_key_value.weight"):
             q, k, v = data_torch.split([n_head * head_dim, n_kv_head * head_dim, n_kv_head * head_dim], dim=-2)
 
@@ -9196,8 +9176,6 @@ class BailingMoeModel(TextModel):
         elif name.find("mlp.experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
-
-            tensors: list[tuple[str, Tensor]] = []
 
             if self._experts is None:
                 self._experts = [{} for _ in range(self.block_count)]
@@ -9220,9 +9198,9 @@ class BailingMoeModel(TextModel):
 
                     new_name = self.map_tensor_name(merged_name)
 
-                    tensors.append((new_name, data_torch))
+                    yield from super().modify_tensors(data_torch, new_name, bid)
 
-            return tensors
+            return
 
         new_name = self.map_tensor_name(name)
 
@@ -9230,7 +9208,7 @@ class BailingMoeModel(TextModel):
             data_torch = data_torch.float()
             data_torch /= torch.norm(data_torch, p=2, dim=0, keepdim=True) + 1e-7
 
-        return [(new_name, data_torch)]
+        yield from super().modify_tensors(data_torch, new_name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
