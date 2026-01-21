@@ -391,6 +391,7 @@ extern "C" {
         bool keep_split;                      // quantize to the same number of shards
         void * imatrix;                       // pointer to importance matrix data
         void * activations;                   // pointer to activations data
+        void * statistics;                    // pointer to statistics data
         void * kv_overrides;                  // pointer to vector containing overrides
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
@@ -399,6 +400,7 @@ extern "C" {
         bool save_state;                      // keep bpw state file
         void * state_file;                    // pointer to bpw state file
         bool ignore_tensor_importance;        // allocate target bpw budget equitably across all tensors
+        bool use_wce;                         // optimize for WCE instead of MSE
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
