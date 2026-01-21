@@ -57,7 +57,7 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
         throw std::runtime_error("error: invalid URL format");
     }
 
-#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
         throw std::runtime_error(
             "HTTPS is not supported. Please rebuild with:\n"
