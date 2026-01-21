@@ -327,9 +327,9 @@ void main() {
 
                 ksh[row * vsh_stride + col] = f16vec4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
             }
+#endif
 
             barrier();
-#endif
 
             [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {
                 coopMatLoad(KMat, Qf, bc_chunk * MatBc * psh_stride, psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
