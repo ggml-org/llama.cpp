@@ -862,6 +862,10 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
 }
 
+size_t mtmd_get_output_embd_size(mtmd_context * ctx) {
+    return ctx->image_embd_v.size();
+}
+
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
     switch (ctx->proj_type_v()) {
         case PROJECTOR_TYPE_GEMMA3:
