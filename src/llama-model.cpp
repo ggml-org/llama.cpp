@@ -1713,7 +1713,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
                     // for compatibility with existing DeepSeek V2 and V2.5 GGUFs
                     // that have no expert_gating_func model parameter set
-                    hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
+                    if (hparams.n_layer == 47 || hparams.n_layer == 48) { // GLM 4.7 Lite
+                        hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+                    } else {
+                        hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
+                    }
                 }
 
                 if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, 0.0f)) {
