@@ -79,7 +79,9 @@ struct task_params {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
-    common_chat_syntax oaicompat_chat_syntax;
+
+    // per-request parameters for chat parsing
+    common_chat_parser_params chat_parser_params;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -96,7 +98,7 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_syntax oaicompat_chat_syntax;
+    common_chat_parser_params chat_parser_params;
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
@@ -105,8 +107,8 @@ struct task_result_state {
     bool anthropic_thinking_block_started = false;
     bool anthropic_text_block_started = false;
 
-    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
-        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
+    task_result_state(const common_chat_parser_params & chat_parser_params)
+        : chat_parser_params(chat_parser_params) {}
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -135,8 +137,10 @@ struct server_task {
     task_params   params;
     server_tokens tokens;
 
-    // only used by CLI, this delegates the tokenization to the server
-    json                    cli_input = nullptr;
+    // only used by CLI, this allow tokenizing CLI inputs on server side
+    // we need this because mtmd_context and vocab are not accessible outside of server_context
+    bool                    cli = false;
+    std::string             cli_prompt;
     std::vector<raw_buffer> cli_files;
 
     server_task_type type;
@@ -233,7 +237,7 @@ struct server_task {
     // the task will be moved into queue, then onto slots
     // however, the state must be kept by caller (e.g., HTTP thread)
     task_result_state create_state() const {
-        return task_result_state(params.oaicompat_chat_syntax);
+        return task_result_state(params.chat_parser_params);
     }
 
     bool is_parent() const {

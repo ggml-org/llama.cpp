@@ -265,7 +265,8 @@ struct llama_file::impl {
                         continue;  // Interrupted by signal, retry
                     }
                     // Fallback to std::fread in case the DMA controller cannot access the buffer
-                    if (errno == EFAULT) {
+                    if (errno == EFAULT || errno == EINVAL) {
+                        LLAMA_LOG_WARN("%s: Falling back to buffered IO due to %s\n", __func__, strerror(errno));
                         auto curr_off = tell();
                         close(fd);
                         fd = -1;
@@ -384,6 +385,9 @@ int llama_file::file_id() const {
 #ifdef _WIN32
     return _fileno(pimpl->fp);
 #else
+    if (pimpl->fd != -1) {
+        return pimpl->fd;
+    }
 #if defined(fileno)
     return fileno(pimpl->fp);
 #else
