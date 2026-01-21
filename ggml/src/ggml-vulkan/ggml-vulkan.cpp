@@ -1813,7 +1813,6 @@ struct ggml_backend_vk_context {
     bool prealloc_x_need_sync, prealloc_y_need_sync, prealloc_split_k_need_sync;
 
     vk_context_ref compute_ctx;
-    vk_context_ref transfer_ctx;
 
     std::vector<vk_context_ref> tensor_ctxs;
 
@@ -1823,7 +1822,6 @@ struct ggml_backend_vk_context {
     uint32_t pipeline_descriptor_set_requirements {};
 
     vk_command_pool compute_cmd_pool;
-    vk_command_pool transfer_cmd_pool;
 
     // number of additional consecutive nodes that are being fused with the
     // node currently being processed
@@ -5658,7 +5656,6 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->almost_ready_fence = ctx->device->device.createFence({});
 
     ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
-    ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
 
     if (vk_perf_logger_enabled) {
         ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
@@ -11579,7 +11576,6 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     free(d_chk);
 
     ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
-    ggml_vk_command_pool_cleanup(ctx->device, ctx->transfer_cmd_pool);
 
     ggml_vk_destroy_buffer(d_X);
     ggml_vk_destroy_buffer(d_Y);
@@ -12164,7 +12160,9 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         ggml_vk_submit(subctx, {});
         ctx->submit_pending = true;
         ggml_vk_synchronize(ctx);
+        GGML_ASSERT(ctx->compute_ctx.expired());
         ggml_vk_ctx_begin(ctx->device, subctx);
+        ctx->compute_ctx = subctx;
     }
 
     if (ctx->prealloc_x == nullptr || (ctx->prealloc_size_x > 0 && ctx->prealloc_x->size < ctx->prealloc_size_x)) {
@@ -12182,6 +12180,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
             ggml_vk_destroy_buffer(ctx->prealloc_y);
         }
         ctx->prealloc_y = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_y);
+        ctx->prealloc_y_last_tensor_used = nullptr;
     }
     if (ctx->prealloc_split_k == nullptr || (ctx->prealloc_size_split_k > 0 && ctx->prealloc_split_k->size < ctx->prealloc_size_split_k)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(split_k_size: " << ctx->prealloc_size_split_k << ")");
@@ -12762,7 +12761,6 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
     ctx->prealloc_x_need_sync = ctx->prealloc_y_need_sync = ctx->prealloc_split_k_need_sync = false;
 
     ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
-    ggml_vk_command_pool_cleanup(ctx->device, ctx->transfer_cmd_pool);
 
     for (size_t i = 0; i < ctx->gc.semaphores.size(); i++) {
         ctx->device->device.destroySemaphore({ ctx->gc.semaphores[i].s });
@@ -12791,7 +12789,7 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
 static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_cleanup(" << ctx->name << ")");
     // discard any unsubmitted command buffers
-    ctx->transfer_ctx.reset();
+    ctx->compute_ctx.reset();
     // wait for any pending command buffers to finish
     ggml_vk_synchronize(ctx);
 
@@ -12824,7 +12822,6 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ctx->descriptor_sets.clear();
 
     ctx->compute_cmd_pool.destroy(ctx->device->device);
-    ctx->transfer_cmd_pool.destroy(ctx->device->device);
     if (vk_perf_logger_enabled) {
         ctx->perf_logger->print_timings(true);
     }
@@ -13096,34 +13093,34 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
 
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
 
-    vk_context transfer_ctx;
+    vk_context compute_ctx;
 
-    if (ctx->transfer_ctx.expired()) {
+    if (ctx->compute_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-        ctx->transfer_ctx = transfer_ctx;
-        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
     } else {
-        transfer_ctx = ctx->transfer_ctx.lock();
+        compute_ctx = ctx->compute_ctx.lock();
     }
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
     auto dst_offset = vk_tensor_offset(tensor) + tensor->view_offs + offset;
 
-    bool ret = ggml_vk_buffer_write_async(transfer_ctx, buf, dst_offset, data, size);
+    bool ret = ggml_vk_buffer_write_async(compute_ctx, buf, dst_offset, data, size);
 
     if (!ret) {
         ggml_vk_ensure_sync_staging_buffer(ctx, size);
-        ggml_vk_sync_buffers(nullptr, transfer_ctx);
+        ggml_vk_sync_buffers(nullptr, compute_ctx);
 
         vk::BufferCopy buffer_cpy;
         buffer_cpy.srcOffset = 0;
         buffer_cpy.dstOffset = dst_offset;
         buffer_cpy.size = size;
 
-        transfer_ctx->s->buffer.copyBuffer(ctx->sync_staging->buffer, buf->buffer, { buffer_cpy });
-        deferred_memcpy(ctx->sync_staging->ptr, data, size, &transfer_ctx->in_memcpys);
+        compute_ctx->s->buffer.copyBuffer(ctx->sync_staging->buffer, buf->buffer, { buffer_cpy });
+        deferred_memcpy(ctx->sync_staging->ptr, data, size, &compute_ctx->in_memcpys);
         ggml_vk_synchronize(ctx);
     }
 }
@@ -13135,34 +13132,34 @@ static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_
 
     ggml_backend_vk_buffer_context * buf_ctx = (ggml_backend_vk_buffer_context *)tensor->buffer->context;
 
-    vk_context transfer_ctx;
+    vk_context compute_ctx;
 
-    if (ctx->transfer_ctx.expired()) {
+    if (ctx->compute_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-        ctx->transfer_ctx = transfer_ctx;
-        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
     } else {
-        transfer_ctx = ctx->transfer_ctx.lock();
+        compute_ctx = ctx->compute_ctx.lock();
     }
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
     auto src_offset = vk_tensor_offset(tensor) + tensor->view_offs + offset;
-    bool ret = ggml_vk_buffer_read_async(transfer_ctx, buf, src_offset, data, size);
+    bool ret = ggml_vk_buffer_read_async(compute_ctx, buf, src_offset, data, size);
 
     // If that failed, copy synchronously through a staging buffer
     if (!ret) {
         ggml_vk_ensure_sync_staging_buffer(ctx, size);
-        ggml_vk_sync_buffers(nullptr, transfer_ctx);
+        ggml_vk_sync_buffers(nullptr, compute_ctx);
 
         vk::BufferCopy buffer_cpy;
         buffer_cpy.srcOffset = src_offset;
         buffer_cpy.dstOffset = 0;
         buffer_cpy.size = size;
 
-        transfer_ctx->s->buffer.copyBuffer(buf->buffer, ctx->sync_staging->buffer, { buffer_cpy });
-        deferred_memcpy(data, ctx->sync_staging->ptr, size, &transfer_ctx->out_memcpys);
+        compute_ctx->s->buffer.copyBuffer(buf->buffer, ctx->sync_staging->buffer, { buffer_cpy });
+        deferred_memcpy(data, ctx->sync_staging->ptr, size, &compute_ctx->out_memcpys);
         ggml_vk_synchronize(ctx);
     }
 }
@@ -13174,21 +13171,21 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend, const ggml_
         ggml_backend_vk_buffer_context * src_buf_ctx = (ggml_backend_vk_buffer_context *)src->buffer->context;
         ggml_backend_vk_buffer_context * dst_buf_ctx = (ggml_backend_vk_buffer_context *)dst->buffer->context;
 
-        vk_context transfer_ctx;
+        vk_context compute_ctx;
 
-        if (ctx->transfer_ctx.expired()) {
+        if (ctx->compute_ctx.expired()) {
             // Initialize new transfer context
-            transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-            ctx->transfer_ctx = transfer_ctx;
-            ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+            compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+            ctx->compute_ctx = compute_ctx;
+            ggml_vk_ctx_begin(ctx->device, compute_ctx);
         } else {
-            transfer_ctx = ctx->transfer_ctx.lock();
+            compute_ctx = ctx->compute_ctx.lock();
         }
 
         vk_buffer src_buf = src_buf_ctx->dev_buffer;
         vk_buffer dst_buf = dst_buf_ctx->dev_buffer;
 
-        ggml_vk_buffer_copy_async(transfer_ctx, dst_buf, vk_tensor_offset(dst) + dst->view_offs, src_buf, vk_tensor_offset(src) + src->view_offs, ggml_nbytes(src));
+        ggml_vk_buffer_copy_async(compute_ctx, dst_buf, vk_tensor_offset(dst) + dst->view_offs, src_buf, vk_tensor_offset(src) + src->view_offs, ggml_nbytes(src));
         return true;
     }
 
@@ -13198,19 +13195,19 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend, const ggml_
 static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_synchronize()");
 
-    bool do_transfer = !ctx->transfer_ctx.expired();
+    bool do_transfer = !ctx->compute_ctx.expired();
 
-    vk_context transfer_ctx;
+    vk_context compute_ctx;
     if (do_transfer) {
-        transfer_ctx = ctx->transfer_ctx.lock();
+        compute_ctx = ctx->compute_ctx.lock();
 
-        ggml_vk_ctx_end(transfer_ctx);
+        ggml_vk_ctx_end(compute_ctx);
 
-        for (auto& cpy : transfer_ctx->in_memcpys) {
+        for (auto& cpy : compute_ctx->in_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
 
-        ggml_vk_submit(transfer_ctx, {});
+        ggml_vk_submit(compute_ctx, {});
         ctx->submit_pending = true;
     }
 
@@ -13224,10 +13221,10 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
     }
 
     if (do_transfer) {
-        for (auto& cpy : transfer_ctx->out_memcpys) {
+        for (auto& cpy : compute_ctx->out_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
-        ctx->transfer_ctx.reset();
+        ctx->compute_ctx.reset();
     }
 }
 
@@ -13896,6 +13893,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_submit(compute_ctx, ctx->device->fence);
         VK_CHECK(ctx->device->device.waitForFences({ ctx->device->fence }, true, UINT64_MAX), "GGML_VULKAN_PERF waitForFences");
         ctx->device->device.resetFences({ ctx->device->fence });
+        ctx->compute_ctx.reset();
 
         // Get the results and pass them to the logger
         std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
@@ -14182,15 +14180,15 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
     vk_event *vkev = (vk_event *)event->context;
 
-    vk_context transfer_ctx;
+    vk_context compute_ctx;
 
-    if (ctx->transfer_ctx.expired()) {
+    if (ctx->compute_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-        ctx->transfer_ctx = transfer_ctx;
-        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
     } else {
-        transfer_ctx = ctx->transfer_ctx.lock();
+        compute_ctx = ctx->compute_ctx.lock();
     }
 
     // the backend interface doesn't have an explicit reset, so reset it here
@@ -14198,13 +14196,13 @@ static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_ev
     ctx->device->device.resetEvent(vkev->event);
     ctx->device->device.resetFences({ vkev->fence });
 
-    ggml_vk_set_event(transfer_ctx, vkev->event);
+    ggml_vk_set_event(compute_ctx, vkev->event);
 
-    ggml_vk_ctx_end(transfer_ctx);
+    ggml_vk_ctx_end(compute_ctx);
 
-    ggml_vk_submit(transfer_ctx, {vkev->fence});
+    ggml_vk_submit(compute_ctx, {vkev->fence});
     ctx->submit_pending = true;
-    ctx->transfer_ctx.reset();
+    ctx->compute_ctx.reset();
 }
 
 static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
@@ -14212,20 +14210,20 @@ static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_even
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
     vk_event *vkev = (vk_event *)event->context;
 
-    vk_context transfer_ctx;
+    vk_context compute_ctx;
 
-    if (ctx->transfer_ctx.expired()) {
+    if (ctx->compute_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
-        ctx->transfer_ctx = transfer_ctx;
-        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
     } else {
-        transfer_ctx = ctx->transfer_ctx.lock();
+        compute_ctx = ctx->compute_ctx.lock();
     }
 
-    ggml_vk_wait_events(transfer_ctx, {vkev->event});
-    ggml_vk_ctx_end(transfer_ctx);
-    ctx->transfer_ctx.reset();
+    ggml_vk_wait_events(compute_ctx, {vkev->event});
+    ggml_vk_ctx_end(compute_ctx);
+    ctx->compute_ctx.reset();
 }
 
 // TODO: enable async and synchronize
