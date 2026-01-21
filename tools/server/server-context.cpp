@@ -165,14 +165,18 @@ struct server_slot {
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
     // Audio output state
-    bool audio_output_enabled = false;
     std::vector<float> audio_embd;  // embedding buffer for audio decode
     llama_pos audio_pos = 0;  // position counter for audio mode (since we can't push tokens)
     llama_pos audio_pos_offset = 0;  // offset to add to pos_next() after audio mode (to account for audio decodes)
 
+    // Check if audio output was requested for this slot
+    bool has_audio_output() const {
+        return task && task->params.has_out_audio && mctx && mtmd_support_audio_output(mctx);
+    }
+
     // Check if slot is currently in audio output mode
-    bool is_audio_mode() const {
-        return audio_output_enabled && mctx && mtmd_get_output_modality(mctx) == MTMD_OUTPUT_MODALITY_AUDIO;
+    bool is_audio_out_mode() const {
+        return has_audio_output() && mtmd_get_output_modality(mctx) == MTMD_OUTPUT_MODALITY_AUDIO;
     }
 
     void reset() {
@@ -199,7 +203,6 @@ struct server_slot {
         n_draft_accepted = 0;
 
         // clear audio output state
-        audio_output_enabled = false;
         audio_embd.clear();
         audio_pos = 0;
         audio_pos_offset = 0;
@@ -744,11 +747,8 @@ private:
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
 
-            // Log audio output support status
             if (mtmd_support_audio_output(mctx)) {
                 SRV_INF("audio output supported, sample_rate = %d\n", mtmd_audio_output_get_sample_rate(mctx));
-            } else {
-                SRV_INF("%s", "audio output not supported (vocoder/tokenizer not loaded)\n");
             }
 
             if (params_base.ctx_shift) {
@@ -1103,7 +1103,6 @@ private:
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
         // continue mode: prepend existing slot tokens to task tokens
-        // the normal cache_prompt logic will then find the common prefix and only process new tokens
         if (task.params.continue_slot) {
             if (slot.prompt.tokens.empty()) {
                 send_error(task, "continue mode requires existing slot state, but slot is empty", ERROR_TYPE_INVALID_REQUEST);
@@ -1232,8 +1231,7 @@ private:
         slot.task = std::make_unique<const server_task>(std::move(task));
 
         // Initialize audio output if enabled and supported
-        slot.audio_output_enabled = slot.task->params.has_out_audio;
-        if (slot.audio_output_enabled && slot.mctx && mtmd_support_audio_output(slot.mctx)) {
+        if (slot.has_audio_output()) {
             // Set output modalities based on requested modalities
             std::vector<mtmd_output_modality> modalities;
             if (slot.task->params.has_out_audio) {
@@ -1251,9 +1249,8 @@ private:
                 slot.audio_embd.clear();
                 slot.audio_embd.reserve(llama_model_n_embd(model));
             }
-        } else if (slot.audio_output_enabled) {
+        } else if (slot.task->params.has_out_audio) {
             SLT_WRN(slot, "%s", "audio output requested but not supported by model\n");
-            slot.audio_output_enabled = false;
         }
 
         slot.state = slot.task->is_child()
@@ -2185,19 +2182,14 @@ private:
                     slot.drafted = std::move(draft);
                 }
             } else {
-                // no speculative decoding
-
-                // Check if this slot is in audio output mode and needs embedding feedback
-                // In audio mode, we feed back the decoded embeddings instead of a token
-                // These slots are handled separately after the main batch
-                if (slot.is_audio_mode() && !slot.audio_embd.empty()) {
+                // check if this slot is in audio output mode and needs embeddings
+                if (slot.is_audio_out_mode() && !slot.audio_embd.empty()) {
                     SLT_DBG(slot, "slot in audio mode, will process with embeddings separately (n_embd=%zu)\n",
                             slot.audio_embd.size());
-                    // Don't add to batch - will be handled in audio processing loop
+                    // don't add to batch - will be handled in audio processing loop
                     continue;
                 }
 
-                // Text mode: normal token-based decoding
                 slot.i_batch = batch.n_tokens;
 
                 // Use offset to account for positions consumed by audio mode
@@ -2706,14 +2698,13 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            // Check if embeddings are needed for this batch
+            // check if embeddings are needed for this batch
             bool need_embd = slot_batched->task->need_embd();
 
-            // Also enable embeddings if any slot has audio output enabled
-            // (needs embeddings for audio decoding when model switches to audio mode)
+            // enable embeddings if any slot has audio output enabled
             if (!need_embd) {
                 for (auto & slot : slots) {
-                    if (slot.is_processing() && slot.audio_output_enabled) {
+                    if (slot.is_processing() && slot.is_audio_out_mode()) {
                         need_embd = true;
                         break;
                     }
@@ -2857,16 +2848,12 @@ private:
 
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
-
-                    // Note: For audio output, after mtmd_audio_output_start_new_turn(), the model
-                    // starts in TEXT mode. The first sampled token (e.g., audio_start) triggers
-                    // the switch to AUDIO mode. So we always sample first, don't skip.
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
                 }
 
-                // Check if this slot is in audio mode - skip sampling, handled by audio loop
-                if (slot.is_audio_mode()) {
+                // slot is in audio mode is handled by audio loop
+                if (slot.is_audio_out_mode()) {
                     continue;
                 }
 
@@ -2900,14 +2887,12 @@ private:
                 result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
                 result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
-
                 if (slot.task->params.sampling.n_probs > 0) {
                     populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx);
                 }
 
-                // Handle audio output if enabled
-                if (slot.audio_output_enabled && slot.mctx) {
-                    // Accept the token into audio decoder state
+                // notify decoder of text token
+                if (slot.has_audio_output()) {
                     mtmd_audio_output_accept_token(slot.mctx, id);
                 }
 
@@ -2989,7 +2974,7 @@ private:
                     }
 
                     // Check if this slot needs audio processing
-                    if (!slot.is_audio_mode()) {
+                    if (!slot.is_audio_out_mode()) {
                         continue;
                     }
 
@@ -3062,7 +3047,7 @@ private:
                         }
 
                         // Check if still in audio mode
-                        const bool still_audio = slot.is_audio_mode();
+                        const bool still_audio = slot.is_audio_out_mode();
                         if (still_audio) {
                             has_audio_slots = true;
                         } else if (!slot.task->params.has_out_text) {
@@ -3121,7 +3106,7 @@ private:
                             // Create result and process through normal flow
                             completion_token_output result;
                             result.tok = next_token;
-                            const bool render_special = slot.audio_output_enabled || accept_special_token(slot, result.tok);
+                            const bool render_special = slot.has_audio_output() || accept_special_token(slot, result.tok);
                             result.text_to_send = common_token_to_piece(ctx, result.tok, render_special);
                             result.prob = 1.0f;
 
@@ -3140,7 +3125,7 @@ private:
                             }
 
                             // Check if immediately switching back to audio
-                            if (slot.is_audio_mode()) {
+                            if (slot.is_audio_out_mode()) {
                                 SLT_INF(slot, "%s", "immediately switching back to audio mode\n");
                                 has_audio_slots = true;
                             }
@@ -3246,7 +3231,7 @@ private:
                     }
 
                     // Check if we're still in audio mode for next iteration
-                    if (!slot.is_audio_mode()) {
+                    if (!slot.is_audio_out_mode()) {
 
                         // For audio-only mode (TTS), end generation when audio completes
                         // For interleaved mode, continue to text generation
@@ -3302,7 +3287,7 @@ private:
                             // Create result and process through normal flow
                             completion_token_output result;
                             result.tok = next_token;
-                            const bool render_special = slot.audio_output_enabled || accept_special_token(slot, result.tok);
+                            const bool render_special = slot.has_audio_output() || accept_special_token(slot, result.tok);
                             result.text_to_send = common_token_to_piece(ctx, result.tok, render_special);
                             result.prob = 1.0f;
 
@@ -3320,7 +3305,7 @@ private:
                             }
 
                             // Check if this token switches back to audio mode
-                            if (slot.is_audio_mode()) {
+                            if (slot.is_audio_out_mode()) {
                                 SLT_INF(slot, "%s", "immediately switching back to audio mode\n");
                                 has_audio_slots = true;
                             }
