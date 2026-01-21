@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Get latest Vulkan SDK version
         id: vulkan_sdk_version
@@ -24,7 +24,7 @@ jobs:
           echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
 
       - name: Setup Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-sdk
         with:
           path: ./vulkan_sdk
@@ -47,10 +47,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-toolchain
         with:
           path: ./spacemit_toolchain
@@ -73,10 +73,10 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-rocm
         with:
           path: C:\Program Files\AMD\ROCm
