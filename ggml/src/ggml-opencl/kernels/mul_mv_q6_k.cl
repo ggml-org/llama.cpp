@@ -344,10 +344,18 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     float4 sumf = 0;
 
     for (int ib = ix; ib < nb; ib += BLOCK_STRIDE) {
-        sumf.s0 += block_q_6_K_dot_y_flat(blk_ql + 0*nb*128, blk_qh + 0*nb*64, blk_scales + 0*nb*16, blk_d + 0*nb, yy, ib, ip, is, l0);
-        sumf.s1 += block_q_6_K_dot_y_flat(blk_ql + 1*nb*128, blk_qh + 1*nb*64, blk_scales + 1*nb*16, blk_d + 1*nb, yy, ib, ip, is, l0);
-        sumf.s2 += block_q_6_K_dot_y_flat(blk_ql + 2*nb*128, blk_qh + 2*nb*64, blk_scales + 2*nb*16, blk_d + 2*nb, yy, ib, ip, is, l0);
-        sumf.s3 += block_q_6_K_dot_y_flat(blk_ql + 3*nb*128, blk_qh + 3*nb*64, blk_scales + 3*nb*16, blk_d + 3*nb, yy, ib, ip, is, l0);
+        if (first_row + 0 < ne01) {
+            sumf.s0 += block_q_6_K_dot_y_flat(blk_ql + 0*nb*128, blk_qh + 0*nb*64, blk_scales + 0*nb*16, blk_d + 0*nb, yy, ib, ip, is, l0);
+        }
+        if (first_row + 1 < ne01) {
+            sumf.s1 += block_q_6_K_dot_y_flat(blk_ql + 1*nb*128, blk_qh + 1*nb*64, blk_scales + 1*nb*16, blk_d + 1*nb, yy, ib, ip, is, l0);
+        }
+        if (first_row + 2 < ne01) {
+            sumf.s2 += block_q_6_K_dot_y_flat(blk_ql + 2*nb*128, blk_qh + 2*nb*64, blk_scales + 2*nb*16, blk_d + 2*nb, yy, ib, ip, is, l0);
+        }
+        if (first_row + 3 < ne01) {
+            sumf.s3 += block_q_6_K_dot_y_flat(blk_ql + 3*nb*128, blk_qh + 3*nb*64, blk_scales + 3*nb*16, blk_d + 3*nb, yy, ib, ip, is, l0);
+        }
     }
 
     float4 tot = (float4)(
@@ -357,9 +365,17 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
         sub_group_reduce_add(sumf.s3)
     );
     if (get_sub_group_local_id() == 0) {
-        dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
-        dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
-        dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
-        dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
+        if (first_row + 0 < ne01) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
+        }
+        if (first_row + 1 < ne01) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
+        }
+        if (first_row + 2 < ne01) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
+        }
+        if (first_row + 3 < ne01) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
+        }
     }
 }
