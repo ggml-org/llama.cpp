@@ -642,11 +642,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         handler_t prev_int = SIG_DFL;
         handler_t prev_term = SIG_DFL;
         signal_scope_guard() {
-            prev_int  = std::signal(SIGINT,  signal_handler);
+            prev_int = std::signal(SIGINT, signal_handler);
             prev_term = std::signal(SIGTERM, signal_handler);
         }
         ~signal_scope_guard() {
-            std::signal(SIGINT,  prev_int);
+            std::signal(SIGINT, prev_int);
             std::signal(SIGTERM, prev_term);
         }
     } signal_guard;
@@ -661,17 +661,17 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         double proj = 0.0;
     };
 
-    // Per‑tensor quantization mix that satisfies a global bpw target
-    struct tensor_info {
+    // Tensor quantization type choice
+    struct type_choice {
         const llama_model_loader::llama_tensor_weight * w = nullptr;
-        std::vector<candidate_types> candidate;
+        std::vector<type_scores> candidates;
         int choice = -1;
         float min_bpw = 0.0;
         float max_bpw = 0.0;
         size_t n_elements = 0;
     };
 
-    // subset of quantization types with the best accuracy/size tradeoff
+    // Quantization types
     constexpr ggml_type quant_types[] = {
         GGML_TYPE_IQ1_S,
         GGML_TYPE_IQ1_M,
@@ -701,34 +701,31 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const char * func = __func__;
 
     // Tensor size in bytes for a given type
-    auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
-        const int64_t n_per_row = t->ne[0];
-        const size_t row_sz = ggml_row_size(typ, n_per_row);
-        return (size_t)ggml_nrows(t) * row_sz;
+    auto tensor_bytes = [](const ggml_tensor * gt, const ggml_type gq) -> size_t {
+        return (size_t)ggml_nrows(gt) * ggml_row_size(gq, gt->ne[0]);
     };
 
     // Tensor bpw for a given type
-    auto tensor_bpw = [&](const ggml_tensor * t, const ggml_type typ) -> double {
-        const size_t bytes = tensor_bytes(t, typ);
-        return (double)bytes * 8.0 / (double)ggml_nelements(t);
+    auto tensor_bpw = [&](const ggml_tensor * gt, const ggml_type gq) -> double {
+        return (double)tensor_bytes(gt, gq) * 8.0 / (double)ggml_nelements(gt);
     };
 
     // Check if tensor is compatible with quantization type
-    auto is_compatible = [](const ggml_tensor * t, const ggml_type typ) -> bool {
-        const int64_t blck = ggml_blck_size(typ);
-        return blck <= 1 || (t->ne[0] % blck) == 0;
+    auto is_compatible = [](const ggml_tensor * gt, const ggml_type gq) -> bool {
+        const int64_t blck = ggml_blck_size(gq);
+        return blck <= 1 || gt->ne[0] % blck == 0;
     };
 
     // Get suitable fallback for type
-    auto make_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> ggml_type {
-        if (is_compatible(t, typ)) { return typ; }
-        const ggml_type fb = fallback_type(typ);
-        return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
+    auto make_compatible = [&](const ggml_tensor * gt, const ggml_type gq) -> ggml_type {
+        if (is_compatible(gt, gq)) { return gq; }
+        const ggml_type fb = fallback_type(gq);
+        return is_compatible(gt, fb) ? fb : GGML_TYPE_F16;
     };
 
     // Check if tensor is an IQ type
-    auto is_iq = [](const enum ggml_type t) {
-        switch (t) {
+    auto is_iq = [](const enum ggml_type gt) {
+        switch (gt) {
             case GGML_TYPE_IQ1_S:
             case GGML_TYPE_IQ1_M:
             case GGML_TYPE_IQ2_XXS:
@@ -745,176 +742,169 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Check if tensor can be quantized
-    auto can_quantize = [&](const ggml_tensor * t) -> bool {
-        if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
-        return is_quantizable(ggml_get_name(t), model.arch, params);
-    };
-
-    // Saved state per tensor
-    struct saved_info {
-        std::vector<candidate_types> candidate;
-        int choice = -1;
-        float min_bpw = 0.0f;
-        float max_bpw = 0.0f;
-        size_t n_elements = 0;
+    auto can_quantize = [&](const ggml_tensor * gt) -> bool {
+        if (ggml_n_dims(gt) < 2 || ggml_n_dims(gt) > 3) { return false; } // skip 1D & 4D+ tensors
+        return is_quantizable(ggml_get_name(gt), model.arch, params);
     };
 
     // DJB2 hashing algorithm
     auto djb2_hash = [&](const uint8_t * data, const size_t n) -> uint64_t {
         uint64_t h = 5381;
-        for (size_t i = 0; i < n; ++i) {
-            h = (h << 5) + h + data[i];
-        }
-        return h ? h : arbitrary_magic;
+        for (size_t i = 0; i < n; ++i) { h = (h << 5) + h + data[i]; }
+        return h ? h : HASH_MAGIC;
     };
 
-    // Get model ID from metadata hash
-    auto metadata_id = [&](const gguf_context * ctx) -> uint64_t {
-        const size_t sz = gguf_get_meta_size(ctx);
+    // Model ID from metadata hash
+    const uint64_t model_id = [&] {
+        const size_t sz = gguf_get_meta_size(ml.meta.get());
         std::vector<uint8_t> buf(sz);
-        gguf_get_meta_data(ctx, buf.data());
+        gguf_get_meta_data(ml.meta.get(), buf.data());
         return djb2_hash(buf.data(), buf.size());
-    };
+    }();
 
-    std::string gen_name;
     std::string checkpoint_file;
-    char hex[17];
-    const uint64_t model_id = metadata_id(ml.meta.get());
 
-    std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
-    ml.get_key(LLM_KV_GENERAL_NAME, gen_name, false);
-    std::replace(gen_name.begin(), gen_name.end(), ' ', '_');
+    {
+        char hex[17];
+        std::string name;
+        std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
+        ml.get_key(LLM_KV_GENERAL_NAME, name, false);
+        std::replace(name.begin(), name.end(), ' ', '_');
+        name.empty() ? checkpoint_file = ml.arch_name : checkpoint_file = name;
+        checkpoint_file += "-" + std::string(hex) + (valid_wce ? "-wce" : "-mse") + ".bpw_state";
 
-    gen_name.empty() ? checkpoint_file = ml.arch_name : checkpoint_file = gen_name;
-    checkpoint_file += "-" + std::string(hex) + "-mse.bpw_state";
+        if (params->state_file) {
+            const auto * filename = static_cast<const char*>(params->state_file);
+            bool is_valid = false;
 
-    if (params->state_file) {
-        const auto * filename = static_cast<const char*>(params->state_file);
-        bool is_valid = false;
-
-        if (std::ifstream(filename, std::ios::binary).good()) {
-            is_valid = true;
-        } else if (params->save_state) {
-            std::ofstream ofs(filename, std::ios::binary | std::ios::app);
-            if (ofs.is_open()) {
+            if (std::ifstream(filename, std::ios::binary).good()) {
                 is_valid = true;
-                ofs.close();
-                std::remove(filename);
+            } else if (params->save_state) {
+                std::ofstream ofs(filename, std::ios::binary | std::ios::app);
+                if (ofs.is_open()) {
+                    is_valid = true;
+                    ofs.close();
+                    std::remove(filename);
+                }
             }
-        }
 
-        if (is_valid) {
-            checkpoint_file = filename;
-        } else {
-            LLAMA_LOG_WARN("%s: '%s' is not a valid state file\n", func, filename);
-            checkpoint_file.clear();
+            if (is_valid) {
+                checkpoint_file = filename;
+            } else {
+                LLAMA_LOG_WARN("%s: '%s' is not a valid state file\n", func, filename);
+                checkpoint_file.clear();
+            }
         }
     }
 
-    // Serializes vector<tensor_info> state to disk
-    auto save_state = [&](const std::vector<tensor_info> & all_vec) {
+    // Save vector<type_choice> state to disk
+    auto save_state = [&](const std::vector<type_choice> & all_tensors) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         if (!ofs) { return; }
-        ofs.write((const char *)&file_magic, sizeof(file_magic));
-        ofs.write((const char *)&model_id, sizeof(model_id));
-        const uint64_t n = all_vec.size();
-        ofs.write((const char *)&n, sizeof(n));
-        for (const auto & ti : all_vec) {
-            const std::string name = ggml_get_name(ti.w->tensor);
+        ofs.write((const char *)& file_magic, sizeof(file_magic));
+        ofs.write((const char *)& model_id, sizeof(model_id));
+        const uint64_t n = all_tensors.size();
+        ofs.write((const char *)& n, sizeof(n));
+        for (const auto & tn : all_tensors) {
+            const std::string name = ggml_get_name(tn.w->tensor);
             const auto len = (uint32_t)name.size();
-            ofs.write((const char *)&len, sizeof(len));
+            ofs.write((const char *)& len, sizeof(len));
             ofs.write(name.data(), len);
 
-            const uint64_t cn = ti.candidate.size();
-            ofs.write((const char *)&cn, sizeof(cn));
-            ofs.write((const char *)&ti.choice, sizeof(ti.choice));
-            ofs.write((const char *)&ti.min_bpw, sizeof(ti.min_bpw));
-            ofs.write((const char *)&ti.max_bpw, sizeof(ti.max_bpw));
-            const uint64_t ne = ti.n_elements;
-            ofs.write((const char *)&ne, sizeof(ne));
+            const uint64_t sz = tn.candidates.size();
+            ofs.write((const char *)& sz, sizeof(sz));
+            ofs.write((const char *)& tn.choice, sizeof(tn.choice));
+            ofs.write((const char *)& tn.min_bpw, sizeof(tn.min_bpw));
+            ofs.write((const char *)& tn.max_bpw, sizeof(tn.max_bpw));
+            const uint64_t ne = tn.n_elements;
+            ofs.write((const char *)& ne, sizeof(ne));
 
-            for (const auto & c : ti.candidate) {
-                const int32_t  t = c.type;
-                const uint64_t b = c.bytes;
-                ofs.write((const char *)&t, sizeof(t));
-                ofs.write((const char *)&c.bpw, sizeof(c.bpw));
-                ofs.write((const char *)&b, sizeof(b));
-                ofs.write((const char *)&c.error, sizeof(c.error));
+            for (const auto & c : tn.candidates) {
+                const int32_t tp = c.type;
+                const uint64_t bt = c.bytes;
+                ofs.write((const char *)& tp, sizeof(tp));
+                ofs.write((const char *)& c.bpw, sizeof(c.bpw));
+                ofs.write((const char *)& bt, sizeof(bt));
+                ofs.write((const char *)& c.error, sizeof(c.error));
             }
         }
 
         ofs.close();
         std::remove(checkpoint_file.c_str());
         std::rename(tmp.c_str(), checkpoint_file.c_str());
-        LLAMA_LOG_INFO("%s: saved target progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: saved target progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
     };
 
-    // Deserializes vector<tensor_info> state from disk
-    auto load_state = [&]() -> std::unordered_map<std::string, saved_info> {
-        std::unordered_map<std::string, saved_info> out;
+    // Load vector<type_choice> state from disk
+    auto load_state = [&]() -> std::unordered_map<std::string, type_choice> {
         std::ifstream ifs(checkpoint_file, std::ios::binary);
-        if (!ifs) { return out; }
+        if (!ifs) { return {}; }
 
         uint32_t magic = 0;
         uint64_t id = 0;
-        ifs.read((char *)&magic, sizeof(magic));
-        ifs.read((char *)&id, sizeof(id));
-        if (magic != file_magic) {
-            LLAMA_LOG_WARN("%s: invalid resume file, ignoring: %s\n", func, checkpoint_file.c_str());
-            return out;
-        }
+        ifs.read((char *)& magic, sizeof(magic));
+        ifs.read((char *)& id, sizeof(id));
         if (id != model_id) {
-            LLAMA_LOG_WARN("%s: model ID mismatch, ignoring: %s\n", func, checkpoint_file.c_str());
-            return out;
+            LLAMA_LOG_WARN("%s: invalid target state file, ignoring\n", func);
+            return {};
+        }
+
+        if (magic != file_magic) {
+            LLAMA_LOG_WARN("%s: bpw state file mismatch (expected %s, got %s), ignoring\n",
+                func, file_magic == MSE_MAGIC ? "MSE" : "WCE", magic == MSE_MAGIC ? "MSE" : "WCE");
+            return {};
         }
 
         LLAMA_LOG_INFO("%s: state file found, resuming tensor quantization\n", func);
 
+        std::unordered_map<std::string, type_choice> out;
         uint64_t n = 0;
-        ifs.read((char *)&n, sizeof(n));
+        ifs.read((char *)& n, sizeof(n));
         for (uint64_t i = 0; i < n; ++i) {
             uint32_t len = 0;
-            ifs.read((char *)&len, sizeof(len));
+            ifs.read((char *)& len, sizeof(len));
             std::string name(len, '\0');
             ifs.read(name.data(), len);
 
-            uint64_t cn = 0;
-            ifs.read((char *)&cn, sizeof(cn));
-
-            saved_info si;
-            ifs.read((char *)&si.choice, sizeof(si.choice));
-            ifs.read((char *)&si.min_bpw, sizeof(si.min_bpw));
-            ifs.read((char *)&si.max_bpw, sizeof(si.max_bpw));
+            type_choice si;
+            uint64_t sz = 0;
+            ifs.read((char *)& sz, sizeof(sz));
+            ifs.read((char *)& si.choice, sizeof(si.choice));
+            ifs.read((char *)& si.min_bpw, sizeof(si.min_bpw));
+            ifs.read((char *)& si.max_bpw, sizeof(si.max_bpw));
             uint64_t ne = 0;
-            ifs.read((char *)&ne, sizeof(ne));
+            ifs.read((char *)& ne, sizeof(ne));
             si.n_elements = (size_t)ne;
 
-            si.candidate.resize(cn);
-            for (auto & s : si.candidate) {
+            si.candidates.resize(sz);
+            for (auto & cd : si.candidates) {
                 int32_t t = 0;
                 uint64_t b = 0;
-                ifs.read((char *)&t, sizeof(t));
-                s.type = (ggml_type)t;
-                ifs.read((char *)&s.bpw, sizeof(s.bpw));
-                ifs.read((char *)&b, sizeof(b));
-                s.bytes = (size_t)b;
-                ifs.read((char *)&s.error, sizeof(s.error));
+                ifs.read((char *)& t, sizeof(t));
+                cd.type = (ggml_type)t;
+                ifs.read((char *)& cd.bpw, sizeof(cd.bpw));
+                ifs.read((char *)& b, sizeof(b));
+                cd.bytes = (size_t)b;
+                ifs.read((char *)& cd.error, sizeof(cd.error));
+                // Populate mse/wce for consistency, though optimization relies on s.error
+                if (valid_wce) { cd.wce = cd.error; }
+                else { cd.mse = cd.error; }
             }
 
             out.emplace(std::move(name), std::move(si));
         }
 
-        LLAMA_LOG_INFO("%s: loaded target state for %lu tensors from %s\n", func, out.size(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: resuming from %s (data for %lu tensors loaded)\n", func, checkpoint_file.c_str(), out.size());
         return out;
     };
 
     // Check for user interrupt and save progress
-    auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
+    auto check_signal_handler = [&](const std::vector<type_choice> & all_tensors) {
         if (bpw_stop.load(std::memory_order_relaxed)) {
-            LLAMA_LOG_INFO("\n%s: saving progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
-            save_state(all_vec);
-            throw std::runtime_error("user interrupted the process");
+            LLAMA_LOG_INFO("\n%s: interrupted, saving progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
+            save_state(all_tensors);
+            throw std::runtime_error("user terminated the process");
         }
     };
 
@@ -1013,7 +1003,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
         }
 
-        // Quantize per slice into quantized_buffer
+        // Quantize & dequantize row samples
         {
             size_t qoff = 0;
             size_t foff = 0;
@@ -1021,129 +1011,104 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 const int64_t rs = rows_sample[s];
                 if (rs == 0) { continue; }
 
-                const float * v = has_values ? values_sample + s * n_per_row : nullptr;
-                (void)ggml_quantize_chunk(quant_type, f32_sample.data() + foff, quantized_buffer.data() + qoff, 0, rs, n_per_row, v);
+                const float * v = has_vals ? values_sample + s * n_per_row : nullptr;
+                ggml_quantize_chunk(quant_type, f32_sample.data() + foff, quantized_buffer.data() + qoff, 0, rs, n_per_row, v);
                 qoff += row_sz * (size_t)rs;
                 foff += (size_t)rs * (size_t)n_per_row;
             }
-        }
 
-        // Dequantize into dequantized_buffer
-        {
-            if (quant_type == GGML_TYPE_F16) {
-                for (size_t r = 0; r < sample_rows; ++r) {
-                    auto src = (const ggml_fp16_t *)(quantized_buffer.data() + r * row_sz);
-                    float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
-                    ggml_fp16_to_fp32_row(src, dst, (int)n_per_row);
-                }
-            } else if (quant_type == GGML_TYPE_BF16) {
-                for (size_t r = 0; r < sample_rows; ++r) {
-                    auto src = (const ggml_bf16_t *)(quantized_buffer.data() + r * row_sz);
-                    float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
-                    ggml_bf16_to_fp32_row(src, dst, (int)n_per_row);
-                }
-            } else {
-                const ggml_type_traits * traits = ggml_get_type_traits(quant_type);
-                if (!traits || !traits->to_float) {
-                    if (out_mse) { *out_mse = infinity; }
-                    if (out_proj) { *out_proj = 0.0; }
-                    return infinity;
-                }
-                for (size_t r = 0; r < sample_rows; ++r) {
-                    const uint8_t * src = quantized_buffer.data() + r * row_sz;
-                    float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
-                    traits->to_float(src, dst, (int)n_per_row);
-                }
+            const ggml_type_traits * traits = ggml_get_type_traits(quant_type);
+            if (!traits || !traits->to_float) { return qe; }
+            for (size_t r = 0; r < sample_rows; ++r) {
+                const void * src = quantized_buffer.data() + r * row_sz;
+                float * dst = dequantized_buffer.data() + r * (size_t)n_per_row;
+                if (quant_type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row((const ggml_fp16_t *)src, dst, (int)n_per_row); }
+                else if (quant_type == GGML_TYPE_BF16) { ggml_bf16_to_fp32_row((const ggml_bf16_t *)src, dst, (int)n_per_row); }
+                else { traits->to_float(src, dst, (int)n_per_row); }
             }
         }
 
-        // Compute error per slice with trimmed aggregation
+        // Helper for trimmed mean
         auto trimmed_mean = [](std::vector<double> & v) -> double {
-            const int64_t n = (int64_t)v.size();
+            const auto n = v.size();
             if (n == 0) { return 0.0; }
-            double sum = std::accumulate(v.begin(), v.end(), 0.0);
-            if (n < 50) { return sum / (double)n; } // too few elements to trim
-            int64_t k = (int64_t) std::floor(0.025 * (double)n); // trim 5% (2.5% each side)
-            std::sort(v.begin(), v.end());
-            const auto num = (double)(n - 2 * k);
-            sum = std::accumulate(v.begin() + k, v.begin() + (n - k), 0.0);
-            return sum / std::max(1.0, num);
+            if (n < 50) { return std::accumulate(v.begin(), v.end(), 0.0) / (double)n; }
+            const auto k = (size_t)((double)n * 0.01); // trim 1% from each end
+            std::nth_element(v.begin(), v.begin() + k, v.end());
+            std::nth_element(v.begin() + k, v.end() - k, v.end());
+            return std::accumulate(v.begin() + k, v.end() - k, 0.0) / std::max(1.0, (double)(n - 2 * k));
         };
 
+        // Compute Error Metrics: Weighted MSE Optimization - Default
         size_t off = 0;
-        size_t ridx = 0;
-        double total_mse = 0.0;
+        size_t row_idx = 0;
+        double total_wmse = 0.0;
         double total_proj = 0.0;
         double total_bias = 0.0;
+
         for (int64_t s = 0; s < ne2; ++s) {
             const int64_t rs = rows_sample[s];
             if (rs == 0) { continue; }
 
-            const float * v = has_values ? values_sample + s * n_per_row : nullptr;
-            const float * a = has_activations ? activations_sample + s * n_per_row : nullptr;
-            const double denom_bias = has_activations ? bias_denom[s] : 0.0;
-            std::vector<double> row_mse_norm;
-            row_mse_norm.reserve(rs);
-            std::vector<double> row_proj_norm;
-            if (a) { row_proj_norm.reserve(rs); }
+            const float * val = has_vals ? values_sample + s * n_per_row : nullptr;
+            const float * act = has_acts ? activations_sample + s * n_per_row : nullptr;
+            const double denom_bias = has_acts ? (* ptr_bias_denom)[s] : 0.0;
 
-            for (int64_t r = 0; r < rs; ++r, ++ridx) {
+            std::vector<double> slice_mse_norm;
+            slice_mse_norm.reserve(rs);
+            std::vector<double> slice_proj_norm;
+            if (act) { slice_proj_norm.reserve(rs); }
+
+            for (int64_t r = 0; r < rs; ++r, ++row_idx) {
                 const float * x = f32_sample.data() + off;
                 const float * y = dequantized_buffer.data() + off;
-                double w_mse = 0.0;
+                double w_err = 0.0;
                 double bias_num = 0.0;
+
                 for (int64_t j = 0; j < n_per_row; ++j) {
-                    const double wj = v ? std::max(0.0f, v[j]) : 1.0;
+                    const double w = val ? std::max(0.0f, val[j]) : 1.0;
                     const double e = y[j] - x[j];
-                    w_mse += wj * e * e;
-                    if (a) { bias_num += wj * e * a[j]; }
+                    w_err += w * e * e;
+                    if (act) { bias_num += w * e * act[j]; }
                 }
 
-                const double denom_x = row_sq_norm[ridx];
-                const double m_norm = w_mse / (denom_x + epsilon);
-                row_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : infinity);
+                const double m_norm = w_err / ((* ptr_row_sq_norm)[row_idx] + EPSILON);
+                slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : INFINITE);
 
-                if (a) {
+                if (act) {
                     double p_norm = 0.0;
                     if (denom_bias > 0.0) {
-                        const double proj = bias_num * bias_num / (denom_bias + epsilon);
+                        const double proj = bias_num * bias_num / (denom_bias + EPSILON);
                         p_norm = std::isfinite(proj) ? proj : 0.0;
                     }
-
-                    row_proj_norm.push_back(p_norm);
+                    slice_proj_norm.push_back(p_norm);
                 }
 
                 off += (size_t)n_per_row;
             }
 
-            const double slice_mse = trimmed_mean(row_mse_norm) * (double)nrows;
-            const double slice_proj = a ? trimmed_mean(row_proj_norm) * (double)nrows : 0.0;
+            const int64_t nrows = t->ne[1];
+            const double slice_mean_mse = trimmed_mean(slice_mse_norm) * (double)nrows;
+            const double slice_mean_proj = act ? trimmed_mean(slice_proj_norm) * (double)nrows : 0.0;
 
-            total_mse += slice_mse;
-            total_proj += slice_proj;
+            total_wmse += slice_mean_mse;
+            total_proj += slice_mean_proj;
 
-            const double bl = slice_bias_lambda ? (double)std::max(0.0f, slice_bias_lambda[s]) : (double)tensor_bias_lambda;
-            total_bias += bl * slice_proj;
-
-            if (!std::isfinite(total_mse) || !std::isfinite(total_proj) || !std::isfinite(total_bias)) {
-                if (out_mse) { *out_mse = infinity; }
-                if (out_proj) { *out_proj = 0.0; }
-                return infinity;
-            }
+            const double lambda = slice_bias ? (double)std::max(0.0f, slice_bias[s]) : (double)tensor_bias;
+            total_bias += lambda * slice_mean_proj;
         }
 
-        if (out_mse) { *out_mse = total_mse; }
-        if (out_proj) { *out_proj = total_proj; }
-
-        const double total_err = total_mse + total_bias;
-        return std::isfinite(total_err) ? total_err : infinity;
+        qe.mse = total_wmse;
+        qe.proj = total_proj;
+        qe.error = total_wmse + total_bias;
+        return qe;
     };
 
-    // Returns lambda per slice or 0.0 if no activations
+    // Lambda per slice or 0.0 if no activations
     auto estimate_lambda = [&](const float * values, const float * activations, const int64_t n_per_row, const int64_t ne2) -> std::vector<float> {
+        if (!activations) { return {}; }
         const int64_t ns = std::max<int64_t>(1, ne2);
         std::vector<float> lambdas(ns, 0.0f);
-        if (!activations) { return lambdas; }
 
         for (int64_t s = 0; s < ns; ++s) {
             const float * v = values ? values + s * n_per_row : nullptr;
@@ -1152,51 +1117,45 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             double s2 = 0.0;
             for (int64_t j = 0; j < n_per_row; ++j) {
                 const double w = v ? std::max(0.0f, v[j]) : 1.0;
-                const double aw = std::sqrt(w) * a[j];
-                const double z  = aw * aw;
-                s1 += z;
-                s2 += z * z;
+                const double aw = std::sqrt(w) * a[j]; // z = w * a^2
+                s1 += aw * aw;
+                s2 += aw * aw * aw * aw;
             }
 
-            float l = 0.0f;
             if (s1 > 0.0) {
-                const auto n = (double)n_per_row;
-                const double c = std::max(0.0, s2 / (s1 * s1 + epsilon) - 1.0 / n);
-                l = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 16.0);
+                const double c = std::max(0.0, s2 / (s1 * s1 + EPSILON) - 1.0 / (double)n_per_row);
+                lambdas[s] = (float)std::clamp(12.0 * (c / (c + 1.0)), 0.0, 16.0);
             }
-
-            lambdas[(size_t)s] = l;
         }
 
         return lambdas;
     };
 
-    std::unordered_map<std::string, saved_info> bpw_data;
+    std::unordered_map<std::string, type_choice> bpw_data;
     if (params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); }
 
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
-    auto process_tensor = [&](const llama_model_loader::llama_tensor_weight * tw,
+    auto process_tensor = [&](
+        const llama_model_loader::llama_tensor_weight * tw,
         std::vector<no_init<uint8_t>> & thread_local_buffer,
         std::mutex & loader_mutex,
-        std::mutex & log_mutex) -> std::optional<tensor_info>
+        std::mutex & log_mutex
+    ) -> std::optional<type_choice>
     {
         ggml_tensor * tensor = tw->tensor;
         const std::string name = ggml_get_name(tensor);
-        if (bpw_stop.load(std::memory_order_relaxed)) {
-            return std::nullopt;
-        }
+        if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
 
-        // check for pre-computed results from a checkpoint file.
-        auto it_saved = bpw_data.find(name);
-        if (it_saved != bpw_data.end()) {
-            tensor_info info;
-            info.w = tw;
-            info.candidate = it_saved->second.candidate;
-            info.choice = it_saved->second.choice;
-            info.min_bpw = it_saved->second.min_bpw;
-            info.max_bpw = it_saved->second.max_bpw;
-            info.n_elements = it_saved->second.n_elements ? it_saved->second.n_elements : (size_t)ggml_nelements(tensor);
-            return info;
+        // Check cache
+        if (auto tn = bpw_data.find(name); tn != bpw_data.end()) {
+            type_choice tc;
+            tc.w = tw;
+            tc.candidates = tn->second.candidates;
+            tc.choice = tn->second.choice;
+            tc.min_bpw = tn->second.min_bpw;
+            tc.max_bpw = tn->second.max_bpw;
+            tc.n_elements = tn->second.n_elements ? tn->second.n_elements : (size_t)ggml_nelements(tensor);
+            return tc;
         }
         {
             std::lock_guard<std::mutex> lock(log_mutex);
@@ -1212,357 +1171,283 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             ml.load_data_for(tensor);
         }
 
-        // Dequantize sampled rows into f32_sample
+        // Sampling
         const int64_t n_per_row = tensor->ne[0];
         const int64_t nrows_total = tensor->ne[1];
         const int64_t ne2 = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
 
         // Compute rows based on tensor shape and slice count
-        auto sample_rows = [](const int64_t n, const int64_t rows, const int64_t n2, const bool has_acts) -> int64_t {
-            const double tensor_budget = has_acts ? 1 * 1024 * 1024 : 0.5 * 1024 * 1024;
-            const double scale_rows = std::clamp(std::sqrt(std::max(1.0, (double)rows) / 4096.0), 0.5, 2.0); // favour more rows for large tensors
-            const double slice_budget = tensor_budget * scale_rows / std::max<int64_t>(1, n2);
-            const int64_t min_rows = has_acts ? 128 : 64;
-            constexpr int64_t max_rows = 4096; // row limit to avoid excessive memory use
-            int64_t total_rows = std::llround(slice_budget / std::max<int64_t>(1, n));
-            total_rows = std::max<int64_t>(min_rows, std::min<int64_t>(total_rows, std::min<int64_t>(rows, max_rows)));
-            if (rows <= min_rows * 2) { total_rows = rows; }
-            return total_rows;
+        auto sample_count = [&](const int64_t n, const int64_t rows, const int64_t n2, const bool has_acts) {
+            const double k_scale = valid_wce ? 2.0 : 1.0;
+            const double tensor_budget = (has_acts ? 1.0 : 0.5) * k_scale * 1024.0 * 1024.0;
+            const double scale = std::clamp(std::sqrt(std::max(1.0, (double)rows) / 4096.0), 0.5, 2.0); // more rows for large tensors
+            const double slice_budget = tensor_budget * scale / std::max<int64_t>(1, n2);
+            const int64_t min_r = (has_acts ? 512 : 256) * (int64_t)k_scale;
+            const int64_t max_r = 4096 * (int64_t)k_scale;
+            int64_t tr = std::llround(slice_budget / std::max<int64_t>(1, n));
+            tr = std::max<int64_t>(min_r, std::min<int64_t>(tr, std::min<int64_t>(rows, max_r)));
+            if (rows <= min_r * 2) { tr = rows; }
+            return tr;
         };
 
-        const int64_t rows_sample_per_expert = sample_rows(n_per_row, nrows_total, ne2, activations_data != nullptr);
+        const int64_t rows_to_sample = sample_count(n_per_row, nrows_total, ne2, activations_data != nullptr);
         std::vector<float> f32_sample;
-        f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, rows_sample_per_expert) * (size_t)n_per_row);
+        f32_sample.reserve((size_t)ne2 * (size_t)std::min(nrows_total, rows_to_sample) * (size_t)n_per_row);
         std::vector<int64_t> rows_sample(ne2, 0);
-        const ggml_type src_type = tensor->type;
-        const ggml_type_traits * src_traits = ggml_get_type_traits(src_type);
-        const bool src_is_quant = ggml_is_quantized(src_type);
-        const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
 
-        // Convert a single row to fp32
-        auto row_to_fp32 = [&](const uint8_t * src, float * dst) {
-            const ggml_type t = src_type;
-            if (t == GGML_TYPE_F32) {
-                std::memcpy(dst, src, sizeof(float) * (size_t)n_per_row);
-                return;
-            }
-            if (t == GGML_TYPE_F16) {
-                ggml_fp16_to_fp32_row((const ggml_fp16_t *)src, dst, (int)n_per_row);
-                return;
-            }
-            if (t == GGML_TYPE_BF16) {
-                ggml_bf16_to_fp32_row((const ggml_bf16_t *)src, dst, (int)n_per_row);
-                return;
-            }
-            if (src_is_quant) {
-                GGML_ASSERT(src_traits && src_traits->to_float);
-                src_traits->to_float(src, dst, (int)n_per_row);
-                return;
-            }
-
-            throw std::runtime_error(format("unsupported src type %s for sampling", ggml_type_name(t)));
-        };
-
-        // Sample rows randomly per slice
+        // Populate f32_sample
         {
-            f32_sample.clear();
-            std::vector<float> row_buffer(n_per_row);
-            for (int64_t slice = 0; slice < ne2; ++slice) {
-                std::mt19937 rng(std::hash<std::string>{}(name) ^ arbitrary_magic ^ slice);
-                const int64_t rows_sample_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, rows_sample_per_expert));
-                const int64_t stride = std::max<int64_t>(1, nrows_total / rows_sample_max);
-                int64_t offset = 0;
-                if (stride > 1) {
-                    std::uniform_int_distribution<int64_t> dist(0, stride - 1);
-                    offset = dist(rng);
-                }
+            const ggml_type src_type = tensor->type;
+            const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
+            const ggml_type_traits * traits = ggml_get_type_traits(src_type);
+            std::vector<float> row_buf(n_per_row);
 
-                int64_t current = 0;
-                for (int64_t r = offset; r < nrows_total && current < rows_sample_max; r += stride) {
-                    const uint8_t * src_row = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
+            for (int64_t slice = 0; slice < ne2; ++slice) {
+                std::mt19937 rng(std::hash<std::string>{}(name) ^ HASH_MAGIC ^ slice);
+                const int64_t limit = std::max<int64_t>(1, std::min<int64_t>(nrows_total, rows_to_sample));
+                const int64_t stride = std::max<int64_t>(1, nrows_total / limit);
+                int64_t offset = stride > 1 ? std::uniform_int_distribution<int64_t>(0, stride - 1)(rng) : 0;
+
+                int64_t count = 0;
+                for (int64_t r = offset; r < nrows_total && count < limit; r += stride) {
+                    const uint8_t * src = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
                     if (src_type == GGML_TYPE_F32) {
-                        const auto *src_f32 = (const float *)src_row;
-                        f32_sample.insert(f32_sample.end(), src_f32, src_f32 + n_per_row);
+                        f32_sample.insert(f32_sample.end(), (const float*)src, (const float*)src + n_per_row);
+                    } else if (src_type == GGML_TYPE_F16 || src_type == GGML_TYPE_BF16) {
+                        if (src_type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row((const ggml_fp16_t*)src, row_buf.data(), (int)n_per_row); }
+                        else { ggml_bf16_to_fp32_row((const ggml_bf16_t*)src, row_buf.data(), (int)n_per_row); }
+                        f32_sample.insert(f32_sample.end(), row_buf.begin(), row_buf.end());
+                    } else if (traits && traits->to_float) {
+                        traits->to_float(src, row_buf.data(), (int)n_per_row);
+                        f32_sample.insert(f32_sample.end(), row_buf.begin(), row_buf.end());
                     } else {
-                        row_to_fp32(src_row, row_buffer.data());
-                        f32_sample.insert(f32_sample.end(), row_buffer.begin(), row_buffer.end());
+                        throw std::runtime_error(format("unsupported source type %s for sampling", ggml_type_name(src_type)));
                     }
 
-                    ++current;
+                    ++count;
                 }
 
-                rows_sample[slice] = current;
+                rows_sample[slice] = count;
             }
         }
 
-        auto side_data = [&](const std::unordered_map<std::string, std::vector<float>> * m, const std::string & tensor_name) {
-            if (!m) { return std::pair<const float*, size_t>{nullptr, 0}; }
-
-            const std::string key = remap_imatrix(tensor_name, mapped);
-            const auto it = m->find(key);
-            return it == m->end() ? std::pair<const float*, size_t>{nullptr, 0} : std::pair<const float*, size_t>{ it->second.data(), it->second.size() };
+        // Prepare side data
+        auto get_side_data = [&](const auto * m) {
+            if (!m) { return std::pair<const float *, size_t>{nullptr, 0}; }
+            auto it = m->find(remap_imatrix(name, mapped));
+            return it != m->end() ? std::pair{it->second.data(), it->second.size()} : std::pair<const float*, size_t>{nullptr, 0};
         };
 
-        // Copy this row's side data (values and activations), or broadcasts to all slices
-        auto copy_or_broadcast = [&](const float * src, size_t src_sz, std::vector<float> & dst) {
-            dst.clear();
-            if (!src || src_sz == 0) { return; }
+        auto [val_ptr, val_sz] = get_side_data(values_data);
+        auto [act_ptr, act_sz] = get_side_data(activations_data);
 
-            const size_t want = (size_t)ne2 * (size_t)n_per_row;
-            if (src_sz == want) {
-                dst.assign(src, src + want);
-                return;
-            }
-            if (src_sz == (size_t)n_per_row) {
-                dst.resize(want);
-                for (int64_t s = 0; s < ne2; ++s) {
-                    std::memcpy(dst.data() + s * n_per_row, src, n_per_row * sizeof(float));
-                }
-                return;
-            }
-
-            std::lock_guard<std::mutex> lock(log_mutex);
-            LLAMA_LOG_WARN("%s: side data size mismatch for %s: got %zu, expected %zu or %zu; ignoring\n", func, name.c_str(), src_sz, (size_t)n_per_row, want);
-        };
-
-        const auto [values_all, values_sz] = side_data(values_data, name);
-        const auto [activations_all, activations_sz] = side_data(activations_data, name);
-        std::vector<float> values_sample;
-        std::vector<float> activations_sample;
-        if (values_all) { copy_or_broadcast(values_all, values_sz, values_sample); }
-        if (activations_all) { copy_or_broadcast(activations_all, activations_sz, activations_sample); }
-
-        tensor_info info;
-        info.w = tw;
-        info.n_elements = ggml_nelements(tensor);
-        size_t total_sampled_rows = f32_sample.size() / n_per_row;
-
-        // Build list of candidate types first (compatible ones)
-        const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
-        size_t max_row_sz = 0;
-        const ggml_type * base_arr = quant_types;
-        const size_t base_sz = std::size(quant_types);
-        std::vector<ggml_type> compatible_candidates;
-        compatible_candidates.reserve(base_sz);
-
-        for (size_t i = 0; i < base_sz; ++i) {
-            ggml_type ts_type = base_arr[i];
-            if (is_iq(ts_type) && !has_valid_imatrix) {
+        std::vector<float> val_vec;
+        std::vector<float> act_vec;
+        auto prepare_broadcast = [&](const float* src, size_t sz, std::vector<float>& dst) {
+            if (!src) { return; }
+            size_t req = (size_t)ne2 * n_per_row;
+            if (sz == req) { dst.assign(src, src + req); }
+            else if (sz == (size_t)n_per_row) {
+                dst.resize(req);
+                for (int s = 0; s < ne2; ++s) { std::memcpy(dst.data() + s * n_per_row, src, n_per_row * sizeof(float)); }
+            } else {
                 std::lock_guard<std::mutex> lock(log_mutex);
-                LLAMA_LOG_WARN("\t%s: skipping %s for %s, no or mismatched imatrix\n", func, ggml_type_name(ts_type), name.c_str());
-                continue;
+                LLAMA_LOG_WARN("%s: side data mismatch for %s\n", func, name.c_str());
             }
+        };
 
-            ggml_type tt = make_compatible(tensor, ts_type);
-            if (!is_compatible(tensor, tt)) { continue; }
-            compatible_candidates.push_back(tt);
-            max_row_sz = std::max(max_row_sz, ggml_row_size(tt, n_per_row));
+        prepare_broadcast(val_ptr, val_sz, val_vec);
+        prepare_broadcast(act_ptr, act_sz, act_vec);
         }
 
-        std::sort(compatible_candidates.begin(), compatible_candidates.end());
-        compatible_candidates.erase(std::unique(compatible_candidates.begin(), compatible_candidates.end()), compatible_candidates.end());
+        // Build candidates
+        std::vector<ggml_type> valid_types;
+        valid_types.reserve(std::size(quant_types));
+        size_t max_row_sz = 0;
+        const bool valid_matrix = !val_vec.empty();
 
-        // Adjusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE.
-        // Larger values favours quantisation types that produce smaller bias even if the MSE is slightly bigger
+        for (auto t : quant_types) {
+            if (is_iq(t) && !valid_matrix) { continue; }
+            ggml_type compat = make_compatible(tensor, t);
+            if (!is_compatible(tensor, compat)) { continue; }
+            valid_types.push_back(compat);
+            max_row_sz = std::max(max_row_sz, ggml_row_size(compat, n_per_row));
+        }
+
+        std::sort(valid_types.begin(), valid_types.end());
+        valid_types.erase(std::unique(valid_types.begin(), valid_types.end()), valid_types.end());
+
+        // Calculate bias lambda to adjust the trade-off between MSE and systematic bias
         float tensor_lambda = 0.0f;
-        std::vector<float> lambdas;
-        const float * values = values_sample.empty() ? nullptr : values_sample.data();
-        const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
-        double acc = 0.0;
-        int ns = 0;
-        lambdas = estimate_lambda(values, activations, n_per_row, ne2);
-        for (float l : lambdas) { acc += l; ++ns; }
-        tensor_lambda = ns ? (float)(acc / ns) : 0.0f;
+        std::vector<float> slice_lambdas = estimate_lambda(val_vec.empty()?nullptr:val_vec.data(), act_vec.empty()?nullptr:act_vec.data(), n_per_row, ne2);
+        if (!slice_lambdas.empty()) {
+            double sum = 0;
+            for(float l : slice_lambdas) { sum += l; }
+            tensor_lambda = (float)(sum / slice_lambdas.size());
+        }
 
         // Evaluate candidates
-        std::vector<candidate_types> eval_candidates(compatible_candidates.size());
-        std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
-        std::vector<float> dequantized_buffer(f32_sample.size());
-        const float * slice_lambda = lambdas.empty() ? nullptr : lambdas.data();
-        for (size_t i = 0; i < compatible_candidates.size(); ++i) {
+        std::vector<type_scores> evaluations;
+        evaluations.reserve(valid_types.size());
+        std::vector<uint8_t> q_buf;
+        std::vector<float> dq_buf;
+
+        for (ggml_type vt : valid_types) {
             if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
+            const wce_cache * ptr_ref_wce = valid_wce && !ref_wce.row_sq_norm.empty() ? & ref_wce : nullptr;
+            const mse_cache * ptr_ref_mse = !valid_wce && !ref_mse.row_sq_norm.empty() ? & ref_mse : nullptr;
 
-            const ggml_type tensor_type = compatible_candidates[i];
-            const auto bpw = (float)tensor_bpw(tensor, tensor_type);
-            const size_t bytes = tensor_bytes(tensor, tensor_type);
-            double mse = 0.0;
-            double proj = 0.0;
-            const auto err = estimate_error(tensor, tensor_type, f32_sample, rows_sample, values, activations,
-                quantized_buffer, dequantized_buffer, tensor_lambda, slice_lambda, &mse, &proj);
-            eval_candidates[i] = candidate_types{ tensor_type, bpw, bytes, err, mse, proj };
+            quant_error qe = compute_quant_error(
+                tensor,
+                vt,
+                f32_sample,
+                rows_sample,
+                val_vec.empty() ? nullptr : val_vec.data(),
+                act_vec.empty() ? nullptr : act_vec.data(),
+                q_buf,
+                dq_buf,
+                tensor_lambda,
+                slice_lambdas.data(),
+                ptr_ref_wce,
+                ptr_ref_mse
+            );
+
+            type_scores candidate;
+            candidate.type = vt;
+            candidate.bpw = (float)tensor_bpw(tensor, vt);
+            candidate.bytes = tensor_bytes(tensor, vt);
+            candidate.error = qe.error;
+            candidate.mse = qe.mse;
+            candidate.proj = qe.proj;
+            candidate.wce = qe.wce;
+            evaluations.push_back(candidate);
         }
 
-        if (bpw_stop.load(std::memory_order_relaxed)) { return std::nullopt; }
-
-        // Check if biasing is needed
+        // Select final quality metric (MSE or MSE + bias) if not using WCE
+        type_choice ch;
+        ch.w = tw;
+        ch.n_elements = ggml_nelements(tensor);
         bool bias_needed = false;
-        if (!lambdas.empty()) {
-            int min_mse  = -1;
-            int min_bias = -1;
-            double best_mse = std::numeric_limits<double>::infinity();
-            double best_err = std::numeric_limits<double>::infinity();
-            for (int i = 0; i < (int)eval_candidates.size(); ++i) {
-                const auto & c = eval_candidates[i];
+            // Determine if bias correction is required
+            double best_mse = INFINITE;
+            double max_rel_bias = 0.0;
+            for (const auto& c : evaluations) {
                 if (c.bytes == 0) { continue; }
-                if (c.mse  < best_mse) {
-                    best_mse = c.mse;
-                    min_mse  = i;
-                }
-                if (c.error < best_err) {
-                    best_err = c.error;
-                    min_bias = i;
-                }
+                best_mse = std::min(best_mse, c.mse);
+                // Check penalty term contribution (error - mse)
+                if (c.mse > EPSILON) { max_rel_bias = std::max(max_rel_bias, std::max(0.0, c.error - c.mse) / c.mse); }
             }
 
-            if (min_mse != min_bias) {
-                bias_needed = true;
-            } else {
-                double max_rel_bias = 0.0;
-                for (const auto & c : eval_candidates) {
-                    if (c.bytes == 0) { continue; }
-                    const double mse = std::max(c.mse, epsilon);
-                    const double bias_term = std::max(0.0, c.error - c.mse);
-                    max_rel_bias = std::max(bias_term / mse, max_rel_bias);
-                }
-
-                bias_needed = max_rel_bias >= 0.5; // >= 50% of MSE?
-            }
+            // If penalty/bias is significant (>= 50% of MSE), use combined error, else pure MSE
+            bias_needed = max_rel_bias >= 0.5;
         }
 
-        for (auto & c : eval_candidates) {
-            if (c.bytes == 0) { continue; }
-            const double final_err = bias_needed ? c.error : c.mse;
-            info.candidate.push_back(candidate_types{ c.type, c.bpw, c.bytes, final_err, c.mse, c.proj });
+        for (const auto & ev : evaluations) {
+            if (ev.bytes == 0) { continue; }
+            type_scores ts = ev;
+            // If using WCE, c.error is already set
+            if (!valid_wce && !bias_needed) { ts.error = ts.mse; }
+            ch.candidates.push_back(ts);
         }
 
-        if (info.candidate.empty()) {
-            // As a last resort, keep original type
-            float bpw = ggml_nbytes(tensor) * 8.0f / info.n_elements;
-            info.candidate.push_back(candidate_types{ tensor->type, bpw, ggml_nbytes(tensor), 0.0 });
+        // Fallback if empty
+        if (ch.candidates.empty()) {
+            type_scores fb;
+            fb.type = tensor->type;
+            fb.bytes = ggml_nbytes(tensor);
+            fb.bpw = fb.bytes * 8.0f / ch.n_elements;
+            ch.candidates.push_back(fb);
         }
 
-        // Keep only the pareto‑optimal candidates and enforce convexity in (bytes, error) curve
-        auto pareto_convex = [&](std::vector<candidate_types> & candidates) {
-            if (candidates.empty()) { return; }
-
-            std::sort(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
-                if (a.bytes != b.bytes) { return a.bytes < b.bytes; }
-                return a.error < b.error;
+        // Convex hull & Pareto Front simplification
+        auto simplify_pareto = [](std::vector<type_scores> & candidates) {
+            std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+                return a.bytes < b.bytes || (a.bytes == b.bytes && a.error < b.error);
             });
-            candidates.erase(std::unique(candidates.begin(), candidates.end(), [](const candidate_types & a, const candidate_types & b) {
-                return a.bytes == b.bytes;
-            }), candidates.end());
-            std::vector<candidate_types> pareto;
-            pareto.reserve(candidates.size());
-            double best_err = infinity;
-            for (const auto & c : candidates) {
-                if (c.error < best_err) {
-                    best_err = c.error;
-                    pareto.push_back(c);
+            candidates.erase(std::unique(candidates.begin(), candidates.end(),
+                 [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
+
+            // Lower envelope
+            std::vector<type_scores> hull;
+            double min_err = INFINITE;
+            for(const auto & c : candidates) {
+                if (c.error < min_err) {
+                    min_err = c.error;
+                    hull.push_back(c);
                 }
             }
-            candidates.swap(pareto);
-            if (candidates.size() < 3) { return; } // need at least 3 points to do convex hull
+            candidates = std::move(hull);
 
-            // Convex hull (lower envelope)
-            auto cross_product = [](const candidate_types & h0, const candidate_types & h1, const candidate_types & p) -> double {
-                const double dx1 = (double)h1.bytes - (double)h0.bytes;
-                const double dy1 = h1.error - h0.error;
-                const double dx2 = (double)p.bytes - (double)h0.bytes;
-                const double dy2 = p.error - h0.error;
-                return dx1 * dy2 - dx2 * dy1;
+            // Convex hull
+            if (candidates.size() < 3) { return; }
+            std::vector<type_scores> convex;
+            auto cross = [](const auto& a, const auto& b, const auto& c) {
+                return ((double)b.bytes - (double)a.bytes) * (c.error - a.error) - ((double)c.bytes - (double)a.bytes) * (b.error - a.error);
             };
-            std::vector<candidate_types> hull; hull.reserve(candidates.size());
             for (const auto & c : candidates) {
-                while (hull.size() >= 2) {
-                    if (cross_product(hull[hull.size() - 2], hull[hull.size() - 1], c) <= epsilon) {
-                        hull.pop_back();
-                    } else {
-                        break;
-                    }
-                }
-
-                hull.push_back(c);
+                while (convex.size() >= 2 && cross(convex[convex.size()-2], convex.back(), c) <= EPSILON) { convex.pop_back(); }
+                convex.push_back(c);
             }
 
-            candidates.swap(hull);
+            candidates = std::move(convex);
         };
 
-        pareto_convex(info.candidate);
-
-        // Initialize choice at the smallest bpw candidate
-        info.choice = 0;
-        info.min_bpw = info.candidate.front().bpw;
-        info.max_bpw = info.candidate.back().bpw;
-
-        return info;
+        simplify_pareto(ch.candidates);
+        ch.choice = 0;
+        ch.min_bpw = ch.candidates.front().bpw;
+        ch.max_bpw = ch.candidates.back().bpw;
+        return ch;
     };
 
-    std::vector<tensor_info> all; // this vector will be populated by the parallel workers
+    std::vector<type_choice> all_tensors; // this vector will be populated by the parallel workers
     {
-        std::atomic<size_t> tensor_idx{0}; // shared work queue index for all threads
-        const size_t tensors_to_process = tensors.size();
-        std::mutex loader_mutex;
-        std::mutex log_mutex;
-        std::mutex results_mutex;
-        std::vector<std::thread> workers;
-        int threads_to_spawn = std::max(1, std::min<int>(nthread, (int)tensors_to_process));
+        std::atomic<size_t> idx{0};
+        std::mutex m_load;
+        std::mutex m_log;
+        std::mutex m_res;
+        std::vector<std::thread> threads;
+        int n_workers = std::max(1, std::min(nthread, (int)tensors.size()));
+        threads.reserve(n_workers);
 
-        for (int i = 0; i < threads_to_spawn; ++i) {
-            workers.emplace_back([&]() {
-                std::vector<no_init<uint8_t>> thread_local_buffer;
-                while (true) {
-                    const size_t current_idx = tensor_idx.fetch_add(1);
-                    if (current_idx >= tensors_to_process) { break; }
-                    const auto * tw = tensors[current_idx];
-                    if (!can_quantize(tw->tensor)) { continue; }
-                    // Execute the main processing logic for this tensor
-                    std::optional<tensor_info> result_info = process_tensor(tw, thread_local_buffer, loader_mutex, log_mutex);
-                    if (result_info) {
-                        std::lock_guard<std::mutex> lock(results_mutex);
-                        all.push_back(std::move(*result_info));
+        for (int i = 0; i < n_workers; ++i) {
+            threads.emplace_back([&](){
+                std::vector<no_init<uint8_t>> buf;
+                while(true) {
+                    const size_t cur = idx.fetch_add(1);
+                    if (cur >= tensors.size()) { break; }
+                    if (!can_quantize(tensors[cur]->tensor)) { continue; }
+
+                    auto res = process_tensor(tensors[cur], buf, m_load, m_log);
+                    if (res) {
+                        std::lock_guard<std::mutex> lock(m_res);
+                        all_tensors.push_back(std::move(*res));
                     }
                 }
             });
         }
 
-        for (auto & w : workers) { w.join(); }
+        for(auto& t : threads) { t.join(); }
     }
 
-    check_signal_handler(all);
-    if (params->save_state) { save_state(all); }
-
-    if (all.empty()) { return {}; }
+    check_signal_handler(all_tensors);
+    if (params->save_state) { save_state(all_tensors); }
+    if (all_tensors.empty()) { return {}; }
 
     // Compute total elements across all tensors and bytes for non-quantizable tensors
     size_t nq_elements = 0;
     size_t nq_bytes = 0;
     for (const auto * it : tensors) {
         const ggml_tensor * tensor = it->tensor;
-        const std::string name = ggml_get_name(tensor);
         nq_elements += (size_t)ggml_nelements(tensor);
         if (!can_quantize(tensor)) { nq_bytes += ggml_nbytes(tensor); }
     }
 
-    auto total_bytes = [&]() -> size_t {
-        size_t tb = 0;
-        for (const auto & ti : all) {
-            tb += ti.candidate[ti.choice].bytes;
-        }
-
-        return tb;
-    };
-
-    size_t q_elements = 0;
-    size_t min_bytes = 0;
-    size_t max_bytes = 0;
-    for (const auto & ti : all) {
-        q_elements += (size_t)ti.n_elements;
-        min_bytes += ti.candidate.front().bytes;  // smallest candidate per tensor
-        max_bytes += ti.candidate.back().bytes;   // largest candidate per tensor
+    size_t min_total_bytes = 0;
+    size_t max_total_bytes = 0;
+    for (const auto & tn : all_tensors) {
+        min_total_bytes += tn.candidates.front().bytes;
+        max_total_bytes += tn.candidates.back().bytes;
     }
-
-    if (q_elements == 0) { return {}; }
 
     size_t budget_bytes = 0;
 
@@ -1572,207 +1457,196 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         int64_t available = (int64_t)params->target_size - (int64_t)metadata_size - (int64_t)nq_bytes;
 
         // Clamp to the absolute minimum possible size for the variable tensors
-        if (available < (int64_t)min_bytes) {
+        if (available < (int64_t)min_total_bytes) {
             LLAMA_LOG_WARN("%s: requested file size %zu is smaller than minimum possible model size (~%zu), clamping to minimum.\n",
-                func, (size_t)params->target_size, min_bytes + nq_bytes + metadata_size);
-            budget_bytes = min_bytes;
+                func, (size_t)params->target_size, min_total_bytes + nq_bytes + metadata_size);
+            budget_bytes = min_total_bytes;
         } else {
             budget_bytes = (size_t)available;
         }
     } else {
         const double target_bpw = params->target_bpw;
         size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
-        budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_bytes;
+        budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_total_bytes;
     }
 
     // Get the types' override
-    auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
-        std::unordered_map<std::string, ggml_type> overrides;
+    auto build_mix = [&]() -> std::unordered_map<std::string, ggml_type> {
+        std::unordered_map<std::string, ggml_type> mix;
         LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", func);
-        for (const auto & ti : all) {
+        for (const auto & ti : all_tensors) {
             LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
-                func, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidate[ti.choice].type), ti.candidate[ti.choice].bpw, ti.candidate[ti.choice].error);
-            overrides[ggml_get_name(ti.w->tensor)] = ti.candidate[ti.choice].type;
+                func, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidates[ti.choice].type), ti.candidates[ti.choice].bpw, ti.candidates[ti.choice].error);
+            mix[ggml_get_name(ti.w->tensor)] = ti.candidates[ti.choice].type;
         }
 
-        return overrides;
+        return mix;
     };
 
-    if (budget_bytes <= min_bytes) {
-        for (auto & ti : all) { ti.choice = 0; }
-        return emit_overrides();
+    if (budget_bytes <= min_total_bytes) {
+        for(auto & tn : all_tensors) { tn.choice = 0; }
+        return build_mix();
     }
-    if (budget_bytes >= max_bytes) {
-        for (auto & ti : all) { ti.choice = (int)ti.candidate.size() - 1; }
-        return emit_overrides();
+    if (budget_bytes >= max_total_bytes) {
+        for(auto & tn : all_tensors) { tn.choice = (int)tn.candidates.size() - 1; }
+        return build_mix();
     }
 
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
-        bool important = tensor_name == "output.weight";
-        if (!important && !params->ignore_tensor_importance) {
-            important = tensor_name.find(".attn_v.weight") != std::string::npos ||
-                        tensor_name.find(".time_mix_value.weight") != std::string::npos ||
+        bool important = false;
+        if (params->ignore_tensor_importance) { return important; }
+
+        important = tensor_name == "output.weight" ||
+                        tensor_name.find(".attn_output.weight") != std::string::npos ||
+                        tensor_name.find(".attn_o.weight") != std::string::npos ||
+                        tensor_name.find(".attn_v.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down_exps.weight") != std::string::npos ||
-                        tensor_name.find(".attn_output.weight") != std::string::npos ||
                         tensor_name.find(".time_mix_output.weight") != std::string::npos ||
-                        tensor_name.find(".attn_o.weight") != std::string::npos;
-        }
+                        tensor_name.find(".time_mix_value.weight") != std::string::npos;
 
         return important;
     };
 
-    // Lagrangian relaxation to minimize error subject to a bpw target constraint
-    auto lagrange_penalty = [&](const double mu, std::vector<int> & choice, size_t & bytes, double & err) {
-        choice.resize(all.size());
+    // Minimize error subject to a size target constraint
+    auto lagrangian_relaxation = [&](const double mu, std::vector<int> & choices, size_t & bytes, double & cost) {
+        choices.resize(all_tensors.size());
         bytes = 0;
-        err = 0.0;
-        for (size_t i = 0; i < all.size(); ++i) {
-            const auto & candidate = all[i].candidate;
-            const std::string tensor_name = ggml_get_name(all[i].w->tensor);
-            double effective_mu = mu;
-            if (is_important(tensor_name)) { effective_mu *= 0.1; } // important tensors get 10x lower penalty
+        cost = 0.0;
+        for (size_t i = 0; i < all_tensors.size(); ++i) {
+            const auto & tn = all_tensors[i];
+            const bool imp = is_important(ggml_get_name(tn.w->tensor));
+            const double eff_mu = imp ? mu * 0.1 : mu; // important tensors get 10x lower penalty
 
-            int best_j = 0;
-            double best_val = infinity;
-            for (int j = 0; j < (int)candidate.size(); ++j) {
-                const double bits = (double)candidate[j].bytes * 8.0;
-                const double val = candidate[j].error + effective_mu * bits;
-                if (val < best_val - epsilon || (std::abs(val - best_val) <= epsilon && candidate[j].bytes < candidate[best_j].bytes)) {
-                    best_val = val;
-                    best_j = j;
+            int best = 0;
+            double min = INFINITE;
+
+            for(int j = 0; j < (int)tn.candidates.size(); ++j) {
+                double lr = tn.candidates[j].error + eff_mu * (double)tn.candidates[j].bytes * 8.0;
+                if (lr < min - EPSILON || (std::abs(lr - min) <= EPSILON && tn.candidates[j].bytes < tn.candidates[best].bytes)) {
+                    min = lr;
+                    best = j;
                 }
             }
 
-            choice[i] = best_j;
-            bytes += candidate[best_j].bytes;
-            err += candidate[best_j].error;
+            choices[i] = best;
+            bytes += tn.candidates[best].bytes;
+            cost += tn.candidates[best].error;
         }
     };
 
-    size_t bytes_lo = 0;
-    size_t bytes_hi = 0;
-    size_t bytes_mid = 0;
+    // Binary search for mu
     double mu_lo = 0.0;
     double mu_hi = 1.0;
-    double err_lo = 0.0;
-    double err_hi = 0.0;
-    double err_mid = 0.0;
-    std::vector<int> choice_lo;
-    std::vector<int> choice_hi;
-    std::vector<int> choice_mid;
-    std::vector<int> best_under_choice;
-    std::vector<int> best_over_choice;
+    std::vector<int> ch_lo;
+    std::vector<int> ch_hi;
+    std::vector<int> ch_under;
+    std::vector<int> ch_over;
+    size_t bt_lo;
+    size_t bt_hi;
+    size_t bt_mid;
+    double dummy;
 
-    lagrange_penalty(mu_lo, choice_lo, bytes_lo, err_lo);
+    lagrangian_relaxation(mu_lo, ch_lo, bt_lo, dummy);
+    int safety = 0;
 
-    // Increase mu until we get under budget or hit a safety cap
-    {
-        int expand = 0;
-        size_t prev_bytes_hi = std::numeric_limits<size_t>::max();
-        while (true) {
-            lagrange_penalty(mu_hi, choice_hi, bytes_hi, err_hi);
-            if (bytes_hi <= budget_bytes) { break; }
-            if (bytes_hi >= prev_bytes_hi) { break; }
-            prev_bytes_hi = bytes_hi;
+    do {
+        lagrangian_relaxation(mu_hi, ch_hi, bt_hi, dummy);
+        if (bt_hi <= budget_bytes || bt_hi == std::numeric_limits<size_t>::max()) { break; }
+        mu_hi *= 2.0;
+    } while(++safety < 60);
 
-            mu_hi *= 2.0; // double the penalty multiplier to reduce tensor sizes
-            if (++expand > 60) { break; } // safety cap to prevent an infinite loop
-        }
-    }
+    double gap_under = INFINITE;
+    double gap_over = INFINITE;
 
-    double best_under_gap = infinity;
-    double best_over_gap = infinity;
-    double best_under_err = infinity;
-    double best_over_err = infinity;
-    for (int it = 0; it < 40; ++it) { // binary search iterations for optimal Lagrange multiplier (40 ≈ 1e-12 precision)
-        double mu = 0.5 * (mu_lo + mu_hi); // midpoint of current bounds
-        lagrange_penalty(mu, choice_mid, bytes_mid, err_mid);
+    for(int i = 0; i < 40; ++i) {
+        double mu = 0.5 * (mu_lo + mu_hi);
+        std::vector<int> ch_mid;
+        double cost_mid = 0.0;
+        lagrangian_relaxation(mu, ch_mid, bt_mid, cost_mid);
 
-        const double gap = std::abs((double)bytes_mid - (double)budget_bytes);
-        if (bytes_mid > budget_bytes) {
-            // Too big, need stronger penalty
+        double gap = std::abs((double)bt_mid - (double)budget_bytes);
+        if (bt_mid > budget_bytes) {
             mu_lo = mu;
-            if (gap < best_over_gap - epsilon || (std::abs(gap - best_over_gap) <= epsilon && err_mid < best_over_err)) {
-                best_over_gap = gap;
-                best_over_err = err_mid;
-                best_over_choice = choice_mid;
+            if (gap < gap_over) {
+                gap_over = gap;
+                ch_over = ch_mid;
             }
         } else {
-            // Under budget, good candidate
             mu_hi = mu;
-            if (gap < best_under_gap - epsilon || (std::abs(gap - best_under_gap) <= epsilon && err_mid < best_under_err)) {
-                best_under_gap = gap;
-                best_under_err = err_mid;
-                best_under_choice = choice_mid;
+            if (gap < gap_under) {
+                gap_under = gap;
+                ch_under = ch_mid;
             }
         }
     }
 
-    if (!best_under_choice.empty()) {
-        for (size_t i = 0; i < all.size(); ++i) {
-            all[i].choice = best_under_choice[i];
+    if (!ch_under.empty()) {
+        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_under[i]; }
+    }
+    else if (!ch_over.empty()) {
+        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_over[i]; }
+    }
+    else if (bt_hi <= budget_bytes && !ch_hi.empty()) {
+        for(size_t i = 0; i < all_tensors.size(); ++i) { all_tensors[i].choice = ch_hi[i]; }
+    }
+    else {
+        for(auto& tn : all_tensors) { tn.choice = 0; }
+    }
+
+    // Single pass greedy upgrade in case there is budget left
+    auto current_bytes = [&] {
+        size_t cb = 0;
+        for(const auto & tn : all_tensors) { cb += tn.candidates[tn.choice].bytes; }
+        return cb;
+    };
+    size_t cb = current_bytes();
+
+    struct tensor_upgrade {
+        int index;
+        int next_choice;
+        double score;
+        bool operator<(const tensor_upgrade & other) const {
+            return score < other.score;
         }
-    } else if (!best_over_choice.empty()) {
-        for (size_t i = 0; i < all.size(); ++i) {
-            all[i].choice = best_over_choice[i];
+    };
+
+    std::priority_queue<tensor_upgrade> queue;
+
+    auto push_next = [&](const int i) {
+        const auto & tn = all_tensors[i];
+        int next = tn.choice + 1;
+        if (next < (int)tn.candidates.size()) {
+            const double err = std::max(0.0, tn.candidates[tn.choice].error - tn.candidates[next].error);
+            auto bytes = (double)(tn.candidates[next].bytes - tn.candidates[tn.choice].bytes);
+            if (bytes > EPSILON) {
+                double ratio = err / bytes;
+                if (is_important(ggml_get_name(tn.w->tensor))) { ratio *= 5.0; } // important tensors get 5x boost
+                queue.push({i, next, ratio});
+            }
         }
-    } else {
-        // Pick whichever side we already have, or keep minimal
-        if (bytes_hi <= budget_bytes && !choice_hi.empty()) {
-            for (size_t i = 0; i < all.size(); ++i) {
-                all[i].choice = choice_hi[i];
-            }
-        } else {
-            for (auto & ti : all) {
-                ti.choice = 0;
-            }
+    };
+
+    for (size_t i = 0; i < all_tensors.size(); ++i) { push_next((int)i); }
+
+    while (!queue.empty()) {
+        auto top = queue.top();
+        queue.pop();
+
+        int i = top.index;
+        int next = top.next_choice;
+        if (all_tensors[i].choice >= next) { continue; }
+
+        size_t delta_bt = all_tensors[i].candidates[next].bytes - all_tensors[i].candidates[all_tensors[i].choice].bytes;
+        if (cb + delta_bt <= budget_bytes) {
+            cb += delta_bt;
+            all_tensors[i].choice = next;
+            push_next(i);
         }
     }
 
-    // Spend any remaining budget with best upgrades that still fit (one pass)
-    {
-        auto cur_bytes = total_bytes();
-        while (true) {
-            int best_i = -1;
-            int best_j = -1;
-            double best_ratio = -1.0;
-            double best_gain = -1.0;
-
-            for (int i = 0; i < (int)all.size(); ++i) {
-                const auto & ti = all[i];
-                const std::string tensor_name  = ggml_get_name(ti.w->tensor);
-                int j = ti.choice + 1;
-                if (j >= (int)ti.candidate.size()) { continue; } // no upgrade available
-
-                size_t delta_bytes = ti.candidate[j].bytes - ti.candidate[ti.choice].bytes;
-                if (cur_bytes + delta_bytes > budget_bytes) { continue; } // won't fit in budget
-
-                double err_gain = std::max(0.0, ti.candidate[ti.choice].error - ti.candidate[j].error);
-                if (err_gain < epsilon) { continue; } // no error improvement
-
-                double ratio = err_gain / (double)delta_bytes; // error reduction per byte
-                if (is_important(tensor_name)) { ratio *= 5.0; } // important tensors get 5x boost
-
-                // For tie-breaking, prioritize the largest absolute error improvement.
-                if (ratio > best_ratio + epsilon || (std::abs(ratio - best_ratio) <= epsilon && err_gain > best_gain)) {
-                    best_ratio = ratio;
-                    best_gain = err_gain;
-                    best_i = i;
-                    best_j = j;
-                }
-            }
-
-            if (best_i < 0) { break; } // no more upgrades within budget found
-
-            size_t upgrade_cost = all[best_i].candidate[best_j].bytes - all[best_i].candidate[all[best_i].choice].bytes;
-            all[best_i].choice = best_j;
-            cur_bytes += upgrade_cost;
-        }
-    }
-
-    return emit_overrides();
+    return build_mix();
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
