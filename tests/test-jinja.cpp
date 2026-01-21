@@ -609,6 +609,12 @@ static void test_filters(testing & t) {
         json::object(),
         "hello"
     );
+
+    test_template(t, "none to string",
+        "{{ x|string }}",
+        {{"x", nullptr}},
+        "None"
+    );
 }
 
 static void test_literals(testing & t) {
