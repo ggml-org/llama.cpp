@@ -22,6 +22,16 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
+
 // =====================================================
 // OpenVINO Buffer Implementation using ov::Tensor
 // =====================================================
@@ -152,7 +162,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
 
     ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
-    if (tensor->data != nullptr) {
+    if (tensor->data != nullptr && !ggml_is_quantized(tensor->type)) {
         ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor, ctx->is_remote);
         if (extra != nullptr) {
             auto it = ctx->tensor_extras.find(tensor);
@@ -172,7 +182,7 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
                                                        uint8_t value,
                                                        size_t offset,
                                                        size_t size) {
-    GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
+    // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     GGML_ASSERT(tensor != nullptr && tensor->data != nullptr);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
@@ -480,20 +490,13 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
     return ggml_nbytes(tensor);
 }
 
-static bool ggml_backend_openvino_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-    // Currently using host memory via ov::Tensor
-    // This will be false when using GPU/NPU remote tensors
-    return true;
-}
-
 static const ggml_backend_buffer_type_i ggml_backend_openvino_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_openvino_buffer_type_get_name,
     /* .alloc_buffer     = */ ggml_backend_openvino_buffer_type_alloc_buffer,
     /* .get_alignment    = */ ggml_backend_openvino_buffer_type_get_alignment,
     /* .get_max_size     = */ ggml_backend_openvino_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_openvino_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_openvino_buffer_type_is_host,
+    /* .is_host          = */ nullptr,
 };
 
 // Get buffer type for a specific device
@@ -537,13 +540,18 @@ static const char * ggml_backend_openvino_host_buffer_type_get_name(ggml_backend
     return name.c_str();
 }
 
+static bool ggml_backend_openvino_host_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return true;
+}
+
 static const ggml_backend_buffer_type_i ggml_backend_openvino_host_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_openvino_host_buffer_type_get_name,
     /* .alloc_buffer     = */ ggml_backend_openvino_buffer_type_alloc_buffer,
     /* .get_alignment    = */ ggml_backend_openvino_buffer_type_get_alignment,
     /* .get_max_size     = */ ggml_backend_openvino_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_openvino_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_openvino_buffer_type_is_host,
+    /* .is_host          = */ ggml_backend_openvino_host_buffer_type_is_host,
 };
 
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_type(int device) {
@@ -704,11 +712,22 @@ static const char * ggml_backend_openvino_device_get_description(ggml_backend_de
 }
 
 static void ggml_backend_openvino_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    GGML_ASSERT(dev->context != nullptr);
-    GGML_ASSERT(free != nullptr);
-    GGML_ASSERT(total != nullptr);
-    *total = 1;
-    *free = 1;
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total = pages * page_size;
+
+    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
+    *free = *total;
+#endif  // _WIN32
+
+    GGML_UNUSED(dev);
 }
 
 static enum ggml_backend_dev_type ggml_backend_openvino_device_get_type(ggml_backend_dev_t dev) {
@@ -924,9 +943,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    // Support our own buffer type and any host buffer (for mmap'd files, etc.)
-    return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_host(buft);
-    // return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_openvino_host(buft);
+    return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_openvino_host(buft);
     GGML_UNUSED(dev);
 }
 
@@ -938,7 +955,6 @@ static const struct ggml_backend_device_i ggml_backend_openvino_device_interface
     /* .get_props            = */ ggml_backend_openvino_device_get_props,
     /* .init_backend         = */ ggml_backend_openvino_device_init,
     /* .get_buffer_type      = */ ggml_backend_openvino_device_get_buffer_type,
-    // /* .get_host_buffer_type = */ NULL,
     /* .get_host_buffer_type = */ ggml_backend_openvino_device_get_host_buffer_type,
     /* .buffer_from_host_ptr = */ NULL,
     /* .supports_op          = */ ggml_backend_openvino_device_supports_op,
