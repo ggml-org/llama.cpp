@@ -23,17 +23,6 @@ static common_http_url common_http_parse_url(const std::string & url) {
         throw std::runtime_error("unsupported URL scheme: " + parts.scheme);
     }
 
-#ifndef CPPHTTPLIB_NO_EXCEPTIONS
-    if (parts.scheme == "https") {
-        throw std::runtime_error(
-            "HTTPS is not supported. Please rebuild with:\n"
-            "  -DLLAMA_BUILD_BORINGSSL=ON\n"
-            "  -DLLAMA_BUILD_LIBRESSL=ON\n"
-            "or ensure dev files of an OpenSSL-compatible library are available when building."
-        );
-    }
-#endif
-
     auto rest = url.substr(scheme_end + 3);
     auto at_pos = rest.find('@');
 
@@ -67,6 +56,17 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     if (parts.host.empty()) {
         throw std::runtime_error("error: invalid URL format");
     }
+
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+    if (parts.scheme == "https") {
+        throw std::runtime_error(
+            "HTTPS is not supported. Please rebuild with:\n"
+            "  -DLLAMA_BUILD_BORINGSSL=ON\n"
+            "  -DLLAMA_BUILD_LIBRESSL=ON\n"
+            "or ensure dev files of an OpenSSL-compatible library are available when building."
+        );
+    }
+#endif
 
     httplib::Client cli(parts.scheme + "://" + parts.host);
 
