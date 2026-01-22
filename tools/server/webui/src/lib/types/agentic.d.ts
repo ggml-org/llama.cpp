@@ -48,3 +48,15 @@ export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messa
 	stream: true;
 	tools?: ApiChatCompletionRequest['tools'];
 };
+
+/**
+ * Per-conversation agentic session state.
+ * Enables parallel agentic flows across multiple chats.
+ */
+export interface AgenticSession {
+	isRunning: boolean;
+	currentTurn: number;
+	totalToolCalls: number;
+	lastError: Error | null;
+	streamingToolCall: { name: string; arguments: string } | null;
+}

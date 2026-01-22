@@ -66,6 +66,8 @@ export interface AgenticFlowOptions {
 }
 
 export interface AgenticFlowParams {
+	/** Conversation ID for per-conversation state tracking */
+	conversationId: string;
 	messages: (ApiChatMessageData | (DatabaseMessage & { extra?: DatabaseMessageExtra[] }))[];
 	options?: AgenticFlowOptions;
 	callbacks: AgenticFlowCallbacks;
@@ -80,12 +82,15 @@ export interface AgenticFlowResult {
 }
 
 interface AgenticStoreStateCallbacks {
-	setRunning: (running: boolean) => void;
-	setCurrentTurn: (turn: number) => void;
-	setTotalToolCalls: (count: number) => void;
-	setLastError: (error: Error | null) => void;
-	setStreamingToolCall: (tc: { name: string; arguments: string } | null) => void;
-	clearStreamingToolCall: () => void;
+	setRunning: (conversationId: string, running: boolean) => void;
+	setCurrentTurn: (conversationId: string, turn: number) => void;
+	setTotalToolCalls: (conversationId: string, count: number) => void;
+	setLastError: (conversationId: string, error: Error | null) => void;
+	setStreamingToolCall: (
+		conversationId: string,
+		tc: { name: string; arguments: string } | null
+	) => void;
+	clearStreamingToolCall: (conversationId: string) => void;
 }
 
 export class AgenticClient {
@@ -132,7 +137,7 @@ export class AgenticClient {
 	 * @returns Result indicating if the flow handled the request
 	 */
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const { messages, options = {}, callbacks, signal, perChatOverrides } = params;
+		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
 		const {
 			onChunk,
 			onReasoningChunk,
@@ -183,13 +188,14 @@ export class AgenticClient {
 				return true;
 			});
 
-		this.store.setRunning(true);
-		this.store.setCurrentTurn(0);
-		this.store.setTotalToolCalls(0);
-		this.store.setLastError(null);
+		this.store.setRunning(conversationId, true);
+		this.store.setCurrentTurn(conversationId, 0);
+		this.store.setTotalToolCalls(conversationId, 0);
+		this.store.setLastError(conversationId, null);
 
 		try {
 			await this.executeAgenticLoop({
+				conversationId,
 				messages: normalizedMessages,
 				options,
 				tools,
@@ -209,11 +215,11 @@ export class AgenticClient {
 			return { handled: true };
 		} catch (error) {
 			const normalizedError = error instanceof Error ? error : new Error(String(error));
-			this.store.setLastError(normalizedError);
+			this.store.setLastError(conversationId, normalizedError);
 			onError?.(normalizedError);
 			return { handled: true, error: normalizedError };
 		} finally {
-			this.store.setRunning(false);
+			this.store.setRunning(conversationId, false);
 			// Lazy Disconnect: Close MCP connections after agentic flow completes
 			// This prevents continuous keepalive/heartbeat polling when tools are not in use
 			await mcpClient.shutdown().catch((err) => {
@@ -225,6 +231,7 @@ export class AgenticClient {
 	}
 
 	private async executeAgenticLoop(params: {
+		conversationId: string;
 		messages: ApiChatMessageData[];
 		options: AgenticFlowOptions;
 		tools: ReturnType<typeof mcpClient.getToolDefinitionsForLLM>;
@@ -232,7 +239,7 @@ export class AgenticClient {
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
 	}): Promise<void> {
-		const { messages, options, tools, agenticConfig, callbacks, signal } = params;
+		const { conversationId, messages, options, tools, agenticConfig, callbacks, signal } = params;
 		const {
 			onChunk,
 			onReasoningChunk,
@@ -265,7 +272,7 @@ export class AgenticClient {
 		const maxToolPreviewLines = agenticConfig.maxToolPreviewLines;
 
 		for (let turn = 0; turn < maxTurns; turn++) {
-			this.store.setCurrentTurn(turn + 1);
+			this.store.setCurrentTurn(conversationId, turn + 1);
 			agenticTimings.turns = turn + 1;
 
 			if (signal?.aborted) {
@@ -359,7 +366,7 @@ export class AgenticClient {
 									) {
 										lastStreamingToolCallName = name;
 										lastStreamingToolCallArgsLength = argsLengthBucket;
-										this.store.setStreamingToolCall({ name, arguments: args });
+										this.store.setStreamingToolCall(conversationId, { name, arguments: args });
 									}
 								}
 							} catch {
@@ -385,7 +392,7 @@ export class AgenticClient {
 					signal
 				);
 
-				this.store.clearStreamingToolCall();
+				this.store.clearStreamingToolCall(conversationId);
 
 				if (turnTimings) {
 					agenticTimings.llm.predicted_n += turnTimings.predicted_n || 0;
@@ -447,7 +454,7 @@ export class AgenticClient {
 					function: call.function ? { ...call.function } : undefined
 				});
 			}
-			this.store.setTotalToolCalls(allToolCalls.length);
+			this.store.setTotalToolCalls(conversationId, allToolCalls.length);
 			onToolCallChunk?.(JSON.stringify(allToolCalls));
 
 			sessionMessages.push({
@@ -689,8 +696,8 @@ export class AgenticClient {
 		return `mcp-attachment-${timestamp}-${index}.${extension}`;
 	}
 
-	clearError(): void {
-		this.store.setLastError(null);
+	clearError(conversationId: string): void {
+		this.store.setLastError(conversationId, null);
 	}
 }
 
