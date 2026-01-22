@@ -101,6 +101,7 @@ set(GGML_OPENCL_KERNELS
     mul_mm_f32_f32_l4_lm
     mul_mm_f16_f32_l4_lm
     mul_mm_q8_0_f32_l4_lm
+    mul_mm_q6_k_f32_l4_lm
     mul_mm_q8_0_f32_8x4
     gemv_noshuffle_general_q8_0_f32
     mul
