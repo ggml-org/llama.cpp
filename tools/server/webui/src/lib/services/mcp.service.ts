@@ -17,7 +17,10 @@ import { Client } from '@modelcontextprotocol/sdk/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type {
+	Tool,
+	ListChangedHandlers,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
 	MCPServerConfig,
@@ -155,7 +158,8 @@ export class MCPService {
 		serverConfig: MCPServerConfig,
 		clientInfo?: Implementation,
 		capabilities?: ClientCapabilities,
-		onPhase?: MCPPhaseCallback
+		onPhase?: MCPPhaseCallback,
+		listChangedHandlers?: ListChangedHandlers,
 	): Promise<MCPConnection> {
 		const startTime = performance.now();
 		const effectiveClientInfo = clientInfo ?? DEFAULT_MCP_CONFIG.clientInfo;
@@ -185,7 +189,10 @@ export class MCPService {
 				name: effectiveClientInfo.name,
 				version: effectiveClientInfo.version ?? '1.0.0'
 			},
-			{ capabilities: effectiveCapabilities }
+			{
+				capabilities: effectiveCapabilities,
+				listChanged: listChangedHandlers
+			}
 		);
 
 		// Phase: Initializing
@@ -320,7 +327,9 @@ export class MCPService {
 			if (error instanceof DOMException && error.name === 'AbortError') {
 				throw error;
 			}
+
 			const message = error instanceof Error ? error.message : String(error);
+
 			throw new MCPError(`Tool execution failed: ${message}`, -32603);
 		}
 	}
@@ -342,18 +351,22 @@ export class MCPService {
 		if (content.type === 'text' && content.text) {
 			return content.text;
 		}
+
 		if (content.type === 'image' && content.data) {
 			return `data:${content.mimeType ?? 'image/png'};base64,${content.data}`;
 		}
+
 		if (content.type === 'resource' && content.resource) {
 			const resource = content.resource;
 			if (resource.text) return resource.text;
 			if (resource.blob) return resource.blob;
 			return JSON.stringify(resource);
 		}
+
 		if (content.data && content.mimeType) {
 			return `data:${content.mimeType};base64,${content.data}`;
 		}
+
 		return JSON.stringify(content);
 	}
 }

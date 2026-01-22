@@ -73,7 +73,9 @@
 	const hasAgenticMarkers = $derived(
 		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
 	);
-	const hasStreamingToolCall = $derived(isChatStreaming() && agenticStreamingToolCall() !== null);
+	const hasStreamingToolCall = $derived(
+		isChatStreaming() && agenticStreamingToolCall(message.convId) !== null
+	);
 	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
 	const isStructuredContent = $derived(
 		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall

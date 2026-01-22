@@ -39,8 +39,12 @@ import type {
 	ServerCapabilities,
 	ClientCapabilities,
 	MCPCapabilitiesInfo,
-	MCPConnectionLog
+	MCPConnectionLog,
+	Tool,
 } from '$lib/types';
+import type {
+	ListChangedHandlers,
+} from '@modelcontextprotocol/sdk/types.js';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPError } from '$lib/errors';
@@ -88,6 +92,13 @@ export class MCPClient {
 	private toolsIndex = new Map<string, string>();
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
+
+	/**
+	 * Reference counter for active agentic flows using MCP connections.
+	 * Prevents shutdown while any conversation is still using connections.
+	 */
+	private activeFlowCount = 0;
+
 	/**
 	 * Ensures MCP is initialized with current config.
 	 * Handles config changes by reinitializing as needed.
@@ -136,6 +147,7 @@ export class MCPClient {
 		}
 
 		this.initPromise = this.doInitialize(signature, mcpConfig, serverEntries);
+
 		return this.initPromise;
 	}
 
@@ -149,7 +161,16 @@ export class MCPClient {
 
 		const results = await Promise.allSettled(
 			serverEntries.map(async ([name, serverConfig]) => {
-				const connection = await MCPService.connect(name, serverConfig, clientInfo, capabilities);
+				const listChangedHandlers = this.createListChangedHandlers(name);
+				const connection = await MCPService.connect(
+					name,
+					serverConfig,
+					clientInfo,
+					capabilities,
+					undefined,
+					listChangedHandlers,
+				);
+
 				return { name, connection };
 			})
 		);
@@ -161,6 +182,7 @@ export class MCPClient {
 					await MCPService.disconnect(result.value.connection).catch(console.warn);
 				}
 			}
+
 			return false;
 		}
 
@@ -216,7 +238,94 @@ export class MCPClient {
 	}
 
 	/**
+	 * Create list changed handlers for a server connection.
+	 * These handlers are called when the server notifies about changes to tools, prompts, or resources.
+	 */
+	private createListChangedHandlers(serverName: string): ListChangedHandlers {
+		return {
+			tools: {
+				onChanged: (error: Error | null, tools: Tool[] | null) => {
+					if (error) {
+						console.warn(`[MCPClient][${serverName}] Tools list changed error:`, error);
+						return;
+					}
+					console.log(`[MCPClient][${serverName}] Tools list changed, ${tools?.length ?? 0} tools`);
+					this.handleToolsListChanged(serverName, tools ?? []);
+				}
+			},
+		};
+	}
+
+	/**
+	 * Handle tools list changed notification from a server.
+	 * Updates the tools index and store.
+	 */
+	private handleToolsListChanged(serverName: string, tools: Tool[]): void {
+		const connection = this.connections.get(serverName);
+		if (!connection) return;
+
+		// Remove old tools from this server from the index
+		for (const [toolName, ownerServer] of this.toolsIndex.entries()) {
+			if (ownerServer === serverName) {
+				this.toolsIndex.delete(toolName);
+			}
+		}
+
+		// Update connection tools
+		connection.tools = tools;
+
+		// Add new tools to the index
+		for (const tool of tools) {
+			if (this.toolsIndex.has(tool.name)) {
+				console.warn(
+					`[MCPClient] Tool name conflict after list change: "${tool.name}" exists in ` +
+						`"${this.toolsIndex.get(tool.name)}" and "${serverName}". ` +
+						`Using tool from "${serverName}".`
+				);
+			}
+			this.toolsIndex.set(tool.name, serverName);
+		}
+
+		// Update store
+		mcpStore.updateState({
+			toolCount: this.toolsIndex.size
+		});
+	}
+
+	/**
+	 * Acquire a reference to MCP connections for an agentic flow.
+	 * Call this when starting an agentic flow to prevent premature shutdown.
+	 */
+	acquireConnection(): void {
+		this.activeFlowCount++;
+		console.log(`[MCPClient] Connection acquired (active flows: ${this.activeFlowCount})`);
+	}
+
+	/**
+	 * Release a reference to MCP connections.
+	 * Call this when an agentic flow completes.
+	 * @param shutdownIfUnused - If true, shutdown connections when no flows are active
+	 */
+	async releaseConnection(shutdownIfUnused = true): Promise<void> {
+		this.activeFlowCount = Math.max(0, this.activeFlowCount - 1);
+		console.log(`[MCPClient] Connection released (active flows: ${this.activeFlowCount})`);
+
+		if (shutdownIfUnused && this.activeFlowCount === 0) {
+			console.log('[MCPClient] No active flows, initiating lazy disconnect...');
+			await this.shutdown();
+		}
+	}
+
+	/**
+	 * Get the number of active agentic flows using MCP connections.
+	 */
+	getActiveFlowCount(): number {
+		return this.activeFlowCount;
+	}
+
+	/**
 	 * Shutdown all MCP connections and clear state.
+	 * Note: This will force shutdown regardless of active flow count.
 	 */
 	async shutdown(): Promise<void> {
 		if (this.initPromise) {
@@ -411,6 +520,7 @@ export class MCPClient {
 		mcpStore.incrementServerUsage(serverName);
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
+
 		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
 	}
 
@@ -491,6 +601,7 @@ export class MCPClient {
 		} catch {
 			console.warn('[MCPClient] Failed to parse custom headers JSON:', headersJson);
 		}
+
 		return undefined;
 	}
 

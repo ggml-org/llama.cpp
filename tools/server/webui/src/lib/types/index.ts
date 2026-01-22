@@ -96,5 +96,6 @@ export type {
 	OpenAIToolDefinition,
 	ServerStatus,
 	ToolCallParams,
-	ToolExecutionResult
+	ToolExecutionResult,
+	Tool,
 } from './mcp';

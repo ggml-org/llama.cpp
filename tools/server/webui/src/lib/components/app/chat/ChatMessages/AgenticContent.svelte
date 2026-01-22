@@ -300,6 +300,7 @@
 				iconClass={streamingIconClass}
 				title={section.toolName || 'Tool call'}
 				subtitle={streamingSubtitle}
+				{isStreaming}
 				onToggle={() => toggleExpanded(index, section)}
 			>
 				<div class="pt-3">
@@ -344,6 +345,7 @@
 				iconClass={toolIconClass}
 				title={section.toolName || ''}
 				subtitle={isPending ? 'executing...' : undefined}
+				isStreaming={isPending}
 				onToggle={() => toggleExpanded(index, section)}
 			>
 				{#if section.toolArgs && section.toolArgs !== '{}'}
@@ -400,6 +402,7 @@
 				icon={Brain}
 				title={reasoningTitle}
 				subtitle={reasoningSubtitle}
+				{isStreaming}
 				onToggle={() => toggleExpanded(index, section)}
 			>
 				<div class="pt-3">
