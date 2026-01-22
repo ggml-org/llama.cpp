@@ -753,10 +753,25 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * 10, GGML_MEM_ALIGN);
     }
 
     // deterministic tensor name order
     std::sort(to_store.begin(), to_store.end());
+
+    // Compute per-tensor statistics
+    std::vector<tensor_statistics> tstats;
+    tstats.reserve(m_stats.size());
+    bool legacy;
+    for (const auto & kv : m_stats) {
+        compute_vector_statistics(tstats, kv.first, kv.second, legacy);
+    }
+    if (!tstats.empty()) { compute_tensor_statistics(tstats); }
+
+    // index by tensor name
+    std::unordered_map<std::string, const tensor_statistics *> tstat_index;
+    tstat_index.reserve(tstats.size());
+    for (const auto & ts : tstats) { tstat_index[ts.tensor] = &ts; }
 
     struct ggml_init_params params = {
         /* .mem_size   = */ data_size,
@@ -813,6 +828,48 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 }
                 gguf_add_tensor(ctx_gguf, in_sum);
             }
+        }
+
+        // Store per-tensor statistics as a small 1D tensor
+        {
+            float nan = std::numeric_limits<float>::quiet_NaN();
+            float min = 0.0f;
+            float max = 0.0f;
+            float mean = 0.0f;
+            float stddev = 0.0f;
+            float h_norm = 0.0f;
+            float zd_score = 0.0f;
+            float sum_sq = 0.0f;
+            float l2_dist = 0.0f;
+            float cossim = 0.0f;
+            float pcc = 0.0f;
+            auto it_ts = tstat_index.find(name);
+            if (it_ts != tstat_index.end() && it_ts->second != nullptr) {
+                sum_sq = it_ts->second->sum_values;
+                h_norm = it_ts->second->elements > 0 ? 100.0f * (it_ts->second->entropy / std::log2f((float)it_ts->second->elements)) : nan;
+                zd_score = it_ts->second->zd_score;
+                l2_dist  = it_ts->second->l2_dist;
+                cossim   = it_ts->second->cossim;
+                pcc      = it_ts->second->pearson;
+                min = it_ts->second->min_values;
+                max = it_ts->second->max_values;
+                mean = it_ts->second->mean_values;
+                stddev = it_ts->second->std_deviation;
+            }
+
+            struct ggml_tensor * stats_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10);
+            ggml_format_name(stats_t, "%s.stats", name.c_str());
+            ((float *)stats_t->data)[0] = sum_sq;
+            ((float *)stats_t->data)[1] = h_norm;
+            ((float *)stats_t->data)[2] = zd_score;
+            ((float *)stats_t->data)[3] = l2_dist;
+            ((float *)stats_t->data)[4] = cossim;
+            ((float *)stats_t->data)[5] = pcc;
+            ((float *)stats_t->data)[6] = min;
+            ((float *)stats_t->data)[7] = max;
+            ((float *)stats_t->data)[8] = mean;
+            ((float *)stats_t->data)[9] = stddev;
+            gguf_add_tensor(ctx_gguf, stats_t);
         }
     }
 
@@ -1404,7 +1461,7 @@ static bool show_statistics(const common_params & params) {
         std::string name;
 
         process_tensor_name(tstat.tensor, layer, name);
-        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
+        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2f((float)tstat.elements)) : std::numeric_limits<float>::quiet_NaN();
 
         int blk;
         try { blk = std::stoi(layer); } catch (...) { blk = -1; }
