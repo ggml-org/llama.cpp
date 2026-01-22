@@ -89,7 +89,10 @@ nix:
 embedding:
     - changed-files:
         - any-glob-to-any-file: examples/embedding/
-
+jinja parser:
+    - changed-files:
+        - any-glob-to-any-file:
+            - common/jinja/**
 Ascend NPU:
     - changed-files:
         - any-glob-to-any-file:

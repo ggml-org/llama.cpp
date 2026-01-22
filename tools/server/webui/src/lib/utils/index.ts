@@ -76,7 +76,6 @@ export {
 	isFileTypeSupportedByModel,
 	filterFilesByModalities,
 	generateModalityErrorMessage,
-	generateModalityAwareAcceptString,
 	type ModalityCapabilities
 } from './modality-file-validation';
 

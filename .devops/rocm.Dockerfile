@@ -27,7 +27,7 @@ RUN apt-get update \
     build-essential \
     cmake \
     git \
-    libcurl4-openssl-dev \
+    libssl-dev \
     curl \
     libgomp1
 

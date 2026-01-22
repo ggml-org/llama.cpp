@@ -7,7 +7,7 @@
 
     Simple usage example:
 
-        cmake -B build -DLLAMA_CURL=1 && cmake --build build --config Release -j -t llama-server
+        cmake -B build && cmake --build build --config Release -j -t llama-server
 
         export LLAMA_SERVER_BIN_PATH=$PWD/build/bin/llama-server
         export LLAMA_CACHE=${LLAMA_CACHE:-$HOME/Library/Caches/llama.cpp}
