@@ -1533,41 +1533,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     return events;
 }
 
-//
-// server_task_result_embd
-//
-json server_task_result_embd::to_json() {
-    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
-        ? to_json_oaicompat()
-        : to_json_non_oaicompat();
-}
-
-json server_task_result_embd::to_json_non_oaicompat() {
-    return json {
-        {"index",     index},
-        {"embedding", embedding},
-    };
-}
-
-json server_task_result_embd::to_json_oaicompat() {
-    return json {
-        {"index",            index},
-        {"embedding",        embedding[0]},
-        {"tokens_evaluated", n_tokens},
-    };
-}
-
-//
-// server_task_result_rerank
-//
-json server_task_result_rerank::to_json() {
-    return json {
-        {"index",            index},
-        {"score",            score},
-        {"tokens_evaluated", n_tokens},
-    };
-}
-
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
@@ -1704,6 +1669,41 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
     }
 
     return events;
+}
+
+//
+// server_task_result_embd
+//
+json server_task_result_embd::to_json() {
+    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
+        ? to_json_oaicompat()
+        : to_json_non_oaicompat();
+}
+
+json server_task_result_embd::to_json_non_oaicompat() {
+    return json {
+        {"index",     index},
+        {"embedding", embedding},
+    };
+}
+
+json server_task_result_embd::to_json_oaicompat() {
+    return json {
+        {"index",            index},
+        {"embedding",        embedding[0]},
+        {"tokens_evaluated", n_tokens},
+    };
+}
+
+//
+// server_task_result_rerank
+//
+json server_task_result_rerank::to_json() {
+    return json {
+        {"index",            index},
+        {"score",            score},
+        {"tokens_evaluated", n_tokens},
+    };
 }
 
 //
