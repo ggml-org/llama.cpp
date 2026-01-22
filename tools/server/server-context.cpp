@@ -880,21 +880,39 @@ private:
 
             try {
                 chat_templates = common_chat_templates_init(model, params_base.chat_template);
-
-                LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
-                    common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
-
             } catch (const std::exception & e) {
                 SRV_ERR("%s: chat template parsing error: %s\n", __func__, e.what());
                 SRV_ERR("%s: please consider disabling jinja via --no-jinja, or use a custom chat template via --chat-template\n", __func__);
                 SRV_ERR("%s: for example: --no-jinja --chat-template chatml\n", __func__);
                 return false;
             }
+            try {
+                LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
+                    common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
+            } catch (const std::exception & e) {
+                SRV_WRN("%s: failed to apply chat template example: %s\n", __func__, e.what());
+                if (params_base.verify_chat_template) {
+                    return false;
+                } else {
+                    SRV_WRN("%s: verification disabled, using as is\n", __func__);
+                }
+            }
 
             // thinking is enabled if:
             // 1. It's not explicitly disabled (reasoning_budget == 0)
             // 2. The chat template supports it
-            const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+            bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0;
+            try {
+                enable_thinking = enable_thinking && common_chat_templates_support_enable_thinking(chat_templates.get());
+            } catch (const std::exception & e) {
+                if (params_base.verify_chat_template) {
+                    SRV_ERR("%s: failed to check chat template thinking support: %s\n", __func__, e.what());
+                    return false;
+                } else {
+                    SRV_WRN("%s: failed to check chat template thinking support, disabling: %s\n", __func__, e.what());
+                    enable_thinking = false;
+                }
+            }
             SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
 
             chat_params = {

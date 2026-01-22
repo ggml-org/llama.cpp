@@ -626,12 +626,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
-        throw std::runtime_error(string_format(
-            "error: the supplied chat template is not supported: %s%s\n",
-            params.chat_template.c_str(),
-            params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
-        ));
+    if (params.verify_chat_template) {
+        if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
+            throw std::runtime_error(string_format(
+                "error: the supplied chat template is not supported: %s%s\n",
+                params.chat_template.c_str(),
+                params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
+            ));
+        }
+    } else {
+        LOG_WRN("warning: skipping chat template compatibility checks\n");
     }
 
     common_log_set_verbosity_thold(params.verbosity);
@@ -3045,6 +3049,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--chat-template-verify"},
+        {"--no-chat-template-verify"},
+        string_format("whether to verify provided chat template against built-in chat presets (default: %s)", params.verify_chat_template ? "true" : "false"),
+        [](common_params & params, bool value) {
+            params.verify_chat_template = value;
+        }
+    ).set_env("LLAMA_ARG_CHAT_TEMPLATE_VERIFY"));
     add_opt(common_arg(
         {"--prefill-assistant"},
         {"--no-prefill-assistant"},
