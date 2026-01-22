@@ -62,17 +62,6 @@ void apir_buffer_set_tensor(virtgpu *               gpu,
     return;
 }
 
-#if false
-void
-apir_buffer_get_tensor(virtgpu *gpu, apir_buffer_context_t *buffer_context,
-                       const ggml_tensor *tensor, void *data, size_t offset, size_t size) {
-    UNUSED(gpu);
-    UNUSED(tensor);
-    char *buffer_base_addr = (char *) buffer_context->shmem.mmap_ptr;
-
-    memcpy(data, buffer_base_addr+offset, size);
-}
-#else
 void apir_buffer_get_tensor(virtgpu *               gpu,
                             apir_buffer_context_t * buffer_context,
                             const ggml_tensor *     tensor,
@@ -113,7 +102,6 @@ void apir_buffer_get_tensor(virtgpu *               gpu,
         virtgpu_shmem_destroy(gpu, shmem);
     }
 }
-#endif
 
 bool apir_buffer_cpy_tensor(virtgpu *               gpu,
                             apir_buffer_context_t * buffer_context,
