@@ -81,12 +81,12 @@ llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
 <details>
 <summary><strong>Optimized settings for GLM-4.7-Flash</strong></summary>
 
-To reduce repetition and looping, use these sampling parameters ([recommended by Unsloth](https://unsloth.ai/docs/models/glm-4.7-flash#reducing-repetition-and-looping)):
+Use these sampling parameters ([recommended by Unsloth](https://unsloth.ai/docs/models/glm-4.7-flash)):
 
 ```bash
-llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_XL \
-  --temp 0.2 --top-k 50 --top-p 0.95 --min-p 0.01 \
-  --dry-multiplier 1.1 --ctx-size 16384
+llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL \
+  --jinja --ctx-size 16384 \
+  --temp 0.7 --top-p 1.0 --min-p 0.01
 ```
 
 </details>
