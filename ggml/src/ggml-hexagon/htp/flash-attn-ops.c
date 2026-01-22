@@ -2,9 +2,9 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
+#include <assert.h>
 #include <HAP_farf.h>
 #include <HAP_perf.h>
-
 #include <math.h>
 #include <string.h>
 
@@ -318,21 +318,23 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             uint32_t ic = 0;
 
             // Process in blocks of 32 (VLEN_FP32)
-            float __attribute__((aligned(VLEN))) scores_x4[FLASH_ATTN_BLOCK_SIZE];
+            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 == 4, "FLASH_ATTN_BLOCK_SIZE must be multiple of VLEN_FP32");
+            HVX_Vector_x4 scores_x4;
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
-            for (; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32) {
+            for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
+                float __attribute__((aligned(VLEN))) scores_arr[FLASH_ATTN_BLOCK_SIZE];
                 for (int j = 0; j < VLEN_FP32; ++j) {
                     const uint32_t cur_ic = ic + j;
                     const uint8_t * k_ptr = k_base + cur_ic * size_k_row_padded;
                     if (q->type == HTP_TYPE_F32) {
-                        hvx_dot_f32_f16_aa(&scores_x4[cur_ic], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f32_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
                     } else {
-                        hvx_dot_f16_f16_aa(&scores_x4[cur_ic], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f16_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
                     }
                 }
 
-                HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic];
+                HVX_Vector scores = *(HVX_Vector *) scores_arr;
 
                 // 2. Softcap
                 if (logit_softcap != 0.0f) {
@@ -357,6 +359,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     scores = Q6_Vsf_equals_Vqf32(scores);
                 }
 
+                scores_x4.v[iv] = scores;
                 v_max = Q6_Vsf_vmax_VsfVsf(scores, v_max);
             }
 
@@ -375,8 +378,8 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
                 HVX_Vector M_new_vec = hvx_vec_splat_f32(M_new);
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
-                for (uint32_t ic2 = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32) {
-                    HVX_Vector scores = *(HVX_Vector *) &scores_x4[ic2];
+                for (uint32_t ic2 = 0, iv = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32, ++iv) {
+                    HVX_Vector scores = scores_x4.v[iv];
                     HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_new_vec);
                     HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
 
