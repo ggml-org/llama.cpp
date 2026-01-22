@@ -1176,6 +1176,10 @@ class TensorNameMap:
         MODEL_TENSOR.CLS_OUT: (
             "classifier.out_proj", # roberta
         ),
+
+        MODEL_TENSOR.CLS_NORM: (
+            "head.norm", # modern-bert
+        ),
         #############################################################################
 
         MODEL_TENSOR.CONVNEXT_DW: (
