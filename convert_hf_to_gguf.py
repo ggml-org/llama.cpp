@@ -2376,22 +2376,20 @@ class RefactModel(TextModel):
         n_head_kv = 1
         head_dim = self.hparams["n_embd"] // n_head
 
-        tensors: list[tuple[str, Tensor]] = []
-
         if bid is not None:
             if name == f"transformer.h.{bid}.attn.kv.weight":
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), data_torch[:n_head_kv * head_dim]))
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), data_torch[n_head_kv * head_dim:]))
-            elif name == f"transformer.h.{bid}.attn.q.weight":
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), data_torch))
-            elif name == f"transformer.h.{bid}.mlp.gate_up_proj.weight":
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), data_torch[:ff_dim]))
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), data_torch[ff_dim:]))
+                yield from super().modify_tensors(data_torch[:n_head_kv * head_dim], self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), bid)
+                yield from super().modify_tensors(data_torch[n_head_kv * head_dim:], self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), bid)
+                return
+            if name == f"transformer.h.{bid}.attn.q.weight":
+                yield from super().modify_tensors(data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), bid)
+                return
+            if name == f"transformer.h.{bid}.mlp.gate_up_proj.weight":
+                yield from super().modify_tensors(data_torch[:ff_dim], self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), bid)
+                yield from super().modify_tensors(data_torch[ff_dim:], self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), bid)
+                return
 
-        if len(tensors) == 0:
-            tensors.append((self.map_tensor_name(name), data_torch))
-
-        return tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("StableLmForCausalLM", "StableLMEpochForCausalLM", "LlavaStableLMEpochForCausalLM")
@@ -2825,6 +2823,7 @@ class LlavaVisionModel(MmprojModel):
             if name.endswith(("k_proj.weight", "k_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
             yield from super().modify_tensors(data_torch, name, bid)
+            return
 
         embed_key = "embed_tokens.weight" if not self.is_mistral_format else "tok_embeddings.weight"
         if self.img_break_tok_id > 0 and embed_key in name:
@@ -6252,6 +6251,7 @@ class Gemma3NModel(Gemma3Model):
             # Continue with normal processing
             name = name.replace("language_model.", "")
             yield from super().modify_tensors(data_torch, name, bid)
+            return
 
         if "altup_unembed_projections" in name:
             data_torch = data_torch.to(device="cpu")
@@ -6268,6 +6268,7 @@ class Gemma3NModel(Gemma3Model):
             out = self._stack_matrices(self._altup_unembd)
             if out is not None:
                 yield from super().modify_tensors(out, "model.altup_unembed_projections.weight", bid)
+                return
             else:
                 return
 
@@ -6284,6 +6285,7 @@ class Gemma3NModel(Gemma3Model):
             out = self._stack_matrices(self._altup_proj)
             if out is not None:
                 yield from super().modify_tensors(out, "model.altup_projections.weight", bid)
+                return
             else:
                 return
 
@@ -7763,9 +7765,6 @@ class PLMModel(TextModel):
         self.gguf_writer.add_value_length(hparams["v_head_dim"])
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        yield from super().modify_tensors(data_torch, name, bid)
-
     def prepare_tensors(self):
         super().prepare_tensors()
 
@@ -8694,11 +8693,9 @@ class ExaoneMoEModel(Exaone4Model):
                 new_name = remapper[_n.stem] + _n.suffix
 
                 # set shared weights for all NextN/MTP layers
-                tensors = []
                 for bid in range(self.hparams['num_hidden_layers'], self.block_count):
-                    new_name = new_name.format(bid=bid)
-                    tensors.append((self.map_tensor_name(new_name), data_torch))
-                return tensors
+                    yield from super().modify_tensors(data_torch, new_name.format(bid=bid), bid)
+                return
 
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
@@ -9166,6 +9163,7 @@ class BailingMoeModel(TextModel):
 
         if name.endswith("attention.dense.weight"):
             yield from super().modify_tensors(data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), bid)
+            return
         elif name.endswith("query_key_value.weight"):
             q, k, v = data_torch.split([n_head * head_dim, n_kv_head * head_dim, n_kv_head * head_dim], dim=-2)
 
