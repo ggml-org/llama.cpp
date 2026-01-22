@@ -55,7 +55,7 @@ ACC_TYPE Max(const in uint32_t row, const in uint32_t col, const in ACC_TYPE ele
     return max(elem0, elem1);
 }
 
-#if defined(BLOCK_SIZE)
+#if BLOCK_SIZE > 1
 #define DECODEFUNC , DEQUANTFUNC
 #else
 #define DECODEFUNC
