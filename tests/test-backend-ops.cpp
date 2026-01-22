@@ -6130,13 +6130,8 @@ struct test_flash_attn_ext : public test_case {
             // for more info:
             //   - https://github.com/ggml-org/llama.cpp/pull/13435
             //   - https://github.com/ggml-org/llama.cpp/pull/18953#issuecomment-3774948392
+            //   - https://github.com/ggml-org/llama.cpp/pull/18986
             v = ggml_view_4d(ctx, k, hsv_padded, kv, nh, nr23[1], k->nb[1], k->nb[2], k->nb[3], 0);
-
-            // note: this is the currently assumed layout by the CUDA FA implementation
-            //       however, this layout is problematic, because the offset can become very inconveniet for quantized KV types (i.e. not multiple of 16)
-            //       so the models/deepseek2.cpp implementation has been updated to concat the PE data at the end of the row, resulting in the layout above
-            //       the CUDA implementation has to be updated to not make an assumption abou the layout, and instead use the V tensor as it is
-            //v = ggml_view_4d(ctx, k, hsv_padded, kv, nh, nr23[1], k->nb[1], k->nb[2], k->nb[3], ggml_row_size(type_KV, hsk_padded - hsv_padded)/ggml_blck_size(type_KV));
         } else {
             v = create_permuted(type_KV,       hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
         }
