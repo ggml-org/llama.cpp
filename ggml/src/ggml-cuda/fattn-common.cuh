@@ -778,11 +778,14 @@ void launch_fattn(
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
-    const bool is_mla = DV == 512; // TODO better parameterization
-
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
+
+    // TODO: make this more generic by removing the notion of "MLA".
+    //       for example "is V a view of K?" so we can skip loading it.
+    //       V strides should be driven by V itself and avoid assumption of the data layout
+    const bool is_mla = V->op == GGML_OP_VIEW && V->src[0] == K;
 
     GGML_ASSERT(V || is_mla);
 
