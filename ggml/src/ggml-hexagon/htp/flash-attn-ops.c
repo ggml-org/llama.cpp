@@ -111,7 +111,7 @@ static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict 
     hvx_vec_store_u(r, 4, rsum);
 }
 
-// MAD: y (F32) += x (F16) * v (float)
+// MAD: y (F32) += x (F16) * s (float)
 static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
     const HVX_Vector * restrict ptr_x = (const HVX_Vector *) x;
     HVX_Vector * restrict ptr_y = (HVX_Vector *) y;
@@ -318,7 +318,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             uint32_t ic = 0;
 
             // Process in blocks of 32 (VLEN_FP32)
-            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 == 4, "FLASH_ATTN_BLOCK_SIZE must be multiple of VLEN_FP32");
+            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 == 4, "FLASH_ATTN_BLOCK_SIZE changed, fix HVX_Vector_x4 usage");
             HVX_Vector_x4 scores_x4;
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
@@ -371,10 +371,8 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 float M_new = (m_block > M) ? m_block : M;
                 M = M_new;
 
-                float ms = expf(M_old - M_new);
-
+                const float ms = expf(M_old - M_new);
                 hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
-                S = S * ms;
 
                 HVX_Vector M_new_vec = hvx_vec_splat_f32(M_new);
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
@@ -397,7 +395,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 }
 
                 p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
-                S += hvx_vec_get_f32(p_sum_vec);
+                S = S * ms + hvx_vec_get_f32(p_sum_vec);
             }
 
             // Leftover
