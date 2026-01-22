@@ -313,7 +313,7 @@ void main() {
         [[unroll]] for (uint32_t hsv_tile = 0; hsv_tile < num_hsv_tiles; ++hsv_tile) {
             const uint hsv_offset = (hsv_tile * row_split + gl_SubgroupID) * 16;
 
-            SfMat = coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBr, MatBc, gl_MatrixUseAccumulator>(0);
+            SfMat = coopmat<ACC_TYPE, gl_ScopeSubgroup, MatBc, MatBr, gl_MatrixUseAccumulator>(0);
 
 #if BLOCK_SIZE > 1
             // Preload V tiles for [Bc, 16 * num subgroups]
@@ -359,7 +359,7 @@ void main() {
             }
 
             // Store SfMat to sfsh and load into Of
-            const uint osh_stride = row_split * MatBc + 8;
+            const uint osh_stride = row_split * MatBc;
             const uint o_offset = gl_SubgroupID * MatBc;
             coopMatStore(SfMat, sfsh, o_offset, osh_stride, gl_CooperativeMatrixLayoutRowMajor);
 
