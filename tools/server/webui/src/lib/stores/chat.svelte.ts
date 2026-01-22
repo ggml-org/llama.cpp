@@ -97,6 +97,17 @@ class ChatStore {
 		this.isLoading = this.chatLoadingStates.get(convId) || false;
 		const streamingState = this.chatStreamingStates.get(convId);
 		this.currentResponse = streamingState?.response || '';
+
+		// If there's an active stream for this conversation, update the message content
+		// This ensures streaming content is visible when switching back to a conversation
+		if (streamingState?.response && streamingState?.messageId) {
+			import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
+				const idx = conversationsStore.findMessageIndex(streamingState.messageId);
+				if (idx !== -1) {
+					conversationsStore.updateMessageAtIndex(idx, { content: streamingState.response });
+				}
+			});
+		}
 	}
 
 	clearUIState(): void {

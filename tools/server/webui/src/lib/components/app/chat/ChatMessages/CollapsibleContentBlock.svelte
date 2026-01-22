@@ -4,11 +4,15 @@
 	 *
 	 * Used for displaying thinking content, tool calls, and other collapsible information
 	 * with a consistent UI pattern.
+	 *
+	 * Features auto-scroll during streaming: scrolls to bottom automatically,
+	 * stops when user scrolls up, resumes when user scrolls back to bottom.
 	 */
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
+	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -25,6 +29,8 @@
 		title: string;
 		/** Optional subtitle/status text */
 		subtitle?: string;
+		/** Whether content is currently streaming (enables auto-scroll) */
+		isStreaming?: boolean;
 		/** Optional click handler for the trigger */
 		onToggle?: () => void;
 		/** Content to display in the collapsible section */
@@ -38,9 +44,26 @@
 		iconClass = 'h-4 w-4',
 		title,
 		subtitle,
+		isStreaming = false,
 		onToggle,
 		children
 	}: Props = $props();
+
+	let contentContainer: HTMLDivElement | undefined = $state();
+	const autoScroll = createAutoScrollController();
+
+	$effect(() => {
+		autoScroll.setContainer(contentContainer);
+	});
+
+	$effect(() => {
+		// Only auto-scroll when open and streaming
+		autoScroll.updateInterval(open && isStreaming);
+	});
+
+	function handleScroll() {
+		autoScroll.handleScroll();
+	}
 </script>
 
 <Collapsible.Root
@@ -77,7 +100,9 @@
 
 		<Collapsible.Content>
 			<div
+				bind:this={contentContainer}
 				class="overflow-y-auto border-t border-muted px-3 pb-3"
+				onscroll={handleScroll}
 				style="max-height: calc(100dvh - var(--chat-form-area-height));"
 			>
 				{@render children()}

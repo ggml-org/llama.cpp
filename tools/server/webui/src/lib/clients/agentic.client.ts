@@ -193,6 +193,9 @@ export class AgenticClient {
 		this.store.setTotalToolCalls(conversationId, 0);
 		this.store.setLastError(conversationId, null);
 
+		// Acquire reference to prevent premature shutdown while this flow is active
+		mcpClient.acquireConnection();
+
 		try {
 			await this.executeAgenticLoop({
 				conversationId,
@@ -220,13 +223,10 @@ export class AgenticClient {
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.store.setRunning(conversationId, false);
-			// Lazy Disconnect: Close MCP connections after agentic flow completes
-			// This prevents continuous keepalive/heartbeat polling when tools are not in use
-			await mcpClient.shutdown().catch((err) => {
-				console.warn('[AgenticClient] Failed to shutdown MCP after flow:', err);
+			// Release reference - will only shutdown if no other flows are active
+			await mcpClient.releaseConnection().catch((err) => {
+				console.warn('[AgenticClient] Failed to release MCP connection:', err);
 			});
-
-			console.log('[AgenticClient] MCP connections closed (lazy disconnect)');
 		}
 	}
 

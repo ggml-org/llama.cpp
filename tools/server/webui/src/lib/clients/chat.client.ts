@@ -421,6 +421,8 @@ export class ChatClient {
 		this.store.clearChatStreaming(currentConv.id);
 
 		try {
+			let parentIdForUserMessage: string | undefined;
+
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = config();
@@ -433,10 +435,20 @@ export class ChatClient {
 						rootId
 					);
 					conversationsStore.addMessageToActive(systemMessage);
+					parentIdForUserMessage = systemMessage.id;
+				} else {
+					// No system prompt - user message should be child of root
+					parentIdForUserMessage = rootId;
 				}
 			}
 
-			const userMessage = await this.addMessage('user', content, 'text', '-1', extras);
+			const userMessage = await this.addMessage(
+				'user',
+				content,
+				'text',
+				parentIdForUserMessage ?? '-1',
+				extras
+			);
 			if (!userMessage) throw new Error('Failed to add user message');
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
@@ -680,6 +692,7 @@ export class ChatClient {
 		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
 			const agenticResult = await agenticClient.runAgenticFlow({
+				conversationId: assistantMessage.convId,
 				messages: allMessages,
 				options: {
 					...this.getApiOptions(),

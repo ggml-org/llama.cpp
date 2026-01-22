@@ -12,11 +12,8 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import {
-		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
-		AUTO_SCROLL_INTERVAL,
-		INITIAL_SCROLL_DELAY
-	} from '$lib/constants/auto-scroll';
+	import { INITIAL_SCROLL_DELAY } from '$lib/constants/auto-scroll';
+	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import {
 		chatStore,
 		errorDialog,
@@ -42,16 +39,13 @@
 	let { showCenteredEmpty = false } = $props();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
-	let lastScrollTop = $state(0);
-	let scrollInterval: ReturnType<typeof setInterval> | undefined;
-	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-	let userScrolledUp = $state(false);
+
+	const autoScroll = createAutoScrollController();
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -222,32 +216,7 @@
 	}
 
 	function handleScroll() {
-		if (disableAutoScroll || !chatScrollContainer) return;
-
-		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
-		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
-
-		if (scrollTop < lastScrollTop && !isAtBottom) {
-			userScrolledUp = true;
-			autoScrollEnabled = false;
-		} else if (isAtBottom && userScrolledUp) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
-
-		if (scrollTimeout) {
-			clearTimeout(scrollTimeout);
-		}
-
-		scrollTimeout = setTimeout(() => {
-			if (isAtBottom) {
-				userScrolledUp = false;
-				autoScrollEnabled = true;
-			}
-		}, AUTO_SCROLL_INTERVAL);
-
-		lastScrollTop = scrollTop;
+		autoScroll.handleScroll();
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
@@ -269,12 +238,9 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		if (!disableAutoScroll) {
-			userScrolledUp = false;
-			autoScrollEnabled = true;
-		}
+		autoScroll.enable();
 		await chatStore.sendMessage(message, extras);
-		scrollChatToBottom();
+		autoScroll.scrollToBottom();
 
 		return true;
 	}
@@ -324,43 +290,28 @@
 		}
 	}
 
-	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
-		if (disableAutoScroll) return;
-
-		chatScrollContainer?.scrollTo({
-			top: chatScrollContainer?.scrollHeight,
-			behavior
-		});
-	}
-
 	afterNavigate(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			setTimeout(() => autoScroll.scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
 	});
 
 	onMount(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
+			setTimeout(() => autoScroll.scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
 	});
 
 	$effect(() => {
-		if (disableAutoScroll) {
-			autoScrollEnabled = false;
-			if (scrollInterval) {
-				clearInterval(scrollInterval);
-				scrollInterval = undefined;
-			}
-			return;
-		}
+		autoScroll.setContainer(chatScrollContainer);
+	});
 
-		if (isCurrentConversationLoading && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
-		} else if (scrollInterval) {
-			clearInterval(scrollInterval);
-			scrollInterval = undefined;
-		}
+	$effect(() => {
+		autoScroll.setDisabled(disableAutoScroll);
+	});
+
+	$effect(() => {
+		autoScroll.updateInterval(isCurrentConversationLoading);
 	});
 </script>
 
@@ -388,11 +339,8 @@
 			class="mb-16 md:mb-24"
 			messages={activeMessages()}
 			onUserAction={() => {
-				if (!disableAutoScroll) {
-					userScrolledUp = false;
-					autoScrollEnabled = true;
-					scrollChatToBottom();
-				}
+				autoScroll.enable();
+				autoScroll.scrollToBottom();
 			}}
 		/>
 
