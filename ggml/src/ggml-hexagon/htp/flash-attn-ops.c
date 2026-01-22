@@ -319,7 +319,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
             // Process in blocks of 32 (VLEN_FP32)
             float __attribute__((aligned(VLEN))) scores_x4[FLASH_ATTN_BLOCK_SIZE];
-            float m_block = 0;
+            HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32) {
                 // 1. Compute scores
                 for (int j = 0; j < VLEN_FP32; ++j) {
@@ -357,14 +357,13 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     scores = Q6_Vsf_equals_Vqf32(scores);
                 }
 
-                // 4. Online Softmax Update - part1: find max
-                HVX_Vector v_max = hvx_vec_reduce_max_f32(scores);
-                float m_curr = hvx_vec_get_f32(v_max);
-                m_block = (m_curr > m_block) ? m_curr : m_block;
+                v_max = Q6_Vsf_vmax_VsfVsf(scores, v_max);
             }
 
             {
-                // 5. Online Softmax Update - part2: update sum and VKQ32
+                // 4. Online Softmax Update
+                v_max = hvx_vec_reduce_max_f32(v_max);
+                float m_block = hvx_vec_get_f32(v_max);
                 float M_old = M;
                 float M_new = (m_block > M) ? m_block : M;
                 M = M_new;
@@ -383,7 +382,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
                     p_sum_vec = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(p_sum_vec, P));
 
-                    // 6. Accumulate V
+                    // 5. Accumulate V
                     float __attribute__((aligned(VLEN))) p_arr[VLEN_FP32];
                     *(HVX_Vector*)p_arr = P;
 
