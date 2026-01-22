@@ -7,9 +7,6 @@
 #include "log.h"
 #include "regex-partial.h"
 
-// #include <minja/chat-template.hpp>
-// #include <minja/minja.hpp>
-
 #include "jinja/parser.h"
 #include "jinja/value.h"
 #include "jinja/runtime.h"
@@ -56,39 +53,73 @@ static bool has_content_or_tool_calls(const common_chat_msg & msg) {
     return !msg.content.empty() || !msg.tool_calls.empty();
 }
 
-template <>
-json common_chat_msg::to_json_oaicompat() const
-{
-    json message {
-        {"role", "assistant"},
-    };
-    if (!reasoning_content.empty()) {
-        message["reasoning_content"] = reasoning_content;
+json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+    if (!content.empty() && !content_parts.empty()) {
+        throw std::runtime_error("Cannot specify both content and content_parts");
     }
-    if (content.empty() && !tool_calls.empty()) {
-        message["content"] = json();
+    json jmsg {
+        {"role", role},
+    };
+    if (!content.empty()) {
+        jmsg["content"] = content;
+    } else if (!content_parts.empty()) {
+        if (concat_typed_text) {
+            std::string text;
+            for (const auto & part : content_parts) {
+                if (part.type != "text") {
+                    LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
+                    continue;
+                }
+                if (!text.empty()) {
+                    text += '\n';
+                }
+                text += part.text;
+            }
+            jmsg["content"] = text;
+        } else {
+            auto & parts = jmsg["content"] = json::array();
+            for (const auto & part : content_parts) {
+                parts.push_back({
+                    {"type", part.type},
+                    {"text", part.text},
+                });
+            }
+        }
     } else {
-        message["content"] = content;
+        jmsg["content"] = "";
+    }
+    if (!reasoning_content.empty()) {
+        jmsg["reasoning_content"] = reasoning_content;
+    }
+    if (!tool_name.empty()) {
+        jmsg["name"] = tool_name;
+    }
+    if (!tool_call_id.empty()) {
+        jmsg["tool_call_id"] = tool_call_id;
     }
     if (!tool_calls.empty()) {
-        auto arr = json::array();
-        for (const auto & tc : tool_calls) {
-            arr.push_back({
+        jmsg["tool_calls"] = json::array();
+        auto & jtool_calls = jmsg["tool_calls"];
+        for (const auto & tool_call : tool_calls) {
+            json tc {
                 {"type", "function"},
                 {"function", {
-                    {"name", tc.name},
-                    {"arguments", tc.arguments},
+                    {"name", tool_call.name},
+                    {"arguments", tool_call.arguments},
                 }},
-                {"id", tc.id},
-                // // Some templates generate and require an id (sometimes in a very specific format, e.g. Mistral Nemo).
-                // // We only generate a random id for the ones that don't generate one by themselves
-                // // (they also won't get to see it as their template likely doesn't use it, so it's all for the client)
-                // {"id", tc.id.empty() ? gen_tool_call_id() : tc.id},
-            });
+            };
+            if (!tool_call.id.empty()) {
+                tc["id"] = tool_call.id;
+            }
+            // Some templates generate and require an id (sometimes in a very specific format, e.g. Mistral Nemo).
+            // We only generate a random id for the ones that don't generate one by themselves
+            // (they also won't get to see it as their template likely doesn't use it, so it's all for the client)
+            // {"id", tc.id.empty() ? gen_tool_call_id() : tc.id},
+            jtool_calls.push_back(tc);
         }
-        message["tool_calls"] = arr;
     }
-    return message;
+
+    return jmsg;
 }
 
 std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & msg_prv, const common_chat_msg & msg_new) {
@@ -256,7 +287,6 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     return rendered_no_thinking.prompt != rendered_with_thinking.prompt;
 }
 
-template <>
 std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messages) {
     std::vector<common_chat_msg> msgs;
 
@@ -350,80 +380,15 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
     return msgs;
 }
 
-template <>
 json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text) {
     json messages = json::array();
     for (const auto & msg : msgs) {
-        if (!msg.content.empty() && !msg.content_parts.empty()) {
-            throw std::runtime_error("Cannot specify both content and content_parts");
-        }
-        json jmsg {
-            {"role", msg.role},
-        };
-        if (!msg.content.empty()) {
-            jmsg["content"] = msg.content;
-        } else if (!msg.content_parts.empty()) {
-            if (concat_typed_text) {
-                std::string text;
-                for (const auto & part : msg.content_parts) {
-                    if (part.type != "text") {
-                        LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
-                        continue;
-                    }
-                    if (!text.empty()) {
-                        text += '\n';
-                    }
-                    text += part.text;
-                }
-                jmsg["content"] = text;
-            } else {
-                auto & parts = jmsg["content"] = json::array();
-                for (const auto & part : msg.content_parts) {
-                    parts.push_back({
-                        {"type", part.type},
-                        {"text", part.text},
-                    });
-                }
-            }
-        } else {
-            jmsg["content"] = "";
-        }
-        if (!msg.reasoning_content.empty()) {
-            jmsg["reasoning_content"] = msg.reasoning_content;
-        }
-        if (!msg.tool_name.empty()) {
-            jmsg["name"] = msg.tool_name;
-        }
-        if (!msg.tool_call_id.empty()) {
-            jmsg["tool_call_id"] = msg.tool_call_id;
-        }
-        if (!msg.tool_calls.empty()) {
-            auto & tool_calls = jmsg["tool_calls"] = json::array();
-            for (const auto & tool_call : msg.tool_calls) {
-                json tc {
-                    {"type", "function"},
-                    {"function", {
-                        {"name", tool_call.name},
-                        {"arguments", tool_call.arguments},
-                    }},
-                };
-                if (!tool_call.id.empty()) {
-                    tc["id"] = tool_call.id;
-                }
-                tool_calls.push_back(tc);
-            }
-        }
+        json jmsg = msg.to_json_oaicompat(concat_typed_text);
         messages.push_back(jmsg);
     }
     return messages;
 }
 
-template <>
-std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const std::string & messages) {
-    return common_chat_msgs_parse_oaicompat(json::parse(messages));
-}
-
-template <>
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
@@ -459,12 +424,6 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     return result;
 }
 
-template <>
-std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const std::string & tools) {
-    return common_chat_tools_parse_oaicompat(json::parse(tools));
-}
-
-template <>
 json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools) {
     if (tools.empty()) {
         return json();
@@ -484,7 +443,7 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
     return result;
 }
 
-template <> json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
+json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
     json delta = json::object();
     if (!diff.reasoning_content_delta.empty()) {
         delta["reasoning_content"] = diff.reasoning_content_delta;
@@ -2867,13 +2826,13 @@ static common_chat_params common_chat_templates_apply_jinja(
     const struct common_chat_templates_inputs & inputs)
 {
     templates_params params;
-    params.tools = common_chat_tools_to_json_oaicompat<json>(inputs.tools);
+    params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
     const auto & tmpl = params.tools.is_array() && tmpls->template_tool_use
         ? *tmpls->template_tool_use
         : *tmpls->template_default;
     const auto & src = tmpl.source();
     const auto & caps = tmpl.original_caps();
-    params.messages = common_chat_msgs_to_json_oaicompat<json>(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
+    params.messages = common_chat_msgs_to_json_oaicompat(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.tool_choice = inputs.tool_choice;
     params.reasoning_format = inputs.reasoning_format;
@@ -2943,6 +2902,10 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<arg_value>") != std::string::npos &&
         params.json_schema.is_null()) {
         workaround::func_args_not_string(params.messages);
+        if (!params.extra_context.contains("clear_thinking")) {
+            // by default, do not clear reasoning_content (added since GLM-4.7)
+            params.extra_context["clear_thinking"] = false;
+        }
         return common_chat_params_init_glm_4_5(tmpl, params);
     }
 
@@ -3173,4 +3136,10 @@ common_chat_params common_chat_templates_apply(
     return inputs.use_jinja
         ? common_chat_templates_apply_jinja(tmpls, inputs)
         : common_chat_templates_apply_legacy(tmpls, inputs);
+}
+
+std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
+    GGML_ASSERT(chat_templates != nullptr);
+    GGML_ASSERT(chat_templates->template_default != nullptr);
+    return chat_templates->template_default->caps.to_map();
 }
