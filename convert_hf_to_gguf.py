@@ -2582,6 +2582,7 @@ class LlamaModel(TextModel):
         if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
+        self.gguf_writer.add_uint32("llama.context_length", 8192)
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
@@ -2603,6 +2604,7 @@ class LlamaModel(TextModel):
             "patch_merger.",
             "pre_mm_projector_norm",
             "audio_encoder.",
+            "mlp1.",
         ]
 
         is_multimodal_tensor = "vision_tower" in name \
@@ -2978,6 +2980,55 @@ class Llama4VisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
         return []
 
+@ModelBase.register("RADIOModel")
+class RadioModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.preprocessor_config.setdefault("image_mean", [0.485, 0.456, 0.406])
+        self.preprocessor_config.setdefault("image_std", [0.229, 0.224, 0.225])
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        config = super().get_vision_config()
+        if config is not None:
+            config.setdefault("num_hidden_layers", 32)
+            config.setdefault("hidden_size", 1280)
+            config.setdefault("image_size", 512)
+            config.setdefault("patch_size", 16)
+            config.setdefault("num_attention_heads", 16)
+            config.setdefault("intermediate_size", 5120)
+            config.setdefault("norm_eps", 1e-6)
+            config.setdefault("hidden_act", "gelu")
+            config.setdefault("max_tiles", 12)
+            config.setdefault("min_tiles", 1)
+            config.setdefault("num_skip", 8)
+        return config
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.CRADIO)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["norm_eps"])
+        downsample_ratio = self.global_config.get("downsample_ratio")
+        assert downsample_ratio is not None, "downsample_ratio not found in config"
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+        assert self.hparams["hidden_act"] == "gelu"
+        self.gguf_writer.add_vision_use_gelu(True)
+        self.gguf_writer.add_uint32("clip.vision.min_tiles", self.hparams.get("min_tiles", 1))
+        self.gguf_writer.add_uint32("clip.vision.max_tiles", self.hparams.get("max_tiles", 12))
+        self.gguf_writer.add_uint32("clip.vision.max_resolution", self.hparams.get("max_resolution", 2048))
+        self.gguf_writer.add_uint32("clip.vision.num_skip", self.hparams.get("num_skip", 8))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
+
+        if any(skip in name for skip in ["summary_idxs", "input_conditioner"]):
+            return []
+
+        if "vision_model" in name or "mlp1" in name:
+            new_name = self.map_tensor_name(name)
+            if new_name == "v.position_embd":
+                new_name = "v.position_embd.weight"
+            return [(new_name, data_torch)]
+        return []
 
 @ModelBase.register(
     "Mistral3ForConditionalGeneration",

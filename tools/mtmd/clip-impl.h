@@ -53,6 +53,10 @@
 #define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
+#define KEY_MIN_TILES              "clip.vision.min_tiles"
+#define KEY_MAX_TILES              "clip.vision.max_tiles"
+#define KEY_MAX_RESOLUTION         "clip.vision.max_resolution"
+#define KEY_NUM_SKIP               "clip.vision.num_skip"
 
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
@@ -233,6 +237,7 @@ enum projector_type {
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_CRADIO,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -266,6 +271,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
+    { PROJECTOR_TYPE_CRADIO,    "cradio"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

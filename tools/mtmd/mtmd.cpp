@@ -313,7 +313,10 @@ struct mtmd_context {
         } else if (proj == PROJECTOR_TYPE_GLM4V) {
             img_beg = "<|begin_of_image|>";
             img_end = "<|end_of_image|>";
-
+        } else if (proj == PROJECTOR_TYPE_CRADIO) {
+            // <img> ... (image embeddings) ... </img>
+            img_beg = "<img>";
+            img_end = "</img>";
         }
     }
 

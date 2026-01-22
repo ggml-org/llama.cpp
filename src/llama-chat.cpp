@@ -36,6 +36,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "mistral-v3-tekken", LLM_CHAT_TEMPLATE_MISTRAL_V3_TEKKEN },
     { "mistral-v7",        LLM_CHAT_TEMPLATE_MISTRAL_V7        },
     { "mistral-v7-tekken", LLM_CHAT_TEMPLATE_MISTRAL_V7_TEKKEN },
+    { "mistral-nemo",      LLM_CHAT_TEMPLATE_MISTRAL_NEMO      },
     { "phi3",              LLM_CHAT_TEMPLATE_PHI_3             },
     { "phi4",              LLM_CHAT_TEMPLATE_PHI_4             },
     { "falcon3",           LLM_CHAT_TEMPLATE_FALCON_3          },
@@ -284,6 +285,21 @@ int32_t llm_chat_apply_template(
                 is_inside_turn = false;
             }
         }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_MISTRAL_NEMO) {
+        ss << "<s>System\n";
+        bool system_prompt = false;
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << message->content << "</s>\n";
+                system_prompt = true;
+            } else if (role == "user") {
+                if (!system_prompt)
+                    ss << "</s>\n";
+                ss << "<s>User\n" << message->content << "</s>\n";
+            }
+        }
+        ss << "<s>Assistant\n";
     } else if (
             tmpl == LLM_CHAT_TEMPLATE_LLAMA_2
             || tmpl == LLM_CHAT_TEMPLATE_LLAMA_2_SYS
