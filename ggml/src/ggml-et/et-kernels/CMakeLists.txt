@@ -41,39 +41,62 @@ set(KERNELS
     memops
 )
 
+set(ADDRESS_FILE ${CMAKE_CURRENT_BINARY_DIR}/et_address.txt)
+file(CONFIGURE OUTPUT ${ADDRESS_FILE} CONTENT "${ADDRESS}" @ONLY)
+
 # Function to create bare metal kernel
 function(create_bare_metal_kernel KERNEL_NAME)
-    # Release version
-    add_custom_target(${KERNEL_NAME}.elf ALL
-        COMMAND ${CMAKE_C_COMPILER}
-            -march=rv64imf
-            -mabi=lp64f
-            -mcmodel=medany
-            -fno-zero-initialized-in-bss
-            -ffunction-sections
-            -fdata-sections
-            -O3
-            -g0
-            -nostdlib
-            -nostartfiles
-            -ffreestanding
-            -std=c99
-            -I${CMAKE_CURRENT_SOURCE_DIR}/src
-            -T ${CMAKE_CURRENT_SOURCE_DIR}/src/linker.ld
-            -Wl,--defsym=BASE_ADDRESS=${ADDRESS}
-            -Wl,--entry=_start
-            -Wl,--gc-sections
-            -o ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL_NAME}.elf
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/${KERNEL_NAME}.c
-        COMMAND ${CMAKE_STRIP} --strip-debug ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL_NAME}.elf
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_unimplemented_instructions.sh ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE} ${CMAKE_CURRENT_BINARY_DIR}/${KERNEL_NAME}.elf
-        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-        COMMENT "Building bare metal kernel: ${KERNEL_NAME}"
-        VERBATIM
+    set(KERNEL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/${KERNEL_NAME}.c)
+    set(LINKER_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/src/linker.ld)
+    set(CHECK_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_unimplemented_instructions.sh)
+
+    add_executable(${KERNEL_NAME}.elf ${KERNEL_SRC})
+
+    target_compile_options(${KERNEL_NAME}.elf PRIVATE
+        -march=rv64imf
+        -mabi=lp64f
+        -mcmodel=medany
+        -fno-zero-initialized-in-bss
+        -ffunction-sections
+        -fdata-sections
+        -O3
+        -g0
+        -nostdlib
+        -ffreestanding
+        -std=c99
     )
 
-    # Note: Kernels are build-time artifacts only (embedded in binary)
-    # They are not installed
+    set_target_properties(${KERNEL_NAME}.elf PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+        LINK_DEPENDS "${LINKER_SCRIPT};${ADDRESS_FILE}"
+    )
+
+    target_include_directories(${KERNEL_NAME}.elf PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    target_link_options(${KERNEL_NAME}.elf PRIVATE
+        -nostartfiles
+        -T ${LINKER_SCRIPT}
+        -Wl,--defsym=BASE_ADDRESS=${ADDRESS}
+        -Wl,--entry=_start
+        -Wl,--gc-sections
+    )
+
+    # Track linker script AND address file changes
+    set_target_properties(${KERNEL_NAME}.elf PROPERTIES
+        LINK_DEPENDS "${LINKER_SCRIPT};${ADDRESS_FILE}"
+    )
+
+    # Post-build: strip and check (fails build if check script fails)
+    add_custom_command(TARGET ${KERNEL_NAME}.elf POST_BUILD
+        COMMAND ${CMAKE_STRIP} --strip-debug $<TARGET_FILE:${KERNEL_NAME}.elf>
+        COMMAND ${CHECK_SCRIPT}
+            ${CMAKE_OBJDUMP} ${CMAKE_ADDR2LINE} $<TARGET_FILE:${KERNEL_NAME}.elf>
+        # Make check script a dependency so changes to it trigger re-check
+        DEPENDS ${CHECK_SCRIPT}
+        VERBATIM
+    )
 endfunction()
 
 # Create all kernels
