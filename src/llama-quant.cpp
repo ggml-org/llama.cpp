@@ -2140,24 +2140,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (!params->pure && (ggml_is_quantized(default_type) || params->target_bpw != -1.0f || params->target_size != -1)) {
+                bool manual = false;
+
                 // get quantization type overrides targeting a bpw or file size budget
                 if ((params->target_bpw != -1.0f || params->target_size != -1) && !bpw_overrides.empty()) {
                     const auto override = bpw_overrides.find(name);
                     if (override != bpw_overrides.end() && override->second != new_type) {
-                        LLAMA_LOG_DEBUG("(bpw override %s) ", ggml_type_name(new_type));
+                        LLAMA_LOG_WARN("(target override: %s) ", ggml_type_name(new_type));
                         new_type = override->second;
+                        manual = true;
                     }
                 }
 
                 // if the user provided tensor types - use those
-                bool manual = false;
                 if (params->tensor_types) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
-                                LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
+                                LLAMA_LOG_WARN("(manual override: %s) ", ggml_type_name(new_type));
                                 new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                                 manual = true;
                                 break;
