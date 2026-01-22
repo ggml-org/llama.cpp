@@ -768,14 +768,12 @@ graph_key compute_graph_key(ggml_cgraph * cgraph) {
     graph_key key;
     key.n_nodes = cgraph->n_nodes;
 
-    if (cgraph->n_nodes > 0) {
-        key.first_node_name = std::string(cgraph->nodes[0]->name);
-        key.last_node_name = std::string(cgraph->nodes[cgraph->n_nodes - 1]->name);
-    } else {
-        key.first_node_name = "";
-        key.last_node_name = "";
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const auto * node = cgraph->nodes[i];
+        if (node->op == GGML_OP_SET_ROWS && strncmp(node->src[2]->name, "cache_k_l0", 10) == 0) {
+            key.cache_k_l0 = node->src[2];
+        }
     }
-
     return key;
 }
 
