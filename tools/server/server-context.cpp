@@ -534,8 +534,8 @@ public:
     server_queue    queue_tasks;
     server_response queue_results;
 
-    common_chat_templates_ptr chat_templates;
-    oaicompat_parser_options  oai_parser_opt;
+    // note: chat_params must not be refreshed upon existing sleeping state
+    server_chat_params chat_params;
 
     ~server_context_impl() {
         if (!sleeping) {
@@ -688,15 +688,6 @@ private:
             llama_init_dft->free_context();
         }
 
-        chat_templates = common_chat_templates_init(model, params_base.chat_template);
-        try {
-            common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs);
-        } catch (const std::exception & e) {
-            SRV_WRN("%s: Chat template parsing error: %s\n", __func__, e.what());
-            SRV_WRN("%s: The chat template that comes with this model is not yet supported, falling back to chatml. This may cause the model to output suboptimal responses\n", __func__);
-            chat_templates = common_chat_templates_init(model, "chatml");
-        }
-
         std::string & mmproj_path = params_base.mmproj.path;
         if (!mmproj_path.empty()) {
             if (!is_resume) {
@@ -845,30 +836,6 @@ private:
             model_name = model_path.filename().string();
         }
 
-        // thinking is enabled if:
-        // 1. It's not explicitly disabled (reasoning_budget == 0)
-        // 2. The chat template supports it
-        const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
-        SRV_INF("thinking = %d\n", enable_thinking);
-
-        oai_parser_opt = {
-            /* use_jinja             */ params_base.use_jinja,
-            /* prefill_assistant     */ params_base.prefill_assistant,
-            /* reasoning_format      */ params_base.reasoning_format,
-            /* chat_template_kwargs  */ params_base.default_template_kwargs,
-            /* common_chat_templates */ chat_templates.get(),
-            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
-            /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-            /* enable_thinking       */ enable_thinking,
-            /* media_path            */ params_base.media_path,
-        };
-
-        // print sample chat example to make it clear which template is used
-        // @ngxson modern templates are too long, spam the logs; printing the example is enough
-        LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
-        //      common_chat_templates_source(chat_templates.get()),
-                common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
-
         if (!is_resume) {
             return init();
         }
@@ -905,6 +872,42 @@ private:
                     return false;
                 }
             }
+        }
+
+        // populate chat template params
+        {
+            common_chat_templates_ptr chat_templates;
+
+            try {
+                chat_templates = common_chat_templates_init(model, params_base.chat_template);
+
+                LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
+                    common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
+
+            } catch (const std::exception & e) {
+                SRV_ERR("%s: chat template parsing error: %s\n", __func__, e.what());
+                SRV_ERR("%s: please consider disabling jinja via --no-jinja, or use a custom chat template via --chat-template\n", __func__);
+                SRV_ERR("%s: for example: --no-jinja --chat-template chatml\n", __func__);
+                return false;
+            }
+
+            // thinking is enabled if:
+            // 1. It's not explicitly disabled (reasoning_budget == 0)
+            // 2. The chat template supports it
+            const bool enable_thinking = params_base.use_jinja && params_base.reasoning_budget != 0 && common_chat_templates_support_enable_thinking(chat_templates.get());
+            SRV_INF("%s: chat template, thinking = %d\n", __func__, enable_thinking);
+
+            chat_params = {
+                /* use_jinja             */ params_base.use_jinja,
+                /* prefill_assistant     */ params_base.prefill_assistant,
+                /* reasoning_format      */ params_base.reasoning_format,
+                /* chat_template_kwargs  */ params_base.default_template_kwargs,
+                /* tmpls                 */ std::move(chat_templates),
+                /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
+                /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+                /* enable_thinking       */ enable_thinking,
+                /* media_path            */ params_base.media_path,
+            };
         }
 
         return true;
@@ -1326,11 +1329,12 @@ private:
     }
 
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
-        const size_t n_probs = slot.task->params.sampling.n_probs;
+        const size_t n_probs_request = slot.task->params.sampling.n_probs;
 
         if (post_sampling) {
             const auto * cur_p = common_sampler_get_candidates(slot.smpl.get(), true);
             const size_t max_probs = cur_p->size;
+            const size_t n_probs = std::min(max_probs, n_probs_request);
 
             // set probability for sampled token
             for (size_t i = 0; i < max_probs; i++) {
@@ -1341,8 +1345,8 @@ private:
             }
 
             // set probability for top n_probs tokens
-            result.probs.reserve(max_probs);
-            for (size_t i = 0; i < std::min(max_probs, n_probs); i++) {
+            result.probs.reserve(n_probs);
+            for (size_t i = 0; i < n_probs; i++) {
                 result.probs.push_back({
                     cur_p->data[i].id,
                     common_token_to_piece(ctx, cur_p->data[i].id, special),
@@ -1352,9 +1356,11 @@ private:
         } else {
             // TODO: optimize this with min-p optimization
             std::vector<llama_token_data> cur = get_token_probabilities(ctx, idx);
+            const size_t max_probs = cur.size();
+            const size_t n_probs = std::min(max_probs, n_probs_request);
 
             // set probability for sampled token
-            for (size_t i = 0; i < cur.size(); i++) {
+            for (size_t i = 0; i < max_probs; i++) {
                 // set probability for sampled token
                 if (cur[i].id == result.tok) {
                     result.prob = cur[i].p;
@@ -1364,7 +1370,7 @@ private:
 
             // set probability for top n_probs tokens
             result.probs.reserve(n_probs);
-            for (size_t i = 0; i < std::min(cur.size(), n_probs); i++) {
+            for (size_t i = 0; i < n_probs; i++) {
                 result.probs.push_back({
                     cur[i].id,
                     common_token_to_piece(ctx, cur[i].id, special),
@@ -1585,32 +1591,14 @@ private:
 
     // tokenize the input if it's set by CLI, return false on error
     bool tokenize_cli_input(server_task & task) {
-        GGML_ASSERT(task.cli_input != nullptr);
         try {
-            auto & opt = oai_parser_opt;
-            common_chat_templates_inputs inputs;
-            inputs.messages              = common_chat_msgs_parse_oaicompat(task.cli_input);
-            inputs.tools                 = {}; // TODO
-            inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
-            inputs.json_schema           = ""; // TODO
-            inputs.grammar               = ""; // TODO
-            inputs.use_jinja             = opt.use_jinja;
-            inputs.parallel_tool_calls   = false;
-            inputs.add_generation_prompt = true;
-            inputs.reasoning_format      = opt.reasoning_format;
-            inputs.enable_thinking       = opt.enable_thinking;
-
-            // Apply chat template to the list of messages
-            auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
-
-            // tokenize the resulting prompt
-            auto & prompt = chat_params.prompt;
+            auto & prompt = task.cli_prompt;
             if (mctx != nullptr) {
                 task.tokens = process_mtmd_prompt(mctx, prompt, task.cli_files);
             } else {
                 task.tokens = std::move(tokenize_input_prompts(vocab, mctx, prompt, true, true)[0]);
             }
-            task.cli_input.clear();
+            task.cli_prompt.clear();
             task.cli_files.clear();
         } catch (const std::exception & e) {
             send_error(task, std::string("Failed to format input: ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
@@ -1686,7 +1674,7 @@ private:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
-                    if (task.cli_input != nullptr) {
+                    if (task.cli) {
                         if (!tokenize_cli_input(task)) {
                             break;
                         }
@@ -2898,8 +2886,6 @@ server_response_reader server_context::get_response_reader() {
 }
 
 server_context_meta server_context::get_meta() const {
-    auto tool_use_src = common_chat_templates_source(impl->chat_templates.get(), "tool_use");
-
     auto bos_id = llama_vocab_bos(impl->vocab);
     auto eos_id = llama_vocab_eos(impl->vocab);
     auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, bos_id, true) : "";
@@ -2910,14 +2896,13 @@ server_context_meta server_context::get_meta() const {
         /* model_name             */ impl->model_name,
         /* model_path             */ impl->params_base.model.path,
         /* has_mtmd               */ impl->mctx != nullptr,
-        /* has_inp_image          */ impl->oai_parser_opt.allow_image,
-        /* has_inp_audio          */ impl->oai_parser_opt.allow_audio,
+        /* has_inp_image          */ impl->chat_params.allow_image,
+        /* has_inp_audio          */ impl->chat_params.allow_audio,
         /* json_webui_settings    */ impl->json_webui_settings,
         /* slot_n_ctx             */ impl->get_slot_n_ctx(),
         /* pooling_type           */ llama_pooling_type(impl->ctx),
 
-        /* chat_template          */ common_chat_templates_source(impl->chat_templates.get()),
-        /* chat_template_tool_use */ tool_use_src ? tool_use_src : "",
+        /* chat_params            */ impl->chat_params,
 
         /* bos_token_str          */ bos_token_str,
         /* eos_token_str          */ eos_token_str,
@@ -3088,6 +3073,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         json first_result_json = first_result->to_json();
         if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
+        } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+            res->data = format_oai_resp_sse(first_result_json);
         } else {
             res->data = format_oai_sse(first_result_json);
         }
@@ -3122,13 +3109,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
                 // check if there is more data
                 if (!rd.has_next()) {
-                    if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                        // Anthropic doesn't send [DONE], message_stop was already sent
-                        output = "";
-                    } else if (res_type != TASK_RESPONSE_TYPE_NONE) {
-                        output = "data: [DONE]\n\n";
-                    } else {
-                        output = "";
+                    switch (res_type) {
+                        case TASK_RESPONSE_TYPE_NONE:
+                        case TASK_RESPONSE_TYPE_OAI_RESP:
+                        case TASK_RESPONSE_TYPE_ANTHROPIC:
+                            output = "";
+                            break;
+
+                        default:
+                            output = "data: [DONE]\n\n";
+                            break;
                     }
                     SRV_DBG("%s", "all results received, terminating stream\n");
                     return false; // no more data, terminate
@@ -3156,6 +3146,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
+                    } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+                        output = format_oai_resp_sse(res_json);
                     } else {
                         output = format_oai_sse(res_json);
                     }
@@ -3199,8 +3191,8 @@ void server_routes::init_routes() {
 
         // this endpoint can be accessed during sleeping
         // the next LOC is to avoid someone accidentally use ctx_server
-        bool server_ctx; // do NOT delete this line
-        GGML_UNUSED(server_ctx);
+        bool ctx_server; // do NOT delete this line
+        GGML_UNUSED(ctx_server);
 
         res->ok({{"status", "ok"}});
         return res;
@@ -3390,8 +3382,8 @@ void server_routes::init_routes() {
 
         // this endpoint can be accessed during sleeping
         // the next LOC is to avoid someone accidentally use ctx_server
-        bool server_ctx; // do NOT delete this line
-        GGML_UNUSED(server_ctx);
+        bool ctx_server; // do NOT delete this line
+        GGML_UNUSED(ctx_server);
 
         task_params tparams;
         tparams.sampling = params.sampling;
@@ -3399,6 +3391,9 @@ void server_routes::init_routes() {
             { "params", tparams.to_json(true) },
             { "n_ctx",  meta->slot_n_ctx },
         };
+
+        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
+        std::string tmpl_tools   = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
 
         json props = {
             { "default_generation_settings", default_generation_settings_for_props },
@@ -3414,15 +3409,15 @@ void server_routes::init_routes() {
             { "endpoint_metrics",            params.endpoint_metrics },
             { "webui",                       params.webui },
             { "webui_settings",              meta->json_webui_settings },
-            { "chat_template",               meta->chat_template },
+            { "chat_template",               tmpl_default },
             { "bos_token",                   meta->bos_token_str },
             { "eos_token",                   meta->eos_token_str },
             { "build_info",                  meta->build_info },
             { "is_sleeping",                 queue_tasks.is_sleeping() },
         };
         if (params.use_jinja) {
-            if (!meta->chat_template_tool_use.empty()) {
-                props["chat_template_tool_use"] = meta->chat_template_tool_use;
+            if (!tmpl_tools.empty()) {
+                props["chat_template_tool_use"] = tmpl_tools;
             }
         }
         res->ok(props);
@@ -3443,6 +3438,7 @@ void server_routes::init_routes() {
 
     this->get_api_show = [this](const server_http_req &) {
         auto res = create_response();
+        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
         json data = {
             {
                 "model_info", {
@@ -3451,7 +3447,7 @@ void server_routes::init_routes() {
             },
             {"modelfile", ""},
             {"parameters", ""},
-            {"template", meta->chat_template},
+            {"template", tmpl_default},
             {"details", {
                 {"parent_model", ""},
                 {"format", "gguf"},
@@ -3576,7 +3572,7 @@ void server_routes::init_routes() {
         json body = json::parse(req.body);
         json body_parsed = oaicompat_chat_params_parse(
             body,
-            ctx_server.oai_parser_opt,
+            meta->chat_params,
             files);
         return handle_completions_impl(
             req,
@@ -3586,13 +3582,29 @@ void server_routes::init_routes() {
             TASK_RESPONSE_TYPE_OAI_CHAT);
     };
 
+    this->post_responses_oai = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_OAI_RESP);
+    };
+
     this->post_anthropic_messages = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_anthropic_to_oai(json::parse(req.body));
         json body_parsed = oaicompat_chat_params_parse(
             body,
-            ctx_server.oai_parser_opt,
+            meta->chat_params,
             files);
         return handle_completions_impl(
             req,
@@ -3608,7 +3620,7 @@ void server_routes::init_routes() {
         json body = convert_anthropic_to_oai(json::parse(req.body));
         json body_parsed = oaicompat_chat_params_parse(
             body,
-            ctx_server.oai_parser_opt,
+            meta->chat_params,
             files);
 
         json prompt = body_parsed.at("prompt");
@@ -3624,7 +3636,7 @@ void server_routes::init_routes() {
         json body = json::parse(req.body);
         json data = oaicompat_chat_params_parse(
             body,
-            ctx_server.oai_parser_opt,
+            meta->chat_params,
             files);
         res->ok({{ "prompt", std::move(data.at("prompt")) }});
         return res;
@@ -3635,8 +3647,8 @@ void server_routes::init_routes() {
 
         // this endpoint can be accessed during sleeping
         // the next LOC is to avoid someone accidentally use ctx_server
-        bool server_ctx; // do NOT delete this line
-        GGML_UNUSED(server_ctx);
+        bool ctx_server; // do NOT delete this line
+        GGML_UNUSED(ctx_server);
 
         json models = {
             {"models", {

@@ -249,7 +249,7 @@
 		</div>
 	{/if}
 
-	<div class="info my-6 grid gap-4">
+	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel()}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
