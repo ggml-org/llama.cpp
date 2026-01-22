@@ -834,8 +834,6 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
             float32x4_t sb_min_0   = vmulq_f32(q5_dmin_0, q8_d);
             float32x4_t sb_min_1   = vmulq_f32(q5_dmin_1, q8_d);
 
-            // interleaved bias_acc: [0]->r0 0123, [1]->r0 4567
-            int32x4_t bias_acc[2] = { vdupq_n_s32(0), vdupq_n_s32(0) };
             // 2 sb each iteration
             int32x4_t acc_lo[col_pairs];
             int32x4_t acc_hi[col_pairs];
@@ -1031,12 +1029,20 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                                                q8_qs[7]);
                 }
 
+                // Prepare bsum vectors for bias computation
+                // Each pair of subblocks share the same bsums
+                int16x4_t bsums_vec_lo = vdup_n_s16(bsums_arr[2 * sb + 0]);
+                int16x4_t bsums_vec_hi = vdup_n_s16(bsums_arr[2 * sb + 1]);
+
                 // Iterates over a pair of column pairs (4 columns) to use a single 128 register
                 // p = 0 -> 0123  p2 -> 4567
                 for (int i = 0, p = 0; p < col_pairs; i++, p += 2) {
                     int16x4_t   group_scales_lo = p == 0 ? vget_low_s16(q5sb_scales[0]) : vget_high_s16(q5sb_scales[0]);
                     int16x4_t   group_scales_hi = p == 0 ? vget_low_s16(q5sb_scales[1]) : vget_high_s16(q5sb_scales[1]);
+                    int16x4_t   group_mins_lo   = p == 0 ? vget_low_s16(q5sb_mins[0]) : vget_high_s16(q5sb_mins[0]);
+                    int16x4_t   group_mins_hi   = p == 0 ? vget_low_s16(q5sb_mins[1]) : vget_high_s16(q5sb_mins[1]);
                     float32x4_t sb_scale        = p == 0 ? sb_scale_0 : sb_scale_1;
+                    float32x4_t sb_min          = p == 0 ? sb_min_0 : sb_min_1;
 
                     // 0123 or 4567
                     float32x4_t sumf_0 =
@@ -1046,25 +1052,15 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                     float32x4_t sumf_1 =
                         vcvtq_f32_s32(vmulq_s32(vmovl_s16(group_scales_hi), vpaddq_s32(acc_hi[p], acc_hi[p + 1])));
                     acc_f32[i] = vfmaq_f32(acc_f32[i], sb_scale, sumf_1);
+
+                    // FUSED BIAS: Compute and subtract bias immediately
+                    // bias = (bsums_lo * mins_lo + bsums_hi * mins_hi) * sb_min
+                    int32x4_t bias = vmull_s16(bsums_vec_lo, group_mins_lo);
+                    bias = vmlal_s16(bias, bsums_vec_hi, group_mins_hi);
+                    float32x4_t bias_f32 = vcvtq_f32_s32(bias);
+                    acc_f32[i] = vmlsq_f32(acc_f32[i], sb_min, bias_f32);
                 }
-
-                // Multiply Acc bsum + mins
-                // Each pair of subblocks share the same bsums
-                // Load scalar bsum → broadcast to a vector (vdupq_n_s16(s)).
-                int16x4_t bsums_vec_lo = vdup_n_s16(bsums_arr[2 * sb + 0]);
-                int16x4_t bsums_vec_hi = vdup_n_s16(bsums_arr[2 * sb + 1]);
-
-                // cols 0-3 bias
-                bias_acc[0] = vmlal_s16(bias_acc[0], bsums_vec_lo, vget_low_s16(q5sb_mins[0]));
-                bias_acc[0] = vmlal_s16(bias_acc[0], bsums_vec_hi, vget_low_s16(q5sb_mins[1]));
-
-                // cols 4-7 bias
-                bias_acc[1] = vmlal_s16(bias_acc[1], bsums_vec_lo, vget_high_s16(q5sb_mins[0]));
-                bias_acc[1] = vmlal_s16(bias_acc[1], bsums_vec_hi, vget_high_s16(q5sb_mins[1]));
             }  // for sb
-
-            acc_f32[0] = vmlsq_f32(acc_f32[0], vcvtq_f32_s32(bias_acc[0]), sb_min_0);
-            acc_f32[1] = vmlsq_f32(acc_f32[1], vcvtq_f32_s32(bias_acc[1]), sb_min_1);
         }  // for b
 
         int base = x * ncols_interleaved;
