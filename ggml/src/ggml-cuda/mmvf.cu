@@ -39,7 +39,6 @@ static __global__ void mul_mat_vec_f(
 
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
 
-    GGML_CUDA_PDL_SYNC();
     x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     y   += int64_t(sample_y)  *stride_sample_y   + channel_y  *stride_channel_y;
     dst += int64_t(sample_dst)*stride_sample_dst + channel_dst*stride_channel_dst;
@@ -80,6 +79,7 @@ static __global__ void mul_mat_vec_f(
         gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     }
 
+    GGML_CUDA_PDL_SYNC();
     const int channel_bias = ids ? channel_x : channel_dst;
 
     if constexpr (has_fusion) {

@@ -98,7 +98,7 @@ static __global__ void flash_attn_ext_vec(
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    GGML_CUDA_PDL_SYNC();
+
     Q += nb03*sequence + nb02* head              + nb01*ic0;
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
@@ -138,6 +138,8 @@ static __global__ void flash_attn_ext_vec(
 #endif // V_DOT2_F32_F16_AVAILABLE
     int    Q_i32[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
     float2  Q_ds[ncols][1 > D/(sizeof(int)*nthreads_KQ) ? 1 : D/(sizeof(int)*nthreads_KQ)];
+
+    GGML_CUDA_PDL_SYNC();
     if constexpr (Q_q8_1) {
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {

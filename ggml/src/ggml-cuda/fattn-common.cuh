@@ -754,7 +754,6 @@ static __global__ void flash_attn_combine_results(
 
     const int j_dst_unrolled = (sequence*ne01 + col)*ne02 + head;
 
-    GGML_CUDA_PDL_LC();
     VKQ_parts += j_dst_unrolled * parallel_blocks*D;
     VKQ_meta  += j_dst_unrolled * parallel_blocks;
     dst       += j_dst_unrolled *                 D;
@@ -763,6 +762,7 @@ static __global__ void flash_attn_combine_results(
     __builtin_assume(tid < D);
 
     extern __shared__ float2 meta[];
+    GGML_CUDA_PDL_SYNC();
     for (int i = tid; i < 2*parallel_blocks; i += D) {
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
     }
