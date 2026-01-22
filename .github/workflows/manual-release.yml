@@ -95,11 +95,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path .\cpu-artifacts
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\cpu-artifacts\
-          Get-ChildItem -Path .\build\bin\Release\ggml-cpu*.dll | Copy-Item -Destination .\cpu-artifacts\
-          Copy-Item .\build\bin\Release\ggml-base.dll .\cpu-artifacts\
-          Copy-Item .\build\bin\Release\ggml.dll .\cpu-artifacts\
-          Copy-Item .\build\bin\Release\ggml-rpc.dll .\cpu-artifacts\
-          Copy-Item .\build\bin\Release\llama.dll .\cpu-artifacts\
+          Get-ChildItem -Path .\build\bin\Release\*.dll | Copy-Item -Destination .\cpu-artifacts\
           Copy-Item .\build\bin\Release\llama-server.exe .\cpu-artifacts\
 
       - name: Upload CPU backends artifact
