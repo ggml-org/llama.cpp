@@ -23,11 +23,10 @@ Native Windows 11 arm64 builds has the following tools dependencies:
   - MSVC arm64 standard and runtime libraries
 - LLVM core libraries and Clang compiler (winget)
 - CMake, Git (winget)
-- Hexagon SDK 6.4 or later (from Qualcomm Software Center)
-  - Compute_AddOn
-  - Windows on Snapdragon Addon
+- Hexagon SDK Community Edition 6.4 or later (from Qualcomm Software Center)
 
-Note: The rest of the **Windows** build process assumes that you're running natively in Powershell. Adapt below build commands accordingly.
+Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
+Adapt below build commands accordingly.
 
 ## How to Build
 
