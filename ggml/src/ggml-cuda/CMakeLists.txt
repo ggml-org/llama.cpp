@@ -98,6 +98,22 @@ if (CUDAToolkit_FOUND)
     endif()
     message(STATUS "Using CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES} CMAKE_CUDA_ARCHITECTURES_NATIVE=${CMAKE_CUDA_ARCHITECTURES_NATIVE}")
 
+    # Warn about CUDA 13.0 compiler bug with Blackwell (sm_120/121)
+    # See: https://github.com/ggml-org/llama.cpp/issues/18331
+    if (CMAKE_CUDA_ARCHITECTURES MATCHES "12[01]")
+        if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "13.0" AND CUDAToolkit_VERSION VERSION_LESS "13.1")
+            message(WARNING "")
+            message(WARNING "========================================")
+            message(WARNING "CUDA 13.0 has known compiler bugs with Blackwell (sm_120/121)")
+            message(WARNING "This may cause crashes in MMQ kernels with MXFP4 quantization")
+            message(WARNING "")
+            message(WARNING "Recommended: Use -DCMAKE_CUDA_ARCHITECTURES=89 for stability")
+            message(WARNING "See: https://github.com/ggml-org/llama.cpp/issues/18331")
+            message(WARNING "========================================")
+            message(WARNING "")
+        endif()
+    endif()
+
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
