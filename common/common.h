@@ -281,6 +281,10 @@ struct common_params_speculative {
 
     struct common_params_model model;
 
+    common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
+    uint16_t spec_ngram_size_n = 12;
+    uint16_t spec_ngram_size_m = 48;
+
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
 };
 

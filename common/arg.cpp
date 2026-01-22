@@ -630,9 +630,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         bool has_draft =!params.speculative.model.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
         bool has_lookup_caches = !params.lookup_cache_static.empty() && !params.lookup_cache_dynamic.empty();
+        bool has_simple = (params.speculative.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
         bool found_config_draft = false;
         bool found_config_eagle3 = false;
         bool found_config_ngram_cache = false;
+        bool found_config_ngram_simple = false;
         for (const auto & config : params.speculative.configs) {
             if (config.type == COMMON_SPECULATIVE_TYPE_DRAFT) {
                 found_config_draft = true;
@@ -643,15 +645,21 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             if (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE) {
                 found_config_ngram_cache = true;
             }
+            if (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE) {
+                found_config_ngram_simple = true;
+            }
+        }
+        if (has_simple && !found_config_ngram_simple) {
+            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
+        }
+        if (has_lookup_caches && !found_config_ngram_cache) {
+            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         }
         if (has_draft && !found_config_draft) {
             params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT));
         }
         if (has_draft_eagle3 && !found_config_eagle3) {
             params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3));
-        }
-        if (has_lookup_caches && !found_config_ngram_cache) {
-            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
         }
     }
 
@@ -3421,6 +3429,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.replacements.push_back({ tgt, dft });
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-draftless"}, "[none|ngram-cache|ngram-simple]",
+        string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
+            common_speculative_type_to_str(params.speculative.draftless_type).c_str()),
+        [](common_params & params, const std::string & value) {
+            if (value == "none") {
+                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NONE;
+            } else if (value == "ngram-cache") {
+                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
+            } else if (value == "ngram-simple") {
+                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
+            } else {
+                throw std::invalid_argument("unknown speculative decoding type without draft model");
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--spec-ngram-size-n"}, "N",
+        string_format("ngram size N for ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.spec_ngram_size_n),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 1024) {
+                throw std::invalid_argument("ngram size N must be between 1 and 1024 inclusive");
+            }
+            params.speculative.spec_ngram_size_n = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--spec-ngram-size-m"}, "N",
+        string_format("ngram size M for ngram-map speculative decoding, length of draft m-gram (default: %d)", params.speculative.spec_ngram_size_m),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 1024) {
+                throw std::invalid_argument("ngram size M must be between 1 and 1024 inclusive");
+            }
+            params.speculative.spec_ngram_size_m = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-config"}, "SPECULATIVE_CONFIG",
         string_format("list of speculative decoding types, separated by ';', optionally followed by a colon and a comma-separated list of key=value pairs\n(types: %s)\n", common_speculative_type_name_str().c_str()),

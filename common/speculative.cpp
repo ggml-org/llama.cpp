@@ -149,16 +149,16 @@ struct common_speculative {
     common_speculative_state *                             curr_impl = nullptr; // current implementation in use (for stats)
 };
 
-common_ngram_map get_common_ngram_map(const common_speculative_config config);
+common_ngram_map get_common_ngram_map(const common_speculative_config config, uint16_t size_ngram, uint16_t size_mgram);
 struct common_speculative_state_ngram_cache create_state_ngram_cache(
         std::string path_static, std::string path_dynamic,
         common_speculative_config config);
 
-common_ngram_map get_common_ngram_map(const common_speculative_config config) {
-    uint16_t size_key   = 12;
-    uint16_t size_value = 48;
+common_ngram_map get_common_ngram_map(const common_speculative_config config, uint16_t size_ngram, uint16_t size_mgram) {
+    uint16_t size_key   = size_ngram;
+    uint16_t size_value = size_mgram;
     bool     key_only   = false;
-    uint16_t check_rate = 3;
+    uint16_t check_rate = 2;
     uint16_t min_hits   = 1;
     const std::map<std::string, std::string> & cfg = config.config;
     if (cfg.find("size_ngram") != cfg.end()) {
@@ -270,7 +270,8 @@ struct common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
-                common_ngram_map ngram_map = get_common_ngram_map(config);
+                common_ngram_map ngram_map = get_common_ngram_map(config,
+                        params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m);
                 uint16_t ngram_size_key   = ngram_map.size_key;
                 uint16_t mgram_size_value = ngram_map.size_value;
                 uint16_t check_rate = ngram_map.check_rate;
@@ -285,13 +286,15 @@ struct common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
-                    (config.type), get_common_ngram_map(config)
+                    (config.type), get_common_ngram_map(config,
+                        params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m)
                 ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k4v>(
-                            (config.type), get_common_ngram_map(config)));
+                            (config.type), get_common_ngram_map(config,
+                                params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
