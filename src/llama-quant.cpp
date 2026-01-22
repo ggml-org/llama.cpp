@@ -949,6 +949,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> & dequantized_buffer,
         float tensor_bias,
         const float * slice_bias,
+        float h_norm,
         const wce_cache * ref_wce = nullptr,
         const mse_cache * ref_mse = nullptr
     ) -> quant_error
@@ -990,10 +991,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                         const float * v = has_vals ? values_sample + s * n_per_row : nullptr;
                         const float * a = activations_sample + s * n_per_row;
                         double denom = 0.0;
-                        for (int64_t j = 0; j < n_per_row; ++j) {
-                            const double w = v ? std::max(0.0f, v[j]) : 1.0;
-                            const double aj = a[j];
-                            denom += w * aj * aj;
+                        if (v) {
+                            for (int64_t j = 0; j < n_per_row; ++j) { denom += std::max(0.0f, v[j]) * a[j] * a[j]; }
+                        } else {
+                            for (int64_t j = 0; j < n_per_row; ++j) { denom += a[j] * a[j]; }
                         }
 
                         local_bias_denom[s] = denom;
@@ -1009,9 +1010,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     for (int64_t r = 0; r < rs; ++r) {
                         const float * x = f32_sample.data() + off;
                         double sum = 0.0;
-                        for (int64_t j = 0; j < n_per_row; ++j) {
-                            double xx = x[j];
-                            sum += (v ? std::max(0.0f, v[j]) : 1.0) * xx * xx;
+                        if (v) {
+                            for (int64_t j = 0; j < n_per_row; ++j) { sum += std::max(0.0f, v[j]) * x[j] * x[j]; }
+                        } else {
+                            for (int64_t j = 0; j < n_per_row; ++j) { sum += x[j] * x[j]; }
                         }
 
                         local_row_sq_norm.push_back(sum);
@@ -1061,15 +1063,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Compute Error Metrics: Entropy-Modulated Weighted Cosine Error (WCE) - Experimental
         if (do_wce) {
-            float h_norm = 1.0f;
-            if (statistics_data) {
-                const std::string name = ggml_get_name(t);
-                const std::string key = remap_imatrix(name, mapped);
-                if (auto it = statistics_data->find(key); it != statistics_data->end() && !it->second.empty()) {
-                    h_norm = it->second.size() > 3 ? it->second[1] : 1.0f;
-                }
-            }
-
             double total_cos_error = 0.0;
             size_t off = 0;
             size_t sample_idx = 0;
@@ -1093,44 +1086,24 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     const bool calc_nx = !cached_norm_x;
 
                     // SIMD-friendly loops
-                    if (v) {
-                        if (calc_nx) {
-                            for (int64_t j = 0; j < n_per_row; ++j) {
-                                const double w = std::max(0.0f, v[j]);
-                                const double xj = wx[j];
-                                const double yj = wy[j];
-                                const double yw = yj * w;
-                                dot += xj * yw;
-                                ny += yj * yw;
-                                nx += xj * xj * w;
-                            }
-                        } else {
-                            nx = (* cached_norm_x)[sample_idx];
-                            for (int64_t j = 0; j < n_per_row; ++j) {
-                                const double w = std::max(0.0f, v[j]);
-                                const double yj = wy[j];
-                                const double yw = yj * w;
-                                dot += (double) wx[j] * yw;
-                                ny += yj * yw;
-                            }
+                    if (calc_nx) {
+                        for (int64_t j = 0; j < n_per_row; ++j) {
+                            const double w = std::max(0.0f, v[j]);
+                            const double xj = wx[j];
+                            const double yj = wy[j];
+                            const double yw = yj * w;
+                            dot += xj * yw;
+                            ny += yj * yw;
+                            nx += xj * xj * w;
                         }
                     } else {
-                        if (calc_nx) {
-                            for (int64_t j = 0; j < n_per_row; ++j) {
-                                const double xj = wx[j];
-                                const double yj = wy[j];
-                                dot += xj * yj;
-                                ny += yj * yj;
-                                nx += xj * xj;
-                            }
-                        } else {
-                            nx = (* cached_norm_x)[sample_idx];
-                            for (int64_t j = 0; j < n_per_row; ++j) {
-                                const double xj = wx[j];
-                                const double yj = wy[j];
-                                dot += xj * yj;
-                                ny += yj * yj;
-                            }
+                        nx = (* cached_norm_x)[sample_idx];
+                        for (int64_t j = 0; j < n_per_row; ++j) {
+                            const double w = std::max(0.0f, v[j]);
+                            const double yj = wy[j];
+                            const double yw = yj * w;
+                            dot += (double) wx[j] * yw;
+                            ny += yj * yw;
                         }
                     }
 
@@ -1184,14 +1157,35 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 double w_err = 0.0;
                 double bias_num = 0.0;
 
-                for (int64_t j = 0; j < n_per_row; ++j) {
-                    const double w = val ? std::max(0.0f, val[j]) : 1.0;
-                    const double e = y[j] - x[j];
-                    w_err += w * e * e;
-                    if (act) { bias_num += w * e * act[j]; }
+                if (val && act) {
+                    for (int64_t j = 0; j < n_per_row; ++j) {
+                        const double w = std::max(0.0f, val[j]);
+                        const double e = y[j] - x[j];
+                        const double we = w * e;
+                        w_err += we * e;
+                        bias_num += we * act[j];
+                    }
+                } else if (val) {
+                    for (int64_t j = 0; j < n_per_row; ++j) {
+                        const double w = std::max(0.0f, val[j]);
+                        const double e = y[j] - x[j];
+                        w_err += w * e * e;
+                    }
+                } else if (act) {
+                    for (int64_t j = 0; j < n_per_row; ++j) {
+                         const double e = y[j] - x[j];
+                         w_err += e * e;
+                         bias_num += e * act[j];
+                    }
+                } else {
+                    for (int64_t j = 0; j < n_per_row; ++j) {
+                        const double e = y[j] - x[j];
+                        w_err += e * e;
+                    }
                 }
 
-                const double m_norm = w_err / ((* ptr_row_sq_norm)[row_idx] + EPSILON);
+                const double rsn = (* ptr_row_sq_norm)[row_idx];
+                const double m_norm = rsn > EPSILON ? w_err / rsn : 0.0;
                 slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : INFINITE);
 
                 if (act) {
@@ -1319,7 +1313,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             const ggml_type src_type = tensor->type;
             const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
             const ggml_type_traits * traits = ggml_get_type_traits(src_type);
-            std::vector<float> row_buf(n_per_row);
 
             for (int64_t slice = 0; slice < ne2; ++slice) {
                 std::mt19937 rng(std::hash<std::string>{}(name) ^ HASH_MAGIC ^ slice);
@@ -1330,18 +1323,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 int64_t count = 0;
                 for (int64_t r = offset; r < nrows_total && count < limit; r += stride) {
                     const uint8_t * src = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
-                    if (src_type == GGML_TYPE_F32) {
-                        f32_sample.insert(f32_sample.end(), (const float*)src, (const float*)src + n_per_row);
-                    } else if (src_type == GGML_TYPE_F16 || src_type == GGML_TYPE_BF16) {
-                        if (src_type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row((const ggml_fp16_t*)src, row_buf.data(), (int)n_per_row); }
-                        else { ggml_bf16_to_fp32_row((const ggml_bf16_t*)src, row_buf.data(), (int)n_per_row); }
-                        f32_sample.insert(f32_sample.end(), row_buf.begin(), row_buf.end());
-                    } else if (traits && traits->to_float) {
-                        traits->to_float(src, row_buf.data(), (int)n_per_row);
-                        f32_sample.insert(f32_sample.end(), row_buf.begin(), row_buf.end());
-                    } else {
-                        throw std::runtime_error(format("unsupported source type %s for sampling", ggml_type_name(src_type)));
-                    }
+                    size_t cur_sz = f32_sample.size();
+                    f32_sample.resize(cur_sz + n_per_row);
+                    float * dst = f32_sample.data() + cur_sz;
+
+                    if (src_type == GGML_TYPE_F32) { std::memcpy(dst, src, n_per_row * sizeof(float)); }
+                    else if (src_type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row((const ggml_fp16_t*)src, dst, (int)n_per_row); }
+                    else if (src_type == GGML_TYPE_BF16) { ggml_bf16_to_fp32_row((const ggml_bf16_t*)src, dst, (int)n_per_row); }
+                    else if (traits && traits->to_float) { traits->to_float(src, dst, (int)n_per_row); }
+                    else { throw std::runtime_error(format("unsupported source type %s for sampling", ggml_type_name(src_type))); }
 
                     ++count;
                 }
@@ -1359,6 +1349,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         auto [val_ptr, val_sz] = get_side_data(values_data);
         auto [act_ptr, act_sz] = get_side_data(activations_data);
+
+        // Cache WCE stats once per tensor to avoid repeated map lookups/regex inside compute_quant_error
+        float h_norm = 1.0f;
+        if (valid_wce && statistics_data) {
+            const std::string key = remap_imatrix(name, mapped);
+            if (auto it = statistics_data->find(key); it != statistics_data->end() && !it->second.empty()) {
+                h_norm = it->second.size() > 3 ? it->second[1] : 1.0f;
+            }
+        }
 
         std::vector<float> val_vec;
         std::vector<float> act_vec;
@@ -1378,7 +1377,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         prepare_broadcast(val_ptr, val_sz, val_vec);
         prepare_broadcast(act_ptr, act_sz, act_vec);
 
-        // Precompute WCE reference stats (row_sq_norm) to avoid recalculation per candidate
+        // Precompute WCE reference stats
         wce_cache ref_wce;
         mse_cache ref_mse;
         size_t total_rows_sampled = 0;
@@ -1386,13 +1385,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         if (valid_wce && !val_vec.empty() && !act_vec.empty()) {
             ref_wce.row_sq_norm.reserve(total_rows_sampled);
-
             size_t off = 0;
             for (int64_t s = 0; s < ne2; ++s) {
                 const int64_t rs = rows_sample[s];
                 if (rs == 0) { continue; }
                 const float * v = val_vec.data() + s * n_per_row;
-
                 for (int64_t r = 0; r < rs; ++r) {
                     const float * wx = f32_sample.data() + off;
                     double norm_x = 0.0;
@@ -1405,43 +1402,45 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 }
             }
         } else {
-             // Precompute MSE reference stats (row_sq_norm and bias_denominator) to avoid recalculation per candidate
-             ref_mse.row_sq_norm.reserve(total_rows_sampled);
-             ref_mse.bias_denominator.assign(ne2, 0.0);
-             const bool has_acts = !act_vec.empty();
-             const bool has_vals = !val_vec.empty();
+            // Precompute MSE reference stats
+            ref_mse.row_sq_norm.reserve(total_rows_sampled);
+            ref_mse.bias_denominator.assign(ne2, 0.0);
+            const bool has_acts = !act_vec.empty();
+            const bool has_vals = !val_vec.empty();
 
-             // Bias Denominators
-             if (has_acts) {
-                 for (int64_t s = 0; s < ne2; ++s) {
-                     const float * v = has_vals ? val_vec.data() + s * n_per_row : nullptr;
-                     const float * a = act_vec.data() + s * n_per_row;
-                     double denom = 0.0;
-                     for (int64_t j = 0; j < n_per_row; ++j) {
-                         const double w = v ? std::max(0.0f, v[j]) : 1.0;
-                         const double aj = a[j];
-                         denom += w * aj * aj;
-                     }
-                     ref_mse.bias_denominator[s] = denom;
-                 }
-             }
+            if (has_acts) {
+                for (int64_t s = 0; s < ne2; ++s) {
+                    const float * v = has_vals ? val_vec.data() + s * n_per_row : nullptr;
+                    const float * a = act_vec.data() + s * n_per_row;
+                    double denom = 0.0;
+                    if (v) {
+                        for (int64_t j = 0; j < n_per_row; ++j) { denom += std::max(0.0f, v[j]) * a[j] * a[j]; }
+                    } else {
+                        for (int64_t j = 0; j < n_per_row; ++j) { denom += a[j] * a[j]; }
+                    }
 
-             // Row Squared Norms
-             size_t off = 0;
-             for (int64_t s = 0; s < ne2; ++s) {
-                 const int64_t rs = rows_sample[s];
-                 const float * v = has_vals ? val_vec.data() + s * n_per_row : nullptr;
-                 for (int64_t r = 0; r < rs; ++r) {
-                     const float * x = f32_sample.data() + off;
-                     double sum = 0.0;
-                     for (int64_t j = 0; j < n_per_row; ++j) {
-                         double xx = x[j];
-                         sum += (v ? std::max(0.0f, v[j]) : 1.0) * xx * xx;
-                     }
-                     ref_mse.row_sq_norm.push_back(sum);
-                     off += (size_t)n_per_row;
-                 }
-             }
+                    ref_mse.bias_denominator[s] = denom;
+                }
+            }
+
+            size_t off = 0;
+            for (int64_t s = 0; s < ne2; ++s) {
+                const int64_t rs = rows_sample[s];
+                const float * v = has_vals ? val_vec.data() + s * n_per_row : nullptr;
+                for (int64_t r = 0; r < rs; ++r) {
+                    const float * x = f32_sample.data() + off;
+                    double sum = 0.0;
+                    if (v) {
+                        for (int64_t j = 0; j < n_per_row; ++j) { sum += std::max(0.0f, v[j]) * x[j] * x[j]; }
+                    }
+                    else {
+                        for (int64_t j = 0; j < n_per_row; ++j) { sum += x[j] * x[j]; }
+                    }
+
+                    ref_mse.row_sq_norm.push_back(sum);
+                    off += (size_t)n_per_row;
+                }
+            }
         }
 
         // Build candidates
@@ -1461,7 +1460,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::sort(valid_types.begin(), valid_types.end());
         valid_types.erase(std::unique(valid_types.begin(), valid_types.end()), valid_types.end());
 
-        // Calculate bias lambda to adjust the trade-off between MSE and systematic bias
         float tensor_lambda = 0.0f;
         std::vector<float> slice_lambdas = estimate_lambda(val_vec.empty()?nullptr:val_vec.data(), act_vec.empty()?nullptr:act_vec.data(), n_per_row, ne2);
         if (!slice_lambdas.empty()) {
@@ -1492,6 +1490,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 dq_buf,
                 tensor_lambda,
                 slice_lambdas.data(),
+                h_norm,
                 ptr_ref_wce,
                 ptr_ref_mse
             );
@@ -1507,35 +1506,29 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             evaluations.push_back(candidate);
         }
 
-        // Select final quality metric (MSE or MSE + bias) if not using WCE
         type_choice ch;
         ch.w = tw;
         ch.n_elements = ggml_nelements(tensor);
         bool bias_needed = false;
         if (!valid_wce && !slice_lambdas.empty()) {
-            // Determine if bias correction is required
             double best_mse = INFINITE;
             double max_rel_bias = 0.0;
             for (const auto& c : evaluations) {
                 if (c.bytes == 0) { continue; }
                 best_mse = std::min(best_mse, c.mse);
-                // Check penalty term contribution (error - mse)
                 if (c.mse > EPSILON) { max_rel_bias = std::max(max_rel_bias, std::max(0.0, c.error - c.mse) / c.mse); }
             }
 
-            // If penalty/bias is significant (>= 50% of MSE), use combined error, else pure MSE
             bias_needed = max_rel_bias >= 0.5;
         }
 
         for (const auto & ev : evaluations) {
             if (ev.bytes == 0) { continue; }
             type_scores ts = ev;
-            // If using WCE, c.error is already set
             if (!valid_wce && !bias_needed) { ts.error = ts.mse; }
             ch.candidates.push_back(ts);
         }
 
-        // Fallback if empty
         if (ch.candidates.empty()) {
             type_scores fb;
             fb.type = tensor->type;
@@ -1544,15 +1537,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             ch.candidates.push_back(fb);
         }
 
-        // Convex hull & Pareto Front simplification
         auto simplify_pareto = [](std::vector<type_scores> & candidates) {
             std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
                 return a.bytes < b.bytes || (a.bytes == b.bytes && a.error < b.error);
             });
             candidates.erase(std::unique(candidates.begin(), candidates.end(),
-                 [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
+                [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
 
-            // Lower envelope
             std::vector<type_scores> hull;
             double min_err = INFINITE;
             for(const auto & c : candidates) {
@@ -1563,12 +1554,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
             candidates = std::move(hull);
 
-            // Convex hull
             if (candidates.size() < 3) { return; }
             std::vector<type_scores> convex;
             auto cross = [](const auto& a, const auto& b, const auto& c) {
                 return ((double)b.bytes - (double)a.bytes) * (c.error - a.error) - ((double)c.bytes - (double)a.bytes) * (b.error - a.error);
             };
+
             for (const auto & c : candidates) {
                 while (convex.size() >= 2 && cross(convex[convex.size()-2], convex.back(), c) <= EPSILON) { convex.pop_back(); }
                 convex.push_back(c);
