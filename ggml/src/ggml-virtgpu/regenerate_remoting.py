@@ -250,16 +250,15 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
         if is_frontend_dir:
             # Running from ggml/src/ggml-virtgpu-apir
             logging.info("📍 Detected frontend directory execution")
-            backend_base = Path("../ggml-remotingbackend")
             frontend_base = Path(".")
         else:
             # Running from project root (fallback to original behavior)
             logging.info("📍 Detected project root execution")
             base_path = self.config_data.get('base_path', 'ggml/src')
-            backend_base = Path(base_path) / "ggml-remotingbackend"
             frontend_base = Path(base_path) / "ggml-virtgpu"
 
         # Compute final file paths
+        backend_base = frontend_base / "backend"
         apir_backend_path = backend_base / "shared" / "apir_backend.gen.h"
         backend_dispatched_path = backend_base / "backend-dispatched.gen.h"
         virtgpu_forward_path = frontend_base / "virtgpu-forward.gen.h"

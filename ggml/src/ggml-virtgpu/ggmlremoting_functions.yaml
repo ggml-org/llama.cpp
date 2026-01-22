@@ -8,8 +8,8 @@ config:
 
   # Header files to update
   files:
-    apir_backend_header: "ggml-remotingbackend/shared/apir_backend.gen.h"
-    backend_dispatched_header: "ggml-remotingbackend/backend-dispatched.gen.h"
+    apir_backend_header: "ggml-virtgpu-apir/backend/shared/apir_backend.gen.h"
+    backend_dispatched_header: "ggml-virtgpu-apir/backend/backend-dispatched.gen.h"
     virtgpu_forward_header: "ggml-virtgpu-apir/virtgpu-forward.gen.h"
 
 # Simplified function definitions with grouping and metadata combined
