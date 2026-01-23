@@ -781,6 +781,7 @@ By default, it is read-only. To make POST request to change global properties, y
   "total_slots": 1,
   "model_path": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
   "chat_template": "...",
+  "chat_template_caps": {},
   "modalities": {
     "vision": false
   },
@@ -793,6 +794,7 @@ By default, it is read-only. To make POST request to change global properties, y
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
+- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info)
 - `modalities` - the list of supported modalities
 - `is_sleeping` - sleeping status, see [Sleeping on idle](#sleeping-on-idle)
 
@@ -1266,6 +1268,12 @@ The response contains a `timings` object, for example:
 This provides information on the performance of the server. It also allows calculating the current context usage.
 
 The total number of tokens in context is equal to `prompt_n + cache_n + predicted_n`
+
+*Reasoning support*
+
+The server supports parsing and returning reasoning via the `reasoning_content` field, similar to Deepseek API.
+
+Reasoning input (preserve reasoning in history) is also supported by some specific templates. For more details, please refer to [PR#18994](https://github.com/ggml-org/llama.cpp/pull/18994).
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 

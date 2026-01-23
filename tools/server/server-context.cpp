@@ -2903,6 +2903,7 @@ server_context_meta server_context::get_meta() const {
         /* pooling_type           */ llama_pooling_type(impl->ctx),
 
         /* chat_params            */ impl->chat_params,
+        /* chat_template_caps     */ common_chat_templates_get_caps(impl->chat_params.tmpls.get()),
 
         /* bos_token_str          */ bos_token_str,
         /* eos_token_str          */ eos_token_str,
@@ -3410,6 +3411,7 @@ void server_routes::init_routes() {
             { "webui",                       params.webui },
             { "webui_settings",              meta->json_webui_settings },
             { "chat_template",               tmpl_default },
+            { "chat_template_caps",          meta->chat_template_caps },
             { "bos_token",                   meta->bos_token_str },
             { "eos_token",                   meta->eos_token_str },
             { "build_info",                  meta->build_info },
