@@ -767,22 +767,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     }
 
     json deltas = json::array();
-    for (const auto & diff : oaicompat_msg_diffs) {
-        deltas.push_back({
-            {"choices", json::array({
-                json {
-                    {"finish_reason", nullptr},
-                    {"index", 0},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
-                },
-            })},
-            {"created", t},
-            {"id", oaicompat_cmpl_id},
-            {"model", oaicompat_model},
-            {"system_fingerprint", build_info},
-            {"object", "chat.completion.chunk"},
-        });
-    }
 
     deltas.push_back({
         {"choices", json::array({
@@ -1089,109 +1073,6 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     // content block indices: thinking (0) -> text (0 or 1) -> tool_use (n+)
     size_t thinking_block_index = 0;
     size_t text_block_index     = has_thinking ? 1 : 0;
-
-    bool thinking_block_started = false;
-    bool text_block_started     = false;
-    std::unordered_set<size_t> tool_calls_started;
-
-    for (const auto & diff : oaicompat_msg_diffs) {
-        // handle thinking/reasoning content
-        if (!diff.reasoning_content_delta.empty()) {
-            if (!thinking_block_started) {
-                events.push_back({
-                    {"event", "content_block_start"},
-                    {"data", {
-                        {"type", "content_block_start"},
-                        {"index", thinking_block_index},
-                        {"content_block", {
-                            {"type", "thinking"},
-                            {"thinking", ""}
-                        }}
-                    }}
-                });
-                thinking_block_started = true;
-            }
-
-            events.push_back({
-                {"event", "content_block_delta"},
-                {"data", {
-                    {"type", "content_block_delta"},
-                    {"index", thinking_block_index},
-                    {"delta", {
-                        {"type", "thinking_delta"},
-                        {"thinking", diff.reasoning_content_delta}
-                    }}
-                }}
-            });
-        }
-
-        // handle regular text content
-        if (!diff.content_delta.empty()) {
-            if (!text_block_started) {
-                events.push_back({
-                    {"event", "content_block_start"},
-                    {"data", {
-                        {"type", "content_block_start"},
-                        {"index", text_block_index},
-                        {"content_block", {
-                            {"type", "text"},
-                            {"text", ""}
-                        }}
-                    }}
-                });
-                text_block_started = true;
-            }
-
-            events.push_back({
-                {"event", "content_block_delta"},
-                {"data", {
-                    {"type", "content_block_delta"},
-                    {"index", text_block_index},
-                    {"delta", {
-                        {"type", "text_delta"},
-                        {"text", diff.content_delta}
-                    }}
-                }}
-            });
-        }
-
-        // handle tool calls
-        if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
-
-            if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
-                const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
-
-                events.push_back({
-                    {"event", "content_block_start"},
-                    {"data", {
-                        {"type", "content_block_start"},
-                        {"index", content_block_index},
-                        {"content_block", {
-                            {"type", "tool_use"},
-                            {"id", full_tool_call.id},
-                            {"name", full_tool_call.name}
-                        }}
-                    }}
-                });
-                tool_calls_started.insert(diff.tool_call_index);
-            }
-
-            if (!diff.tool_call_delta.arguments.empty()) {
-                events.push_back({
-                    {"event", "content_block_delta"},
-                    {"data", {
-                        {"type", "content_block_delta"},
-                        {"index", content_block_index},
-                        {"delta", {
-                            {"type", "input_json_delta"},
-                            {"partial_json", diff.tool_call_delta.arguments}
-                        }}
-                    }}
-                });
-            }
-        }
-    }
 
     // close content blocks in order
     if (has_thinking) {
