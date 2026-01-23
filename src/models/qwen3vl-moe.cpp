@@ -111,15 +111,9 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
         cb(cur, "l_out", il);
 
         if (il < (int) n_deepstack_layers) {
-            std::array<ggml_tensor *, 2> curs = { cur, nullptr };
-
             ggml_tensor * ds = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (il + 1) * n_embd * sizeof(float));
             cur = ggml_add(ctx0, cur, ds);
             cb(cur, "deepstack_out", il);
-
-            curs[1] = cur;
-
-            cur = ggml_build_forward_select(gf, curs.data(), curs.size(), ubatch.embd ? 1 : 0);
         }
 
         // input for next layer
