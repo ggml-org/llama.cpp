@@ -12,6 +12,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { t } from '$lib/i18n';
 	import {
 		autoResizeTextarea,
 		getFileTypeCategory,
@@ -251,7 +252,7 @@
 		) {
 			event.preventDefault();
 
-			const textFile = new File([text], 'Pasted', {
+			const textFile = new File([text], t('chat.attachments.pasted_filename'), {
 				type: MimeTypeText.PLAIN
 			});
 
@@ -318,7 +319,7 @@
 				onEditedContentChange(e.currentTarget.value);
 			}}
 			onpaste={handlePaste}
-			placeholder="Edit your message..."
+			placeholder={t('chat.message.edit.placeholder_user')}
 		></textarea>
 
 		<div class="flex w-full items-center gap-3" style="container-type: inline-size">
@@ -326,9 +327,9 @@
 				class="h-8 w-8 shrink-0 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
 				onclick={() => fileInputElement?.click()}
 				type="button"
-				title="Add attachment"
+				title={t('chat.message.edit.add_attachment')}
 			>
-				<span class="sr-only">Attach files</span>
+				<span class="sr-only">{t('chat.message.edit.attach_files')}</span>
 
 				<Paperclip class="h-4 w-4" />
 			</Button>
@@ -348,9 +349,17 @@
 				onclick={handleSubmit}
 				disabled={!canSubmit}
 				type="button"
-				title={saveWithoutRegenerate ? 'Save changes' : 'Send and regenerate'}
+				title={
+					saveWithoutRegenerate
+						? t('chat.message.edit.save_changes')
+						: t('chat.message.edit.send_regenerate')
+				}
 			>
-				<span class="sr-only">{saveWithoutRegenerate ? 'Save' : 'Send'}</span>
+				<span class="sr-only">
+					{saveWithoutRegenerate
+						? t('chat.message.edit.save')
+						: t('chat.message.edit.send')}
+				</span>
 
 				<ArrowUp class="h-5 w-5" />
 			</Button>
@@ -364,7 +373,7 @@
 			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
 
 			<label for="save-only-switch" class="cursor-pointer text-xs text-muted-foreground">
-				Update without re-sending
+				{t('chat.message.edit.update_without_resend')}
 			</label>
 		</div>
 	{:else}
@@ -374,16 +383,16 @@
 	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
 		<X class="mr-1 h-3 w-3" />
 
-		Cancel
+		{t('chat.message.edit.cancel')}
 	</Button>
 </div>
 
 <DialogConfirmation
 	bind:open={showDiscardDialog}
-	title="Discard changes?"
-	description="You have unsaved changes. Are you sure you want to discard them?"
-	confirmText="Discard"
-	cancelText="Keep editing"
+	title={t('chat.message.edit.discard.title')}
+	description={t('chat.message.edit.discard.description')}
+	confirmText={t('chat.message.edit.discard.confirm')}
+	cancelText={t('chat.message.edit.discard.cancel')}
 	variant="destructive"
 	icon={AlertTriangle}
 	onConfirm={onCancelEdit}

@@ -6,6 +6,7 @@
 import { browser } from '$app/environment';
 import { MimeTypeApplication, MimeTypeImage } from '$lib/enums';
 import * as pdfjs from 'pdfjs-dist';
+import { t } from '$lib/i18n';
 
 type TextContent = {
 	items: Array<{ str: string }>;
@@ -35,11 +36,11 @@ async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
 			if (event.target?.result) {
 				resolve(event.target.result as ArrayBuffer);
 			} else {
-				reject(new Error('Failed to read file.'));
+				reject(new Error(t('chat.attachments.pdf.error.read_file')));
 			}
 		};
 		reader.onerror = () => {
-			reject(new Error('Failed to read file.'));
+			reject(new Error(t('chat.attachments.pdf.error.read_file')));
 		};
 		reader.readAsArrayBuffer(file);
 	});
@@ -52,7 +53,7 @@ async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
  */
 export async function convertPDFToText(file: File): Promise<string> {
 	if (!browser) {
-		throw new Error('PDF processing is only available in the browser');
+		throw new Error(t('chat.attachments.pdf.error.browser_only'));
 	}
 
 	try {
@@ -76,7 +77,9 @@ export async function convertPDFToText(file: File): Promise<string> {
 	} catch (error) {
 		console.error('Error converting PDF to text:', error);
 		throw new Error(
-			`Failed to convert PDF to text: ${error instanceof Error ? error.message : 'Unknown error'}`
+			t('chat.attachments.pdf.error.convert_text', {
+				message: error instanceof Error ? error.message : t('chat.error.unknown')
+			})
 		);
 	}
 }
@@ -89,7 +92,7 @@ export async function convertPDFToText(file: File): Promise<string> {
  */
 export async function convertPDFToImage(file: File, scale: number = 1.5): Promise<string[]> {
 	if (!browser) {
-		throw new Error('PDF processing is only available in the browser');
+		throw new Error(t('chat.attachments.pdf.error.browser_only'));
 	}
 
 	try {
@@ -107,7 +110,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 			canvas.height = viewport.height;
 
 			if (!ctx) {
-				throw new Error('Failed to get 2D context from canvas');
+				throw new Error(t('chat.attachments.pdf.error.canvas_context'));
 			}
 
 			const task = page.render({
@@ -126,7 +129,9 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	} catch (error) {
 		console.error('Error converting PDF to images:', error);
 		throw new Error(
-			`Failed to convert PDF to images: ${error instanceof Error ? error.message : 'Unknown error'}`
+			t('chat.attachments.pdf.error.convert_images', {
+				message: error instanceof Error ? error.message : t('chat.error.unknown')
+			})
 		);
 	}
 }

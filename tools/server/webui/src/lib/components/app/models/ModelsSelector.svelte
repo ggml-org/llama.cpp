@@ -18,6 +18,7 @@
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { DialogModelInformation, SearchInput } from '$lib/components/app';
+	import { t } from '$lib/i18n';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -339,10 +340,10 @@
 	{#if loading && options.length === 0 && isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
-			Loading models…
+			{t('chat.models.loading')}
 		</div>
 	{:else if options.length === 0 && isRouter}
-		<p class="text-xs text-muted-foreground">No models available.</p>
+		<p class="text-xs text-muted-foreground">{t('chat.models.none_available')}</p>
 	{:else}
 		{@const selectedOption = getDisplayOption()}
 
@@ -366,7 +367,7 @@
 					<Package class="h-3.5 w-3.5" />
 
 					<span class="truncate font-medium">
-						{selectedOption?.model || 'Select model'}
+						{selectedOption?.model || t('chat.models.select')}
 					</span>
 
 					{#if updating}
@@ -388,7 +389,7 @@
 						>
 							<SearchInput
 								id="model-search"
-								placeholder="Search models..."
+								placeholder={t('chat.models.search.placeholder')}
 								bind:value={searchTerm}
 								bind:ref={searchInputRef}
 								onClose={() => handleOpenChange(false)}
@@ -409,12 +410,16 @@
 									disabled
 								>
 									<span class="truncate">{selectedOption?.name || currentModel}</span>
-									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+									<span class="ml-2 text-xs whitespace-nowrap opacity-70">
+										{t('chat.models.not_available')}
+									</span>
 								</button>
 								<div class="my-1 h-px bg-border"></div>
 							{/if}
 							{#if filteredOptions.length === 0}
-								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+								<p class="px-4 py-3 text-sm text-muted-foreground">
+									{t('chat.models.none_found')}
+								</p>
 							{/if}
 							{#each filteredOptions as option, index (option.id)}
 								{@const status = getModelStatus(option.model)}
@@ -461,7 +466,7 @@
 														<EyeOff class="h-3.5 w-3.5" />
 													</Tooltip.Trigger>
 													<Tooltip.Content class="z-[9999]">
-														<p>No vision support</p>
+														<p>{t('chat.models.no_vision')}</p>
 													</Tooltip.Content>
 												</Tooltip.Root>
 											{/if}
@@ -471,7 +476,7 @@
 														<MicOff class="h-3.5 w-3.5" />
 													</Tooltip.Trigger>
 													<Tooltip.Content class="z-[9999]">
-														<p>No audio support</p>
+														<p>{t('chat.models.no_audio')}</p>
 													</Tooltip.Content>
 												</Tooltip.Root>
 											{/if}
@@ -484,7 +489,7 @@
 												<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
 											</Tooltip.Trigger>
 											<Tooltip.Content class="z-[9999]">
-												<p>Loading model...</p>
+												<p>{t('chat.models.loading_model')}</p>
 											</Tooltip.Content>
 										</Tooltip.Root>
 									{:else if isLoaded}
@@ -507,7 +512,7 @@
 												</button>
 											</Tooltip.Trigger>
 											<Tooltip.Content class="z-[9999]">
-												<p>Unload model</p>
+												<p>{t('chat.models.unload')}</p>
 											</Tooltip.Content>
 										</Tooltip.Root>
 									{:else}

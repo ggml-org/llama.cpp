@@ -1,4 +1,5 @@
 import { getAuthHeaders } from '$lib/utils';
+import { t } from '$lib/i18n';
 
 /**
  * PropsService - Server properties management
@@ -38,7 +39,10 @@ export class PropsService {
 
 		if (!response.ok) {
 			throw new Error(
-				`Failed to fetch server properties: ${response.status} ${response.statusText}`
+				t('server.error.fetch.props_failed', {
+					status: response.status,
+					statusText: response.statusText
+				})
 			);
 		}
 
@@ -67,7 +71,10 @@ export class PropsService {
 
 		if (!response.ok) {
 			throw new Error(
-				`Failed to fetch model properties: ${response.status} ${response.statusText}`
+				t('server.error.fetch.model_props_failed', {
+					status: response.status,
+					statusText: response.statusText
+				})
 			);
 		}
 

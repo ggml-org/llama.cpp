@@ -5,6 +5,7 @@ import { DatabaseService } from '$lib/services/database';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import { AttachmentType } from '$lib/enums';
+import { t } from '$lib/i18n';
 
 /**
  * conversationsStore - Persistent conversation data and lifecycle management
@@ -407,12 +408,12 @@ class ConversationsStore {
 			this.clearActiveConversation();
 			this.conversations = [];
 
-			toast.success('All conversations deleted');
+			toast.success(t('chat.conversations.delete_all.success'));
 
 			await goto(`?new_chat=true#/`);
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
-			toast.error('Failed to delete conversations');
+			toast.error(t('chat.conversations.delete_all.failed'));
 		}
 	}
 
@@ -448,7 +449,7 @@ class ConversationsStore {
 		const allConversations = await DatabaseService.getAllConversations();
 
 		if (allConversations.length === 0) {
-			throw new Error('No conversations to export');
+			throw new Error(t('chat.conversations.export.none'));
 		}
 
 		const allData = await Promise.all(
@@ -468,7 +469,9 @@ class ConversationsStore {
 		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
 
-		toast.success(`All conversations (${allConversations.length}) prepared for download`);
+		toast.success(
+			t('chat.conversations.export.prepared', { count: allConversations.length })
+		);
 
 		return allConversations;
 	}
@@ -488,7 +491,7 @@ class ConversationsStore {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
 
 				if (!file) {
-					reject(new Error('No file selected'));
+					reject(new Error(t('chat.conversations.import.no_file')));
 					return;
 				}
 
@@ -507,11 +510,16 @@ class ConversationsStore {
 					) {
 						importedData = [parsedData];
 					} else {
-						throw new Error('Invalid file format');
+						throw new Error(t('chat.conversations.import.invalid_format'));
 					}
 
 					const result = await DatabaseService.importConversations(importedData);
-					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
+					toast.success(
+						t('chat.conversations.import.success', {
+							imported: result.imported,
+							skipped: result.skipped
+						})
+					);
 
 					await this.loadConversations();
 
@@ -521,10 +529,11 @@ class ConversationsStore {
 
 					resolve(importedConversations);
 				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
+					const message =
+						err instanceof Error ? err.message : t('chat.conversations.import.unknown_error');
 					console.error('Failed to import conversations:', err);
-					toast.error('Import failed', { description: message });
-					reject(new Error(`Import failed: ${message}`));
+					toast.error(t('chat.conversations.import.failed'), { description: message });
+					reject(new Error(t('chat.conversations.import.failed_with', { message })));
 				}
 			};
 

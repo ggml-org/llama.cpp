@@ -3,6 +3,7 @@
 	import { BadgeChatStatistic } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		predictedTokens?: number;
@@ -96,11 +97,11 @@
 						onclick={() => (activeView = ChatMessageStatsView.READING)}
 					>
 						<BookOpenText class="h-3 w-3" />
-						<span class="sr-only">Reading</span>
+						<span class="sr-only">{t('chat.stats.reading')}</span>
 					</button>
 				</Tooltip.Trigger>
 				<Tooltip.Content>
-					<p>Reading (prompt processing)</p>
+					<p>{t('chat.stats.reading_tooltip')}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
 		{/if}
@@ -118,14 +119,14 @@
 					disabled={isGenerationDisabled}
 				>
 					<Sparkles class="h-3 w-3" />
-					<span class="sr-only">Generation</span>
+					<span class="sr-only">{t('chat.stats.generation')}</span>
 				</button>
 			</Tooltip.Trigger>
 			<Tooltip.Content>
 				<p>
 					{isGenerationDisabled
-						? 'Generation (waiting for tokens...)'
-						: 'Generation (token output)'}
+						? t('chat.stats.generation_waiting')
+						: t('chat.stats.generation_tooltip')}
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
@@ -136,39 +137,47 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{predictedTokens?.toLocaleString()} tokens"
-				tooltipLabel="Generated tokens"
+				value={t('chat.stats.value.tokens', {
+					count: predictedTokens?.toLocaleString() ?? '0'
+				})}
+				tooltipLabel={t('chat.stats.generated_tokens')}
 			/>
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{timeInSeconds}s"
-				tooltipLabel="Generation time"
+				value={t('chat.stats.value.seconds', { value: timeInSeconds })}
+				tooltipLabel={t('chat.stats.generation_time')}
 			/>
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
-				value="{tokensPerSecond.toFixed(2)} tokens/s"
-				tooltipLabel="Generation speed"
+				value={t('chat.stats.value.tokens_per_second', {
+					value: tokensPerSecond.toFixed(2)
+				})}
+				tooltipLabel={t('chat.stats.generation_speed')}
 			/>
 		{:else if hasPromptStats}
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{promptTokens} tokens"
-				tooltipLabel="Prompt tokens"
+				value={t('chat.stats.value.tokens', {
+					count: promptTokens?.toLocaleString() ?? '0'
+				})}
+				tooltipLabel={t('chat.stats.prompt_tokens')}
 			/>
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{promptTimeInSeconds}s"
-				tooltipLabel="Prompt processing time"
+				value={t('chat.stats.value.seconds', { value: promptTimeInSeconds })}
+				tooltipLabel={t('chat.stats.prompt_time')}
 			/>
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
-				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"
-				tooltipLabel="Prompt processing speed"
+				value={t('chat.stats.value.tokens_per_second', {
+					value: promptTokensPerSecond!.toFixed(2)
+				})}
+				tooltipLabel={t('chat.stats.prompt_speed')}
 			/>
 		{/if}
 	</div>

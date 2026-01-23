@@ -6,6 +6,7 @@ import { settingsStore } from '$lib/stores/settings.svelte';
 import { toast } from 'svelte-sonner';
 import { getFileTypeCategory } from '$lib/utils';
 import { convertPDFToText } from './pdf-processing';
+import { t } from '$lib/i18n';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -99,13 +100,13 @@ export async function processFilesToChatUploaded(
 					: false;
 				const currentConfig = settingsStore.config;
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
-					toast.info(`You can enable parsing PDF as images with vision models.`, {
+					toast.info(t('chat.attachments.pdf.enable_images_hint'), {
 						duration: 8000,
 						action: {
-							label: 'Enable PDF as Images',
+							label: t('chat.attachments.pdf.enable_images_action'),
 							onClick: () => {
 								settingsStore.updateConfig('pdfAsImage', true);
-								toast.success('PDF parsing as images enabled!', {
+								toast.success(t('chat.attachments.pdf.enable_images_success'), {
 									duration: 3000
 								});
 							}

@@ -1,6 +1,7 @@
 import { base } from '$app/paths';
 import { ServerModelStatus } from '$lib/enums';
 import { getJsonHeaders } from '$lib/utils';
+import { t } from '$lib/i18n';
 
 /**
  * ModelsService - Stateless service for model management API communication
@@ -32,7 +33,7 @@ export class ModelsService {
 		});
 
 		if (!response.ok) {
-			throw new Error(`Failed to fetch model list (status ${response.status})`);
+			throw new Error(t('chat.models.error.fetch_list', { status: response.status }));
 		}
 
 		return response.json() as Promise<ApiModelListResponse>;
@@ -48,7 +49,7 @@ export class ModelsService {
 		});
 
 		if (!response.ok) {
-			throw new Error(`Failed to fetch router models list (status ${response.status})`);
+			throw new Error(t('chat.models.error.fetch_router_list', { status: response.status }));
 		}
 
 		return response.json() as Promise<ApiRouterModelsListResponse>;
@@ -78,7 +79,10 @@ export class ModelsService {
 
 		if (!response.ok) {
 			const errorData = await response.json().catch(() => ({}));
-			throw new Error(errorData.error || `Failed to load model (status ${response.status})`);
+			throw new Error(
+				errorData.error ||
+					t('chat.models.error.load_model_status', { status: response.status })
+			);
 		}
 
 		return response.json() as Promise<ApiRouterModelsLoadResponse>;
@@ -98,7 +102,10 @@ export class ModelsService {
 
 		if (!response.ok) {
 			const errorData = await response.json().catch(() => ({}));
-			throw new Error(errorData.error || `Failed to unload model (status ${response.status})`);
+			throw new Error(
+				errorData.error ||
+					t('chat.models.error.unload_model_status', { status: response.status })
+			);
 		}
 
 		return response.json() as Promise<ApiRouterModelsUnloadResponse>;

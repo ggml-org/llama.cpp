@@ -5,6 +5,7 @@
 		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		role: 'user' | 'assistant';
@@ -64,35 +65,55 @@
 		<div
 			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150"
 		>
-			<ActionButton icon={Copy} tooltip="Copy" onclick={onCopy} />
+			<ActionButton icon={Copy} tooltip={t('chat.message.actions.copy')} onclick={onCopy} />
 
 			{#if onEdit}
-				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
+				<ActionButton icon={Edit} tooltip={t('chat.message.actions.edit')} onclick={onEdit} />
 			{/if}
 
 			{#if role === 'assistant' && onRegenerate}
-				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
+				<ActionButton
+					icon={RefreshCw}
+					tooltip={t('chat.message.actions.regenerate')}
+					onclick={() => onRegenerate()}
+				/>
 			{/if}
 
 			{#if role === 'assistant' && onContinue}
-				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+				<ActionButton
+					icon={ArrowRight}
+					tooltip={t('chat.message.actions.continue')}
+					onclick={onContinue}
+				/>
 			{/if}
 
-			<ActionButton icon={Trash2} tooltip="Delete" onclick={onDelete} />
+			<ActionButton icon={Trash2} tooltip={t('chat.message.actions.delete')} onclick={onDelete} />
 		</div>
 	</div>
 </div>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
-	title="Delete Message"
+	title={t('chat.message.delete.title')}
 	description={deletionInfo && deletionInfo.totalCount > 1
-		? `This will delete ${deletionInfo.totalCount} messages including: ${deletionInfo.userMessages} user message${deletionInfo.userMessages > 1 ? 's' : ''} and ${deletionInfo.assistantMessages} assistant response${deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
-		: 'Are you sure you want to delete this message? This action cannot be undone.'}
+		? t('chat.message.delete.description_many', {
+				total: deletionInfo.totalCount,
+				userCount: deletionInfo.userMessages,
+				userLabel:
+					deletionInfo.userMessages === 1
+						? t('chat.message.delete.user_singular')
+						: t('chat.message.delete.user_plural'),
+				assistantCount: deletionInfo.assistantMessages,
+				assistantLabel:
+					deletionInfo.assistantMessages === 1
+						? t('chat.message.delete.assistant_singular')
+						: t('chat.message.delete.assistant_plural')
+			})
+		: t('chat.message.delete.description_single')}
 	confirmText={deletionInfo && deletionInfo.totalCount > 1
-		? `Delete ${deletionInfo.totalCount} Messages`
-		: 'Delete'}
-	cancelText="Cancel"
+		? t('chat.message.delete.confirm_many', { count: deletionInfo.totalCount })
+		: t('chat.message.delete.confirm_single')}
+	cancelText={t('chat.message.delete.cancel')}
 	variant="destructive"
 	icon={Trash2}
 	onConfirm={handleConfirmDelete}

@@ -1,5 +1,6 @@
 import { modelsStore } from '$lib/stores/models.svelte';
 import { isRouterMode } from '$lib/stores/server.svelte';
+import { t } from '$lib/i18n';
 import { toast } from 'svelte-sonner';
 
 interface UseModelChangeValidationOptions {
@@ -47,7 +48,7 @@ export function useModelChangeValidation(options: UseModelChangeValidationOption
 					await modelsStore.loadModel(modelName);
 					hasLoadedModel = true;
 				} catch {
-					toast.error(`Failed to load model "${modelName}"`);
+					toast.error(t('chat.models.load_failed', { modelName }));
 					return false;
 				}
 			}
@@ -61,15 +62,18 @@ export function useModelChangeValidation(options: UseModelChangeValidationOption
 				// Check if model supports required modalities
 				const missingModalities: string[] = [];
 				if (requiredModalities.vision && !props.modalities.vision) {
-					missingModalities.push('vision');
+					missingModalities.push(t('chat.models.modalities.vision'));
 				}
 				if (requiredModalities.audio && !props.modalities.audio) {
-					missingModalities.push('audio');
+					missingModalities.push(t('chat.models.modalities.audio'));
 				}
 
 				if (missingModalities.length > 0) {
 					toast.error(
-						`Model "${modelName}" doesn't support required modalities: ${missingModalities.join(', ')}. Please select a different model.`
+						t('chat.models.validation.missing_modalities', {
+							modelName,
+							modalities: missingModalities.join(', ')
+						})
 					);
 
 					// Unload the model if we just loaded it
@@ -101,7 +105,7 @@ export function useModelChangeValidation(options: UseModelChangeValidationOption
 			return true;
 		} catch (error) {
 			console.error('Failed to change model:', error);
-			toast.error('Failed to validate model capabilities');
+			toast.error(t('chat.models.validation.failed'));
 
 			// Execute rollback callback on error if provided
 			if (onValidationFailure && previousSelectedModelId) {

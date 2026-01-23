@@ -1,4 +1,5 @@
 import { toast } from 'svelte-sonner';
+import { t } from '$lib/i18n';
 import { AttachmentType } from '$lib/enums';
 import type {
 	DatabaseMessageExtra,
@@ -16,8 +17,8 @@ import type {
  */
 export async function copyToClipboard(
 	text: string,
-	successMessage = 'Copied to clipboard',
-	errorMessage = 'Failed to copy to clipboard'
+	successMessage = t('common.clipboard.copied'),
+	errorMessage = t('common.clipboard.failed')
 ): Promise<boolean> {
 	try {
 		// Try modern clipboard API first (secure contexts only)
@@ -62,8 +63,8 @@ export async function copyToClipboard(
  */
 export async function copyCodeToClipboard(
 	rawCode: string,
-	successMessage = 'Code copied to clipboard',
-	errorMessage = 'Failed to copy code'
+	successMessage = t('common.clipboard.code_copied'),
+	errorMessage = t('common.clipboard.code_failed')
 ): Promise<boolean> {
 	return copyToClipboard(rawCode, successMessage, errorMessage);
 }

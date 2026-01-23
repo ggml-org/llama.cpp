@@ -15,6 +15,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { t } from '$lib/i18n';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -674,13 +675,13 @@ class ChatStore {
 			}
 
 			const userMessage = await this.addMessage('user', content, 'text', '-1', extras);
-			if (!userMessage) throw new Error('Failed to add user message');
+			if (!userMessage) throw new Error(t('chat.error.failed_add_user_message'));
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
+			if (!assistantMessage) throw new Error(t('chat.error.failed_create_assistant_message'));
 
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
@@ -703,7 +704,7 @@ class ChatStore {
 
 				this.showErrorDialog(
 					dialogType,
-					error instanceof Error ? error.message : 'Unknown error',
+					error instanceof Error ? error.message : t('chat.error.unknown'),
 					contextInfo
 				);
 			}
@@ -848,7 +849,7 @@ class ChatStore {
 
 			const assistantMessage = await this.createAssistantMessage();
 
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
+			if (!assistantMessage) throw new Error(t('chat.error.failed_create_assistant_message'));
 
 			conversationsStore.addMessageToActive(assistantMessage);
 
@@ -894,7 +895,7 @@ class ChatStore {
 					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
 					: undefined;
 			const assistantMessage = await this.createAssistantMessage(parentMessageId);
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
+			if (!assistantMessage) throw new Error(t('chat.error.failed_create_assistant_message'));
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),

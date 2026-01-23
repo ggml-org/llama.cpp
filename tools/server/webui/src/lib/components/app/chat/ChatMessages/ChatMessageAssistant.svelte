@@ -21,6 +21,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -172,14 +173,14 @@
 	}
 
 	function handleCopyToolCall(payload: string) {
-		void copyToClipboard(payload, 'Tool call copied to clipboard');
+		void copyToClipboard(payload, t('chat.message.tool_calls.copied'));
 	}
 </script>
 
 <div
 	class="text-md group w-full leading-7.5 {className}"
 	role="group"
-	aria-label="Assistant message with actions"
+	aria-label={t('chat.message.assistant.aria')}
 >
 	{#if thinkingContent}
 		<ChatMessageThinkingBlock
@@ -210,7 +211,7 @@
 					autoResizeTextarea(e.currentTarget);
 					onEditedContentChange?.(e.currentTarget.value);
 				}}
-				placeholder="Edit assistant message..."
+				placeholder={t('chat.message.assistant.placeholder')}
 			></textarea>
 
 			<div class="mt-2 flex items-center justify-between">
@@ -221,18 +222,18 @@
 						onCheckedChange={(checked) => onShouldBranchAfterEditChange?.(checked === true)}
 					/>
 					<Label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
-						Branch conversation after edit
+						{t('chat.message.assistant.branch_after_edit')}
 					</Label>
 				</div>
 				<div class="flex gap-2">
 					<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
 						<X class="mr-1 h-3 w-3" />
-						Cancel
+						{t('chat.message.assistant.cancel')}
 					</Button>
 
 					<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent?.trim()} size="sm">
 						<Check class="mr-1 h-3 w-3" />
-						Save
+						{t('chat.message.assistant.save')}
 					</Button>
 				</div>
 			</div>
@@ -297,7 +298,7 @@
 					<span class="inline-flex items-center gap-1">
 						<Wrench class="h-3.5 w-3.5" />
 
-						<span>Tool calls:</span>
+						<span>{t('chat.message.tool_calls.label')}</span>
 					</span>
 
 					{#if toolCalls && toolCalls.length > 0}
@@ -307,13 +308,13 @@
 								type="button"
 								class="tool-call-badge inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
 								title={badge.tooltip}
-								aria-label={`Copy tool call ${badge.label}`}
+								aria-label={t('chat.message.tool_calls.copy', { label: badge.label })}
 								onclick={() => handleCopyToolCall(badge.copyValue)}
 							>
 								{badge.label}
 								<CopyToClipboardIcon
 									text={badge.copyValue}
-									ariaLabel={`Copy tool call ${badge.label}`}
+									ariaLabel={t('chat.message.tool_calls.copy', { label: badge.label })}
 								/>
 							</button>
 						{/each}
@@ -322,11 +323,14 @@
 							type="button"
 							class="tool-call-badge tool-call-badge--fallback inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
 							title={fallbackToolCalls}
-							aria-label="Copy tool call payload"
+							aria-label={t('chat.message.tool_calls.copy_payload')}
 							onclick={() => handleCopyToolCall(fallbackToolCalls)}
 						>
 							{fallbackToolCalls}
-							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
+							<CopyToClipboardIcon
+								text={fallbackToolCalls}
+								ariaLabel={t('chat.message.tool_calls.copy_payload')}
+							/>
 						</button>
 					{/if}
 				</span>

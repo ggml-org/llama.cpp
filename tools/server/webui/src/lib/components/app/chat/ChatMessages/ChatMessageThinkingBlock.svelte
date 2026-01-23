@@ -5,6 +5,7 @@
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
 	import { config } from '$lib/stores/settings.svelte';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -38,7 +39,7 @@
 				<Brain class="h-4 w-4" />
 
 				<span class="text-sm font-medium">
-					{isStreaming ? 'Reasoning...' : 'Reasoning'}
+					{isStreaming ? t('chat.message.reasoning_streaming') : t('chat.message.reasoning')}
 				</span>
 			</div>
 
@@ -51,7 +52,7 @@
 			>
 				<ChevronsUpDownIcon class="h-4 w-4" />
 
-				<span class="sr-only">Toggle reasoning content</span>
+				<span class="sr-only">{t('chat.message.reasoning.toggle')}</span>
 			</div>
 		</Collapsible.Trigger>
 

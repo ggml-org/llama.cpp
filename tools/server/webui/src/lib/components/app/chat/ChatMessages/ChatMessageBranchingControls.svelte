@@ -2,6 +2,7 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -35,14 +36,17 @@
 
 {#if siblingInfo && siblingInfo.totalSiblings > 1}
 	<div
-		aria-label="Message version {siblingInfo.currentIndex + 1} of {siblingInfo.totalSiblings}"
+		aria-label={t('chat.message.branching.aria', {
+			current: siblingInfo.currentIndex + 1,
+			total: siblingInfo.totalSiblings
+		})}
 		class="flex items-center gap-1 text-xs text-muted-foreground {className}"
 		role="navigation"
 	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
 				<Button
-					aria-label="Previous message version"
+					aria-label={t('chat.message.branching.previous')}
 					class="h-5 w-5 p-0 {!hasPrevious ? 'cursor-not-allowed opacity-30' : ''}"
 					disabled={!hasPrevious}
 					onclick={handlePrevious}
@@ -54,7 +58,7 @@
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
-				<p>Previous version</p>
+				<p>{t('chat.message.branching.previous_tooltip')}</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
 
@@ -65,7 +69,7 @@
 		<Tooltip.Root>
 			<Tooltip.Trigger>
 				<Button
-					aria-label="Next message version"
+					aria-label={t('chat.message.branching.next')}
 					class="h-5 w-5 p-0 {!hasNext ? 'cursor-not-allowed opacity-30' : ''}"
 					disabled={!hasNext}
 					onclick={handleNext}
@@ -77,7 +81,7 @@
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
-				<p>Next version</p>
+				<p>{t('chat.message.branching.next_tooltip')}</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
 	</div>

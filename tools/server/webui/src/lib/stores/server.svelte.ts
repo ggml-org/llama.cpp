@@ -1,5 +1,6 @@
 import { PropsService } from '$lib/services/props';
 import { ServerRole } from '$lib/enums';
+import { t } from '$lib/i18n';
 
 /**
  * serverStore - Server connection state, configuration, and role detection
@@ -86,25 +87,25 @@ class ServerStore {
 			const message = error.message || '';
 
 			if (error.name === 'TypeError' && message.includes('fetch')) {
-				return 'Server is not running or unreachable';
+				return t('server.error.fetch.unreachable');
 			} else if (message.includes('ECONNREFUSED')) {
-				return 'Connection refused - server may be offline';
+				return t('server.error.fetch.connection_refused');
 			} else if (message.includes('ENOTFOUND')) {
-				return 'Server not found - check server address';
+				return t('server.error.fetch.not_found');
 			} else if (message.includes('ETIMEDOUT')) {
-				return 'Request timed out';
+				return t('server.error.fetch.timeout');
 			} else if (message.includes('503')) {
-				return 'Server temporarily unavailable';
+				return t('server.error.fetch.unavailable');
 			} else if (message.includes('500')) {
-				return 'Server error - check server logs';
+				return t('server.error.fetch.server_error');
 			} else if (message.includes('404')) {
-				return 'Server endpoint not found';
+				return t('server.error.fetch.endpoint_not_found');
 			} else if (message.includes('403') || message.includes('401')) {
-				return 'Access denied';
+				return t('server.error.fetch.access_denied');
 			}
 		}
 
-		return 'Failed to connect to server';
+		return t('server.error.fetch.failed');
 	}
 
 	clear(): void {

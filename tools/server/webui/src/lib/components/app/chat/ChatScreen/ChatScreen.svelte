@@ -507,19 +507,21 @@
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />
 
-		<AlertDialog.Content class="flex max-w-md flex-col">
-			<AlertDialog.Header>
-				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
+			<AlertDialog.Content class="flex max-w-md flex-col">
+				<AlertDialog.Header>
+					<AlertDialog.Title>{t('chat.upload_error.title')}</AlertDialog.Title>
 
-				<AlertDialog.Description class="text-sm text-muted-foreground">
-					Some files cannot be uploaded with the current model.
-				</AlertDialog.Description>
-			</AlertDialog.Header>
+					<AlertDialog.Description class="text-sm text-muted-foreground">
+					{t('chat.upload_error.description')}
+					</AlertDialog.Description>
+				</AlertDialog.Header>
 
 			<div class="!max-h-[50vh] min-h-0 flex-1 space-y-4 overflow-y-auto">
 				{#if fileErrorData.generallyUnsupported.length > 0}
 					<div class="space-y-2">
-						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
+						<h4 class="text-sm font-medium text-destructive">
+							{t('chat.upload_error.unsupported_types')}
+						</h4>
 
 						<div class="space-y-1">
 							{#each fileErrorData.generallyUnsupported as file (file.name)}
@@ -528,7 +530,9 @@
 										{file.name}
 									</p>
 
-									<p class="mt-1 text-xs text-muted-foreground">File type not supported</p>
+									<p class="mt-1 text-xs text-muted-foreground">
+										{t('chat.upload_error.file_type_not_supported')}
+									</p>
 								</div>
 							{/each}
 						</div>
@@ -545,7 +549,8 @@
 									</p>
 
 									<p class="mt-1 text-xs text-muted-foreground">
-										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
+										{fileErrorData.modalityReasons[file.name] ||
+											t('chat.upload_error.modality_not_supported')}
 									</p>
 								</div>
 							{/each}
@@ -555,7 +560,7 @@
 			</div>
 
 			<div class="rounded-md bg-muted/50 p-3">
-				<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
+				<h4 class="mb-2 text-sm font-medium">{t('chat.upload_error.supported_header')}</h4>
 
 				<p class="text-sm text-muted-foreground">
 					{fileErrorData.supportedTypes.join(', ')}
@@ -564,7 +569,7 @@
 
 			<AlertDialog.Footer>
 				<AlertDialog.Action onclick={() => (showFileErrorDialog = false)}>
-					Got it
+					{t('chat.upload_error.confirm')}
 				</AlertDialog.Action>
 			</AlertDialog.Footer>
 		</AlertDialog.Content>
@@ -573,10 +578,10 @@
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
-	title="Delete Conversation"
-	description="Are you sure you want to delete this conversation? This action cannot be undone and will permanently remove all messages in this conversation."
-	confirmText="Delete"
-	cancelText="Cancel"
+	title={t('chat.conversation.delete.title')}
+	description={t('chat.conversation.delete.description')}
+	confirmText={t('chat.conversation.delete.confirm')}
+	cancelText={t('chat.conversation.delete.cancel')}
 	variant="destructive"
 	icon={Trash2}
 	onConfirm={handleDeleteConfirm}
