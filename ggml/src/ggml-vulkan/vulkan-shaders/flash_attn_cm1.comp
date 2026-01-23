@@ -48,8 +48,10 @@ shared FLOAT_TYPE tmpsh[gl_WorkGroupSize.x];
 shared ACC_TYPEV4 tmpshv4[gl_WorkGroupSize.x];
 
 const uint32_t qstride = HSK_pad / 4 + 2; // in units of f16vec4
+shared f16vec4 Qf[Br * qstride];
+
 const uint psh_stride = Br / 4 + 2;
-shared f16vec4 Qf[(Br * qstride >= Bc * psh_stride) ? (Br * qstride) : (Bc * psh_stride)];
+shared f16vec4 Psh[Bc * psh_stride];
 
 // Avoid padding for hsk==256 to make it fit in 48KB shmem.
 const uint32_t sfshstride = (HSK <= 128) ? (Br + 8) : Br;
@@ -289,7 +291,7 @@ void main() {
             }
         }
 
-        // Calculate and store Pf in Qf
+        // Calculate and store Pf in Psh
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
             const uint col = c * cols_per_iter + col_tid;
 
@@ -302,7 +304,7 @@ void main() {
                     Pfvec[vec_idx] = Pf;
                 }
                 if (d_tid == 0) {  // All other threads have the same P values
-                    Qf[col * psh_stride + row / 4] = Pfvec;
+                    Psh[col * psh_stride + row / 4] = Pfvec;
                 }
             }
         }
@@ -353,7 +355,7 @@ void main() {
             barrier();
 
             [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {
-                coopMatLoad(KMat, Qf, bc_chunk * MatBc * psh_stride, psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
+                coopMatLoad(KMat, Psh, bc_chunk * MatBc * psh_stride, psh_stride, gl_CooperativeMatrixLayoutColumnMajor);
 
 #if BLOCK_SIZE == 1
                 if (!KV_bounds_check) {
