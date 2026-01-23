@@ -2780,6 +2780,15 @@ static void system_message_not_supported(json & messages) {
     }
 }
 
+static void requires_non_null_content(json & messages) {
+    GGML_ASSERT(messages.is_array());
+    for (auto & message : messages) {
+        if (message.contains("tool_calls") && !messages.contains("content")) {
+            messages["content"] = "";
+        }
+    }
+}
+
 static void func_args_not_string(json & messages) {
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
@@ -2883,6 +2892,10 @@ static common_chat_params common_chat_templates_apply_jinja(
 
     if (!tmpl.original_caps().supports_system_role) {
         workaround::system_message_not_supported(params.messages);
+    }
+
+    if (!tmpl.original_caps().requires_non_null_content) {
+        workaround::requires_non_null_content(params.messages);
     }
 
     params.extra_context = json::object();

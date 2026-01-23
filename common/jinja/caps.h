@@ -15,6 +15,7 @@ struct caps {
     bool supports_preserve_reasoning = false; // support assistant message with reasoning_content
 
     bool requires_typed_content = false; // default: use string content
+    bool requires_non_null_content = false; // requires "" instead of null for content in tool calls
 
     // for reporting on server
     std::map<std::string, bool> to_map() const;
