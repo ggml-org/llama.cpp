@@ -3,13 +3,16 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { getFaviconUrl } from '$lib/utils/mcp';
-	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
 	import McpServerForm from './McpServerForm.svelte';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 
-	// Get servers from store
-	let servers = $derived<MCPServerSettingsEntry[]>(mcpStore.getServers());
+	// Use store methods for consistent sorting logic
+	let rawServers = $derived(mcpStore.getServers());
+	let servers = $derived(mcpStore.getServersSorted());
+	let isLoading = $derived(mcpStore.isAnyServerLoading());
 
 	// New server form state
 	let isAddingServer = $state(false);
@@ -112,17 +115,58 @@
 		</div>
 	{/if}
 
-	{#if servers.length > 0}
+	{#if rawServers.length > 0}
 		<div class="space-y-3">
-			{#each servers as server (server.id)}
-				<McpServerCard
-					{server}
-					faviconUrl={getFaviconUrl(server.url)}
-					onToggle={(enabled) => mcpStore.updateServer(server.id, { enabled })}
-					onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
-					onDelete={() => mcpStore.removeServer(server.id)}
-				/>
-			{/each}
+			{#if isLoading}
+				<!-- Show skeleton cards while health checks are in progress -->
+				{#each rawServers as server (server.id)}
+					<Card.Root class="grid gap-3 p-4">
+						<!-- Header: favicon + name + version ... toggle -->
+						<div class="flex items-center justify-between gap-4">
+							<div class="flex items-center gap-2">
+								<Skeleton class="h-5 w-5 rounded" />
+								<Skeleton class="h-5 w-28" />
+								<Skeleton class="h-5 w-12 rounded-full" />
+							</div>
+							<Skeleton class="h-6 w-11 rounded-full" />
+						</div>
+
+						<!-- Capability badges -->
+						<div class="flex flex-wrap gap-1.5">
+							<Skeleton class="h-5 w-14 rounded-full" />
+							<Skeleton class="h-5 w-12 rounded-full" />
+							<Skeleton class="h-5 w-16 rounded-full" />
+						</div>
+
+						<!-- Tools & Connection info -->
+						<div class="space-y-1.5">
+							<Skeleton class="h-4 w-40" />
+							<Skeleton class="h-4 w-52" />
+						</div>
+
+						<!-- Protocol version -->
+						<Skeleton class="h-3.5 w-36" />
+
+						<!-- Action buttons -->
+						<div class="flex justify-end gap-2">
+							<Skeleton class="h-8 w-8 rounded" />
+							<Skeleton class="h-8 w-8 rounded" />
+							<Skeleton class="h-8 w-8 rounded" />
+						</div>
+					</Card.Root>
+				{/each}
+			{:else}
+				{#each servers as server (server.id)}
+					<McpServerCard
+						{server}
+						faviconUrl={getFaviconUrl(server.url)}
+						enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
+						onToggle={async () => await conversationsStore.toggleMcpServerForChat(server.id)}
+						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
+						onDelete={() => mcpStore.removeServer(server.id)}
+					/>
+				{/each}
+			{/if}
 		</div>
 	{/if}
 </div>

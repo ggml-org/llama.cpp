@@ -324,19 +324,14 @@
 	}}
 >
 	<div
-		class="{INPUT_CLASSES} overflow-hidden rounded-3xl backdrop-blur-md {disabled
-			? 'cursor-not-allowed opacity-60'
-			: ''}"
-		data-slot="input-area"
+			class="flex-column relative min-h-[48px] items-center rounded-3xl p-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!p-3"
+		onpaste={handlePaste}
 	>
-		<ChatAttachmentsList
-			{attachments}
-			bind:uploadedFiles
-			onFileRemove={handleFileRemove}
-			limitToSingleRow
-			class="py-5"
-			style="scroll-padding: 1rem;"
-			activeModelId={activeModelId ?? undefined}
+		<ChatFormTextarea
+				class="px-2 py-1 md:py-0"
+			bind:value={message}
+			onKeydown={handleKeydown}
+			{disabled}
 		/>
 
 		<ChatFormActions

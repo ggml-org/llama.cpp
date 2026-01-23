@@ -85,7 +85,7 @@
 			/>
 		</div>
 
-		<div class={cn('overflow-y-auto', 'max-h-[--bits-dropdown-menu-content-available-height]')}>
+		<div class={cn('overflow-y-auto', 'max-h-[10rem]')}>
 			{@render children()}
 
 			{#if isEmpty}

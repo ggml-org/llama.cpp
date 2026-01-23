@@ -22,7 +22,8 @@
 import { mcpClient } from '$lib/clients/mcp.client';
 import type { HealthCheckState, MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
-import { buildMcpClientConfig, parseMcpServerSettings } from '$lib/utils/mcp';
+import { buildMcpClientConfig, parseMcpServerSettings, getMcpServerLabel } from '$lib/utils/mcp';
+import { HealthCheckStatus } from '$lib/enums';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
@@ -165,10 +166,41 @@ class MCPStore {
 	 */
 
 	/**
-	 * Get all configured MCP servers from settings
+	 * Get all configured MCP servers from settings (unsorted).
 	 */
 	getServers(): MCPServerSettingsEntry[] {
 		return parseMcpServerSettings(config().mcpServers);
+	}
+
+	/**
+	 * Check if any server is still loading (idle or connecting).
+	 */
+	isAnyServerLoading(): boolean {
+		const servers = this.getServers();
+		return servers.some((s) => {
+			const state = this.getHealthCheckState(s.id);
+			return state.status === HealthCheckStatus.Idle || state.status === HealthCheckStatus.Connecting;
+		});
+	}
+
+	/**
+	 * Get servers sorted alphabetically by display label.
+	 * Returns unsorted list while health checks are in progress to prevent UI jumping.
+	 */
+	getServersSorted(): MCPServerSettingsEntry[] {
+		const servers = this.getServers();
+		
+		// Don't sort while any server is still loading - prevents UI jumping
+		if (this.isAnyServerLoading()) {
+			return servers;
+		}
+		
+		// Sort alphabetically by display label once all health checks are done
+		return [...servers].sort((a, b) => {
+			const labelA = getMcpServerLabel(a, this.getHealthCheckState(a.id));
+			const labelB = getMcpServerLabel(b, this.getHealthCheckState(b.id));
+			return labelA.localeCompare(labelB);
+		});
 	}
 
 	/**
