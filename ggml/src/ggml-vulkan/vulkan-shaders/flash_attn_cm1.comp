@@ -48,14 +48,17 @@ shared FLOAT_TYPE tmpsh[gl_WorkGroupSize.x];
 shared ACC_TYPEV4 tmpshv4[gl_WorkGroupSize.x];
 
 const uint32_t qstride = HSK_pad / 4 + 2; // in units of f16vec4
-shared f16vec4 Qf[Br * qstride];
+const uint psh_stride = Br / 4 + 2;
+shared f16vec4 Qf[(Br * qstride >= Bc * psh_stride) ? (Br * qstride) : (Bc * psh_stride)];
 
 // Avoid padding for hsk==256 to make it fit in 48KB shmem.
 const uint32_t sfshstride = (HSK <= 128) ? (Br + 8) : Br;
 shared ACC_TYPE sfsh[Bc * sfshstride];
 
 const uint32_t kshstride = HSK_pad / 4 + 2; // in units of f16vec4
-shared f16vec4 ksh[Bc * kshstride];
+const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * number of subgroups
+const uint vsh_stride = v_cols;
+shared f16vec4 ksh[(kshstride >= vsh_stride) ? (Bc * kshstride) : (Bc * vsh_stride)];
 
 shared float slope[Br];
 
@@ -286,8 +289,6 @@ void main() {
             }
         }
 
-        const uint psh_stride = Br / 4; // No space for padding, maybe increase Qf size?
-
         // Calculate and store Pf in Qf
         [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
             const uint col = c * cols_per_iter + col_tid;
@@ -306,7 +307,7 @@ void main() {
             }
         }
 
-        const uint num_hsv_tiles = max(HSV / MatBc / row_split, 1);
+        const uint num_hsv_tiles = (HSV + MatBc * row_split - 1) / (MatBc * row_split); // round up
 
         // Each subgroup handles HSV/4 columns
         [[unroll]] for (uint32_t hsv_tile = 0; hsv_tile < num_hsv_tiles; ++hsv_tile) {
@@ -316,11 +317,8 @@ void main() {
 
             // Preload V tiles for [Bc, 16 * num subgroups]
             const uint v_rows = Bc;
-            const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * number of subgroups
             const uint v_total = v_rows * v_cols;
             const uint v_loads_per_thread = v_total / gl_WorkGroupSize.x;
-
-            const uint vsh_stride = v_cols;
 
 #if BLOCK_SIZE == 1
             // For f16, only preload if not aligned
@@ -385,7 +383,7 @@ void main() {
             const uint d_values_per_tile = hsv_per_tile / 4 / D_split;
 
             const uint d_start = hsv_tile * d_values_per_tile;
-            const uint d_end = d_start + d_values_per_tile;
+            const uint d_end = min(d_start + d_values_per_tile, HSV_per_thread / 4);
 
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 const uint row = tile_row(r);
