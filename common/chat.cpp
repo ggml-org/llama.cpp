@@ -2894,7 +2894,10 @@ static common_chat_params common_chat_templates_apply_jinja(
         workaround::system_message_not_supported(params.messages);
     }
 
-    if (!tmpl.original_caps().requires_non_null_content) {
+    if (tmpl.original_caps().supports_tool_calls) {
+        // some templates will require the content field in tool call messages
+        // to still be non-null, this puts an empty string everywhere where the 
+        // content field is null
         workaround::requires_non_null_content(params.messages);
     }
 
