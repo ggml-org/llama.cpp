@@ -1,3 +1,4 @@
+#include "chat.h"
 #include "common.h"
 #include "arg.h"
 #include "console.h"
@@ -188,7 +189,8 @@ struct cli_context {
         inputs.use_jinja             = chat_params.use_jinja;
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
-        inputs.enable_thinking       = chat_params.enable_thinking;
+        inputs.reasoning_format      = COMMON_REASONING_FORMAT_DEEPSEEK;
+        inputs.enable_thinking       = common_chat_templates_support_enable_thinking(chat_params.tmpls.get());
 
         // Apply chat template to the list of messages
         return common_chat_templates_apply(chat_params.tmpls.get(), inputs);

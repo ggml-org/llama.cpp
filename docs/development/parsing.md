@@ -22,7 +22,7 @@ Below is a contrived example demonstrating how to use the PEG parser to parse
 output from a model that emits arguments as JSON.
 
 ```cpp
-auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
     // Build a choice of all available tools
     auto tool_choice = p.choice();
     for (const auto & tool : tools) {
@@ -212,7 +212,7 @@ mapper.from_ast(ctx.ast, result);
 
 ### Native
 
-The `common_chat_peg_native_builder` builds a `native` parser suitable for
+The `common_chat_peg_unified_builder` builds a `native` parser suitable for
 models that emit tool arguments as a direct JSON object.
 
 - **`reasoning(p)`** - Tag node for `reasoning_content`
@@ -225,7 +225,7 @@ models that emit tool arguments as a direct JSON object.
 - **`tool_args(p)`** - Tag the tool arguments
 
 ```cpp
-build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
+build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
     auto get_weather_tool = p.tool(p.sequence({
         p.tool_open(p.literal("{")),
         p.json_member("name", "\"" + p.tool_name(p.literal("get_weather")) + "\""),
@@ -246,7 +246,7 @@ build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
 
 ### Constructed
 
-The `common_chat_peg_constructed_builder` builds a `constructed` parser
+The `common_chat_peg_unified_builder` builds a `constructed` parser
 suitable for models that emit tool arguments as separate entities, such as XML
 tags.
 
@@ -264,7 +264,7 @@ tags.
 - **`tool_arg_json_value(p)`** - Tag JSON value for the argument
 
 ```cpp
-build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
     auto location_arg = p.tool_arg(
         p.tool_arg_open("<parameter name=\"" + p.tool_arg_name(p.literal("location")) + "\">"),
         p.tool_arg_string_value(p.until("</parameter>")),
