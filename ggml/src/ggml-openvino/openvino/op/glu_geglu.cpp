@@ -26,7 +26,7 @@ OutputVector translate_glu_geglu(const NodeContext & context) {
         src1 = context.get_input(1);
     } else {
         auto combined = context.get_input(0);
-        auto split_axis = ov::op::v0::Constant::create(ov::element::i64, {}, {3});
+        auto split_axis = ov::op::v0::Constant::create(ov::element::i64, {}, {-1});
         auto split = std::make_shared<ov::op::v1::Split>(combined, split_axis, 2);
         src0 = split->output(0);
         src1 = split->output(1);
