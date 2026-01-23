@@ -80,10 +80,6 @@ class I18nStore {
 	}
 
 	t(key: string, params?: TranslationParams): string {
-		if (browser && !this.initialized) {
-			this.init();
-		}
-
 		const primary = this.messages[this.locale];
 		const fallback = this.messages[DEFAULT_LOCALE];
 		const value = primary?.[key] ?? fallback?.[key] ?? key;
