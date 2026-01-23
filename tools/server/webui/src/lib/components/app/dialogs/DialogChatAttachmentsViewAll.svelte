@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ChatAttachmentsViewAll } from '$lib/components/app';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		open?: boolean;
@@ -35,8 +36,8 @@
 
 		<Dialog.Content class="flex !max-h-[90vh] !max-w-6xl flex-col">
 			<Dialog.Header>
-				<Dialog.Title>All Attachments ({totalCount})</Dialog.Title>
-				<Dialog.Description>View and manage all attached files</Dialog.Description>
+				<Dialog.Title>{t('dialog.attachments.title', { count: totalCount })}</Dialog.Title>
+				<Dialog.Description>{t('dialog.attachments.description')}</Dialog.Description>
 			</Dialog.Header>
 
 			<ChatAttachmentsViewAll

@@ -5,6 +5,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		open?: boolean;
@@ -46,14 +47,16 @@
 		</style>
 
 		<Dialog.Header>
-			<Dialog.Title>Model Information</Dialog.Title>
-			<Dialog.Description>Current model details and capabilities</Dialog.Description>
+			<Dialog.Title>{t('dialog.model_info.title')}</Dialog.Title>
+			<Dialog.Description>{t('dialog.model_info.description')}</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="space-y-6 py-4">
 			{#if isLoadingModels}
 				<div class="flex items-center justify-center py-8">
-					<div class="text-sm text-muted-foreground">Loading model information...</div>
+					<div class="text-sm text-muted-foreground">
+						{t('dialog.model_info.loading')}
+					</div>
 				</div>
 			{:else if firstModel}
 				{@const modelMeta = firstModel.meta}
@@ -62,7 +65,7 @@
 					<Table.Root>
 						<Table.Header>
 							<Table.Row>
-								<Table.Head class="w-[10rem]">Model</Table.Head>
+								<Table.Head class="w-[10rem]">{t('dialog.model_info.header_model')}</Table.Head>
 
 								<Table.Head>
 									<div class="inline-flex items-center gap-2">
@@ -76,7 +79,7 @@
 										<CopyToClipboardIcon
 											text={modelName || ''}
 											canCopy={!!modelName}
-											ariaLabel="Copy model name to clipboard"
+											ariaLabel={t('dialog.model_info.copy_model_name')}
 										/>
 									</div>
 								</Table.Head>
@@ -85,7 +88,9 @@
 						<Table.Body>
 							<!-- Model Path -->
 							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium">File Path</Table.Cell>
+								<Table.Cell class="h-10 align-middle font-medium">
+									{t('dialog.model_info.file_path')}
+								</Table.Cell>
 
 								<Table.Cell
 									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
@@ -99,31 +104,40 @@
 
 									<CopyToClipboardIcon
 										text={serverProps.model_path}
-										ariaLabel="Copy model path to clipboard"
+										ariaLabel={t('dialog.model_info.copy_model_path')}
 									/>
 								</Table.Cell>
 							</Table.Row>
 
 							<!-- Context Size -->
 							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
+								<Table.Cell class="h-10 align-middle font-medium">
+									{t('dialog.model_info.context_size')}
+								</Table.Cell>
 								<Table.Cell
-									>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
+									>{formatNumber(serverProps.default_generation_settings.n_ctx)}
+									{t('dialog.model_info.tokens')}</Table.Cell
 								>
 							</Table.Row>
 
 							<!-- Training Context -->
 							{#if modelMeta?.n_ctx_train}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Training Context</Table.Cell>
-									<Table.Cell>{formatNumber(modelMeta.n_ctx_train)} tokens</Table.Cell>
+									<Table.Cell class="h-10 align-middle font-medium">
+										{t('dialog.model_info.training_context')}
+									</Table.Cell>
+									<Table.Cell
+										>{formatNumber(modelMeta.n_ctx_train)} {t('dialog.model_info.tokens')}</Table.Cell
+									>
 								</Table.Row>
 							{/if}
 
 							<!-- Model Size -->
 							{#if modelMeta?.size}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Model Size</Table.Cell>
+									<Table.Cell class="h-10 align-middle font-medium">
+										{t('dialog.model_info.model_size')}
+									</Table.Cell>
 									<Table.Cell>{formatFileSize(modelMeta.size)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -131,7 +145,9 @@
 							<!-- Parameters -->
 							{#if modelMeta?.n_params}
 								<Table.Row>
-									<Table.Cell class="h-10 align-middle font-medium">Parameters</Table.Cell>
+									<Table.Cell class="h-10 align-middle font-medium">
+										{t('dialog.model_info.parameters')}
+									</Table.Cell>
 									<Table.Cell>{formatParameters(modelMeta.n_params)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -139,7 +155,9 @@
 							<!-- Embedding Size -->
 							{#if modelMeta?.n_embd}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Embedding Size</Table.Cell>
+									<Table.Cell class="align-middle font-medium">
+										{t('dialog.model_info.embedding_size')}
+									</Table.Cell>
 									<Table.Cell>{formatNumber(modelMeta.n_embd)}</Table.Cell>
 								</Table.Row>
 							{/if}
@@ -147,29 +165,39 @@
 							<!-- Vocabulary Size -->
 							{#if modelMeta?.n_vocab}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Vocabulary Size</Table.Cell>
-									<Table.Cell>{formatNumber(modelMeta.n_vocab)} tokens</Table.Cell>
+									<Table.Cell class="align-middle font-medium">
+										{t('dialog.model_info.vocab_size')}
+									</Table.Cell>
+									<Table.Cell
+										>{formatNumber(modelMeta.n_vocab)} {t('dialog.model_info.tokens')}</Table.Cell
+									>
 								</Table.Row>
 							{/if}
 
 							<!-- Vocabulary Type -->
 							{#if modelMeta?.vocab_type}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
+									<Table.Cell class="align-middle font-medium">
+										{t('dialog.model_info.vocab_type')}
+									</Table.Cell>
 									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
 								</Table.Row>
 							{/if}
 
 							<!-- Total Slots -->
 							<Table.Row>
-								<Table.Cell class="align-middle font-medium">Parallel Slots</Table.Cell>
+								<Table.Cell class="align-middle font-medium">
+									{t('dialog.model_info.parallel_slots')}
+								</Table.Cell>
 								<Table.Cell>{serverProps.total_slots}</Table.Cell>
 							</Table.Row>
 
 							<!-- Modalities -->
 							{#if modalities.length > 0}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Modalities</Table.Cell>
+									<Table.Cell class="align-middle font-medium">
+										{t('dialog.model_info.modalities')}
+									</Table.Cell>
 									<Table.Cell>
 										<div class="flex flex-wrap gap-1">
 											<BadgeModality {modalities} />
@@ -180,7 +208,9 @@
 
 							<!-- Build Info -->
 							<Table.Row>
-								<Table.Cell class="align-middle font-medium">Build Info</Table.Cell>
+								<Table.Cell class="align-middle font-medium">
+									{t('dialog.model_info.build_info')}
+								</Table.Cell>
 								<Table.Cell class="align-middle font-mono text-xs"
 									>{serverProps.build_info}</Table.Cell
 								>
@@ -189,7 +219,9 @@
 							<!-- Chat Template -->
 							{#if serverProps.chat_template}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
+									<Table.Cell class="align-middle font-medium">
+										{t('dialog.model_info.chat_template')}
+									</Table.Cell>
 									<Table.Cell class="py-10">
 										<div class="max-h-120 overflow-y-auto rounded-md bg-muted p-4">
 											<pre
@@ -203,7 +235,9 @@
 				{/if}
 			{:else if !isLoadingModels}
 				<div class="flex items-center justify-center py-8">
-					<div class="text-sm text-muted-foreground">No model information available</div>
+					<div class="text-sm text-muted-foreground">
+						{t('dialog.model_info.no_info')}
+					</div>
 				</div>
 			{/if}
 		</div>

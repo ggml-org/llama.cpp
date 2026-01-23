@@ -2,6 +2,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ChatAttachmentPreview } from '$lib/components/app';
 	import { formatFileSize } from '$lib/utils';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		open: boolean;
@@ -32,7 +33,9 @@
 
 	let chatAttachmentPreviewRef: ChatAttachmentPreview | undefined = $state();
 
-	let displayName = $derived(uploadedFile?.name || attachment?.name || name || 'Unknown File');
+	let displayName = $derived(
+		uploadedFile?.name || attachment?.name || name || t('dialog.attachment_preview.unknown_file')
+	);
 
 	let displaySize = $derived(uploadedFile?.size || size);
 
