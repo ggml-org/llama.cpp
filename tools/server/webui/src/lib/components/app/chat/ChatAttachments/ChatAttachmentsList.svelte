@@ -4,6 +4,7 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { DialogChatAttachmentPreview, DialogChatAttachmentsViewAll } from '$lib/components/app';
 	import { getAttachmentDisplayItems } from '$lib/utils';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -113,7 +114,7 @@
 						? 'opacity-100'
 						: 'pointer-events-none opacity-0'}"
 					onclick={scrollLeft}
-					aria-label="Scroll left"
+					aria-label={t('chat.attachments.scroll_left')}
 				>
 					<ChevronLeft class="h-4 w-4" />
 				</button>
@@ -163,7 +164,7 @@
 						? 'opacity-100'
 						: 'pointer-events-none opacity-0'}"
 					onclick={scrollRight}
-					aria-label="Scroll right"
+					aria-label={t('chat.attachments.scroll_right')}
 				>
 					<ChevronRight class="h-4 w-4" />
 				</button>
@@ -178,7 +179,7 @@
 						class="h-6 text-xs text-muted-foreground hover:text-foreground"
 						onclick={() => (viewAllDialogOpen = true)}
 					>
-						View all ({displayItems.length})
+						{t('chat.attachments.view_all', { count: displayItems.length })}
 					</Button>
 				</div>
 			{/if}

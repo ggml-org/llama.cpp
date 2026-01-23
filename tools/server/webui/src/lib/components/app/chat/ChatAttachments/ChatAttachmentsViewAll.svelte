@@ -5,6 +5,7 @@
 		DialogChatAttachmentPreview
 	} from '$lib/components/app';
 	import { getAttachmentDisplayItems } from '$lib/utils';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		uploadedFiles?: ChatUploadedFile[];
@@ -57,7 +58,9 @@
 	<div class="min-h-0 flex-1 space-y-6 overflow-y-auto px-1">
 		{#if fileItems.length > 0}
 			<div>
-				<h3 class="mb-3 text-sm font-medium text-foreground">Files ({fileItems.length})</h3>
+				<h3 class="mb-3 text-sm font-medium text-foreground">
+					{t('chat.attachments.files_count', { count: fileItems.length })}
+				</h3>
 				<div class="flex flex-wrap items-start gap-3">
 					{#each fileItems as item (item.id)}
 						<ChatAttachmentThumbnailFile
@@ -79,7 +82,9 @@
 
 		{#if imageItems.length > 0}
 			<div>
-				<h3 class="mb-3 text-sm font-medium text-foreground">Images ({imageItems.length})</h3>
+				<h3 class="mb-3 text-sm font-medium text-foreground">
+					{t('chat.attachments.images_count', { count: imageItems.length })}
+				</h3>
 				<div class="flex flex-wrap items-start gap-3">
 					{#each imageItems as item (item.id)}
 						{#if item.preview}

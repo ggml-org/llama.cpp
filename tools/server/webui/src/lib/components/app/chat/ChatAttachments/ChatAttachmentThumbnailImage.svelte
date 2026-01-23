@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { RemoveButton } from '$lib/components/app';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		id: string;
@@ -38,7 +39,7 @@
 			type="button"
 			class="block h-full w-full rounded-lg focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:outline-none"
 			onclick={onClick}
-			aria-label="Preview {name}"
+			aria-label={t('chat.attachments.preview_aria', { name })}
 		>
 			<img
 				src={preview}

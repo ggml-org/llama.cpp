@@ -2,6 +2,7 @@
 	import { RemoveButton } from '$lib/components/app';
 	import { formatFileSize, getFileTypeLabel, getPreviewText, isTextFile } from '$lib/utils';
 	import { AttachmentType } from '$lib/enums';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -54,7 +55,9 @@
 		if (attachment?.type === AttachmentType.PDF) {
 			const pdfAttachment = attachment as DatabaseMessageExtraPdfFile;
 
-			return pdfAttachment.processedAsImages ? 'Sent as Image' : 'Sent as Text';
+			return pdfAttachment.processedAsImages
+				? t('chat.attachments.pdf_sent_image')
+				: t('chat.attachments.pdf_sent_text');
 		}
 		return null;
 	});
@@ -66,7 +69,7 @@
 		<button
 			class="cursor-pointer rounded-lg border border-border bg-muted p-3 transition-shadow hover:shadow-md {className} w-full max-w-2xl"
 			onclick={onClick}
-			aria-label={`Preview ${name}`}
+			aria-label={t('chat.attachments.preview_aria', { name })}
 			type="button"
 		>
 			<div class="flex items-start gap-3">
