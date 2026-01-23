@@ -240,65 +240,81 @@ caps caps_get(jinja::program & prog) {
     );
 
     // case: requires non-null content in tool calls
-    caps_try_execute(
-        prog,
-        [&]() {
-            // messages
-            return json::array({
-                {
-                    {"role", "user"},
-                    {"content", "User message"},
-                },
-                {
-                    {"role", "assistant"},
-                    {"tool_calls", json::array({
-                        {
-                            {"id", "call0001"},
-                            {"type", "function"},
-                            {"function", {
-                                {"name", "tool1"},
-                                {"arguments", {
-                                    {"arg", "value"}
-                                }}
-                            }}
+    if (result.supports_tool_calls) {
+        caps_try_execute(
+            prog,
+            [&]() {
+                // messages
+                return json::array({
+                    {
+                        { "role", "user" },
+                        { "content", "User message" },
+                    },
+                    {
+                        { "role", "assistant" },
+                        { "tool_calls",
+                            json::array({
+                                {
+                                    { "id", "call0001" },
+                                    { "type", "function" },
+                                    { "function",
+                                        {
+                                            { "name", "tool1" },
+                                            { "arguments",
+                                                {
+                                                    { "arg", "value" }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                            })
+                        }
+                    },
+                    {
+                        { "role", "user" },
+                        { "content", "User message" },
+                    },
+                });
+            },
+            [&]() {
+                // tools
+                return json::array({
+                    {
+                        { "name", "tool" },
+                        { "type", "function" },
+                        { "function",
+                            {
+                                { "name", "tool1" },
+                                { "description", "Tool description" },
+                                { "parameters",
+                                    {
+                                        { "type", "object" },
+                                        { "properties",
+                                            {
+                                                { "arg",
+                                                    {
+                                                        { "type", "string" },
+                                                        { "description", "Arg description" },
+                                                    }
+                                                },
+                                            }
+                                        },
+                                        { "required", json::array({ "arg" }) },
+                                    }
+                                },
+                            }
                         },
-                    })}
-                },
-                {
-                    {"role", "user"},
-                    {"content", "User message"},
-                },
-            });
-        },
-        [&]() {
-            // tools
-            return json::array({
-                {
-                    {"name", "tool"},
-                    {"type", "function"},
-                    {"function", {
-                        {"name", "tool1"},
-                        {"description", "Tool description"},
-                        {"parameters", {
-                            {"type", "object"},
-                            {"properties", {
-                                {"arg", {
-                                    {"type", "string"},
-                                    {"description", "Arg description"},
-                                }},
-                            }},
-                            {"required", json::array({ "arg" })},
-                        }},
-                    }},
-                },
-            });
-        },
-        [&](bool success, value & messages, value & tools) {
-            if (!success) {
-                result.requires_non_null_content = true;
+                    },
+                });
+            },
+            [&](bool success, value & /* messages */, value & /* tools */) {
+                if (!success) {
+                    result.requires_non_null_content = true;
+                }
             }
-        }
-    );
+        );
+    }
 
     // case: preserve reasoning content in chat history
     caps_try_execute(
