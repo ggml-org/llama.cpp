@@ -4,6 +4,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -23,14 +24,14 @@
 
 	const fileUploadTooltipText = $derived.by(() => {
 		return !hasVisionModality
-			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
-			: 'Attach files';
+			? t('chat.form.attachments.tooltip_text_only')
+			: t('chat.form.attachments.tooltip_default');
 	});
 </script>
 
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root>
-		<DropdownMenu.Trigger name="Attach files" {disabled}>
+		<DropdownMenu.Trigger name={t('chat.form.attachments.trigger_label')} {disabled}>
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<Button
@@ -38,7 +39,7 @@
 						{disabled}
 						type="button"
 					>
-						<span class="sr-only">Attach files</span>
+						<span class="sr-only">{t('chat.form.attachments.trigger_label')}</span>
 
 						<Paperclip class="h-4 w-4" />
 					</Button>
@@ -60,13 +61,13 @@
 					>
 						<FILE_TYPE_ICONS.image class="h-4 w-4" />
 
-						<span>Images</span>
+						<span>{t('chat.form.attachments.images')}</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
 				{#if !hasVisionModality}
 					<Tooltip.Content>
-						<p>Images require vision models to be processed</p>
+						<p>{t('chat.form.attachments.images_requires_vision')}</p>
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
@@ -80,13 +81,13 @@
 					>
 						<FILE_TYPE_ICONS.audio class="h-4 w-4" />
 
-						<span>Audio Files</span>
+						<span>{t('chat.form.attachments.audio')}</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
 				{#if !hasAudioModality}
 					<Tooltip.Content>
-						<p>Audio files require audio models to be processed</p>
+						<p>{t('chat.form.attachments.audio_requires_model')}</p>
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
@@ -97,7 +98,7 @@
 			>
 				<FILE_TYPE_ICONS.text class="h-4 w-4" />
 
-				<span>Text Files</span>
+				<span>{t('chat.form.attachments.text')}</span>
 			</DropdownMenu.Item>
 
 			<Tooltip.Root>
@@ -108,13 +109,13 @@
 					>
 						<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
 
-						<span>PDF Files</span>
+						<span>{t('chat.form.attachments.pdf')}</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
 				{#if !hasVisionModality}
 					<Tooltip.Content>
-						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
+						<p>{t('chat.form.attachments.pdf_text_warning')}</p>
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>

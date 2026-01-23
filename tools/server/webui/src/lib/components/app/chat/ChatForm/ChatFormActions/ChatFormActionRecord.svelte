@@ -2,6 +2,7 @@
 	import { Mic, Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		class?: string;
@@ -33,7 +34,9 @@
 				onclick={onMicClick}
 				type="button"
 			>
-				<span class="sr-only">{isRecording ? 'Stop recording' : 'Start recording'}</span>
+				<span class="sr-only">
+					{isRecording ? t('chat.form.record.stop') : t('chat.form.record.start')}
+				</span>
 
 				{#if isRecording}
 					<Square class="h-4 w-4 animate-pulse fill-white" />
@@ -45,7 +48,7 @@
 
 		{#if !hasAudioModality}
 			<Tooltip.Content>
-				<p>Current model does not support audio</p>
+				<p>{t('chat.form.record.no_audio')}</p>
 			</Tooltip.Content>
 		{/if}
 	</Tooltip.Root>
