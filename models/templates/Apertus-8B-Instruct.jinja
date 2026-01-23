@@ -294,7 +294,7 @@
             {%- for tool_call in message.tool_calls -%}
                 {%- if tool_call.type == 'function' -%}
                     {%- set function = tool_call.function -%}
-                    {{- '{"' + function.name + '": ' + function.arguments + '}' }}
+                    {{- '{"' + function.name + '": ' + function.arguments|tojson + '}' }}
                     {%- if not loop.last -%}
                         {{- ", " }}
                     {%- endif -%}
