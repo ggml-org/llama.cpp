@@ -19,11 +19,11 @@ Note: The rest of the **Android** build process assumes that you're running insi
 ### Windows On Snapdragon
 
 Native Windows 11 arm64 builds has the following tools dependencies:
-- MS Visual Studio 2022 or later (Community Edition or Pro)
+- MS Visual Studio 2026 (Community Edition or Pro)
   - MSVC arm64 standard and runtime libraries
 - LLVM core libraries and Clang compiler (winget)
-- CMake, Git (winget)
-- Hexagon SDK Community Edition 6.4 or later (from Qualcomm Software Center)
+- CMake, Git, Python (winget)
+- Hexagon SDK Community Edition 6.4 or later (see windows.md)
 
 Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
 Adapt below build commands accordingly.
