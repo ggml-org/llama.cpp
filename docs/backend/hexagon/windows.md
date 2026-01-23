@@ -10,11 +10,13 @@ The document also covers procedures for installing the latest NPU drivers and He
 
 ## Install the latest Hexagon SDK Community Edition
 
-Either download the complete official version from
-    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.4.0.2
+Eiether use the trimmed down version (optimized for CI) from
 
-Or use the trimmed down version (optimized for CI) from
     https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.4.0.2/hexagon-sdk-v6.4.0.2-arm64-wos.tar.xz
+
+Or download the complete official version from
+
+    https://softwarecenter.qualcomm.com/catalog/item/Hexagon_SDK?version=6.4.0.2
 
 Unzip/untar the archive into
 ```
@@ -23,16 +25,18 @@ Unzip/untar the archive into
 ## Install the latest Qualcomm NPU driver
 
 Download the driver from
+
     https://softwarecenter.qualcomm.com/catalog/item/Qualcomm_HND
 
 After the automated installation and reboot please make sure that the Hexagon NPU device shows up in Device Manager (under Neural Processors).
 
-If the device is not available you can try installing all components (qcnspmcdm8380, qcnspmcdm8380_ext) manually
+If the device is not available you can try installing all components (qcnspmcdm8380, qcnspmcdm8380_ext) manually.
 The components are extracted into 
 ```
     c:\QCDrivers\qcnspmcdm...
 ```
-## Enabled test signatures for drivers
+
+## Enable test signatures for drivers
 
 Use `bcdedit` to enable test-signing
 ```
@@ -48,6 +52,7 @@ Make sure test-signing is enabled after reboot
     ...
 ```
 For additional details see Microsoft guide at
+
    https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option
 
 ## Create personal certificate
@@ -76,9 +81,9 @@ Right click on the certificate store, select "All Tasks -> Import" and follow th
 PFX file you created above.
 
 For additional details see Microsoft guide at
-```
+
     https://learn.microsoft.com/en-us/windows-hardware/drivers/install/introduction-to-test-signing
-```
+
 Make sure to save the PFX file, you will need it for the build procedures.
 Please note that the same certificate can be use for signing any number of builds.
 
@@ -89,9 +94,10 @@ However, additional settings are required for generating and signing HTP Ops lib
 ```
     > $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
     > $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
+    > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
     > $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
 
-    > cmake --preset arm64-windows-snapdragon -B build-wos -D GGML_HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
+    > cmake --preset arm64-windows-snapdragon -B build-wos
     ...
     > cmake --install build-wos --prefix pkg-snapdragon
 ```
