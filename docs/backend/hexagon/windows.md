@@ -66,7 +66,7 @@ c:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0
 ```
 (replace 10.0.26100.0 with correct version).
 
-To create personal self-signed certificate the following commands (either from cmd or power-shell):
+To create personal self-signed certificate run the following commands (either from cmd or power-shell):
 ```
 > cd c:\Users\MyUser
 > mkdir Certs
@@ -86,7 +86,7 @@ For additional details see Microsoft guide at
     https://learn.microsoft.com/en-us/windows-hardware/drivers/install/introduction-to-test-signing
 
 Make sure to save the PFX file, you will need it for the build procedures.
-Please note that the same certificate can be use for signing any number of builds.
+Please note that the same certificate can be used for signing any number of builds.
 
 ## Build Hexagon backend with signed HTP ops libraries
 
