@@ -34,6 +34,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { t } from '$lib/i18n';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
@@ -375,7 +376,7 @@
 {#if !isEmpty}
 	<div
 		bind:this={chatScrollContainer}
-		aria-label="Chat interface with file drop zone"
+		aria-label={t('chat.screen.aria.chat')}
 		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
@@ -410,14 +411,14 @@
 					<Alert.Root variant="destructive">
 						<AlertTriangle class="h-4 w-4" />
 						<Alert.Title class="flex items-center justify-between">
-							<span>Server unavailable</span>
+							<span>{t('chat.server.unavailable')}</span>
 							<button
 								onclick={() => serverStore.fetch()}
 								disabled={isServerLoading}
 								class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
 							>
 								<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-								{isServerLoading ? 'Retrying...' : 'Retry'}
+								{isServerLoading ? t('chat.server.retrying') : t('chat.server.retry')}
 							</button>
 						</Alert.Title>
 						<Alert.Description>{serverError()}</Alert.Description>
@@ -444,7 +445,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		aria-label="Welcome screen with file drop zone"
+		aria-label={t('chat.screen.aria.welcome')}
 		class="flex h-full items-center justify-center"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
@@ -454,12 +455,14 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-4 text-3xl font-semibold tracking-tight">llama.cpp</h1>
+				<h1 class="mb-4 text-3xl font-semibold tracking-tight">
+					{t('chat.landing.title')}
+				</h1>
 
 				<p class="text-lg text-muted-foreground">
 					{serverStore.props?.modalities?.audio
-						? 'Record audio, type a message '
-						: 'Type a message'} or upload files to get started
+						? t('chat.landing.prompt_with_audio')
+						: t('chat.landing.prompt_no_audio')}
 				</p>
 			</div>
 
@@ -468,14 +471,14 @@
 					<Alert.Root variant="destructive">
 						<AlertTriangle class="h-4 w-4" />
 						<Alert.Title class="flex items-center justify-between">
-							<span>Server unavailable</span>
+							<span>{t('chat.server.unavailable')}</span>
 							<button
 								onclick={() => serverStore.fetch()}
 								disabled={isServerLoading}
 								class="flex items-center gap-1.5 rounded-lg bg-destructive/20 px-2 py-1 text-xs font-medium hover:bg-destructive/30 disabled:opacity-50"
 							>
 								<RefreshCw class="h-3 w-3 {isServerLoading ? 'animate-spin' : ''}" />
-								{isServerLoading ? 'Retrying...' : 'Retry'}
+								{isServerLoading ? t('chat.server.retrying') : t('chat.server.retry')}
 							</button>
 						</Alert.Title>
 						<Alert.Description>{serverError()}</Alert.Description>

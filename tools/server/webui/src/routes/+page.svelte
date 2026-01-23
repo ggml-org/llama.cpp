@@ -3,6 +3,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
+	import { t } from '$lib/i18n';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
@@ -79,7 +80,7 @@
 </script>
 
 <svelte:head>
-	<title>llama.cpp - AI Chat Interface</title>
+	<title>{t('page.title.home')}</title>
 </svelte:head>
 
 <ChatScreen showCenteredEmpty={true} />

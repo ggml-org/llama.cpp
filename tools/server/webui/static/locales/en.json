@@ -5,5 +5,14 @@
 	"error.api_key.access_denied": "Access denied - check server permissions",
 	"error.generic.title": "Error {status}",
 	"error.generic.message": "Something went wrong",
-	"error.generic.go_home": "Go Home"
+	"error.generic.go_home": "Go Home",
+	"page.title.home": "llama.cpp - AI Chat Interface",
+	"chat.screen.aria.chat": "Chat interface with file drop zone",
+	"chat.screen.aria.welcome": "Welcome screen with file drop zone",
+	"chat.server.unavailable": "Server unavailable",
+	"chat.server.retrying": "Retrying...",
+	"chat.server.retry": "Retry",
+	"chat.landing.title": "llama.cpp",
+	"chat.landing.prompt_with_audio": "Record audio, type a message, or upload files to get started",
+	"chat.landing.prompt_no_audio": "Type a message or upload files to get started"
 }
