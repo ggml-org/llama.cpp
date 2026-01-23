@@ -281,11 +281,16 @@ struct common_params_speculative {
 
     struct common_params_model model;
 
+    // draftless:
+
     common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
-    uint16_t spec_ngram_size_n = 12;
-    uint16_t spec_ngram_size_m = 48;
+    uint16_t spec_ngram_size_n = 12; // ngram size for lookup
+    uint16_t spec_ngram_size_m = 48; // mgram size for speculative tokens
 
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
+
+    std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
+    std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
 };
 
 struct common_params_vocoder {
@@ -403,8 +408,6 @@ struct common_params {
     std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state             // NOLINT
     std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
     std::string input_suffix         = ""; // string to suffix user inputs with                             // NOLINT
-    std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
-    std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
 
     // llama-debug specific options

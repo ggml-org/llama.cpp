@@ -629,7 +629,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     {
         bool has_draft =!params.speculative.model.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
-        bool has_lookup_caches = !params.lookup_cache_static.empty() && !params.lookup_cache_dynamic.empty();
+        bool has_lookup_caches = !params.speculative.lookup_cache_static.empty()
+            && !params.speculative.lookup_cache_dynamic.empty();
         bool has_simple = (params.speculative.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
         bool found_config_draft = false;
         bool found_config_eagle3 = false;
@@ -1253,14 +1254,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-lcs", "--lookup-cache-static"}, "FNAME",
         "path to static lookup cache to use for lookup decoding (not updated by generation)",
         [](common_params & params, const std::string & value) {
-            params.lookup_cache_static = value;
+            params.speculative.lookup_cache_static = value;
         }
     ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-lcd", "--lookup-cache-dynamic"}, "FNAME",
         "path to dynamic lookup cache to use for lookup decoding (updated by generation)",
         [](common_params & params, const std::string & value) {
-            params.lookup_cache_dynamic = value;
+            params.speculative.lookup_cache_dynamic = value;
         }
     ).set_examples({LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

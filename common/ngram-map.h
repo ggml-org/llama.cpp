@@ -62,5 +62,5 @@ void common_ngram_map_draft(
     const llama_tokens & inp, llama_token sampled,
     llama_tokens & draft);
 
-// Update the statistics of a value after a draft was accepted.
-void common_ngram_map_send_accepted(common_ngram_map & map, uint16_t n_accepted);
+// Update the statistics of a value after a draft was processed.
+void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted);

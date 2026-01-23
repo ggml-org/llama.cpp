@@ -251,12 +251,12 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 
 
 struct common_speculative * common_speculative_init(
-        struct common_params & params,
+        struct common_params_speculative & params,
         struct llama_context * ctx_tgt,
         struct llama_context * ctx_dft
     ) {
     std::vector<std::unique_ptr<common_speculative_state>> implementations = {};
-    for (const common_speculative_config & config : params.speculative.configs) {
+    for (const common_speculative_config & config : params.configs) {
         LOG_INF("common_speculative_init: adding implementation %s\n", common_speculative_type_to_str(config.type).c_str());
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
@@ -271,7 +271,7 @@ struct common_speculative * common_speculative_init(
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
                 common_ngram_map ngram_map = get_common_ngram_map(config,
-                        params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m);
+                        params.spec_ngram_size_n, params.spec_ngram_size_m);
                 uint16_t ngram_size_key   = ngram_map.size_key;
                 uint16_t mgram_size_value = ngram_map.size_value;
                 uint16_t check_rate = ngram_map.check_rate;
@@ -287,14 +287,14 @@ struct common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
                     (config.type), get_common_ngram_map(config,
-                        params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m)
+                        params.spec_ngram_size_n, params.spec_ngram_size_m)
                 ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k4v>(
                             (config.type), get_common_ngram_map(config,
-                                params.speculative.spec_ngram_size_n, params.speculative.spec_ngram_size_m)));
+                                params.spec_ngram_size_n, params.spec_ngram_size_m)));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
@@ -746,7 +746,7 @@ llama_tokens common_speculative_use_draft_model(
     return result;
 }
 
-void common_speculative_send_accepted(struct common_speculative * spec, const uint16_t n_accepted) {
+void common_speculative_accept(struct common_speculative * spec, const uint16_t n_accepted) {
     common_speculative_state * impl = spec->curr_impl;
     if (impl != nullptr) {
         if (n_accepted > 0) {
@@ -756,7 +756,7 @@ void common_speculative_send_accepted(struct common_speculative * spec, const ui
         if (impl->type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K ||
             impl->type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) {
             auto state = static_cast<struct common_speculative_state_ngram_map_k *>(impl);
-            common_ngram_map_send_accepted(state->map, n_accepted);
+            common_ngram_map_accept(state->map, n_accepted);
         }
     }
 }

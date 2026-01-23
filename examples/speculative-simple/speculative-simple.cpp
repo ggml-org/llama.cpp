@@ -132,7 +132,7 @@ int main(int argc, char ** argv) {
     params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
     params_spec.p_min   = p_min;
 
-    struct common_speculative * spec = common_speculative_init(params, ctx_tgt, ctx_dft);
+    struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt, ctx_dft);
     for (auto &pair : params.speculative.replacements) {
         common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
     }

@@ -48,8 +48,6 @@ enum server_state {
 struct server_slot {
     int id;
 
-    llama_batch batch_spec = {};
-
     // TODO: change to unique_ptrs for consistency:
     llama_context * ctx = nullptr;
     llama_context * ctx_dft = nullptr;
@@ -604,8 +602,6 @@ private:
 
             common_speculative_free(slot.spec);
             slot.spec = nullptr;
-
-            llama_batch_free(slot.batch_spec);
         }
 
         llama_batch_free(batch);
@@ -766,8 +762,6 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             if (model_dft) {
-                slot.batch_spec = llama_batch_init(params_base.speculative.n_max + 1, 0, 1);
-
                 // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
                 slot.ctx_dft = llama_init_from_model(model_dft, cparams_dft);
                 if (slot.ctx_dft == nullptr) {
@@ -775,7 +769,7 @@ private:
                     return false;
                 }
 
-                slot.spec = common_speculative_init(params_base, slot.ctx, slot.ctx_dft);
+                slot.spec = common_speculative_init(params_base.speculative, slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return false;
@@ -784,7 +778,7 @@ private:
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             } else if (params_base.speculative.configs.size() > 0) {
-                slot.spec = common_speculative_init(params_base, nullptr, nullptr);
+                slot.spec = common_speculative_init(params_base.speculative, nullptr, nullptr);
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
@@ -1184,14 +1178,6 @@ private:
         }
 
         slot.task = std::make_unique<const server_task>(std::move(task));
-
-        // initialize draft batch
-        // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
-        if (slot.can_speculate()) {
-            llama_batch_free(slot.batch_spec);
-
-            slot.batch_spec = llama_batch_init(task.params.speculative.n_max + 1, 0, 1);
-        }
 
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
@@ -2817,8 +2803,8 @@ private:
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
 
-                // inform the speculative decoding about the accepted tokens
-                common_speculative_send_accepted(slot.spec, ids.size() - 1);
+                // inform the speculative decoding about the number of accepted tokens
+                common_speculative_accept(slot.spec, ids.size() - 1);
 
                 // rollback to the state before sampling the draft tokens
                 slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);

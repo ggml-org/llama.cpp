@@ -237,7 +237,7 @@ void common_ngram_map_draft(common_ngram_map & map,
     map.last_draft_value_idx     = slot_max; // value used for draft generation.
 }
 
-void common_ngram_map_send_accepted(common_ngram_map & map, uint16_t n_accepted) {
+void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
     if (!map.last_draft_created) {
         return;
     }
