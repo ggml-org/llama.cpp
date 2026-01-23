@@ -5,11 +5,13 @@ if (NOT IS_DIRECTORY "${HEXAGON_SDK_ROOT}" OR NOT IS_DIRECTORY "${HEXAGON_TOOLS_
     message(FATAL_ERROR "Make sure HEXAGON_SDK_ROOT and HEXAGON_TOOLS_ROOT point to the correct Hexagon SDK installation.")
 endif()
 
+message(STATUS "hexagon: using ${HEXAGON_SDK_ROOT} and ${HEXAGON_TOOLS_ROOT} for building libggml-htp skels")
+
 include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG "ggml-hexagon: enable HTP debug output" OFF)
-option(GGML_HEXAGON_HTP_CERT  "ggml-hexagon: enable HTP library signing using certificate" OFF)
+set(GGML_HEXAGON_HTP_CERT  "$ENV{HEXAGON_HTP_CERT}" CACHE PATH "ggml-hexagon: enable HTP library signing using certificate")
 set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
 add_library(htp_iface OBJECT
@@ -85,6 +87,8 @@ if (CMAKE_SYSTEM_NAME MATCHES Windows AND GGML_HEXAGON_HTP_CERT)
     find_program(INF2CAT  NAMES inf2cat.exe  PATHS ${WINSDK_PATHS} REQUIRED)
     find_program(SIGNTOOL NAMES signtool.exe PATHS ${WINSDK_PATHS} REQUIRED)
 
+    message(STATUS "hexagon: using ${GGML_HEXAGON_HTP_CERT} to sign libggml-htp skels")
+
     set(LIBGGML_HTP_CAT ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp.cat)
     add_custom_target(libggml-htp-cat
         BYPRODUCTS ${LIBGGML_HTP_CAT}
@@ -95,6 +99,7 @@ if (CMAKE_SYSTEM_NAME MATCHES Windows AND GGML_HEXAGON_HTP_CERT)
         COMMENT "generating and signing libggml-htp.cat file"
         VERBATIM
     )
+
     add_dependencies(${TARGET_NAME} libggml-htp-cat)
     install(FILES ${LIBGGML_HTP_CAT} TYPE LIB)
 endif()
