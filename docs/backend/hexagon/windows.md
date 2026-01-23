@@ -22,6 +22,7 @@ Unzip/untar the archive into
 ```
 c:\Qualcomm\Hexagon_SDK\6.4.0.2
 ```
+
 ## Install the latest Qualcomm NPU driver
 
 Download the driver from
@@ -40,7 +41,7 @@ c:\QCDrivers\qcnspmcdm...
 
 Use `bcdedit` to enable test-signing
 ```
-    > bcdedit /set TESTSIGNING ON
+> bcdedit /set TESTSIGNING ON
 ```
 (Secure Boot may need to be disabled for this to work)
 
