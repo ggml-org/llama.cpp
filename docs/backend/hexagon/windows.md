@@ -20,7 +20,7 @@ Or download the complete official version from
 
 Unzip/untar the archive into
 ```
-    c:\Qualcomm\Hexagon_SDK\6.4.0.2
+c:\Qualcomm\Hexagon_SDK\6.4.0.2
 ```
 ## Install the latest Qualcomm NPU driver
 
@@ -33,7 +33,7 @@ After the automated installation and reboot please make sure that the Hexagon NP
 If the device is not available you can try installing all components (qcnspmcdm8380, qcnspmcdm8380_ext) manually.
 The components are extracted into 
 ```
-    c:\QCDrivers\qcnspmcdm...
+c:\QCDrivers\qcnspmcdm...
 ```
 
 ## Enable test signatures for drivers
@@ -46,10 +46,10 @@ Use `bcdedit` to enable test-signing
 
 Make sure test-signing is enabled after reboot
 ```
-    > bcdedit /enum
-    ...
-    testsigning             Yes
-    ...
+> bcdedit /enum
+...
+testsigning             Yes
+...
 ```
 For additional details see Microsoft guide at
 
@@ -61,17 +61,17 @@ The tools required for this procedure are available as part of Windows SDK and W
 installed as part of the MS Visual Studio.
 They are typically located at
 ```
-    c:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0
+c:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0
 ```
 (replace 10.0.26100.0 with correct version).
 
 To create personal self-signed certificate the following commands (either from cmd or power-shell):
 ```
-    > cd c:\Users\MyUser
-    > mkdir Certs
-    > cd Certs
-    > makecert -r -pe -ss PrivateCertStore -n CN=GGML.HTP.v1 -eku 1.3.6.1.5.5.7.3.3 -sv ggml-htp-v1.pvk ggml-htp-v1.cer
-    > pvk2pfx.exe' -pvk ggml-htp-v1.pvk -spc ggml-htp-v1.cer -pfx ggml-htp-v1.pfx
+> cd c:\Users\MyUser
+> mkdir Certs
+> cd Certs
+> makecert -r -pe -ss PrivateCertStore -n CN=GGML.HTP.v1 -eku 1.3.6.1.5.5.7.3.3 -sv ggml-htp-v1.pvk ggml-htp-v1.cer
+> pvk2pfx.exe' -pvk ggml-htp-v1.pvk -spc ggml-htp-v1.cer -pfx ggml-htp-v1.pfx
 ```
 (replace MyUser with your username). 
 
@@ -92,39 +92,39 @@ Please note that the same certificate can be use for signing any number of build
 The overall Hexagon backend build procedure for Windows on Snapdragon is the same as for other platforms.
 However, additional settings are required for generating and signing HTP Ops libraries. 
 ```
-    > $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
-    > $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
-    > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
-    > $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
+> $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
+> $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
+> $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
+> $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
 
-    > cmake --preset arm64-windows-snapdragon -B build-wos
-    ...
-    > cmake --install build-wos --prefix pkg-snapdragon
+> cmake --preset arm64-windows-snapdragon -B build-wos
+...
+> cmake --install build-wos --prefix pkg-snapdragon
 ```
 
 Once the build is complete HTP ops libraries will be installed like this
 ```
-    > dir pkg-snapdragon/lib/libggml-htp-v73.so
-    ...
-    -a----         1/22/2026   6:01 PM         187656 libggml-htp-v73.so
-    -a----         1/22/2026   6:01 PM         191752 libggml-htp-v75.so
-    -a----         1/22/2026   6:01 PM         187656 libggml-htp-v79.so
-    -a----         1/22/2026   6:01 PM         187656 libggml-htp-v81.so
-    -a----         1/22/2026   6:01 PM           4139 libggml-htp.cat
+> dir pkg-snapdragon/lib/libggml-htp-v73.so
+...
+-a----         1/22/2026   6:01 PM         187656 libggml-htp-v73.so
+-a----         1/22/2026   6:01 PM         191752 libggml-htp-v75.so
+-a----         1/22/2026   6:01 PM         187656 libggml-htp-v79.so
+-a----         1/22/2026   6:01 PM         187656 libggml-htp-v81.so
+-a----         1/22/2026   6:01 PM           4139 libggml-htp.cat
 ```
 
 The .cat file, the signature and proper certicate installation can be verified with
 
 ```
-    > signtool.exe" verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
-    Verifying: .\pkg-snapdragon\lib\libggml-htp.cat
+> signtool.exe" verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
+Verifying: .\pkg-snapdragon\lib\libggml-htp.cat
 
-    Signature Index: 0 (Primary Signature)
-    Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC2F401CF
- 
-    Signing Certificate Chain:
-            Issued to: GGML.HTP.v1
-    ...
-    Successfully verified: .\pkg-snapdragon\lib\libggml-htp.cat
-    ...
+Signature Index: 0 (Primary Signature)
+Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC2F401CF
+
+Signing Certificate Chain:
+        Issued to: GGML.HTP.v1
+...
+Successfully verified: .\pkg-snapdragon\lib\libggml-htp.cat
+...
 ```
