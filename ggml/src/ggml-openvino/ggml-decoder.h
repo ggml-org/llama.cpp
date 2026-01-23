@@ -16,7 +16,7 @@ struct ModelParams {
     int ctx_swa = -1;
     int ctx_per_seq = -1;
     int ctx_per_seq_swa = -1;
-    int n_seq = -1;
+    int n_seq = 1;
     int n_heads = -1;
     int n_heads_kv = -1;
     int head_size = -1;
@@ -37,14 +37,14 @@ struct ModelParams {
 };
 
 struct ComputeParams {
-    int n_seq_active = -1;
-    int seq_active_start = -1;
+    int n_seq_active = 1;
+    int seq_active_start = 0;
     int attention_size = -1;
     int attention_size_swa = -1;
     int input_len = -1;
     int token_len_per_seq = -1;
     int past_kv_len = -1;
-    int output_len = -1;
+    int output_len = 1;
 };
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
