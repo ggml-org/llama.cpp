@@ -105,7 +105,7 @@ However, additional settings are required for generating and signing HTP Ops lib
 
 Once the build is complete HTP ops libraries will be installed like this
 ```
-> dir pkg-snapdragon/lib/libggml-htp-v73.so
+> dir pkg-snapdragon/lib
 ...
 -a----         1/22/2026   6:01 PM         187656 libggml-htp-v73.so
 -a----         1/22/2026   6:01 PM         191752 libggml-htp-v75.so
