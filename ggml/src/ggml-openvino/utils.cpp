@@ -614,10 +614,10 @@ ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, con
     auto output_type = ggml_decoder->get_ov_type(ggml_tensor);
     auto output_shape = ggml_decoder->get_shape(ggml_tensor);
 
-    if (ggml_decoder->is_static() && result_name == "result_output" && output_shape[2] == 0) {
+    if (ggml_decoder->is_static() && output_shape[2] == 0) {
         output_shape[2] = 1;
     }
-    if (ggml_decoder->is_stateful() && result_name == "result_output") {
+    if (ggml_decoder->is_stateful() && ggml_tensor->flags & GGML_TENSOR_FLAG_OUTPUT) {
         std::vector<long unsigned int> output_shape_3d;
         for (size_t i=1; i<output_shape.size(); i++) {
             output_shape_3d.push_back(output_shape[i]);

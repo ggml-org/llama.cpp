@@ -169,9 +169,11 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                             // TODO: The shape modification for stateful model below is not validated for all supported models yet. More generic solution might be needed
                             // to enable additional cases. Ideally, this could be removed from decoder and done as part of a transformation later.
                             auto stateless_kv_shape = get_graph_input_shape(node, src);
-                            assert(stateless_kv_shape.size() == 4 && stateless_kv_shape[0] == 1 && stateless_kv_shape[1] == 1
-                                   && stateless_kv_shape[2].is_dynamic() && stateless_kv_shape[3] == (m_model_params.n_heads_kv*m_model_params.head_size));
-                            stateful_kv_shape = {stateless_kv_shape[0], ov::Dimension::dynamic(), m_model_params.n_heads_kv, m_model_params.head_size};
+                            assert(stateless_kv_shape.size() == 4 && stateless_kv_shape[0] == 1 &&
+                                   stateless_kv_shape[1] == 1 && stateless_kv_shape[2].is_dynamic() &&
+                                   stateless_kv_shape[3] == (m_model_params.n_heads_kv * m_model_params.head_size));
+                            stateful_kv_shape = {stateless_kv_shape[0], ov::Dimension::dynamic(),
+                                                 m_model_params.n_heads_kv, m_model_params.head_size};
                         }
                     }
                 }
@@ -180,9 +182,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 }
                 m_inputs[src_name] = src;
                 assert(stateful_kv_shape.rank().is_static());
-                ov::PartialShape param_shape = (stateful_kv_shape.rank().get_length() != 0) 
-                                                                 ? stateful_kv_shape 
-                                                                 : get_graph_input_shape(node, src);
+                ov::PartialShape param_shape =
+                    (stateful_kv_shape.rank().get_length() != 0) ? stateful_kv_shape : get_graph_input_shape(node, src);
                 auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
                 param_node->set_friendly_name(src_name);
                 param_node->output(0).get_tensor().set_names({src_name});
@@ -197,7 +198,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         static std::set<std::string> debug_output_names = {};
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
         if (node->op == GGML_OP_SET_ROWS || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
-            node_output_name.find("output") != std::string::npos || debug_output_names.count(node_output_name)) {
+            debug_output_names.count(node_output_name)) {
             if (m_model_outputs.find(node_output_name) == m_model_outputs.end()) {
                 m_model_outputs[node_output_name] = node_output;
             }
@@ -312,6 +313,11 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         auto * node = cgraph->nodes[i];
         std::string name = std::string(node->name);
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            model_params.n_heads = node->src[0]->ne[2];
+            model_params.n_heads_kv = node->src[1]->ne[2];
+            model_params.head_size = node->src[0]->ne[0];
+            compute_params.input_len = node->src[0]->ne[1];
+
             auto * cache_k_perm = node->src[1];
             if (cache_k_perm->op == GGML_OP_CPY) {
                 cache_k_perm = cache_k_perm->src[0];
@@ -324,9 +330,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             int layer = extract_layer_from_name(cache_k->name);
             auto * mask = node->src[3];
             std::string mask_name(mask->name);
-            assert(mask_name.find("self_kq_mask") == 0);
 
-            if (std::string(node->src[3]->name).find("swa") != std::string::npos) {
+            if (mask_name.find("swa") != std::string::npos) {
                 model_params.swa_layers.push_back(layer);
                 model_params.ctx_per_seq_swa = cache_k->ne[1];
             } else {
@@ -351,24 +356,17 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 compute_params.attention_size_swa = model_params.ctx_per_seq_swa;
                 compute_params.token_len_per_seq = 1;
             }
-
-        } else if (node->op == GGML_OP_ROPE) {
-            if (name.find("Qcur-0") == 0 || std::string(node->src[0]->name).find("Qcur-0") == 0) {
-                model_params.head_size = node->ne[0];
-                model_params.n_heads = node->ne[1];
-                model_params.rope_params = node->op_params;
-                auto * inp_pos = node->src[1];
-                compute_params.input_len = inp_pos->ne[0];
-            } else if (name.find("Kcur-0") == 0 || std::string(node->src[0]->name).find("Kcur-0") == 0) {
-                model_params.n_heads_kv = node->ne[1];
-            }
-        } else if (node->op == GGML_OP_GET_ROWS && std::string(node->src[1]->name) == "inp_out_ids") {
-            // for static case, output_len is always 1 except for llama-perplexity
-            compute_params.output_len = node->src[1]->ne[0];
-            if (is_static && compute_params.output_len == 0) {
-                compute_params.output_len = 1;
-            }
+            break;
         }
+        if (node->op == GGML_OP_ROPE) {
+            model_params.rope_params = node->op_params;
+        }
+    }
+    auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];
+    compute_params.output_len = output_tensor->ne[1];
+    // for NPU, output_len is always 1 except for llama-perplexity
+    if (is_static && compute_params.output_len == 0) {
+        compute_params.output_len = 1;
     }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
     model_params.ctx_swa = model_params.ctx_per_seq_swa * model_params.n_seq;
@@ -385,14 +383,17 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
-    if (name == "inp_tokens" || name == "inp_pos") {
+    if ((op->op == GGML_OP_GET_ROWS && op->src[0]->op == GGML_OP_NONE) || op->op == GGML_OP_ROPE) {
+        // tokens or positions
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
         input_shape = ov::PartialShape{1, 1, 1, len};
 
-    } else if (name == "inp_out_ids") {
+    } else if (op->op == GGML_OP_GET_ROWS) {
+        // output index
         input_shape = ov::PartialShape{1, 1, 1, m_is_static ? m_compute_params.output_len : -1};
 
-    } else if (name.find("self_kq_mask") == 0) {
+    } else if (op->op == GGML_OP_CPY || op->op == GGML_OP_FLASH_ATTN_EXT) {
+        // mask
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
         } else if (m_is_stateful) {
@@ -401,7 +402,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
 
-    } else if (name.find("cache_") == 0) {
+    } else if (op && op->op == GGML_OP_SET_ROWS && op->src[2] == input) {
+        // kvcache
         input_shape = ov::PartialShape{get_shape(input)};
         if (!m_is_static) {
             // do not fix ctx size to make llama-bench work
@@ -409,6 +411,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         }
 
     } else if (op && op->op == GGML_OP_SET_ROWS && op->src[1] == input) {
+        // kv update index
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
         input_shape = ov::PartialShape{1, 1, 1, len};
 
