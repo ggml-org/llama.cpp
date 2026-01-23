@@ -286,7 +286,6 @@ void main() {
             }
         }
 
-#if 1
         const uint psh_stride = Br / 4; // No space for padding, maybe increase Qf size?
 
         // Calculate and store Pf in Qf
@@ -406,31 +405,6 @@ void main() {
                 }
             }
         }
-#else
-        [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
-            if (KV_bounds_check && j * Bc + c * cols_per_iter + col_tid >= KV) {
-                continue;
-            }
-            float Pf[rows_per_thread];
-            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                Pf[r] = exp(sfsh[tile_row(r) + (c * cols_per_iter + col_tid) * sfshstride] - Mf[r]);
-                Lf[r] += Pf[r];
-            }
-            [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-#if BLOCK_SIZE > 1
-                uint coord = (j * Bc + c * cols_per_iter + col_tid) * v_stride * BLOCK_SIZE + 4 * (d * D_split + d_tid);
-                uint ib = coord / BLOCK_SIZE;
-                uint iqs = (coord % BLOCK_SIZE);
-                vec4 Vf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
-#else
-                vec4 Vf = vec4(data_vv4[v_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * v_stride / 4 + d * D_split + d_tid]);
-#endif
-                [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                    Of[r][d] += ACC_TYPE(Pf[r]) * ACC_TYPEV4(Vf);
-                }
-            }
-        }
-#endif
 
         barrier();
     }
