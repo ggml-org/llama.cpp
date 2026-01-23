@@ -29,9 +29,9 @@ Download the driver from
 
     https://softwarecenter.qualcomm.com/catalog/item/Qualcomm_HND
 
-After the automated installation and reboot please make sure that the Hexagon NPU device shows up in Device Manager (under Neural Processors).
+After the automated installation and reboot please make sure that the Hexagon NPU device shows up in `Device Manager` (under `Neural Processors`).
 
-If the device is not available you can try installing all components (qcnspmcdm8380, qcnspmcdm8380_ext) manually.
+If the device is not available you can try installing all components (`qcnspmcdm8380`, `qcnspmcdm8380_ext`) manually.
 The components are extracted into 
 ```
 c:\QCDrivers\qcnspmcdm...
@@ -74,7 +74,7 @@ To create personal self-signed certificate the following commands (either from c
 > makecert -r -pe -ss PrivateCertStore -n CN=GGML.HTP.v1 -eku 1.3.6.1.5.5.7.3.3 -sv ggml-htp-v1.pvk ggml-htp-v1.cer
 > pvk2pfx.exe' -pvk ggml-htp-v1.pvk -spc ggml-htp-v1.cer -pfx ggml-htp-v1.pfx
 ```
-(replace MyUser with your username). 
+(replace `MyUser` with your username). 
 
 Add this certificate to `Trusted Root Certification Authorities` and `Trusted Publishers` stores.
 This can be done using `certlm` Certificate Manager tool.
