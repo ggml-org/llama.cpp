@@ -8946,9 +8946,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 return;
             }
             case GGML_TYPE_Q6_K: {
-                //if (ne11 < 32) {
-                //    break;
-                //}
+                if (ne11 < 32) {
+                    break;
+                }
+                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+                    break;
+                }
+
                 kernel = backend_ctx->kernel_mul_mm_q6_k_f32_l4_lm;
                 nth0 = 128; // calculated as (BM*BN)/(TM*TN)
 
