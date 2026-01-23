@@ -216,7 +216,7 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     auto begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {split_addr});
     auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_end});
     auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+    auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {context.is_stateful() ? 2 : 3});
     auto sliced = std::make_shared<ov::op::v8::Slice>(input, begin, end, stride, axes);
     return sliced;
 }
