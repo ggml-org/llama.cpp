@@ -1207,17 +1207,15 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         const uint8x16_t q6_qs_cp_0_h = q6_qh_0.val[cp];
                         const uint8x16_t q6_qs_cp_1_h = q6_qh_1.val[cp];
 
-                        // Extract high 2 bits and shift into position
-                        const uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
+                        // Extract high 2 bits for upper nibble reconstruction
                         const uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
-                        const uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
                         const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
 
                         // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
-                        const int8x16_t q6_l0 =
-                            vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl));
-                        const int8x16_t q6_l1 =
-                            vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_1_l, m4b), q6_qs_cp_1_hl));
+                        const int8x16_t q6_l0 = vreinterpretq_s8_u8(
+                            vsliq_n_u8(vandq_u8(q6_qs_cp_0_l, m4b), vandq_u8(q6_qs_cp_0_h, mask_lo), 4));
+                        const int8x16_t q6_l1 = vreinterpretq_s8_u8(
+                            vsliq_n_u8(vandq_u8(q6_qs_cp_1_l, m4b), vandq_u8(q6_qs_cp_1_h, mask_lo), 4));
                         const int8x16_t q6_h0 =
                             vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_0_l, 4), q6_qs_cp_0_hh));
                         const int8x16_t q6_h1 =
@@ -3594,20 +3592,23 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             const uint8x16_t q6_qs_cp_0_h = q6_qh_0[cp];
                             const uint8x16_t q6_qs_cp_1_h = q6_qh_1[cp];
 
-                            // Extract high 2 bits and shift into position
-                            const uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
+                            // Extract high 2 bits for upper nibble reconstruction
                             const uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
-                            const uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
                             const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
 
                             // q6 = (low4 | high2<<4) - 32
                             // TODO: Not adding -32 and adjusting scales later didn't provide the expeected
                             // benefits in initial experiments, but more thought may be needed to get the
                             // expected performance improvements
-                            const int8x16_t q6_l0 = vsubq_s8(
-                                vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s);
-                            const int8x16_t q6_l1 = vsubq_s8(
-                                vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_1_l, m4b), q6_qs_cp_1_hl)), m32s);
+                            // Use vsliq_n_u8 to combine shift-left-insert in one instruction (like Q5_K)
+                            const int8x16_t q6_l0 =
+                                vsubq_s8(vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_qs_cp_0_l, m4b),
+                                                                        vandq_u8(q6_qs_cp_0_h, mask_lo), 4)),
+                                         m32s);
+                            const int8x16_t q6_l1 =
+                                vsubq_s8(vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_qs_cp_1_l, m4b),
+                                                                        vandq_u8(q6_qs_cp_1_h, mask_lo), 4)),
+                                         m32s);
                             const int8x16_t q6_h0 = vsubq_s8(
                                 vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_0_l, 4), q6_qs_cp_0_hh)), m32s);
                             const int8x16_t q6_h1 = vsubq_s8(
