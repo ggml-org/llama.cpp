@@ -33,11 +33,7 @@
 		onMcpServersClick?.();
 	}
 
-	const fileUploadTooltipText = $derived.by(() => {
-		return !hasVisionModality
-			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
-			: 'Add files, prompts and MCP Servers';
-	});
+	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -46,8 +42,9 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<Button
-						class="file-upload-button h-8 w-8 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+						class="file-upload-button h-8 w-8 rounded-full p-0"
 						{disabled}
+						variant="secondary"
 						type="button"
 					>
 						<span class="sr-only">{fileUploadTooltipText}</span>

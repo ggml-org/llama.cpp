@@ -289,11 +289,11 @@
 	/>
 
 	<div
-		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
+			class="flex-column relative min-h-[48px] items-center rounded-3xl p-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!p-3"
 		onpaste={handlePaste}
 	>
 		<ChatFormTextarea
-			bind:this={textareaRef}
+				class="px-2 py-1 md:py-0"
 			bind:value={message}
 			onKeydown={handleKeydown}
 			{disabled}

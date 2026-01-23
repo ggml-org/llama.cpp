@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { ChevronDown, Settings } from '@lucide/svelte';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Switch } from '$lib/components/ui/switch';
 	import { cn } from '$lib/components/ui/utils';
 	import { SearchableDropdownMenu } from '$lib/components/app';
 	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseMcpServerSettings, getMcpServerLabel, getFaviconUrl } from '$lib/utils/mcp';
+	import { getMcpServerLabel, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -22,75 +22,41 @@
 	let { class: className = '', disabled = false, onSettingsClick }: Props = $props();
 
 	let searchQuery = $state('');
-
-	// Only show servers that are enabled in settings (available for use)
-	let mcpServers = $derived.by(() => {
-		return parseMcpServerSettings(settingsStore.config.mcpServers).filter((s) => s.enabled);
-	});
-
+	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
 	let hasMcpServers = $derived(mcpServers.length > 0);
-
-	let mcpUsageStats = $derived(mcpStore.getUsageStats());
-
-	function getServerUsageCount(serverId: string): number {
-		return mcpUsageStats[serverId] || 0;
-	}
-
-	function isServerEnabledForChat(serverId: string): boolean {
-		return conversationsStore.isMcpServerEnabledForChat(serverId);
-	}
-
-	function getServerLabel(server: MCPServerSettingsEntry): string {
-		return getMcpServerLabel(server, mcpStore.getHealthCheckState(server.id));
-	}
-
+	let isLoading = $derived(mcpStore.isAnyServerLoading());
 	let enabledMcpServersForChat = $derived(
 		mcpServers.filter((s) => isServerEnabledForChat(s.id) && s.url.trim())
 	);
-
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
 			return healthState.status !== 'error';
 		})
 	);
-
 	let hasEnabledMcpServers = $derived(enabledMcpServersForChat.length > 0);
-
-	let sortedMcpServers = $derived(
-		[...mcpServers].sort((a, b) => {
-			// First: enabled for chat servers come first
-			const aEnabled = isServerEnabledForChat(a.id);
-			const bEnabled = isServerEnabledForChat(b.id);
-			if (aEnabled !== bEnabled) return aEnabled ? -1 : 1;
-
-			// Then sort by usage count (descending)
-			const usageA = getServerUsageCount(a.id);
-			const usageB = getServerUsageCount(b.id);
-			if (usageB !== usageA) return usageB - usageA;
-
-			// Then alphabetically by name
-			return getServerLabel(a).localeCompare(getServerLabel(b));
-		})
-	);
-
-	let filteredMcpServers = $derived(() => {
+	let extraServersCount = $derived(Math.max(0, healthyEnabledMcpServers.length - 3));
+	let filteredMcpServers = $derived.by(() => {
 		const query = searchQuery.toLowerCase().trim();
 		if (query) {
-			return sortedMcpServers.filter((s) => {
+			return mcpServers.filter((s) => {
 				const name = getServerLabel(s).toLowerCase();
 				const url = s.url.toLowerCase();
 				return name.includes(query) || url.includes(query);
 			});
 		}
 
-		return sortedMcpServers.slice(0, 4);
+		return mcpServers;
 	});
+	let mcpFavicons = $derived(
+		healthyEnabledMcpServers
+			.slice(0, 3)
+			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
+			.filter((f) => f.url !== null)
+	);
 
-	let extraServersCount = $derived(Math.max(0, healthyEnabledMcpServers.length - 3));
-
-	async function toggleServerForChat(serverId: string) {
-		await conversationsStore.toggleMcpServerForChat(serverId);
+	function getServerLabel(server: MCPServerSettingsEntry): string {
+		return getMcpServerLabel(server, mcpStore.getHealthCheckState(server.id));
 	}
 
 	function handleDropdownOpen(open: boolean) {
@@ -99,12 +65,13 @@
 		}
 	}
 
-	let mcpFavicons = $derived(
-		healthyEnabledMcpServers
-			.slice(0, 3)
-			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
-			.filter((f) => f.url !== null)
-	);
+	function isServerEnabledForChat(serverId: string): boolean {
+		return conversationsStore.isMcpServerEnabledForChat(serverId);
+	}
+
+	async function toggleServerForChat(serverId: string) {
+		await conversationsStore.toggleMcpServerForChat(serverId);
+	}
 </script>
 
 {#if hasMcpServers}
@@ -112,7 +79,7 @@
 		bind:searchValue={searchQuery}
 		placeholder="Search servers..."
 		emptyMessage="No servers found"
-		isEmpty={filteredMcpServers().length === 0}
+		isEmpty={filteredMcpServers.length === 0}
 		{disabled}
 		onOpenChange={handleDropdownOpen}
 	>
@@ -154,37 +121,58 @@
 			</button>
 		{/snippet}
 
-		{#each filteredMcpServers() as server (server.id)}
-			{@const healthState = mcpStore.getHealthCheckState(server.id)}
-			{@const hasError = healthState.status === HealthCheckStatus.Error}
-			{@const isEnabledForChat = isServerEnabledForChat(server.id)}
+		<div class="max-h-64 overflow-y-auto">
+			{#if isLoading}
+				{#each mcpServers as server (server.id)}
+					<div class="flex items-center justify-between gap-2 px-2 py-2">
+						<div class="flex min-w-0 flex-1 items-center gap-2">
+							<Skeleton class="h-4 w-4 shrink-0 rounded-sm" />
+							<Skeleton class="h-4 w-24" />
+						</div>
+						<Skeleton class="h-5 w-9 rounded-full" />
+					</div>
+				{/each}
+			{:else}
+				{#each filteredMcpServers as server (server.id)}
+					{@const healthState = mcpStore.getHealthCheckState(server.id)}
+					{@const hasError = healthState.status === HealthCheckStatus.Error}
+					{@const isEnabledForChat = isServerEnabledForChat(server.id)}
 
-			<div class="flex items-center justify-between gap-2 px-2 py-2">
-				<div class="flex min-w-0 flex-1 items-center gap-2">
-					{#if getFaviconUrl(server.url)}
-						<img
-							src={getFaviconUrl(server.url)}
-							alt=""
-							class="h-4 w-4 shrink-0 rounded-sm"
-							onerror={(e) => {
-								(e.currentTarget as HTMLImageElement).style.display = 'none';
-							}}
+					<button
+						type="button"
+						class="flex w-full items-center justify-between gap-2 px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+						onclick={() => !hasError && toggleServerForChat(server.id)}
+						disabled={hasError}
+					>
+						<div class="flex min-w-0 flex-1 items-center gap-2">
+							{#if getFaviconUrl(server.url)}
+								<img
+									src={getFaviconUrl(server.url)}
+									alt=""
+									class="h-4 w-4 shrink-0 rounded-sm"
+									onerror={(e) => {
+										(e.currentTarget as HTMLImageElement).style.display = 'none';
+									}}
+								/>
+							{/if}
+							<span class="truncate text-sm">{getServerLabel(server)}</span>
+							{#if hasError}
+								<span
+									class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
+									>Error</span
+								>
+							{/if}
+						</div>
+						<Switch
+							checked={isEnabledForChat}
+							disabled={hasError}
+							onclick={(e: MouseEvent) => e.stopPropagation()}
+							onCheckedChange={() => toggleServerForChat(server.id)}
 						/>
-					{/if}
-					<span class="truncate text-sm">{getServerLabel(server)}</span>
-					{#if hasError}
-						<span class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-							>Error</span
-						>
-					{/if}
-				</div>
-				<Switch
-					checked={isEnabledForChat}
-					onCheckedChange={() => toggleServerForChat(server.id)}
-					disabled={hasError}
-				/>
-			</div>
-		{/each}
+					</button>
+				{/each}
+			{/if}
+		</div>
 
 		{#snippet footer()}
 			<DropdownMenu.Item class="flex cursor-pointer items-center gap-2" onclick={onSettingsClick}>

@@ -79,6 +79,7 @@ export { default as ModelsSelector } from './models/ModelsSelector.svelte';
 
 // MCP
 
+export { default as McpActiveServersAvatars } from './mcp/McpActiveServersAvatars.svelte';
 export { default as McpSelector } from './mcp/McpSelector.svelte';
 export { default as McpSettingsSection } from './mcp/McpSettingsSection.svelte';
 

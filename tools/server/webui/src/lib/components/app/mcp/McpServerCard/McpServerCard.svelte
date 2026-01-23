@@ -18,12 +18,13 @@
 	interface Props {
 		server: MCPServerSettingsEntry;
 		faviconUrl: string | null;
+		enabled?: boolean;
 		onToggle: (enabled: boolean) => void;
 		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => void;
 		onDelete: () => void;
 	}
 
-	let { server, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
+	let { server, faviconUrl, enabled, onToggle, onUpdate, onDelete }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(getMcpServerLabel(server, healthState));
@@ -116,7 +117,7 @@
 		<McpServerCardHeader
 			{displayName}
 			{faviconUrl}
-			enabled={server.enabled}
+			enabled={enabled ?? server.enabled}
 			{onToggle}
 			{serverInfo}
 			{capabilities}

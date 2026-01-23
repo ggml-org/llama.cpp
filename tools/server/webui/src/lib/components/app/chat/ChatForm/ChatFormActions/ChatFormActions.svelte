@@ -6,7 +6,7 @@
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		DialogMcpServersSettings,
-		McpSelector,
+		McpActiveServersAvatars,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
@@ -16,7 +16,6 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -158,11 +157,10 @@
 	}
 
 	let showMcpDialog = $state(false);
-	let hasAvailableMcpServers = $derived(mcpStore.hasAvailableServers());
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<div class="mr-auto flex items-center gap-1.5">
+	<div class="mr-auto flex items-center gap-2">
 		<ChatFormActionFileAttachments
 			{disabled}
 			{hasAudioModality}
@@ -172,9 +170,7 @@
 			onMcpServersClick={() => (showMcpDialog = true)}
 		/>
 
-		{#if hasAvailableMcpServers}
-			<McpSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
-		{/if}
+		<McpActiveServersAvatars {disabled} onSettingsClick={() => (showMcpDialog = true)} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
