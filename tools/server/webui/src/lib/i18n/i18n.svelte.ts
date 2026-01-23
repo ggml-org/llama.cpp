@@ -2,7 +2,6 @@ import { browser } from '$app/environment';
 import { base } from '$app/paths';
 
 const DEFAULT_LOCALE = 'en';
-const LOCALE_STORAGE_KEY = 'LlamaCppWebui.locale';
 
 type TranslationParams = Record<string, string | number>;
 type Messages = Record<string, string>;
@@ -58,14 +57,13 @@ class I18nStore {
 		if (!browser || this.initialized) return;
 		this.initialized = true;
 
-		const storedLocale = localStorage.getItem(LOCALE_STORAGE_KEY);
 		const preferredLocale =
-			storedLocale || navigator.languages?.[0] || navigator.language || DEFAULT_LOCALE;
+			navigator.languages?.[0] || navigator.language || DEFAULT_LOCALE;
 
-		void this.setLocale(preferredLocale, { persist: true });
+		void this.setLocale(preferredLocale);
 	}
 
-	async setLocale(value: string, options?: { persist?: boolean }) {
+	async setLocale(value: string) {
 		const candidates = getLocaleCandidates(value);
 		const resolved = await this.loadFirstAvailable(candidates);
 		this.locale = resolved;
@@ -73,9 +71,6 @@ class I18nStore {
 
 		if (browser) {
 			document.documentElement.lang = resolved;
-			if (options?.persist !== false) {
-				localStorage.setItem(LOCALE_STORAGE_KEY, resolved);
-			}
 		}
 	}
 
