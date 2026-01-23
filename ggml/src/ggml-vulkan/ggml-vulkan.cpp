@@ -4703,6 +4703,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
 
         device->subgroup_size = subgroup_props.subgroupSize;
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM && device->subgroup_size > 64) {
+            GGML_LOG_INFO("ggml_vulkan: clamping subgroup size to 64 for Qualcomm\n");
+            device->subgroup_size = 64;
+        }
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
         if (sm_builtins) {
