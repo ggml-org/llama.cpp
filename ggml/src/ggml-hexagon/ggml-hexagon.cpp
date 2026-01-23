@@ -42,12 +42,12 @@
 #include "htp_iface.h"
 
 static size_t opt_ndev         = 1;
-static size_t opt_nhvx         = 0;  // use all
-static int    opt_arch         = 0;  // autodetect
+static size_t opt_nhvx         = 0; // use all
+static int    opt_arch         = 0; // autodetect
 static int    opt_etm          = 0;
 static int    opt_verbose      = 0;
 static int    opt_profile      = 0;
-static int    opt_hostbuf      = 1;
+static int    opt_hostbuf      = 1; // hostbuf ON by default
 static int    opt_experimental = 0;
 
 // Enable all stages by default
@@ -1753,6 +1753,9 @@ static bool ggml_backend_buffer_is_hexagon(const struct ggml_backend_buffer * b)
 }
 
 static inline bool ggml_backend_buffer_is_hexagon_repack(const struct ggml_backend_buffer * b) {
+    if (!opt_hostbuf) {
+        return ggml_backend_buffer_is_hexagon(b);
+    }
     return b->buft->iface.alloc_buffer == ggml_backend_hexagon_repack_buffer_type_alloc_buffer;
 }
 
@@ -2302,6 +2305,16 @@ static inline size_t init_binary_req(htp_general_req * req, dspqueue_buffer * bu
     return n_bufs;
 }
 
+static inline size_t init_cpy_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_CPY;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     req->op = HTP_OP_GET_ROWS;
 
@@ -2484,6 +2497,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
             continue;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         uint32_t flags = 0;
 
         // skip quantizer if src1 is reused
@@ -2555,6 +2572,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_GET_ROWS:
                 ggml_hexagon_dispatch_op<init_get_rows_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_CPY:
+                ggml_hexagon_dispatch_op<init_cpy_req>(sess, node, flags);
                 break;
 
             default:
@@ -2858,6 +2879,27 @@ static bool ggml_hexagon_supported_buffers(ggml_hexagon_session *sess, const str
     return true;
 }
 
+static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    // for now we can do f32 -> f16 and f16 -> f32 (without reshaping)
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+    if ( dst->type != GGML_TYPE_F32 &&  dst->type != GGML_TYPE_F16) return false;
+
+    const bool sametype   = (src0->type == dst->type);
+    const bool transposed = ggml_is_transposed(src0) || ggml_is_transposed(dst);
+    const bool sameshape  = !transposed && ggml_are_same_shape(src0, dst);
+
+    // can handle any shape and any same-type (pretty slow if reshaping is required)
+    if (sametype) return true;
+
+    // cannot handle re-shaping and type conversion at the same time
+    if (!sameshape) return false;
+
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
@@ -2934,6 +2976,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_GET_ROWS:
             supp = ggml_hexagon_supported_get_rows(sess, op);
+            break;
+
+        case GGML_OP_CPY:
+            supp = ggml_hexagon_supported_cpy(sess, op);
             break;
 
         default:
@@ -3061,7 +3107,7 @@ static ggml_backend_dev_t ggml_backend_hexagon_reg_get_device(ggml_backend_reg_t
 }
 
 static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, const char * name) {
-    if (strcmp(name, "ggml_backend_dev_get_extra_bufts") == 0) {
+    if (strcmp(name, "ggml_backend_dev_get_extra_bufts") == 0 && opt_hostbuf) {
         ggml_backend_dev_get_extra_bufts_t fct = ggml_backend_hexagon_device_get_extra_buffers_type;
         return (void *) fct;
     }
@@ -3078,42 +3124,37 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     static_assert((unsigned int) HTP_TYPE_MXFP4 == (unsigned int) GGML_TYPE_MXFP4,
                   "please update hexagon_type to match ggml_type");
 
+    const char * str_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL");
     const char * str_verbose = getenv("GGML_HEXAGON_VERBOSE");
     const char * str_hostbuf = getenv("GGML_HEXAGON_HOSTBUF");
+    const char * str_opmask  = getenv("GGML_HEXAGON_OPMASK");
+    const char * str_opsync  = getenv("GGML_HEXAGON_OPSYNC");
+    const char * str_profile = getenv("GGML_HEXAGON_PROFILE");
+    const char * str_etm     = getenv("GGML_HEXAGON_ETM");
+    const char * str_nhvx    = getenv("GGML_HEXAGON_NHVX");
+    const char * str_ndev    = getenv("GGML_HEXAGON_NDEV");
+    const char * str_arch    = getenv("GGML_HEXAGON_ARCH");
 
+    opt_experimental = str_experimental ? atoi(str_experimental) : 0;
     opt_verbose      = str_verbose ? atoi(str_verbose) : 0;
-    opt_profile      = getenv("GGML_HEXAGON_PROFILE") != nullptr;
-    opt_etm          = getenv("GGML_HEXAGON_ETM") != nullptr;
-    opt_experimental = getenv("GGML_HEXAGON_EXPERIMENTAL") != nullptr;
+    opt_hostbuf      = str_hostbuf ? atoi(str_hostbuf) : opt_hostbuf;
+    opt_opmask       = str_opmask  ? strtoul(str_opmask, NULL, 0) : opt_opmask;
+    opt_opsync       = str_opsync  ? atoi(str_opsync)  : 0;
+    opt_profile      = str_profile ? atoi(str_profile) : 0;
+    opt_etm          = str_etm     ? atoi(str_etm) : 0;
+    opt_nhvx         = str_nhvx    ? strtoul(str_nhvx, NULL, 0) : opt_nhvx;
+    opt_ndev         = str_ndev    ? strtoul(str_ndev, NULL, 0) : opt_ndev;
 
-    const char * str_opmask = getenv("GGML_HEXAGON_OPMASK");
-    if (str_opmask != nullptr) {
-        opt_opmask = strtoul(str_opmask, NULL, 0);
-    }
-    opt_opsync = getenv("GGML_HEXAGON_OPSYNC") != nullptr;
-
-    const char * str_ndev = getenv("GGML_HEXAGON_NDEV");
-    if (str_ndev) {
-        opt_ndev = strtoul(str_ndev, NULL, 0);
-        if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
-            opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
-        }
+    if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
+        opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
     }
 
-    const char * str_nhvx = getenv("GGML_HEXAGON_NHVX");
-    if (str_nhvx) {
-        opt_nhvx = strtoul(str_nhvx, NULL, 0);
-    }
-
-    const char * str_arch = getenv("GGML_HEXAGON_ARCH");
     if (str_arch) {
         if (str_arch[0] == 'v') {
             str_arch++;
         }
         opt_arch = strtoul(str_arch, NULL, 0);
     }
-
-    opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) : 1;
 
     reg->context = new ggml_hexagon_registry(reg);
 

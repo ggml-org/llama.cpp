@@ -94,17 +94,6 @@ void ggml_cann_set_device(const int32_t device) {
 }
 
 /**
- * @brief Retrieves the current device ID.
- *
- * @return The current device ID.
- */
-int32_t ggml_cann_get_device() {
-    int32_t id;
-    ACL_CHECK(aclrtGetDevice(&id));
-    return id;
-}
-
-/**
  * @brief Get the value of the specified environment variable (name) as lowercase.
  *        if not empty, return a std::string object
  */
@@ -1889,6 +1878,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
         case GGML_OP_OUT_PROD:
             ggml_cann_out_prod(ctx, dst);
             break;
+        case GGML_OP_GATED_LINEAR_ATTN:
+            ggml_cann_gated_linear_attn(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_cann_ssm_conv(ctx, dst);
             break;
@@ -2151,6 +2143,10 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 
             if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
                 node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                continue;
+            }
+
+            if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                 continue;
             }
 
@@ -2454,6 +2450,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_MEAN:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
+        case GGML_OP_GATED_LINEAR_ATTN:
             return true;
         case GGML_OP_OUT_PROD:
             {

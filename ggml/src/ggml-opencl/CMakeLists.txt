@@ -57,6 +57,7 @@ set(GGML_OPENCL_KERNELS
     add
     add_id
     argsort
+    tri
     fill
     clamp
     cpy
@@ -69,6 +70,7 @@ set(GGML_OPENCL_KERNELS
     get_rows
     glu
     group_norm
+    solve_tri
     im2col_f32
     im2col_f16
     mean
