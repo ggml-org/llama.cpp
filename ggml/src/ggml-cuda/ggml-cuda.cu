@@ -2149,7 +2149,6 @@ static bool ggml_cuda_should_use_mmvq(ggml_type type, int cc, int64_t ncols_dst)
     if (GGML_CUDA_CC_IS_RDNA4(cc)) {
         switch (type) {
             case GGML_TYPE_IQ2_S:
-            case GGML_TYPE_IQ2_XS:
             case GGML_TYPE_IQ2_XXS:
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_S:
