@@ -8372,8 +8372,13 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         const uint32_t h = iq2; // head index
         const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
 
-        float S[Q_TILE_SZ]{0.0f};
-        float M[Q_TILE_SZ]{-INFINITY};
+        float S[Q_TILE_SZ];
+        float M[Q_TILE_SZ];
+
+        for (int i = 0 ; i < Q_TILE_SZ; ++i) {
+            S[i] = 0.;
+            M[i] = -INFINITY;
+        }
 
         // Per-thread scratch layout:
         // Q_q:    Q_TILE_SZ * DK (converted Q tile in KV type)
@@ -8434,6 +8439,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
             }
 
+            bool skip[Q_TILE_SZ] = {};
+
             for (int tq = 0; tq < Q_TILE_SZ; tq++) {
                 float * kq_row = KQ + tq * KV_TILE_SZ;
 
@@ -8450,6 +8457,11 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
                 M[tq] = Mnew;
 
+                if (tile_max == -INFINITY) {
+                    skip[tq] = true;
+                    continue;
+                }
+
                 S[tq] += ggml_vec_soft_max_f32(KV_TILE_SZ, kq_row, kq_row, Mnew);
             }
 
@@ -8462,6 +8474,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     ggml_fp16_to_fp32_row(v_row, V32 + tk * DV, DV);
                 }
                 for (int tq = 0; tq < Q_TILE_SZ; tq++) {
+                    if (skip[tq]) continue;
                     float * vkq_row = VKQ32 + tq * DV;
                     for (int tk = 0; tk < KV_TILE_SZ; tk++) {
                         const float p = KQ[tq * KV_TILE_SZ + tk];
@@ -8470,6 +8483,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
             } else {
                 for (int tq = 0; tq < Q_TILE_SZ; tq++) {
+                    if (skip[tq]) continue;
                     float * vkq_row = VKQ32 + tq * DV;
                     for (int tk = 0; tk < KV_TILE_SZ; tk++) {
                         const float p = KQ[tq * KV_TILE_SZ + tk];
