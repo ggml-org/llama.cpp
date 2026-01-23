@@ -6,6 +6,7 @@
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
+	import { t } from '$lib/i18n';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -27,7 +28,7 @@
 		try {
 			const allConversations = conversations();
 			if (allConversations.length === 0) {
-				toast.info('No conversations to export');
+				toast.info(t('chat.settings.import_export.export.none'));
 				return;
 			}
 
@@ -43,7 +44,7 @@
 			showExportDialog = true;
 		} catch (err) {
 			console.error('Failed to load conversations:', err);
-			alert('Failed to load conversations');
+			alert(t('chat.settings.import_export.error.load_conversations'));
 		}
 	}
 
@@ -75,7 +76,7 @@
 			showExportDialog = false;
 		} catch (err) {
 			console.error('Export failed:', err);
-			alert('Failed to export conversations');
+			alert(t('chat.settings.import_export.export.failed'));
 		}
 	}
 
@@ -106,9 +107,7 @@
 						// Single conversation object
 						importedData = [parsedData];
 					} else {
-						throw new Error(
-							'Invalid file format: expected array of conversations or single conversation object'
-						);
+						throw new Error(t('chat.settings.import_export.import.invalid_format'));
 					}
 
 					fullImportData = importedData;
@@ -118,17 +117,20 @@
 					messageCountMap = createMessageCountMap(importedData);
 					showImportDialog = true;
 				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
+					const message =
+						err instanceof Error
+							? err.message
+							: t('chat.settings.import_export.error.unknown');
 
 					console.error('Failed to parse file:', err);
-					alert(`Failed to parse file: ${message}`);
+					alert(t('chat.settings.import_export.import.parse_failed', { message }));
 				}
 			};
 
 			input.click();
 		} catch (err) {
 			console.error('Import failed:', err);
-			alert('Failed to import conversations');
+			alert(t('chat.settings.import_export.import.failed'));
 		}
 	}
 
@@ -147,7 +149,7 @@
 			showImportDialog = false;
 		} catch (err) {
 			console.error('Import failed:', err);
-			alert('Failed to import conversations. Please check the file format.');
+			alert(t('chat.settings.import_export.import.failed_format'));
 		}
 	}
 
@@ -156,14 +158,14 @@
 			const allConversations = conversations();
 
 			if (allConversations.length === 0) {
-				toast.info('No conversations to delete');
+				toast.info(t('chat.settings.import_export.delete.none'));
 				return;
 			}
 
 			showDeleteDialog = true;
 		} catch (err) {
 			console.error('Failed to load conversations for deletion:', err);
-			toast.error('Failed to load conversations');
+			toast.error(t('chat.settings.import_export.error.load_conversations'));
 		}
 	}
 
@@ -185,11 +187,10 @@
 <div class="space-y-6">
 	<div class="space-y-4">
 		<div class="grid">
-			<h4 class="mb-2 text-sm font-medium">Export Conversations</h4>
+			<h4 class="mb-2 text-sm font-medium">{t('chat.settings.import_export.export.title')}</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
-				Download all your conversations as a JSON file. This includes all messages, attachments, and
-				conversation history.
+				{t('chat.settings.import_export.export.description')}
 			</p>
 
 			<Button
@@ -199,25 +200,33 @@
 			>
 				<Download class="mr-2 h-4 w-4" />
 
-				Export conversations
+				{t('chat.settings.import_export.export.button')}
 			</Button>
 
 			{#if showExportSummary && exportedConversations.length > 0}
 				<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
 					<h5 class="mb-2 text-sm font-medium">
-						Exported {exportedConversations.length} conversation{exportedConversations.length === 1
-							? ''
-							: 's'}
+						{exportedConversations.length === 1
+							? t('chat.settings.import_export.export.summary_one', {
+									count: exportedConversations.length
+								})
+							: t('chat.settings.import_export.export.summary_many', {
+									count: exportedConversations.length
+								})}
 					</h5>
 
 					<ul class="space-y-1 text-sm text-muted-foreground">
 						{#each exportedConversations.slice(0, 10) as conv (conv.id)}
-							<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
+							<li class="truncate">
+								• {conv.name || t('dialog.conversation_selection.untitled')}
+							</li>
 						{/each}
 
 						{#if exportedConversations.length > 10}
 							<li class="italic">
-								... and {exportedConversations.length - 10} more
+								{t('chat.settings.import_export.summary.more', {
+									count: exportedConversations.length - 10
+								})}
 							</li>
 						{/if}
 					</ul>
@@ -226,11 +235,10 @@
 		</div>
 
 		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mb-2 text-sm font-medium">Import Conversations</h4>
+			<h4 class="mb-2 text-sm font-medium">{t('chat.settings.import_export.import.title')}</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
-				Import one or more conversations from a previously exported JSON file. This will merge with
-				your existing conversations.
+				{t('chat.settings.import_export.import.description')}
 			</p>
 
 			<Button
@@ -239,25 +247,33 @@
 				variant="outline"
 			>
 				<Upload class="mr-2 h-4 w-4" />
-				Import conversations
+				{t('chat.settings.import_export.import.button')}
 			</Button>
 
 			{#if showImportSummary && importedConversations.length > 0}
 				<div class="mt-4 grid overflow-x-auto rounded-lg border border-border/50 bg-muted/30 p-4">
 					<h5 class="mb-2 text-sm font-medium">
-						Imported {importedConversations.length} conversation{importedConversations.length === 1
-							? ''
-							: 's'}
+						{importedConversations.length === 1
+							? t('chat.settings.import_export.import.summary_one', {
+									count: importedConversations.length
+								})
+							: t('chat.settings.import_export.import.summary_many', {
+									count: importedConversations.length
+								})}
 					</h5>
 
 					<ul class="space-y-1 text-sm text-muted-foreground">
 						{#each importedConversations.slice(0, 10) as conv (conv.id)}
-							<li class="truncate">• {conv.name || 'Untitled conversation'}</li>
+							<li class="truncate">
+								• {conv.name || t('dialog.conversation_selection.untitled')}
+							</li>
 						{/each}
 
 						{#if importedConversations.length > 10}
 							<li class="italic">
-								... and {importedConversations.length - 10} more
+								{t('chat.settings.import_export.summary.more', {
+									count: importedConversations.length - 10
+								})}
 							</li>
 						{/if}
 					</ul>
@@ -266,11 +282,12 @@
 		</div>
 
 		<div class="grid border-t border-border/30 pt-4">
-			<h4 class="mb-2 text-sm font-medium text-destructive">Delete All Conversations</h4>
+			<h4 class="mb-2 text-sm font-medium text-destructive">
+				{t('chat.settings.import_export.delete.title')}
+			</h4>
 
 			<p class="mb-4 text-sm text-muted-foreground">
-				Permanently delete all conversations and their messages. This action cannot be undone.
-				Consider exporting your conversations first if you want to keep a backup.
+				{t('chat.settings.import_export.delete.description')}
 			</p>
 
 			<Button
@@ -280,7 +297,7 @@
 			>
 				<Trash2 class="mr-2 h-4 w-4" />
 
-				Delete all conversations
+				{t('chat.settings.import_export.delete.button')}
 			</Button>
 		</div>
 	</div>
@@ -306,10 +323,10 @@
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
-	title="Delete all conversations"
-	description="Are you sure you want to delete all conversations? This action cannot be undone and will permanently remove all your conversations and messages."
-	confirmText="Delete All"
-	cancelText="Cancel"
+	title={t('chat.settings.import_export.delete.dialog.title')}
+	description={t('chat.settings.import_export.delete.dialog.description')}
+	confirmText={t('chat.settings.import_export.delete.dialog.confirm')}
+	cancelText={t('chat.settings.import_export.delete.dialog.cancel')}
 	variant="destructive"
 	icon={Trash2}
 	onConfirm={handleDeleteAllConfirm}

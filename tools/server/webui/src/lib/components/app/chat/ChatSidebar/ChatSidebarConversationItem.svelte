@@ -5,6 +5,7 @@
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { onMount } from 'svelte';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		isActive?: boolean;
@@ -105,7 +106,7 @@
 						onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
 						role="button"
 						tabindex="0"
-						aria-label="Stop generation"
+						aria-label={t('chat.sidebar.stop_generation')}
 					>
 						<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
 
@@ -114,7 +115,7 @@
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
-					<p>Stop generation</p>
+					<p>{t('chat.sidebar.stop_generation')}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
 		{/if}
@@ -130,18 +131,18 @@
 		<div class="actions flex items-center">
 			<ActionDropdown
 				triggerIcon={MoreHorizontal}
-				triggerTooltip="More actions"
+				triggerTooltip={t('chat.sidebar.actions.more')}
 				bind:open={dropdownOpen}
 				actions={[
 					{
 						icon: Pencil,
-						label: 'Edit',
+						label: t('chat.sidebar.actions.edit'),
 						onclick: handleEdit,
 						shortcut: ['shift', 'cmd', 'e']
 					},
 					{
 						icon: Download,
-						label: 'Export',
+						label: t('chat.sidebar.actions.export'),
 						onclick: (e) => {
 							e.stopPropagation();
 							conversationsStore.downloadConversation(conversation.id);
@@ -150,7 +151,7 @@
 					},
 					{
 						icon: Trash2,
-						label: 'Delete',
+						label: t('chat.sidebar.actions.delete'),
 						onclick: handleDelete,
 						variant: 'destructive',
 						shortcut: ['shift', 'cmd', 'd'],

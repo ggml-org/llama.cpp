@@ -3,6 +3,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { RotateCcw } from '@lucide/svelte';
+	import { t } from '$lib/i18n';
 
 	interface Props {
 		onReset?: () => void;
@@ -34,26 +35,26 @@
 		<Button variant="outline" onclick={handleResetClick}>
 			<RotateCcw class="h-3 w-3" />
 
-			Reset to default
+			{t('chat.settings.reset_to_default')}
 		</Button>
 	</div>
 
-	<Button onclick={handleSave}>Save settings</Button>
+	<Button onclick={handleSave}>{t('chat.settings.footer.save')}</Button>
 </div>
 
 <AlertDialog.Root bind:open={showResetDialog}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Reset Settings to Default</AlertDialog.Title>
+			<AlertDialog.Title>{t('chat.settings.footer.reset_dialog.title')}</AlertDialog.Title>
 			<AlertDialog.Description>
-				Are you sure you want to reset all settings to their default values? This will reset all
-				parameters to the values provided by the server's /props endpoint and remove all your custom
-				configurations.
+				{t('chat.settings.footer.reset_dialog.description')}
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 		<AlertDialog.Footer>
-			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={handleConfirmReset}>Reset to Default</AlertDialog.Action>
+			<AlertDialog.Cancel>{t('chat.settings.footer.reset_dialog.cancel')}</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={handleConfirmReset}>
+				{t('chat.settings.reset_to_default')}
+			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>

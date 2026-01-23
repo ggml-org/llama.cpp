@@ -19,6 +19,7 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
+	import { t } from '$lib/i18n';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -28,239 +29,246 @@
 	let { onSave }: Props = $props();
 
 	const settingSections: Array<{
+		id: string;
 		fields: SettingsFieldConfig[];
 		icon: Component;
-		title: string;
+		titleKey: string;
 	}> = [
 		{
-			title: 'General',
+			id: 'general',
+			titleKey: 'chat.settings.section.general',
 			icon: Settings,
 			fields: [
 				{
 					key: 'theme',
-					label: 'Theme',
+					label: 'chat.settings.field.theme',
 					type: 'select',
 					options: [
-						{ value: 'system', label: 'System', icon: Monitor },
-						{ value: 'light', label: 'Light', icon: Sun },
-						{ value: 'dark', label: 'Dark', icon: Moon }
+						{ value: 'system', label: 'chat.settings.option.theme.system', icon: Monitor },
+						{ value: 'light', label: 'chat.settings.option.theme.light', icon: Sun },
+						{ value: 'dark', label: 'chat.settings.option.theme.dark', icon: Moon }
 					]
 				},
-				{ key: 'apiKey', label: 'API Key', type: 'input' },
+				{ key: 'apiKey', label: 'chat.settings.field.api_key', type: 'input' },
 				{
 					key: 'systemMessage',
-					label: 'System Message',
+					label: 'chat.settings.field.system_message',
 					type: 'textarea'
 				},
 				{
 					key: 'pasteLongTextToFileLen',
-					label: 'Paste long text to file length',
+					label: 'chat.settings.field.paste_long_text_to_file_length',
 					type: 'input'
 				},
 				{
 					key: 'copyTextAttachmentsAsPlainText',
-					label: 'Copy text attachments as plain text',
+					label: 'chat.settings.field.copy_text_attachments_as_plain_text',
 					type: 'checkbox'
 				},
 				{
 					key: 'enableContinueGeneration',
-					label: 'Enable "Continue" button',
+					label: 'chat.settings.field.enable_continue_generation',
 					type: 'checkbox',
 					isExperimental: true
 				},
 				{
 					key: 'pdfAsImage',
-					label: 'Parse PDF as image',
+					label: 'chat.settings.field.parse_pdf_as_image',
 					type: 'checkbox'
 				},
 				{
 					key: 'askForTitleConfirmation',
-					label: 'Ask for confirmation before changing conversation title',
+					label: 'chat.settings.field.ask_for_title_confirmation',
 					type: 'checkbox'
 				}
 			]
 		},
 		{
-			title: 'Display',
+			id: 'display',
+			titleKey: 'chat.settings.section.display',
 			icon: Monitor,
 			fields: [
 				{
 					key: 'showMessageStats',
-					label: 'Show message generation statistics',
+					label: 'chat.settings.field.show_message_stats',
 					type: 'checkbox'
 				},
 				{
 					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
+					label: 'chat.settings.field.show_thought_in_progress',
 					type: 'checkbox'
 				},
 				{
 					key: 'keepStatsVisible',
-					label: 'Keep stats visible after generation',
+					label: 'chat.settings.field.keep_stats_visible',
 					type: 'checkbox'
 				},
 				{
 					key: 'autoMicOnEmpty',
-					label: 'Show microphone on empty input',
+					label: 'chat.settings.field.show_microphone_on_empty',
 					type: 'checkbox',
 					isExperimental: true
 				},
 				{
 					key: 'renderUserContentAsMarkdown',
-					label: 'Render user content as Markdown',
+					label: 'chat.settings.field.render_user_content_as_markdown',
 					type: 'checkbox'
 				},
 				{
 					key: 'disableAutoScroll',
-					label: 'Disable automatic scroll',
+					label: 'chat.settings.field.disable_auto_scroll',
 					type: 'checkbox'
 				},
 				{
 					key: 'alwaysShowSidebarOnDesktop',
-					label: 'Always show sidebar on desktop',
+					label: 'chat.settings.field.always_show_sidebar_on_desktop',
 					type: 'checkbox'
 				},
 				{
 					key: 'autoShowSidebarOnNewChat',
-					label: 'Auto-show sidebar on new chat',
+					label: 'chat.settings.field.auto_show_sidebar_on_new_chat',
 					type: 'checkbox'
 				}
 			]
 		},
 		{
-			title: 'Sampling',
+			id: 'sampling',
+			titleKey: 'chat.settings.section.sampling',
 			icon: Funnel,
 			fields: [
 				{
 					key: 'temperature',
-					label: 'Temperature',
+					label: 'chat.settings.field.temperature',
 					type: 'input'
 				},
 				{
 					key: 'dynatemp_range',
-					label: 'Dynamic temperature range',
+					label: 'chat.settings.field.dynamic_temperature_range',
 					type: 'input'
 				},
 				{
 					key: 'dynatemp_exponent',
-					label: 'Dynamic temperature exponent',
+					label: 'chat.settings.field.dynamic_temperature_exponent',
 					type: 'input'
 				},
 				{
 					key: 'top_k',
-					label: 'Top K',
+					label: 'chat.settings.field.top_k',
 					type: 'input'
 				},
 				{
 					key: 'top_p',
-					label: 'Top P',
+					label: 'chat.settings.field.top_p',
 					type: 'input'
 				},
 				{
 					key: 'min_p',
-					label: 'Min P',
+					label: 'chat.settings.field.min_p',
 					type: 'input'
 				},
 				{
 					key: 'xtc_probability',
-					label: 'XTC probability',
+					label: 'chat.settings.field.xtc_probability',
 					type: 'input'
 				},
 				{
 					key: 'xtc_threshold',
-					label: 'XTC threshold',
+					label: 'chat.settings.field.xtc_threshold',
 					type: 'input'
 				},
 				{
 					key: 'typ_p',
-					label: 'Typical P',
+					label: 'chat.settings.field.typical_p',
 					type: 'input'
 				},
 				{
 					key: 'max_tokens',
-					label: 'Max tokens',
+					label: 'chat.settings.field.max_tokens',
 					type: 'input'
 				},
 				{
 					key: 'samplers',
-					label: 'Samplers',
+					label: 'chat.settings.field.samplers',
 					type: 'input'
 				},
 				{
 					key: 'backend_sampling',
-					label: 'Backend sampling',
+					label: 'chat.settings.field.backend_sampling',
 					type: 'checkbox'
 				}
 			]
 		},
 		{
-			title: 'Penalties',
+			id: 'penalties',
+			titleKey: 'chat.settings.section.penalties',
 			icon: AlertTriangle,
 			fields: [
 				{
 					key: 'repeat_last_n',
-					label: 'Repeat last N',
+					label: 'chat.settings.field.repeat_last_n',
 					type: 'input'
 				},
 				{
 					key: 'repeat_penalty',
-					label: 'Repeat penalty',
+					label: 'chat.settings.field.repeat_penalty',
 					type: 'input'
 				},
 				{
 					key: 'presence_penalty',
-					label: 'Presence penalty',
+					label: 'chat.settings.field.presence_penalty',
 					type: 'input'
 				},
 				{
 					key: 'frequency_penalty',
-					label: 'Frequency penalty',
+					label: 'chat.settings.field.frequency_penalty',
 					type: 'input'
 				},
 				{
 					key: 'dry_multiplier',
-					label: 'DRY multiplier',
+					label: 'chat.settings.field.dry_multiplier',
 					type: 'input'
 				},
 				{
 					key: 'dry_base',
-					label: 'DRY base',
+					label: 'chat.settings.field.dry_base',
 					type: 'input'
 				},
 				{
 					key: 'dry_allowed_length',
-					label: 'DRY allowed length',
+					label: 'chat.settings.field.dry_allowed_length',
 					type: 'input'
 				},
 				{
 					key: 'dry_penalty_last_n',
-					label: 'DRY penalty last N',
+					label: 'chat.settings.field.dry_penalty_last_n',
 					type: 'input'
 				}
 			]
 		},
 		{
-			title: 'Import/Export',
+			id: 'import_export',
+			titleKey: 'chat.settings.section.import_export',
 			icon: Database,
 			fields: []
 		},
 		{
-			title: 'Developer',
+			id: 'developer',
+			titleKey: 'chat.settings.section.developer',
 			icon: Code,
 			fields: [
 				{
 					key: 'showToolCalls',
-					label: 'Show tool call labels',
+					label: 'chat.settings.field.show_tool_call_labels',
 					type: 'checkbox'
 				},
 				{
 					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
+					label: 'chat.settings.field.show_raw_llm_output',
 					type: 'checkbox'
 				},
 				{
 					key: 'custom',
-					label: 'Custom JSON',
+					label: 'chat.settings.field.custom_json',
 					type: 'textarea'
 				}
 			]
@@ -280,9 +288,9 @@
 		// }
 	];
 
-	let activeSection = $state('General');
+	let activeSection = $state('general');
 	let currentSection = $derived(
-		settingSections.find((section) => section.title === activeSection) || settingSections[0]
+		settingSections.find((section) => section.id === activeSection) || settingSections[0]
 	);
 	let localConfig: SettingsConfigType = $state({ ...config() });
 
@@ -311,7 +319,7 @@
 			try {
 				JSON.parse(localConfig.custom);
 			} catch (error) {
-				alert('Invalid JSON in custom parameters. Please check the format and try again.');
+				alert(t('chat.settings.error.invalid_custom_json'));
 				console.error(error);
 				return;
 			}
@@ -347,7 +355,7 @@
 				if (!isNaN(numValue)) {
 					processedConfig[field] = numValue;
 				} else {
-					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+					alert(t('chat.settings.error.invalid_numeric', { field }));
 					return;
 				}
 			}
@@ -407,17 +415,17 @@
 	<!-- Desktop Sidebar -->
 	<div class="hidden w-64 border-r border-border/30 p-6 md:block">
 		<nav class="space-y-1 py-2">
-			{#each settingSections as section (section.title)}
+			{#each settingSections as section (section.id)}
 				<button
 					class="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-accent {activeSection ===
-					section.title
+					section.id
 						? 'bg-accent text-accent-foreground'
 						: 'text-muted-foreground'}"
-					onclick={() => (activeSection = section.title)}
+					onclick={() => (activeSection = section.id)}
 				>
 					<section.icon class="h-4 w-4" />
 
-					<span class="ml-2">{section.title}</span>
+					<span class="ml-2">{t(section.titleKey)}</span>
 				</button>
 			{/each}
 		</nav>
@@ -433,7 +441,7 @@
 						? 'opacity-100'
 						: 'pointer-events-none opacity-0'}"
 					onclick={scrollLeft}
-					aria-label="Scroll left"
+					aria-label={t('chat.settings.scroll_left')}
 				>
 					<ChevronLeft class="h-4 w-4" />
 				</button>
@@ -444,19 +452,19 @@
 					onscroll={updateScrollButtons}
 				>
 					<div class="flex min-w-max gap-2">
-						{#each settingSections as section (section.title)}
+						{#each settingSections as section (section.id)}
 							<button
 								class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {activeSection ===
-								section.title
+								section.id
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground'}"
 								onclick={(e: MouseEvent) => {
-									activeSection = section.title;
+									activeSection = section.id;
 									scrollToCenter(e.currentTarget as HTMLElement);
 								}}
 							>
 								<section.icon class="h-4 w-4 flex-shrink-0" />
-								<span>{section.title}</span>
+								<span>{t(section.titleKey)}</span>
 							</button>
 						{/each}
 					</div>
@@ -467,7 +475,7 @@
 						? 'opacity-100'
 						: 'pointer-events-none opacity-0'}"
 					onclick={scrollRight}
-					aria-label="Scroll right"
+					aria-label={t('chat.settings.scroll_right')}
 				>
 					<ChevronRight class="h-4 w-4" />
 				</button>
@@ -481,10 +489,10 @@
 				<div class="mb-6 flex hidden items-center gap-2 border-b border-border/30 pb-6 md:flex">
 					<currentSection.icon class="h-5 w-5" />
 
-					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
+					<h3 class="text-lg font-semibold">{t(currentSection.titleKey)}</h3>
 				</div>
 
-				{#if currentSection.title === 'Import/Export'}
+				{#if currentSection.id === 'import_export'}
 					<ChatSettingsImportExportTab />
 				{:else}
 					<div class="space-y-6">
@@ -499,7 +507,7 @@
 			</div>
 
 			<div class="mt-8 border-t pt-6">
-				<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
+				<p class="text-xs text-muted-foreground">{t('chat.settings.saved_notice')}</p>
 			</div>
 		</div>
 	</ScrollArea>

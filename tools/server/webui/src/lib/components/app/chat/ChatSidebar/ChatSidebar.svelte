@@ -10,6 +10,7 @@
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils/text';
+	import { t } from '$lib/i18n';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
@@ -121,7 +122,9 @@
 	<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
 		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 			<Sidebar.GroupLabel>
-				{isSearchModeActive ? 'Search results' : 'Conversations'}
+				{isSearchModeActive
+					? t('chat.sidebar.search_results')
+					: t('chat.sidebar.conversations')}
 			</Sidebar.GroupLabel>
 		{/if}
 
@@ -150,10 +153,10 @@
 					<div class="px-2 py-4 text-center">
 						<p class="mb-4 p-4 text-sm text-muted-foreground">
 							{searchQuery.length > 0
-								? 'No results found'
+								? t('chat.sidebar.empty_no_results')
 								: isSearchModeActive
-									? 'Start typing to see results'
-									: 'No conversations yet'}
+									? t('chat.sidebar.empty_start_typing')
+									: t('chat.sidebar.empty_no_conversations')}
 						</p>
 					</div>
 				{/if}
@@ -164,12 +167,12 @@
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
-	title="Delete Conversation"
+	title={t('chat.sidebar.delete.title')}
 	description={selectedConversation
-		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
+		? t('chat.sidebar.delete.description', { name: selectedConversationNamePreview })
 		: ''}
-	confirmText="Delete"
-	cancelText="Cancel"
+	confirmText={t('chat.sidebar.delete.confirm')}
+	cancelText={t('chat.sidebar.delete.cancel')}
 	variant="destructive"
 	icon={Trash2}
 	onConfirm={handleConfirmDelete}
@@ -182,7 +185,7 @@
 <AlertDialog.Root bind:open={showEditDialog}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
+			<AlertDialog.Title>{t('chat.sidebar.edit.title')}</AlertDialog.Title>
 			<AlertDialog.Description>
 				<Input
 					class="mt-4 text-foreground"
@@ -192,7 +195,7 @@
 							handleConfirmEdit();
 						}
 					}}
-					placeholder="Enter a new name"
+					placeholder={t('chat.sidebar.edit.placeholder')}
 					type="text"
 					bind:value={editedName}
 				/>
@@ -203,9 +206,11 @@
 				onclick={() => {
 					showEditDialog = false;
 					selectedConversation = null;
-				}}>Cancel</AlertDialog.Cancel
+				}}>{t('chat.sidebar.edit.cancel')}</AlertDialog.Cancel
 			>
-			<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
+			<AlertDialog.Action onclick={handleConfirmEdit}>
+				{t('chat.sidebar.edit.save')}
+			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
