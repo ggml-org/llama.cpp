@@ -3,6 +3,7 @@
 set -e
 
 CONVERTED_MODEL="${1:-"$CONVERTED_MODEL"}"
+BUILD_DIR="${2:-"$BUILD_DIR"}"
 
 # Final check if we have a model path
 if [ -z "$CONVERTED_MODEL" ]; then
@@ -25,9 +26,13 @@ mkdir -p ppl
 OUTPUTFILE="ppl/$(basename $CONVERTED_MODEL).kld"
 echo "Model: $CONVERTED_MODEL"
 
-cmake --build ../../build --target llama-perplexity -j8
+if [ -z "$BUILD_DIR" ]; then
+    BUILD_DIR="../../build"
+fi
 
-../.././build/bin/llama-perplexity -m $CONVERTED_MODEL \
+cmake --build $BUILD_DIR --target llama-perplexity -j8
+
+${BUILD_DIR}/bin/llama-perplexity -m $CONVERTED_MODEL \
     -f ppl/wikitext-2-raw/wiki.test.raw \
     --kl-divergence-base $OUTPUTFILE
 
