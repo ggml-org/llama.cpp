@@ -2783,8 +2783,8 @@ static void system_message_not_supported(json & messages) {
 static void requires_non_null_content(json & messages) {
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
-        if (message.contains("tool_calls") && !messages.contains("content")) {
-            messages["content"] = "";
+        if (message.contains("tool_calls") && !message.contains("content")) {
+            message["content"] = "";
         }
     }
 }
