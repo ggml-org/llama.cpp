@@ -4858,6 +4858,7 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
             // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
+            // PR: https://github.com/ggml-org/llama.cpp/pull/19042
             if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
 #ifdef _WIN32
                 _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
