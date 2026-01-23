@@ -76,9 +76,9 @@ To create personal self-signed certificate the following commands (either from c
 ```
 (replace MyUser with your username). 
 
-Add this certificate to "Trusted Root Certification Authorities" and "Trusted Publishers" stores.
-This can be down using `certlm` Certificate Manager tool.
-Right click on the certificate store, select "All Tasks -> Import" and follow the prompts to import the certificate from the
+Add this certificate to `Trusted Root Certification Authorities` and `Trusted Publishers` stores.
+This can be done using `certlm` Certificate Manager tool.
+Right click on the certificate store, select `All Tasks -> Import` and follow the prompts to import the certificate from the
 PFX file you created above.
 
 For additional details see Microsoft guide at
