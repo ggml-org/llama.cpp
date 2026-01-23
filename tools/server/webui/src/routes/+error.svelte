@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { ServerErrorSplash } from '$lib/components/app';
+	import { t } from '$lib/i18n';
 
 	let error = $derived($page.error);
 	let status = $derived($page.status);
@@ -22,12 +23,12 @@
 </script>
 
 <svelte:head>
-	<title>Error {status} - WebUI</title>
+	<title>{t('error.page.title', { status })}</title>
 </svelte:head>
 
 {#if isApiKeyError}
 	<ServerErrorSplash
-		error={error?.message || 'Access denied - check server permissions'}
+		error={error?.message || t('error.api_key.access_denied')}
 		onRetry={handleRetry}
 		showRetry={false}
 		showTroubleshooting={false}
@@ -54,16 +55,16 @@
 						/>
 					</svg>
 				</div>
-				<h1 class="mb-2 text-2xl font-bold">Error {status}</h1>
+				<h1 class="mb-2 text-2xl font-bold">{t('error.generic.title', { status })}</h1>
 				<p class="text-muted-foreground">
-					{error?.message || 'Something went wrong'}
+					{error?.message || t('error.generic.message')}
 				</p>
 			</div>
 			<button
 				onclick={() => goto('#/')}
 				class="rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
 			>
-				Go Home
+				{t('error.generic.go_home')}
 			</button>
 		</div>
 	</div>

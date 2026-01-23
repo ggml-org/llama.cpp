@@ -1,0 +1,9 @@
+{
+	"server.loading.title": "Connecting to Server",
+	"server.loading.message": "Initializing connection to llama.cpp server...",
+	"error.page.title": "Error {status} - WebUI",
+	"error.api_key.access_denied": "Access denied - check server permissions",
+	"error.generic.title": "Error {status}",
+	"error.generic.message": "Something went wrong",
+	"error.generic.go_home": "Go Home"
+}
