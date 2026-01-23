@@ -299,7 +299,12 @@ void main() {
                 const uint row = tile_row(r);
                 f16vec4 Pfvec;
                 [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
-                    const float16_t Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
+                    float16_t Pf;
+                    if (KV_bounds_check && j * Bc + col >= KV) {
+                        Pf = float16_t(0.0f);
+                    } else {
+                        Pf = float16_t(exp(sfsh[row + vec_idx + col * sfshstride] - Mf[r + vec_idx]));
+                    }
                     Lf[r + vec_idx] += Pf;
                     Pfvec[vec_idx] = Pf;
                 }
@@ -338,7 +343,7 @@ void main() {
                 const uint ib = coord / BLOCK_SIZE;
                 const uint iqs = coord % BLOCK_SIZE;
 
-                if (!KV_bounds_check || v_col < HSV) {
+                if (!KV_bounds_check || (v_row < KV && v_col < HSV)) {
 #if BLOCK_SIZE > 1
                     ksh[row * vsh_stride + col] = f16vec4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
 #else
