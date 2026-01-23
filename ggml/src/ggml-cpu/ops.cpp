@@ -8425,7 +8425,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             }
 
             if (mp) {
-                for (int tq = 0; tq < Q_TILE_SZ; tq++) {
+                for (int tq = 0; tq < tile_rows; tq++) {
                     const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
                     for (int tk = 0; tk < KV_TILE_SZ; tk++) {
                         const float mv = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
