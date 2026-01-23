@@ -10,7 +10,7 @@ The document also covers procedures for installing the latest NPU drivers and He
 
 ## Install the latest Hexagon SDK Community Edition
 
-Eiether use the trimmed down version (optimized for CI) from
+Either use the trimmed down version (optimized for CI) from
 
     https://github.com/snapdragon-toolchain/hexagon-sdk/releases/download/v6.4.0.2/hexagon-sdk-v6.4.0.2-arm64-wos.tar.xz
 
