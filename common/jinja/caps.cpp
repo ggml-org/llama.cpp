@@ -89,7 +89,7 @@ caps caps_get(jinja::program & prog) {
         return v->stats.ops.find(op_name) != v->stats.ops.end();
     };
 
-    // case: typed content requirement
+    // case: typed content requirement (probe 1: string content)
     caps_try_execute(
         prog,
         [&]() {
@@ -114,6 +114,36 @@ caps caps_get(jinja::program & prog) {
             }
         }
     );
+
+    // case: typed content requirement (probe 2: array content, only if probe 1 did not trigger)
+    if (!result.requires_typed_content) {
+        caps_try_execute(
+            prog,
+            [&]() {
+                return json::array({
+                    {
+                        {"role", "user"},
+                        {"content", json::array({
+                            {
+                                {"type", "text"},
+                                {"text", "content"}
+                            }
+                        })}
+                    }
+                });
+            },
+            [&]() {
+                return json{nullptr};
+            },
+            [&](bool, value & messages, value &) {
+                auto & content = messages->at(0)->at("content");
+                caps_print_stats(content, "messages[0].content (typed probe)");
+                if (has_op(content, "selectattr") || has_op(content, "array_access")) {
+                    result.requires_typed_content = true;
+                }
+            }
+        );
+    }
 
 
     // case: system prompt support

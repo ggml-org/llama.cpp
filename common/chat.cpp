@@ -2650,6 +2650,127 @@ static common_chat_params common_chat_params_init_exaone_moe(const common_chat_t
     return data;
 }
 
+static common_chat_params common_chat_params_init_translategemma(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    // TODO:For now, a hard-coded approach is used. If you use the mtmd_default_marker() interface in mtmd.h, you need to include the corresponding header file.
+    static const std::string mtmdMediaMarker = "<__media__>";
+
+    std::string default_source_lang_code = "en";
+    std::string default_target_lang_code = "zh";
+    bool has_source_lang_code = false;
+    bool has_target_lang_code = false;
+    bool used_fallback_default = false;
+    bool replace_image_marker = false;
+
+    // extract source_lang_code and target_lang_code from extra_context
+    if (inputs.extra_context.is_object()) {
+        if (inputs.extra_context.contains("source_lang_code") &&
+            inputs.extra_context.at("source_lang_code").is_string()) {
+            auto val = inputs.extra_context.at("source_lang_code").get<std::string>();
+            if (!val.empty()) {
+                default_source_lang_code = val;
+                has_source_lang_code = true;
+            }
+        }
+        if (inputs.extra_context.contains("target_lang_code") &&
+            inputs.extra_context.at("target_lang_code").is_string()) {
+            auto val = inputs.extra_context.at("target_lang_code").get<std::string>();
+            if (!val.empty()) {
+                default_target_lang_code = val;
+                has_target_lang_code = true;
+            }
+        }
+    }
+
+    if (!has_source_lang_code) {
+        used_fallback_default = true;
+    }
+    if (!has_target_lang_code) {
+        used_fallback_default = true;
+    }
+
+    // Adjust messages to ensure each user message has source_lang_code and target_lang_code
+    auto adjusted_messages = json::array();
+    for (const auto & msg : inputs.messages)
+    {
+        std::string source_lang_code = default_source_lang_code;
+        std::string target_lang_code = default_target_lang_code;
+
+        if (msg.value("role", "") != "user") {
+            adjusted_messages.push_back(msg);
+            continue;
+        }
+
+        std::string text;
+        // extract text from content
+        if (msg.contains("content")) {
+            const auto & content = msg.at("content");
+            if (content.is_string()) {
+                text = content.get<std::string>();
+            } else if (content.is_array()) {
+                for (const auto & part : content) {
+                    if (!part.is_object()) {
+                        continue;
+                    }
+                    if (part.value("type", "") == "text" &&
+                        part.contains("text") &&
+                        part.at("text").is_string()) {
+                        text = part.at("text").get<std::string>();
+                    }
+                }
+            }
+        }
+
+        auto adjusted = msg;
+        if (text == mtmdMediaMarker) {
+            adjusted["content"]  = json::array({
+                {
+                 { "type", "image" },
+                 { "source_lang_code", source_lang_code },
+                 { "target_lang_code", target_lang_code },
+                 { "text", nullptr },
+                 { "image", text },
+                 }
+            });
+            replace_image_marker = true;
+        } else {
+            adjusted["content"] = json::array({
+                {
+                 { "type", "text" },
+                 { "source_lang_code", source_lang_code },
+                 { "target_lang_code", target_lang_code },
+                 { "text", text },
+                 { "image", nullptr },
+                 }
+            });
+        }
+        adjusted_messages.push_back(adjusted);
+    }
+
+    if (used_fallback_default) {
+        LOG_WRN(
+            "%s: missing source_lang_code/target_lang_code, defaulting to '%s' -> '%s' (override via "
+            "--chat-template-kwargs)\n",
+            __func__, default_source_lang_code.c_str(), default_target_lang_code.c_str());
+    }
+    // This function is used to construct the input prompts needed for the model.
+    data.prompt = apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    if (replace_image_marker) {
+        string_replace_all(data.prompt, "<start_of_image>", mtmdMediaMarker);
+    }
+    data.format       = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    data.grammar_lazy = false;
+    if (!inputs.json_schema.is_null()) {
+        if (!inputs.grammar.empty()) {
+            throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+        }
+        data.grammar = json_schema_to_grammar(inputs.json_schema);
+    } else {
+        data.grammar = inputs.grammar;
+    }
+    return data;
+}
+
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
@@ -2996,6 +3117,13 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // TranslateGemma format detection
+    if (src.find("source_lang_code") != std::string::npos &&
+        src.find("target_lang_code") != std::string::npos &&
+        src.find("You are a professional") != std::string::npos) {
+        return common_chat_params_init_translategemma(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
