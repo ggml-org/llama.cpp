@@ -51,7 +51,6 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
-		// Force reactivity on message changes
 		void message;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown

@@ -8,20 +8,16 @@
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
 	import McpServerForm from './McpServerForm.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-
-	// Use store methods for consistent sorting logic
 	let servers = $derived(mcpStore.getServersSorted());
 
-	// New server form state
 	let isAddingServer = $state(false);
 	let newServerUrl = $state('');
 	let newServerHeaders = $state('');
-
-	// Validation for new server URL
 	let newServerUrlError = $derived.by(() => {
 		if (!newServerUrl.trim()) return 'URL is required';
 		try {
 			new URL(newServerUrl);
+
 			return null;
 		} catch {
 			return 'Invalid URL format';

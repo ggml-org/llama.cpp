@@ -22,10 +22,8 @@
 		id = 'server'
 	}: Props = $props();
 
-	// Local state for header pairs
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
-	// Sync header pairs to parent when they change
 	function updateHeaderPairs(newPairs: KeyValuePair[]) {
 		headerPairs = newPairs;
 		onHeadersChange(serializeHeaders(newPairs));

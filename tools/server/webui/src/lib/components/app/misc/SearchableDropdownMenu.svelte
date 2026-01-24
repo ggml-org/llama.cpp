@@ -5,33 +5,19 @@
 	import { SearchInput } from '$lib/components/app';
 
 	interface Props {
-		/** Controlled open state */
 		open?: boolean;
-		/** Callback when open state changes */
 		onOpenChange?: (open: boolean) => void;
-		/** Search input placeholder */
 		placeholder?: string;
-		/** Search input value (bindable) */
 		searchValue?: string;
-		/** Callback when search value changes */
 		onSearchChange?: (value: string) => void;
-		/** Callback for search input keydown events */
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
-		/** Content alignment */
 		align?: 'start' | 'center' | 'end';
-		/** Content width class */
 		contentClass?: string;
-		/** Empty state message */
 		emptyMessage?: string;
-		/** Whether to show empty state */
 		isEmpty?: boolean;
-		/** Whether the trigger is disabled */
 		disabled?: boolean;
-		/** Trigger content */
 		trigger: Snippet;
-		/** List items content */
 		children: Snippet;
-		/** Optional footer content */
 		footer?: Snippet;
 	}
 

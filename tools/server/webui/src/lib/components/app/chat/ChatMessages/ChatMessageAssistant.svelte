@@ -1,10 +1,10 @@
 <script lang="ts">
 	import {
-		AgenticContent,
-		ModelBadge,
+		ChatMessageAgenticContent,
 		ChatMessageActions,
 		ChatMessageStatistics,
 		MarkdownContent,
+		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
@@ -173,7 +173,11 @@
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else if isStructuredContent}
-			<AgenticContent content={messageContent || ''} isStreaming={isChatStreaming()} {message} />
+			<ChatMessageAgenticContent
+				content={messageContent || ''}
+				isStreaming={isChatStreaming()}
+				{message}
+			/>
 		{:else}
 			<MarkdownContent content={messageContent || ''} {message} />
 		{/if}

@@ -355,8 +355,6 @@ export class ChatService {
 				return;
 			}
 
-			console.log('[ChatService] Tool call delta received:', JSON.stringify(toolCalls));
-
 			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
 				aggregatedToolCalls,
 				toolCalls,
@@ -371,7 +369,9 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
-			console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
+			if (import.meta.env.DEV) {
+				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
+			}
 
 			if (!serializedToolCalls) {
 				return;
