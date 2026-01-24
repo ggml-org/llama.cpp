@@ -43,19 +43,16 @@ extern "C" {
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 
-<<<<<<< HEAD
 extern "C" {
     #include <webp/decode.h>
 }
 
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
-=======
 #ifdef MTMD_INTERNAL_HEADER
 #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 #endif
 
->>>>>>> upstream/master
 //
 // internal logging functions
 //
