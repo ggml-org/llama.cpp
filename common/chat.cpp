@@ -2659,6 +2659,10 @@ static common_chat_params common_chat_params_init_translate_gemma(const common_c
     templates_params inputs_new = inputs;
     json & messages = inputs_new.messages;
 
+    // default to chat_template_kwargs, or en-GB if not specified
+    std::string default_src_lang = inputs.extra_context.value("source_lang_code", "en-GB");
+    std::string default_tgt_lang = inputs.extra_context.value("target_lang_code", "en-GB");
+
     GGML_ASSERT(messages.is_array());
     for (auto & message : messages) {
         if (message.contains("role") && message["role"].get<std::string>() != "user") {
@@ -2670,8 +2674,10 @@ static common_chat_params common_chat_params_init_translate_gemma(const common_c
         if (message.contains("content") && !message["content"].is_array()) {
             auto content_str = message["content"].get<std::string>();
             // default to en-GB if not specified (to make common_chat_format_example works)
-            auto src_lang = message.contains("source_lang_code") ? message["source_lang_code"].get<std::string>() : "en-GB";
-            auto tgt_lang = message.contains("target_lang_code") ? message["target_lang_code"].get<std::string>() : "en-GB";
+            auto src_lang = message.contains("source_lang_code")
+                        ? message["source_lang_code"].get<std::string>() : default_src_lang;
+            auto tgt_lang = message.contains("target_lang_code")
+                        ? message["target_lang_code"].get<std::string>() : default_tgt_lang;
             message["content"] = json::array({
                 json{
                     {"type", "text"},
