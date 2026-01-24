@@ -2688,7 +2688,6 @@ class ArceeModel(LlamaModel):
 @ModelBase.register("AfmoeForCausalLM")
 class AfmoeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.AFMOE
-    undo_permute = False
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2737,7 +2736,7 @@ class AfmoeModel(LlamaModel):
 
                     data_torch = torch.stack(datas, dim=0)
                     merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
+                    yield from ModelBase.modify_tensors(self, data_torch, merged_name, bid)
 
                 return
             else:
@@ -2746,7 +2745,7 @@ class AfmoeModel(LlamaModel):
         if name.endswith(".expert_bias"):
             name = name.replace(".expert_bias", ".expert_bias.bias")
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register(
@@ -8919,7 +8918,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             return Mamba2Model.modify_tensors(self, data_torch, name, bid)
         elif bid in self._attn_layers:
             return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def set_gguf_parameters(self):
         """This method merges params from both parents and some that are
@@ -9051,33 +9050,33 @@ class NemotronHModel(GraniteHybridModel):
         if self.is_moe and bid is not None:
             if name.endswith("mixer.gate.e_score_correction_bias"):
                 new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-                yield from super().modify_tensors(data_torch, new_name, bid)
+                yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
                 return
 
             if name.endswith("mixer.dt_bias"):
                 new_name = name.replace("dt_bias", "dt.bias")
-                yield from super().modify_tensors(data_torch, new_name, bid)
+                yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
                 return
 
             if name.endswith("mixer.conv1d.weight"):
                 squeezed_data = data_torch.squeeze()
-                yield from super().modify_tensors(squeezed_data, name, bid)
+                yield from ModelBase.modify_tensors(self, squeezed_data, name, bid)
                 return
 
             if name.endswith("mixer.A_log"):
                 transformed_data = -torch.exp(data_torch)
                 reshaped_data = transformed_data.squeeze().reshape(-1, 1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.endswith("mixer.D"):
                 reshaped_data = data_torch.squeeze().reshape(-1, 1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.endswith("mixer.norm.weight"):
                 reshaped_data = data_torch.reshape(self.n_group, -1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.find("mixer.experts") != -1:
@@ -9102,12 +9101,12 @@ class NemotronHModel(GraniteHybridModel):
                         data_torch = torch.stack(datas, dim=0)
                         merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
 
-                        yield from super().modify_tensors(data_torch, merged_name, bid)
+                        yield from ModelBase.modify_tensors(self, data_torch, merged_name, bid)
                     return
                 else:
                     return
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -10726,14 +10725,13 @@ class CogVLMVisionModel(MmprojModel):
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.COGVLM
-    undo_permute = False
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # block vision tensors
         if name.startswith("model.vision."):
             return
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("JanusForConditionalGeneration")
@@ -10758,7 +10756,7 @@ class JanusProModel(LlamaModel):
         elif name.startswith('language_model.'):
             name = name.replace('language_model.', '')
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("JanusForConditionalGeneration")
