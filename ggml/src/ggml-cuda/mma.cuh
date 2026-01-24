@@ -661,7 +661,7 @@ namespace ggml_cuda_mma {
 #endif // defined(TURING_MMA_AVAILABLE)
 
     static __device__ __forceinline__ void make_identity_mat(tile<16, 8, half2> & t) {
-#if defined(RDNA4)
+#if defined(RDNA4) || defined(RDNA3)
         const int row = t.get_i(0);
         const int left_right = t.get_j(0) / 4;
         const int up_down = row / 8;
@@ -670,7 +670,7 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(t);
         NO_DEVICE_CODE;
-#endif // defined(RDNA4)
+#endif // defined(RDNA4) || defined(RDNA3)
     }
 
     template <int I, int J, typename T, data_layout dl>
@@ -919,10 +919,16 @@ namespace ggml_cuda_mma {
         const halfx8_t& a_frag = reinterpret_cast<const halfx8_t&>(A.x[0]);
         const halfx8_t& b_frag = reinterpret_cast<const halfx8_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32_gfx12(a_frag, b_frag, acc_frag);
+#elif defined(RDNA3)
+        using halfx16_t = __attribute__((ext_vector_type(16))) _Float16;
+        halfx16_t& acc_frag = reinterpret_cast<halfx16_t&>(D.x[0]);
+        const halfx16_t& a_frag = reinterpret_cast<const halfx16_t&>(A.x[0]);
+        const halfx16_t& b_frag = reinterpret_cast<const halfx16_t&>(B.x[0]);
+        acc_frag = __builtin_amdgcn_wmma_f16_16x16x16_f16_w32(a_frag, b_frag, acc_frag, false);
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // defined(RDNA4)
+#endif // defined(RDNA4) || defined(RDNA3)
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
