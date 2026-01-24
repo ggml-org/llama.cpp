@@ -670,7 +670,7 @@
 		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		background: var(--code-background);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-		max-height: calc(100dvh - var(--chat-form-area-height));
+		max-height: var(--max-message-height);
 	}
 
 	:global(.dark) div :global(.code-block-wrapper) {

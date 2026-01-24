@@ -134,7 +134,7 @@
 					<Card
 						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border)); max-height: calc(100dvh - var(--chat-form-area-height));"
+						style="border: 2px dashed hsl(var(--border)); max-height: var(--max-message-height);"
 					>
 						<div
 							class="relative transition-all duration-300 {isExpanded
