@@ -8,7 +8,6 @@ import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPTransportType, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-import { normalizePositiveNumber } from '$lib/utils/number';
 import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
@@ -110,14 +109,11 @@ export function serializeHeaders(pairs: { key: string; value: string }[]): strin
 
 /**
  * Parses MCP server settings from a JSON string or array.
+ * requestTimeoutSeconds is not user-configurable in the UI, so we always use the default value.
  * @param rawServers - The raw servers to parse
- * @param fallbackRequestTimeoutSeconds - The fallback request timeout seconds
  * @returns An empty array if the input is invalid.
  */
-export function parseMcpServerSettings(
-	rawServers: unknown,
-	fallbackRequestTimeoutSeconds = DEFAULT_MCP_CONFIG.requestTimeoutSeconds
-): MCPServerSettingsEntry[] {
+export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 	if (!rawServers) return [];
 
 	let parsed: unknown;
@@ -138,11 +134,6 @@ export function parseMcpServerSettings(
 	if (!Array.isArray(parsed)) return [];
 
 	return parsed.map((entry, index) => {
-		const requestTimeoutSeconds = normalizePositiveNumber(
-			(entry as { requestTimeoutSeconds?: unknown })?.requestTimeoutSeconds,
-			fallbackRequestTimeoutSeconds
-		);
-
 		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
 		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
 
@@ -150,7 +141,7 @@ export function parseMcpServerSettings(
 			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
-			requestTimeoutSeconds,
+			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined
 		} satisfies MCPServerSettingsEntry;
 	});
