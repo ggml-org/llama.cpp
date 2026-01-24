@@ -21,9 +21,11 @@ Note: The rest of the **Android** build process assumes that you're running insi
 Native Windows 11 arm64 builds has the following tools dependencies:
 - MS Visual Studio 2026 (Community Edition or Pro)
   - MSVC arm64 standard and runtime libraries
+  - UCRT and Driver Kit
 - LLVM core libraries and Clang compiler (winget)
 - CMake, Git, Python (winget)
 - Hexagon SDK Community Edition 6.4 or later (see windows.md)
+- OpenCL SDK 2.3 or later (see windows.md)
 
 Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
 Adapt below build commands accordingly.
@@ -113,7 +115,8 @@ Llama-3.2-1B-Instruct-Q4_0.gguf: 1 file pushed, 0 skipped. 38.3 MB/s (773025920 
 
 ### Windows
 
-All artifacts are already installed in the `pkg-snapdragon` folder. To run, adapt below instructions to use Powershell scrits in `scripts/snapdragon/windows`.
+All artifacts are already installed in the `pkg-snapdragon` folder.
+To run, adapt below instructions to use Powershell scrits in `scripts/snapdragon/windows`.
 
 ## How to Run
 

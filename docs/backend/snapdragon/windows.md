@@ -1,12 +1,28 @@
 ## Overview
 
+The document covers procedures for installing the latest GPU and NPU drivers, and OpenCL and Hexagon SDKs.
+
+
 In order to use Hexagon NPU on Snapdragon Windows devices the underlying HTP Ops libraries (e.g libggml-htp-v73.so) 
 must be included in the .cat file digitally signed with a trusted certificate. 
 
 This document covers details on how to generate personal certificate files (.pfx) and how to configure the system
 to allow for test signatures (aka test-signing). 
 
-The document also covers procedures for installing the latest NPU drivers and Hexagon SDK.
+## Install the latest Adreno OpenCL SDK
+
+Either use the trimmed down version (optimized for CI) from
+
+    https://github.com/snapdragon-toolchain/opencl-sdk/releases/download/v2.3.2/adreno-opencl-sdk-v2.3.2-arm64-wos.tar.xz
+
+Or download the complete official version from
+
+    https://softwarecenter.qualcomm.com/catalog/item/Adreno_OpenCL_SDK?version=2.3.2
+
+Unzip/untar the archive into
+```
+c:\Qualcomm\OpenCL_SDK\2.3.2
+```
 
 ## Install the latest Hexagon SDK Community Edition
 
@@ -23,13 +39,21 @@ Unzip/untar the archive into
 c:\Qualcomm\Hexagon_SDK\6.4.0.2
 ```
 
+## Install the latest Adreno GPU driver
+
+Download the driver from
+
+    https://softwarecenter.qualcomm.com/catalog/item/Windows_Graphics_Driver
+
+After the automated installation and reboot please make sure that the GPU device shows up in the `Device Manager` (under 'Display Adapters`)
+
 ## Install the latest Qualcomm NPU driver
 
 Download the driver from
 
     https://softwarecenter.qualcomm.com/catalog/item/Qualcomm_HND
 
-After the automated installation and reboot please make sure that the Hexagon NPU device shows up in `Device Manager` (under `Neural Processors`).
+After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager` (under `Neural Processors`).
 
 If the device is not available you can try installing all components (`qcnspmcdm8380`, `qcnspmcdm8380_ext`) manually.
 The components are extracted into 
@@ -37,7 +61,12 @@ The components are extracted into
 c:\QCDrivers\qcnspmcdm...
 ```
 
-## Enable test signatures for drivers
+## Enable NPU driver test signatures
+
+Please note that the following steps are required only for the Hexagon NPU.
+Adreno GPU backend does not require test signatures.
+
+### Enable testsigning
 
 Use `bcdedit` to enable test-signing
 ```
@@ -56,7 +85,7 @@ For additional details see Microsoft guide at
 
    https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option
 
-## Create personal certificate
+### Create personal certificate
 
 The tools required for this procedure are available as part of Windows SDK and Windows Driver Kit which should be 
 installed as part of the MS Visual Studio.
@@ -93,6 +122,7 @@ Please note that the same certificate can be used for signing any number of buil
 The overall Hexagon backend build procedure for Windows on Snapdragon is the same as for other platforms.
 However, additional settings are required for generating and signing HTP Ops libraries. 
 ```
+> $env:OPENCL_SDK_ROOT="C:\Qualcomm\OpenCL_SDK\2.3.2"
 > $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
 > $env:HEXAGON_TOOLS_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2\tools\HEXAGON_Tools\19.0.04"
 > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
