@@ -65,8 +65,13 @@ export function filterByLeafNodeId(
 		currentNode = nodeMap.get(currentNode.parent);
 	}
 
-	// Sort by timestamp to get chronological order (root to leaf)
-	result.sort((a, b) => a.timestamp - b.timestamp);
+	// Sort: system messages first, then by timestamp
+	result.sort((a, b) => {
+		if (a.role === 'system' && b.role !== 'system') return -1;
+		if (a.role !== 'system' && b.role === 'system') return 1;
+
+		return a.timestamp - b.timestamp;
+	});
 	return result;
 }
 
