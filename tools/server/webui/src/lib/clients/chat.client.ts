@@ -12,9 +12,9 @@ import {
 	normalizeModelName,
 	filterByLeafNodeId,
 	findDescendantMessages,
-	findLeafNode,
-	getAgenticConfig
+	findLeafNode
 } from '$lib/utils';
+import { agenticStore } from '$lib/stores/agentic.svelte';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
@@ -687,7 +687,7 @@ export class ChatClient {
 		};
 
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
-		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
+		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
 			const agenticResult = await agenticClient.runAgenticFlow({
 				conversationId: assistantMessage.convId,
