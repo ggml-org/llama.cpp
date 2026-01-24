@@ -19,7 +19,7 @@ Primary integration points:
 - LUT implementation: `ggml/src/ggml-ifairy-lut.h`, `ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp`
 - Index encoding: `ggml/src/ggml-quants.c` (3W 6-bit pattern)
 
-## Runtime toggles (must preserve)
+## Runtime toggles (current implementation)
 
 - `GGML_IFAIRY_LUT=0/1`
 - `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`
@@ -43,7 +43,9 @@ Primary integration points:
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`
 
-If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a safe default.
+These toggles reflect the current implementation. V2 aims to consolidate/remove most of them; do not add new knobs unless strictly necessary.
+
+If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` and keep a safe default.
 
 ## Formatting & Static Analysis (required)
 

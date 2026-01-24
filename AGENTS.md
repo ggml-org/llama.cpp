@@ -90,12 +90,16 @@ This repo includes an iFairy 3-weight complex LUT path. When touching it:
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
 - Performance claims must include reproducible commands + raw `eval tok/s` logs
 - Edge-case coverage lives in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics); keep docs in sync.
-- If adding/changing iFairy LUT env knobs, update `IFAIRY_ARM_3W_LUT_API_PLAN.md` + `IFAIRY_ARM_3W_LUT_STATUS.md` to avoid drift.
-- For profiling summaries, prefer `xcrun xctrace export ... | python3 scripts/ifairy_xctrace_leaf.py` and record traces/summary in `IFAIRY_ARM_3W_LUT_STATUS.md`.
+- If adding/changing iFairy LUT env knobs or routing, update the V2 docs (do not modify the legacy `IFAIRY_ARM_3W_LUT_*.md` series):
+  - `IFAIRY_ARM_3W_LUT_V2_REFACTOR_PLAN.md`
+  - `IFAIRY_ARM_3W_LUT_V2_LUT_C_INTEGRATION_PLAN.md`
+  - `IFAIRY_ARM_3W_LUT_V2_STATUS.md`
+- For profiling summaries, prefer `xcrun xctrace export ... | python3 scripts/ifairy_xctrace_leaf.py` and record traces/summary in `IFAIRY_ARM_3W_LUT_V2_STATUS.md`.
 
 Detailed iFairy rules live in:
 - `ggml/src/ggml-cpu/AGENTS.md`
-- `IFAIRY_ARM_3W_LUT_DESIGN.md`, `IFAIRY_ARM_3W_LUT_API_PLAN.md`, `IFAIRY_ARM_3W_LUT_STATUS.md`
+- V2 docs: `IFAIRY_ARM_3W_LUT_V2_REFACTOR_PLAN.md`, `IFAIRY_ARM_3W_LUT_V2_LUT_C_INTEGRATION_PLAN.md`, `IFAIRY_ARM_3W_LUT_V2_STATUS.md`
+- Legacy reference docs (do not edit): `IFAIRY_ARM_3W_LUT_DESIGN.md`, `IFAIRY_ARM_3W_LUT_API_PLAN.md`, `IFAIRY_ARM_3W_LUT_STATUS.md`
 
 ## 6) Coding Style & Naming Conventions
 
