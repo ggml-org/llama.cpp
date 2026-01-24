@@ -25,8 +25,8 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
-import { getEnabledServersForConversation } from '$lib/utils/mcp';
 import { mcpClient } from '$lib/clients/mcp.client';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import type { McpServerOverride } from '$lib/types/database';
 import { MessageRole } from '$lib/enums';
 
@@ -182,7 +182,7 @@ export class ConversationsClient {
 			return;
 		}
 
-		const enabledServers = getEnabledServersForConversation(config(), mcpServerOverrides);
+		const enabledServers = mcpStore.getEnabledServersForConversation(mcpServerOverrides);
 
 		if (enabledServers.length === 0) {
 			return;

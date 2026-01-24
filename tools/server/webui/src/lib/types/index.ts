@@ -93,7 +93,6 @@ export type {
 	MCPServerConfig,
 	MCPClientConfig,
 	MCPServerSettingsEntry,
-	McpServerUsageStats,
 	MCPToolCall,
 	OpenAIToolDefinition,
 	ServerStatus,

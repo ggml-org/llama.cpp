@@ -2,7 +2,7 @@
 	import { cn } from '$lib/components/ui/utils';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl } from '$lib/utils/mcp';
+	import { getFaviconUrl } from '$lib/utils';
 	import { HealthCheckStatus } from '$lib/enums';
 
 	interface Props {

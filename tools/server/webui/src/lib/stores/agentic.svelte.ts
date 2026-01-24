@@ -28,6 +28,7 @@
 import { browser } from '$app/environment';
 import type { AgenticFlowParams, AgenticFlowResult } from '$lib/clients';
 import type { AgenticSession } from '$lib/types/agentic';
+import { agenticClient } from '$lib/clients/agentic.client';
 
 export type {
 	AgenticFlowCallbacks,
@@ -56,8 +57,8 @@ class AgenticStore {
 	 */
 	private _sessions = $state<Map<string, AgenticSession>>(new Map());
 
-	/** Reference to the client (lazy loaded to avoid circular dependency) */
-	private _client: typeof import('$lib/clients/agentic.client').agenticClient | null = null;
+	/** Reference to the client */
+	private _client = agenticClient;
 
 	private get client() {
 		return this._client;
@@ -65,19 +66,18 @@ class AgenticStore {
 
 	/** Check if store is ready (client initialized) */
 	get isReady(): boolean {
-		return this._client !== null;
+		return this._initialized;
 	}
+
+	private _initialized = false;
 
 	/**
 	 * Initialize the store by wiring up to the client.
 	 * Must be called once after app startup.
 	 */
-	async init(): Promise<void> {
+	init(): void {
 		if (!browser) return;
-		if (this._client) return; // Already initialized
-
-		const { agenticClient } = await import('$lib/clients/agentic.client');
-		this._client = agenticClient;
+		if (this._initialized) return; // Already initialized
 
 		agenticClient.setStoreCallbacks({
 			setRunning: (convId, running) => this.updateSession(convId, { isRunning: running }),
@@ -87,6 +87,8 @@ class AgenticStore {
 			setStreamingToolCall: (convId, tc) => this.updateSession(convId, { streamingToolCall: tc }),
 			clearStreamingToolCall: (convId) => this.updateSession(convId, { streamingToolCall: null })
 		});
+
+		this._initialized = true;
 	}
 
 	/**

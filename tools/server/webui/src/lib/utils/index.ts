@@ -65,8 +65,7 @@ export {
 	formatNumber,
 	formatJsonPretty,
 	formatTime,
-	formatPerformanceTime,
-	formatAttachmentText
+	formatPerformanceTime
 } from './formatters';
 
 // IME utilities
@@ -98,7 +97,30 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
 
 // Agentic utilities
-export { toAgenticMessages } from './agentic';
+export { toAgenticMessages, getAgenticConfig } from './agentic';
 
 // Base64 utilities
 export { decodeBase64 } from './base64';
+
+// Chat stream utilities
+export { mergeToolCallDeltas, extractModelName } from './chat-stream';
+
+// Debounce utilities
+export { debounce } from './debounce';
+
+// Image error fallback utilities
+export { getImageErrorFallbackHtml } from './image-error-fallback';
+
+// MCP utilities
+export {
+	detectMcpTransportFromUrl,
+	parseMcpServerSettings,
+	getMcpLogLevelIcon,
+	getMcpLogLevelClass
+} from './mcp';
+
+// Header utilities
+export { parseHeadersToArray, serializeHeaders } from './headers';
+
+// Favicon utilities
+export { getFaviconUrl } from './favicon';

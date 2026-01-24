@@ -2,7 +2,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { KeyValuePairs } from '$lib/components/app';
 	import type { KeyValuePair } from '$lib/types';
-	import { parseHeadersToArray, serializeHeaders } from '$lib/utils/mcp';
+	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 
 	interface Props {
 		url: string;

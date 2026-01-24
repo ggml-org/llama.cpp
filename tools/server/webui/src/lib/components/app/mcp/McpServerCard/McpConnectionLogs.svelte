@@ -3,8 +3,7 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { cn } from '$lib/components/ui/utils';
 	import type { MCPConnectionLog } from '$lib/types';
-	import { formatTime } from '$lib/utils/formatters';
-	import { getMcpLogLevelIcon, getMcpLogLevelClass } from '$lib/utils/mcp';
+	import { formatTime, getMcpLogLevelIcon, getMcpLogLevelClass } from '$lib/utils';
 
 	interface Props {
 		logs: MCPConnectionLog[];

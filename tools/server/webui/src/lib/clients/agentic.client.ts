@@ -26,8 +26,7 @@
 import { mcpClient } from '$lib/clients';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
-import { getAgenticConfig } from '$lib/utils/agentic';
-import { toAgenticMessages } from '$lib/utils';
+import { getAgenticConfig, toAgenticMessages } from '$lib/utils';
 import type { AgenticMessage, AgenticToolCallList } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import type { DatabaseMessageExtraMcpPrompt, MCPServerSettingsEntry } from '$lib/types';
-	import { getFaviconUrl, getMcpServerLabel } from '$lib/utils/mcp';
+	import { getFaviconUrl } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 
@@ -51,8 +51,7 @@
 		const server = serverSettingsMap.get(prompt.serverName);
 		if (!server) return prompt.serverName;
 
-		const healthState = mcpStore.getHealthCheckState(server.id);
-		return getMcpServerLabel(server, healthState);
+		return mcpStore.getServerLabel(server);
 	}
 
 	let contentParts = $derived.by((): ContentPart[] => {

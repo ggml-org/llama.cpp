@@ -2,7 +2,7 @@
 	import { Plus, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { getFaviconUrl } from '$lib/utils/mcp';
+	import { getFaviconUrl } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';

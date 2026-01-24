@@ -232,8 +232,6 @@ export interface ServerStatus {
 	error?: string;
 }
 
-export type McpServerUsageStats = Record<string, number>;
-
 export interface MCPServerConnectionConfig {
 	name: string;
 	server: MCPServerConfig;
