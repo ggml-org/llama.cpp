@@ -1,6 +1,5 @@
 <script lang="ts">
-	import { RemoveButton } from '$lib/components/app';
-	import McpPromptContent from '../McpPromptContent.svelte';
+	import { ChatMessageMcpPromptContent, RemoveButton } from '$lib/components/app';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
@@ -23,7 +22,7 @@
 </script>
 
 <div class="group relative {className}">
-	<McpPromptContent {prompt} variant="attachment" {isLoading} {loadError} />
+	<ChatMessageMcpPromptContent {prompt} variant="attachment" {isLoading} {loadError} />
 
 	{#if !readonly && onRemove}
 		<div

@@ -23,7 +23,6 @@ export { default as ChatFormActions } from './chat/ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionSubmit } from './chat/ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormFileInputInvisible.svelte';
 export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperText.svelte';
-export { default as ChatFormInputArea } from './chat/ChatForm/ChatFormInputArea.svelte';
 export { default as ChatFormPromptPicker } from './chat/ChatForm/ChatFormPromptPicker.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
 
@@ -35,15 +34,15 @@ export { default as ChatMessageBranchingControls } from './chat/ChatMessages/Cha
 export { default as ChatMessageEditForm } from './chat/ChatMessages/ChatMessageEditForm.svelte';
 export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessageStatistics.svelte';
 export { default as ChatMessageMcpPrompt } from './chat/ChatMessages/ChatMessageMcpPrompt.svelte';
+export { default as ChatMessageMcpPromptContent } from './chat/ChatMessages/ChatMessageMcpPromptContent.svelte';
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as CollapsibleContentBlock } from './chat/ChatMessages/CollapsibleContentBlock.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 
-export { default as McpPromptContent } from './chat/McpPromptContent.svelte';
-
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
-export { default as KeyValuePairs } from './misc/KeyValuePairs.svelte';
+export { default as ChatScreenForm } from './chat/ChatScreen/ChatScreenForm.svelte';
+
 export { default as ChatScreenHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
 export { default as ChatScreenProcessingInfo } from './chat/ChatScreen/ChatScreenProcessingInfo.svelte';
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';
@@ -77,11 +76,11 @@ export { default as ActionButton } from './misc/ActionButton.svelte';
 export { default as ActionDropdown } from './misc/ActionDropdown.svelte';
 export { default as BadgeChatStatistic } from './misc/BadgeChatStatistic.svelte';
 export { default as BadgeInfo } from './misc/BadgeInfo.svelte';
-export { default as McpLogo } from './misc/McpLogo.svelte';
 export { default as BadgeModality } from './misc/BadgeModality.svelte';
 export { default as ConversationSelection } from './misc/ConversationSelection.svelte';
 export { default as CopyToClipboardIcon } from './misc/CopyToClipboardIcon.svelte';
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
+export { default as KeyValuePairs } from './misc/KeyValuePairs.svelte';
 export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
 export { default as RemoveButton } from './misc/RemoveButton.svelte';
 export { default as SearchInput } from './misc/SearchInput.svelte';
@@ -97,7 +96,7 @@ export { default as ModelsSelector } from './models/ModelsSelector.svelte';
 // MCP
 
 export { default as McpActiveServersAvatars } from './mcp/McpActiveServersAvatars.svelte';
-export { default as McpSelector } from './mcp/McpSelector.svelte';
+export { default as McpLogo } from './mcp/McpLogo.svelte';
 export { default as McpSettingsSection } from './mcp/McpSettingsSection.svelte';
 
 // Server

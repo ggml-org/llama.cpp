@@ -31,10 +31,10 @@
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
-	let chatFormRef: ChatForm | undefined = $state(undefined);
-	let message = $derived(initialMessage);
-	let previousIsLoading = $derived(isLoading);
-	let previousInitialMessage = $derived(initialMessage);
+	let inputAreaRef: ChatForm | undefined = $state(undefined);
+	let message = $state(initialMessage);
+	let previousIsLoading = $state(isLoading);
+	let previousInitialMessage = $state(initialMessage);
 
 	// Sync message when initialMessage prop changes (e.g., after draft restoration)
 	$effect(() => {
@@ -59,7 +59,7 @@
 		)
 			return;
 
-		if (!chatFormRef?.checkModelSelected()) return;
+		if (!inputAreaRef?.checkModelSelected()) return;
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
@@ -67,7 +67,7 @@
 		message = '';
 		uploadedFiles = [];
 
-		chatFormRef?.resetTextareaHeight();
+		inputAreaRef?.resetHeight();
 
 		const success = await onSend?.(messageToSend, filesToSend);
 
@@ -86,16 +86,16 @@
 	}
 
 	onMount(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+		setTimeout(() => inputAreaRef?.focus(), 10);
 	});
 
 	afterNavigate(() => {
-		setTimeout(() => chatFormRef?.focus(), 10);
+		setTimeout(() => inputAreaRef?.focus(), 10);
 	});
 
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+			setTimeout(() => inputAreaRef?.focus(), 10);
 		}
 
 		previousIsLoading = isLoading;
@@ -104,12 +104,13 @@
 
 <div class="relative mx-auto max-w-[48rem]">
 	<ChatForm
-		bind:this={chatFormRef}
+		bind:this={inputAreaRef}
 		bind:value={message}
 		bind:uploadedFiles
 		class={className}
 		{disabled}
 		{isLoading}
+		showMcpPromptButton={true}
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}

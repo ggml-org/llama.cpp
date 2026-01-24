@@ -2,7 +2,7 @@
 	import { X, AlertTriangle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { ChatFormInputArea, DialogConfirmation } from '$lib/components/app';
+	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
@@ -36,7 +36,7 @@
 		onEditedUploadedFilesChange
 	}: Props = $props();
 
-	let inputAreaRef: ChatFormInputArea | undefined = $state(undefined);
+	let inputAreaRef: ChatForm | undefined = $state(undefined);
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 
@@ -126,7 +126,7 @@
 <svelte:window onkeydown={handleGlobalKeydown} />
 
 <div class="relative w-full max-w-[80%]">
-	<ChatFormInputArea
+	<ChatForm
 		bind:this={inputAreaRef}
 		value={editedContent}
 		attachments={editedExtras}
