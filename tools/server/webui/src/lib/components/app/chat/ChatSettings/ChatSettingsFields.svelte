@@ -33,6 +33,12 @@
 		const defaultValue = SETTING_CONFIG_DEFAULT[key] ?? t('chat.settings.default_none');
 		return t('chat.settings.default_value', { value: defaultValue });
 	}
+
+	function getHelpText(field: SettingsFieldConfig): string | null {
+		const key = field.help || SETTING_CONFIG_INFO[field.key];
+		if (!key) return null;
+		return t(key);
+	}
 </script>
 
 {#each fields as field (field.key)}
@@ -100,9 +106,10 @@
 					</button>
 				{/if}
 			</div>
-			{#if field.help || SETTING_CONFIG_INFO[field.key]}
+			{@const helpText = getHelpText(field)}
+			{#if helpText}
 				<p class="mt-1 text-xs text-muted-foreground">
-					{@html field.help || SETTING_CONFIG_INFO[field.key]}
+					{@html helpText}
 				</p>
 			{/if}
 		{:else if field.type === 'textarea'}
@@ -123,9 +130,10 @@
 				class="min-h-[10rem] w-full md:max-w-2xl"
 			/>
 
-			{#if field.help || SETTING_CONFIG_INFO[field.key]}
+			{@const helpText = getHelpText(field)}
+			{#if helpText}
 				<p class="mt-1 text-xs text-muted-foreground">
-					{field.help || SETTING_CONFIG_INFO[field.key]}
+					{@html helpText}
 				</p>
 			{/if}
 
@@ -228,9 +236,10 @@
 					{/if}
 				</Select.Content>
 			</Select.Root>
-			{#if field.help || SETTING_CONFIG_INFO[field.key]}
+			{@const helpText = getHelpText(field)}
+			{#if helpText}
 				<p class="mt-1 text-xs text-muted-foreground">
-					{field.help || SETTING_CONFIG_INFO[field.key]}
+					{@html helpText}
 				</p>
 			{/if}
 		{:else if field.type === 'checkbox'}
@@ -255,9 +264,10 @@
 						{/if}
 					</label>
 
-					{#if field.help || SETTING_CONFIG_INFO[field.key]}
+					{@const helpText = getHelpText(field)}
+					{#if helpText}
 						<p class="text-xs text-muted-foreground">
-							{field.help || SETTING_CONFIG_INFO[field.key]}
+							{@html helpText}
 						</p>
 					{/if}
 				</div>
