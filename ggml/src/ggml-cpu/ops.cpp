@@ -8394,8 +8394,6 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
 
         memset(VKQ32, 0, Q_TILE_SZ * DV * sizeof(float));
 
-        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]) : NULL;
-
         // k indices
         const int ik3 = iq3 / rk3;
         const int ik2 = iq2 / rk2;
@@ -8414,6 +8412,26 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         }
 
         for (int64_t ic = 0; ic < nek1; ic += KV_TILE_SZ) {
+
+            // skip the tile entirely if all the masks are -inf
+            if (mask) {
+                bool can_skip = true;
+                for (int tq = 0; tq < tile_rows; tq++) {
+                    const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
+                    for (int tk = 0; tk < KV_TILE_SZ; tk++) {
+                        const float mv = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
+                        if (mv != -INFINITY) {
+                            can_skip = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (can_skip) {
+                    continue;
+                }
+            }
+
             for (int tq = 0; tq < Q_TILE_SZ; tq++) {
                 const void * q_row = (const char *)Q_q + tq * DK * kv_type_size;
                 for (int tk = 0; tk < KV_TILE_SZ; tk++) {
@@ -8429,7 +8447,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 ggml_vec_scale_f32(Q_TILE_SZ * KV_TILE_SZ, KQ, logit_softcap);
             }
 
-            if (mp) {
+            if (mask) {
                 for (int tq = 0; tq < tile_rows; tq++) {
                     const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
                     for (int tk = 0; tk < KV_TILE_SZ; tk++) {
