@@ -26,10 +26,9 @@ export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperTex
 export { default as ChatFormPromptPicker } from './chat/ChatForm/ChatFormPromptPicker.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
 
-export { default as AgenticContent } from './chat/ChatMessages/AgenticContent.svelte';
 export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessageActions } from './chat/ChatMessages/ChatMessageActions.svelte';
-export { default as ChatMessageAssistant } from './chat/ChatMessages/ChatMessageAssistant.svelte';
+export { default as ChatMessageAgenticContent } from './chat/ChatMessages/ChatMessageAgenticContent.svelte';
 export { default as ChatMessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 export { default as ChatMessageEditForm } from './chat/ChatMessages/ChatMessageEditForm.svelte';
 export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessageStatistics.svelte';
