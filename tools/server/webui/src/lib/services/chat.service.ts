@@ -675,14 +675,11 @@ export class ChatService {
 			});
 		}
 
-		// Only include images for user messages (assistant images are for display only)
-		const imageFiles =
-			message.role === 'user'
-				? message.extra.filter(
-						(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
-							extra.type === AttachmentType.IMAGE
-					)
-				: [];
+		// Include images from all messages
+		const imageFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
+				extra.type === AttachmentType.IMAGE
+		);
 
 		for (const image of imageFiles) {
 			contentParts.push({
