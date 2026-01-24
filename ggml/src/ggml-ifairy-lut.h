@@ -50,9 +50,21 @@ static inline int ggml_ifairy_env_get_int_nonzero(const char * name, int default
 struct ifairy_lut_extra {
     uint8_t *             indexes;
     size_t                size;
+    void *                packed_w;
+    size_t                packed_w_size;
     struct ggml_tensor *  index_tensor;
     ggml_backend_buffer_t index_buffer;
 };
+
+// Packed iFairy 3-weight codes for lut_c-style kernels:
+// - per ggml QK_K=256 block has 86 groups ((256+2)/3)
+// - each group stores 16 lanes (16 output rows) of 1-byte codes (idx16 + flags)
+// - d_real/d_imag are per-row/per-block weight scales, stored as float for fast use in kernels
+struct ifairy_lut_wtile_16 {
+    uint8_t qs[86][16];
+    float   d_real[16];
+    float   d_imag[16];
+} __attribute__((aligned(128)));
 
 // iFairy 3-weight LUT API
 //
