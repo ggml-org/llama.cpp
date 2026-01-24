@@ -8383,16 +8383,19 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         // Per-thread scratch layout:
         // Q_q:    Q_TILE_SZ * DK (converted Q tile in KV type)
         // KQ:     Q_TILE_SZ * KV_TILE_SZ (attention scores in float)
+        // mask:   Q_TILE_SZ * KV_TILE_SZ (mask in float)
         // VKQ32:  Q_TILE_SZ * DV (FP32 output accumulator)
         // V32:    KV_TILE_SZ * DV (F32 buffer for V tile - used for f166 conversion)
-        float * base  = (float *) params->wdata + ith*(Q_TILE_SZ*DK + Q_TILE_SZ*KV_TILE_SZ + Q_TILE_SZ*DV + KV_TILE_SZ*DV + CACHE_LINE_SIZE_F32);
+        float * base  = (float *) params->wdata + ith*(Q_TILE_SZ*DK + 2*Q_TILE_SZ*KV_TILE_SZ + Q_TILE_SZ*DV + KV_TILE_SZ*DV + CACHE_LINE_SIZE_F32);
 
         void  * Q_q    = base;
         float * KQ     = (float *)((char *)base + Q_TILE_SZ * DK * sizeof(float));
-        float * VKQ32  = KQ + Q_TILE_SZ * KV_TILE_SZ;
+        float * mask32 = KQ + Q_TILE_SZ * KV_TILE_SZ;
+        float * VKQ32  = mask32 + Q_TILE_SZ * KV_TILE_SZ;
         float * V32    = VKQ32 + Q_TILE_SZ * DV;  // F32 buffer for V tile
 
         memset(VKQ32, 0, Q_TILE_SZ * DV * sizeof(float));
+        memset(mask32, 0, Q_TILE_SZ * KV_TILE_SZ * sizeof(float));
 
         // k indices
         const int ik3 = iq3 / rk3;
@@ -8419,10 +8422,9 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 for (int tq = 0; tq < tile_rows; tq++) {
                     const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
                     for (int tk = 0; tk < KV_TILE_SZ; tk++) {
-                        const float mv = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
-                        if (mv != -INFINITY) {
+                        mask32[tq * KV_TILE_SZ + tk] = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
+                        if (mask32[tq * KV_TILE_SZ + tk] != -INFINITY) {
                             can_skip = false;
-                            break;
                         }
                     }
                 }
@@ -8448,13 +8450,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             }
 
             if (mask) {
-                for (int tq = 0; tq < tile_rows; tq++) {
-                    const ggml_fp16_t * mp_row = (const ggml_fp16_t *)((const char *) mask->data + (iq1 + tq)*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]);
-                    for (int tk = 0; tk < KV_TILE_SZ; tk++) {
-                        const float mv = slope * GGML_CPU_FP16_TO_FP32(mp_row[ic + tk]);
-                        KQ[tq * KV_TILE_SZ + tk] += mv;
-                    }
-                }
+                ggml_vec_add_f32(tile_rows * KV_TILE_SZ, KQ, KQ, mask32);
             }
 
             bool skip[Q_TILE_SZ] = {};

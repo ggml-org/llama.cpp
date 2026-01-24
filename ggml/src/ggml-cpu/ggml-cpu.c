@@ -2871,8 +2871,8 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t DV = node->src[2]->ne[0];
 
                         // Tiled flash attention scratch (tile sizes defined in common.h)
-                        // Per-thread: Q_q + KQ + VKQ32 + V32 + padding
-                        cur = sizeof(float)*(GGML_FA_TILE_Q*DK + GGML_FA_TILE_Q*GGML_FA_TILE_KV + GGML_FA_TILE_Q*DV + GGML_FA_TILE_KV*DV + CACHE_LINE_SIZE_F32)*n_tasks;
+                        // Per-thread: Q_q + KQ + mask + VKQ32 + V32 + padding
+                        cur = sizeof(float)*(GGML_FA_TILE_Q*DK + 2*GGML_FA_TILE_Q*GGML_FA_TILE_KV + GGML_FA_TILE_Q*DV + GGML_FA_TILE_KV*DV)*n_tasks;
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
