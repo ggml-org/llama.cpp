@@ -28,6 +28,7 @@ import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import { getEnabledServersForConversation } from '$lib/utils/mcp';
 import { mcpClient } from '$lib/clients/mcp.client';
 import type { McpServerOverride } from '$lib/types/database';
+import { MessageRole } from '$lib/enums';
 
 interface ConversationsStoreStateCallbacks {
 	getConversations: () => DatabaseConversation[];
@@ -410,7 +411,7 @@ export class ConversationsClient {
 		const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 		const activeMessages = this.store.getActiveMessages();
 		const currentFirstUserMessage = activeMessages.find(
-			(m) => m.role === 'user' && m.parent === rootMessage?.id
+			(m) => m.role === MessageRole.USER && m.parent === rootMessage?.id
 		);
 
 		const currentLeafNodeId = findLeafNode(allMessages, siblingId);
@@ -422,7 +423,7 @@ export class ConversationsClient {
 		const updatedActiveMessages = this.store.getActiveMessages();
 		if (rootMessage && updatedActiveMessages.length > 0) {
 			const newFirstUserMessage = updatedActiveMessages.find(
-				(m) => m.role === 'user' && m.parent === rootMessage.id
+				(m) => m.role === MessageRole.USER && m.parent === rootMessage.id
 			);
 
 			if (

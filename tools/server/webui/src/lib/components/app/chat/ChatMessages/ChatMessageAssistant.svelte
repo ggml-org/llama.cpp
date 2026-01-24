@@ -110,7 +110,7 @@
 	role="group"
 	aria-label="Assistant message with actions"
 >
-	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
+	{#if message?.role === MessageRole.ASSISTANT && isLoading() && !message?.content?.trim()}
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">

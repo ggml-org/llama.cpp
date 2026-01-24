@@ -56,7 +56,8 @@ export enum ErrorDialogType {
 export enum MessageRole {
 	USER = 'user',
 	ASSISTANT = 'assistant',
-	SYSTEM = 'system'
+	SYSTEM = 'system',
+	TOOL = 'tool'
 }
 
 /**

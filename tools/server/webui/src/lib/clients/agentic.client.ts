@@ -48,7 +48,7 @@ import type {
 	DatabaseMessageExtraImageFile,
 	McpServerOverride
 } from '$lib/types/database';
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType, MessageRole } from '$lib/enums';
 
 export interface AgenticFlowCallbacks {
 	onChunk?: (chunk: string) => void;
@@ -190,7 +190,7 @@ export class AgenticClient {
 				return msg as ApiChatMessageData;
 			})
 			.filter((msg) => {
-				if (msg.role === 'system') {
+				if (msg.role === MessageRole.SYSTEM) {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 					return content.trim().length > 0;
 				}
@@ -467,7 +467,7 @@ export class AgenticClient {
 			onToolCallChunk?.(JSON.stringify(allToolCalls));
 
 			sessionMessages.push({
-				role: 'assistant',
+				role: MessageRole.ASSISTANT,
 				content: turnContent || undefined,
 				tool_calls: normalizedCalls
 			});
@@ -562,7 +562,7 @@ export class AgenticClient {
 				}
 
 				sessionMessages.push({
-					role: 'tool',
+					role: MessageRole.TOOL,
 					tool_call_id: toolCall.id,
 					content: contentParts.length === 1 ? cleanedResult : contentParts
 				});

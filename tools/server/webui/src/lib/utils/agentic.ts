@@ -5,6 +5,7 @@ import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
 import { normalizePositiveNumber } from '$lib/utils/number';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { MessageRole } from '$lib/enums';
 
 /**
  * Gets the current agentic configuration.
@@ -37,9 +38,13 @@ export function getAgenticConfig(
  */
 export function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
-		if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {
+		if (
+			message.role === MessageRole.ASSISTANT &&
+			message.tool_calls &&
+			message.tool_calls.length > 0
+		) {
 			return {
-				role: 'assistant',
+				role: MessageRole.ASSISTANT,
 				content: message.content,
 				tool_calls: message.tool_calls.map((call, index) => ({
 					id: call.id ?? `call_${index}`,
@@ -52,16 +57,16 @@ export function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessag
 			} satisfies AgenticMessage;
 		}
 
-		if (message.role === 'tool' && message.tool_call_id) {
+		if (message.role === MessageRole.TOOL && message.tool_call_id) {
 			return {
-				role: 'tool',
+				role: MessageRole.TOOL,
 				tool_call_id: message.tool_call_id,
 				content: typeof message.content === 'string' ? message.content : ''
 			} satisfies AgenticMessage;
 		}
 
 		return {
-			role: message.role,
+			role: message.role as MessageRole.SYSTEM | MessageRole.USER,
 			content: message.content
 		} satisfies AgenticMessage;
 	});

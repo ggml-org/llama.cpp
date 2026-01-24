@@ -23,6 +23,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { browser } from '$app/environment';
 import { chatClient, type ApiProcessingState, type ErrorDialogState } from '$lib/clients';
 import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
+import { MessageRole, MessageType } from '$lib/enums';
 
 export type { ApiProcessingState, ErrorDialogState };
 
@@ -262,9 +263,9 @@ class ChatStore {
 	}
 
 	async addMessage(
-		role: 'user' | 'assistant' | 'system' | 'tool',
+		role: MessageRole,
 		content: string,
-		type: 'text' | 'root' = 'text',
+		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
 		extras?: DatabaseMessageExtra[]
 	): Promise<DatabaseMessage | null> {

@@ -23,7 +23,6 @@
 	} from '$lib/constants/settings-sections';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
-	import { SettingsFieldType } from '$lib/enums/settings';
 	import type { Component } from 'svelte';
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
@@ -48,8 +47,12 @@
 				{
 					key: SETTINGS_KEYS.THEME,
 					label: 'Theme',
-					type: SettingsFieldType.SELECT,
-					options: SETTINGS_COLOR_MODES_CONFIG
+					type: 'select',
+					options: [
+						{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+						{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+						{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+					]
 				},
 				{ key: SETTINGS_KEYS.API_KEY, label: 'API Key', type: SettingsFieldType.INPUT },
 				{

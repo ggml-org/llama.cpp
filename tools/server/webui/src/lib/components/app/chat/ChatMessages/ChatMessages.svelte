@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
-	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';

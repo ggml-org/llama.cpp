@@ -1,3 +1,4 @@
+import type { MessageRole } from '$lib/enums';
 import type { ApiChatCompletionRequest, ApiChatMessageContentPart } from './api';
 
 /**
@@ -26,21 +27,21 @@ export type AgenticToolCallPayload = {
  */
 export type AgenticMessage =
 	| {
-			role: 'system' | 'user';
+			role: MessageRole.SYSTEM | MessageRole.USER;
 			content: string | ApiChatMessageContentPart[];
 	  }
 	| {
-			role: 'assistant';
+			role: MessageRole.ASSISTANT;
 			content?: string | ApiChatMessageContentPart[];
 			tool_calls?: AgenticToolCallPayload[];
 	  }
 	| {
-			role: 'tool';
+			role: MessageRole.TOOL;
 			tool_call_id: string;
 			content: string | ApiChatMessageContentPart[];
 	  };
 
-export type AgenticAssistantMessage = Extract<AgenticMessage, { role: 'assistant' }>;
+export type AgenticAssistantMessage = Extract<AgenticMessage, { role: MessageRole.ASSISTANT }>;
 export type AgenticToolCallList = NonNullable<AgenticAssistantMessage['tool_calls']>;
 
 export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messages'> & {

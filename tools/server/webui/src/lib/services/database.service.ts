@@ -17,6 +17,7 @@ class LlamacppDatabase extends Dexie {
 
 const db = new LlamacppDatabase();
 import { v4 as uuid } from 'uuid';
+import { MessageRole } from '$lib/enums';
 
 /**
  * DatabaseService - Stateless IndexedDB communication layer
@@ -162,7 +163,7 @@ export class DatabaseService {
 			convId,
 			type: 'root',
 			timestamp: Date.now(),
-			role: 'system',
+			role: MessageRole.SYSTEM,
 			content: '',
 			parent: null,
 			toolCalls: '',
@@ -195,9 +196,9 @@ export class DatabaseService {
 		const systemMessage: DatabaseMessage = {
 			id: uuid(),
 			convId,
-			type: 'system',
+			type: MessageRole.SYSTEM,
 			timestamp: Date.now(),
-			role: 'system',
+			role: MessageRole.SYSTEM,
 			content: trimmedPrompt,
 			parent: parentId,
 			children: []
