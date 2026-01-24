@@ -101,9 +101,6 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
 
-// Agentic utilities
-export { toAgenticMessages, getAgenticConfig } from './agentic';
-
 // Debounce utilities
 export { debounce } from './debounce';
 

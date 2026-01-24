@@ -26,8 +26,8 @@
 import { mcpClient } from '$lib/clients';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
-import { getAgenticConfig, toAgenticMessages } from '$lib/utils';
-import type { AgenticMessage, AgenticToolCallList } from '$lib/types/agentic';
+import { agenticStore } from '$lib/stores/agentic.svelte';
+import type { AgenticMessage, AgenticToolCallList, AgenticConfig } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
 	ApiChatMessageData,
@@ -48,6 +48,45 @@ import type {
 	McpServerOverride
 } from '$lib/types/database';
 import { AttachmentType, MessageRole } from '$lib/enums';
+
+/**
+ * Converts API messages to agentic format.
+ */
+function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
+	return messages.map((message) => {
+		if (
+			message.role === MessageRole.ASSISTANT &&
+			message.tool_calls &&
+			message.tool_calls.length > 0
+		) {
+			return {
+				role: MessageRole.ASSISTANT,
+				content: message.content,
+				tool_calls: message.tool_calls.map((call, index) => ({
+					id: call.id ?? `call_${index}`,
+					type: (call.type as 'function') ?? 'function',
+					function: {
+						name: call.function?.name ?? '',
+						arguments: call.function?.arguments ?? ''
+					}
+				}))
+			} satisfies AgenticMessage;
+		}
+
+		if (message.role === MessageRole.TOOL && message.tool_call_id) {
+			return {
+				role: MessageRole.TOOL,
+				tool_call_id: message.tool_call_id,
+				content: typeof message.content === 'string' ? message.content : ''
+			} satisfies AgenticMessage;
+		}
+
+		return {
+			role: message.role as MessageRole.SYSTEM | MessageRole.USER,
+			content: message.content
+		} satisfies AgenticMessage;
+	});
+}
 
 export interface AgenticFlowCallbacks {
 	onChunk?: (chunk: string) => void;
@@ -158,7 +197,7 @@ export class AgenticClient {
 		} = callbacks;
 
 		// Get agentic configuration (considering per-chat MCP overrides)
-		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
+		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) {
 			return { handled: false };
 		}
@@ -243,7 +282,7 @@ export class AgenticClient {
 		messages: ApiChatMessageData[];
 		options: AgenticFlowOptions;
 		tools: ReturnType<typeof mcpClient.getToolDefinitionsForLLM>;
-		agenticConfig: ReturnType<typeof getAgenticConfig>;
+		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
 	}): Promise<void> {

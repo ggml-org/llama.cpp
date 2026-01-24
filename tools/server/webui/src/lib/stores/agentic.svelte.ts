@@ -27,7 +27,11 @@
 
 import { browser } from '$app/environment';
 import type { AgenticFlowParams, AgenticFlowResult } from '$lib/clients';
-import type { AgenticSession } from '$lib/types/agentic';
+import type { AgenticSession, AgenticConfig } from '$lib/types/agentic';
+import type { SettingsConfigType } from '$lib/types/settings';
+import type { McpServerOverride } from '$lib/types/database';
+import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { agenticClient } from '$lib/clients/agentic.client';
 
 export type {
@@ -478,6 +482,30 @@ class AgenticStore {
 	 */
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
+	}
+
+	/**
+	 *
+	 * Configuration
+	 *
+	 */
+
+	/**
+	 * Gets the current agentic configuration.
+	 * Automatically disables agentic mode if no MCP servers are configured.
+	 * @param settings - Global settings configuration
+	 * @param perChatOverrides - Optional per-chat MCP server overrides
+	 */
+	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
+		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
+		const maxToolPreviewLines =
+			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+
+		return {
+			enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
+			maxTurns,
+			maxToolPreviewLines
+		};
 	}
 }
 
