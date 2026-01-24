@@ -13,10 +13,28 @@ Status: Draft (2026-01-24)
 ## 基线（Baseline）
 
 ### merged64（现有 fastest 路径）
-- Machine:
-- Build:
+- Machine: Mac16,12 (Apple M4), macOS 26.2 (25C56)
+- Build: `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release` + `cmake --build build-rel` (OpenMP not found)
 - Command:
-- Result:
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+- Result (build `a3329995`):
+  - `pp128`: `162.82 tok/s`
+  - `tg256`: `87.78 tok/s`
+
+### merged64（GGML_IFAIRY_ARM_LUT=ON, CPU-only 配置）
+- Build:
+  - `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
+  - `cmake --build build-rel-lut`
+- Command:
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+- Result (build `a3329995`):
+  - `pp128`: `32.43 tok/s`
+  - `tg256`: `25.56 tok/s`
+
+### microbench（GGML_IFAIRY_ARM_LUT=ON）
+- `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=623.10`
+- `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=45.42`
+- `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=170151.2`
 
 ---
 
@@ -35,4 +53,3 @@ Status: Draft (2026-01-24)
 - 完整命令行（含 env）
 - 原始输出（tok/s）
 - 备注（M/K/N、线程数、模型）
-
