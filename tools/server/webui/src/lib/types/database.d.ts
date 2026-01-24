@@ -52,11 +52,21 @@ export interface DatabaseMessageExtraTextFile {
 	content: string;
 }
 
+export interface DatabaseMessageExtraMcpPrompt {
+	type: AttachmentType.MCP_PROMPT;
+	name: string;
+	serverName: string;
+	promptName: string;
+	content: string;
+	arguments?: Record<string, string>;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
 	| DatabaseMessageExtraPdfFile
+	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
@@ -67,11 +77,7 @@ export interface DatabaseMessage {
 	role: ChatRole;
 	content: string;
 	parent: string | null;
-	/**
-	 * @deprecated - left for backward compatibility
-	 */
 	thinking?: string;
-	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */
 	toolCallId?: string;

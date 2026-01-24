@@ -10,9 +10,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 
 	// Use store methods for consistent sorting logic
-	let rawServers = $derived(mcpStore.getServers());
 	let servers = $derived(mcpStore.getServersSorted());
-	let isLoading = $derived(mcpStore.isAnyServerLoading());
 
 	// New server form state
 	let isAddingServer = $state(false);
@@ -115,13 +113,15 @@
 		</div>
 	{/if}
 
-	{#if rawServers.length > 0}
+	{#if servers.length > 0}
 		<div class="space-y-3">
-			{#if isLoading}
-				<!-- Show skeleton cards while health checks are in progress -->
-				{#each rawServers as server (server.id)}
+			{#each servers as server (server.id)}
+				{@const healthState = mcpStore.getHealthCheckState(server.id)}
+				{@const isServerLoading =
+					healthState.status === 'idle' || healthState.status === 'connecting'}
+
+				{#if isServerLoading}
 					<Card.Root class="grid gap-3 p-4">
-						<!-- Header: favicon + name + version ... toggle -->
 						<div class="flex items-center justify-between gap-4">
 							<div class="flex items-center gap-2">
 								<Skeleton class="h-5 w-5 rounded" />
@@ -131,32 +131,26 @@
 							<Skeleton class="h-6 w-11 rounded-full" />
 						</div>
 
-						<!-- Capability badges -->
 						<div class="flex flex-wrap gap-1.5">
 							<Skeleton class="h-5 w-14 rounded-full" />
 							<Skeleton class="h-5 w-12 rounded-full" />
 							<Skeleton class="h-5 w-16 rounded-full" />
 						</div>
 
-						<!-- Tools & Connection info -->
 						<div class="space-y-1.5">
 							<Skeleton class="h-4 w-40" />
 							<Skeleton class="h-4 w-52" />
 						</div>
 
-						<!-- Protocol version -->
 						<Skeleton class="h-3.5 w-36" />
 
-						<!-- Action buttons -->
 						<div class="flex justify-end gap-2">
 							<Skeleton class="h-8 w-8 rounded" />
 							<Skeleton class="h-8 w-8 rounded" />
 							<Skeleton class="h-8 w-8 rounded" />
 						</div>
 					</Card.Root>
-				{/each}
-			{:else}
-				{#each servers as server (server.id)}
+				{:else}
 					<McpServerCard
 						{server}
 						faviconUrl={getFaviconUrl(server.url)}
@@ -165,8 +159,8 @@
 						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
 						onDelete={() => mcpStore.removeServer(server.id)}
 					/>
-				{/each}
-			{/if}
+				{/if}
+			{/each}
 		</div>
 	{/if}
 </div>

@@ -40,11 +40,12 @@ import type {
 	ClientCapabilities,
 	MCPCapabilitiesInfo,
 	MCPConnectionLog,
+	MCPPromptInfo,
+	GetPromptResult,
 	Tool,
+	Prompt
 } from '$lib/types';
-import type {
-	ListChangedHandlers,
-} from '@modelcontextprotocol/sdk/types.js';
+import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPError } from '$lib/errors';
@@ -168,7 +169,7 @@ export class MCPClient {
 					clientInfo,
 					capabilities,
 					undefined,
-					listChangedHandlers,
+					listChangedHandlers
 				);
 
 				return { name, connection };
@@ -253,6 +254,18 @@ export class MCPClient {
 					this.handleToolsListChanged(serverName, tools ?? []);
 				}
 			},
+			prompts: {
+				onChanged: (error: Error | null, prompts: Prompt[] | null) => {
+					if (error) {
+						console.warn(`[MCPClient][${serverName}] Prompts list changed error:`, error);
+						return;
+					}
+					console.log(
+						`[MCPClient][${serverName}] Prompts list changed, ${prompts?.length ?? 0} prompts`
+					);
+					this.handlePromptsListChanged(serverName);
+				}
+			}
 		};
 	}
 
@@ -290,6 +303,18 @@ export class MCPClient {
 		mcpStore.updateState({
 			toolCount: this.toolsIndex.size
 		});
+	}
+
+	/**
+	 * Handle prompts list changed notification from a server.
+	 * Triggers a refresh of the prompts cache if needed.
+	 */
+	private handlePromptsListChanged(serverName: string): void {
+		// Prompts are fetched on-demand, so we just log the change
+		// The UI will get fresh prompts on next getAllPrompts() call
+		console.log(
+			`[MCPClient][${serverName}] Prompts list updated - will be refreshed on next fetch`
+		);
 	}
 
 	/**
@@ -492,6 +517,77 @@ export class MCPClient {
 	/**
 	 *
 	 *
+	 * Prompts
+	 *
+	 *
+	 */
+
+	/**
+	 * Get all prompts from all connected servers that support prompts.
+	 */
+	async getAllPrompts(): Promise<MCPPromptInfo[]> {
+		const results: MCPPromptInfo[] = [];
+
+		for (const [serverName, connection] of this.connections) {
+			if (!connection.serverCapabilities?.prompts) continue;
+
+			const prompts = await MCPService.listPrompts(connection);
+			for (const prompt of prompts) {
+				results.push({
+					name: prompt.name,
+					description: prompt.description,
+					title: prompt.title,
+					serverName,
+					arguments: prompt.arguments?.map((arg) => ({
+						name: arg.name,
+						description: arg.description,
+						required: arg.required
+					}))
+				});
+			}
+		}
+
+		return results;
+	}
+
+	/**
+	 * Get a prompt by name from a specific server.
+	 * Returns the prompt messages ready to be used in chat.
+	 * Throws an error if the server is not found or prompt execution fails.
+	 */
+	async getPrompt(
+		serverName: string,
+		promptName: string,
+		args?: Record<string, string>
+	): Promise<GetPromptResult> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			const errorMsg = `Server "${serverName}" not found for prompt "${promptName}"`;
+			console.error(`[MCPClient] ${errorMsg}`);
+
+			throw new Error(errorMsg);
+		}
+
+		return MCPService.getPrompt(connection, promptName, args);
+	}
+
+	/**
+	 * Check if any connected server supports prompts.
+	 */
+	hasPromptsSupport(): boolean {
+		for (const connection of this.connections.values()) {
+			if (connection.serverCapabilities?.prompts) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 *
+	 *
 	 * Tool Execution
 	 *
 	 *
@@ -581,6 +677,47 @@ export class MCPClient {
 		}
 
 		throw new MCPError(`Invalid tool arguments type: ${typeof args}`, -32602);
+	}
+
+	/**
+	 *
+	 *
+	 * Completions
+	 *
+	 *
+	 */
+
+	/**
+	 * Get completion suggestions for a prompt argument.
+	 * Used for autocompleting prompt argument values.
+	 *
+	 * @param serverName - Name of the server hosting the prompt
+	 * @param promptName - Name of the prompt
+	 * @param argumentName - Name of the argument being completed
+	 * @param argumentValue - Current partial value of the argument
+	 * @returns Completion suggestions or null if not supported/error
+	 */
+	async getPromptCompletions(
+		serverName: string,
+		promptName: string,
+		argumentName: string,
+		argumentValue: string
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		const connection = this.connections.get(serverName);
+		if (!connection) {
+			console.warn(`[MCPClient] Server "${serverName}" is not connected`);
+			return null;
+		}
+
+		if (!connection.serverCapabilities?.completions) {
+			return null;
+		}
+
+		return MCPService.complete(
+			connection,
+			{ type: 'ref/prompt', name: promptName },
+			{ name: argumentName, value: argumentValue }
+		);
 	}
 
 	/**

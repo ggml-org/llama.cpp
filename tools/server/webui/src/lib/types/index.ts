@@ -48,6 +48,7 @@ export type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile,
 	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraMcpPrompt,
 	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtra,
@@ -83,6 +84,7 @@ export type {
 	MCPServerInfo,
 	MCPCapabilitiesInfo,
 	MCPToolInfo,
+	MCPPromptInfo,
 	MCPConnectionDetails,
 	MCPPhaseCallback,
 	MCPConnection,
@@ -98,4 +100,7 @@ export type {
 	ToolCallParams,
 	ToolExecutionResult,
 	Tool,
+	Prompt,
+	GetPromptResult,
+	PromptMessage
 } from './mcp';

@@ -254,6 +254,25 @@ export function buildMcpClientConfig(
 }
 
 /**
+ * Gets enabled MCP servers for a conversation based on per-chat overrides.
+ * Returns servers that are both globally enabled AND enabled for this chat.
+ * @param config - Global settings configuration
+ * @param perChatOverrides - Per-chat server overrides
+ * @returns Array of enabled server settings entries
+ */
+export function getEnabledServersForConversation(
+	config: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): MCPServerSettingsEntry[] {
+	if (!perChatOverrides?.length) {
+		return [];
+	}
+
+	const allServers = parseMcpServerSettings(config.mcpServers);
+	return allServers.filter((server) => checkServerEnabled(server, perChatOverrides));
+}
+
+/**
  * Get the appropriate icon component for a log level
  *
  * @param level - MCP log level

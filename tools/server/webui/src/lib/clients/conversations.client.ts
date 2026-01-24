@@ -25,6 +25,8 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
+import { getEnabledServersForConversation } from '$lib/utils/mcp';
+import { mcpClient } from '$lib/clients/mcp.client';
 import type { McpServerOverride } from '$lib/types/database';
 
 interface ConversationsStoreStateCallbacks {
@@ -159,11 +161,40 @@ export class ConversationsClient {
 				this.store.setActiveMessages(messages);
 			}
 
+			// Run MCP health checks for enabled servers in this conversation
+			this.runMcpHealthChecksForConversation(conversation.mcpServerOverrides);
+
 			return true;
 		} catch (error) {
 			console.error('Failed to load conversation:', error);
 			return false;
 		}
+	}
+
+	/**
+	 * Runs MCP health checks for servers enabled in a conversation.
+	 * Runs asynchronously in the background without blocking conversation loading.
+	 * @param mcpServerOverrides - The conversation's MCP server overrides
+	 */
+	private runMcpHealthChecksForConversation(mcpServerOverrides?: McpServerOverride[]): void {
+		if (!mcpServerOverrides?.length) {
+			return;
+		}
+
+		const enabledServers = getEnabledServersForConversation(config(), mcpServerOverrides);
+
+		if (enabledServers.length === 0) {
+			return;
+		}
+
+		console.log(
+			`[ConversationsClient] Running health checks for ${enabledServers.length} MCP server(s)`
+		);
+
+		// Run health checks in background (don't await)
+		mcpClient.runHealthChecksForServers(enabledServers).catch((error) => {
+			console.warn('[ConversationsClient] MCP health checks failed:', error);
+		});
 	}
 
 	/**

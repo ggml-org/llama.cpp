@@ -9,7 +9,7 @@ export * from './models';
 export * from './navigation';
 export * from './server';
 
-// Chat
+export { default as ChatAttachmentMcpPrompt } from './chat/ChatAttachments/ChatAttachmentMcpPrompt.svelte';
 export { default as ChatAttachmentPreview } from './chat/ChatAttachments/ChatAttachmentPreview.svelte';
 export { default as ChatAttachmentThumbnailFile } from './chat/ChatAttachments/ChatAttachmentThumbnailFile.svelte';
 export { default as ChatAttachmentThumbnailImage } from './chat/ChatAttachments/ChatAttachmentThumbnailImage.svelte';
@@ -23,6 +23,8 @@ export { default as ChatFormActions } from './chat/ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionSubmit } from './chat/ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormFileInputInvisible.svelte';
 export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperText.svelte';
+export { default as ChatFormInputArea } from './chat/ChatForm/ChatFormInputArea.svelte';
+export { default as ChatFormPromptPicker } from './chat/ChatForm/ChatFormPromptPicker.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
 
 export { default as AgenticContent } from './chat/ChatMessages/AgenticContent.svelte';

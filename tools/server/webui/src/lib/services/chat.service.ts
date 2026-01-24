@@ -2,6 +2,7 @@ import { getJsonHeaders } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
+import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 export class ChatService {
 	private static stripReasoningContent(
@@ -751,8 +752,20 @@ export class ChatService {
 			}
 		}
 
-		const result: ApiChatMessageData = {
-			role: message.role as MessageRole,
+		const mcpPrompts = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
+				extra.type === AttachmentType.MCP_PROMPT
+		);
+
+		for (const mcpPrompt of mcpPrompts) {
+			contentParts.push({
+				type: 'text',
+				text: `\n\n--- MCP Prompt: ${mcpPrompt.name} (${mcpPrompt.serverName}) ---\n${mcpPrompt.content}`
+			});
+		}
+
+		return {
+			role: message.role as 'user' | 'assistant' | 'system',
 			content: contentParts
 		};
 

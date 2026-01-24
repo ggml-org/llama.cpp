@@ -1,26 +1,6 @@
 <script lang="ts">
-	import {
-		ChatAttachmentsList,
-		ChatFormActions,
-		ChatFormFileInputInvisible,
-		ChatFormTextarea
-	} from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/css-classes';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { CLIPBOARD_CONTENT_QUOTE_PREFIX } from '$lib/constants/chat-form';
-	import { KeyboardKey, MimeTypeText } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
-	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		isAudioRecordingSupported
-	} from '$lib/utils/browser-only';
+	import { afterNavigate } from '$app/navigation';
+	import { ChatFormHelperText, ChatFormInputArea } from '$lib/components/app';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -61,292 +41,79 @@
 		onValueChange
 	}: Props = $props();
 
-	/**
-	 *
-	 *
-	 * STATE
-	 *
-	 *
-	 */
+	let inputAreaRef: ChatFormInputArea | undefined = $state(undefined);
+	let message = $state('');
+	let previousIsLoading = $state(isLoading);
 
-	// Component References
-	let audioRecorder: AudioRecorder | undefined;
-	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
-	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
-
-	// Audio Recording State
-	let isRecording = $state(false);
-	let recordingSupported = $state(false);
-
-	/**
-	 *
-	 *
-	 * DERIVED STATE
-	 *
-	 *
-	 */
-
-	// Configuration
-	let currentConfig = $derived(config());
-	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
-		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
-	});
-
-	// Model Selection Logic
-	let isRouter = $derived(isRouterMode());
-	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
-	);
-	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = selectedModelId();
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-			if (model) return model.model;
-		}
-
-		return null;
-	});
-
-	// Form Validation State
-	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
-	let hasAttachments = $derived(
-		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
-	);
-	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	/**
-	 *
-	 *
-	 * LIFECYCLE
-	 *
-	 *
-	 */
+	async function handleSubmit() {
+		if (
+			(!message.trim() && uploadedFiles.length === 0) ||
+			disabled ||
+			isLoading ||
+			hasLoadingAttachments
+		)
+			return;
+
+		if (!inputAreaRef?.checkModelSelected()) return;
+
+		const messageToSend = message.trim();
+		const filesToSend = [...uploadedFiles];
+
+		message = '';
+		uploadedFiles = [];
+
+		inputAreaRef?.resetHeight();
+
+		const success = await onSend?.(messageToSend, filesToSend);
+
+		if (!success) {
+			message = messageToSend;
+			uploadedFiles = filesToSend;
+		}
+	}
+
+	function handleFilesAdd(files: File[]) {
+		onFileUpload?.(files);
+	}
+
+	function handleUploadedFileRemove(fileId: string) {
+		onFileRemove?.(fileId);
+	}
 
 	onMount(() => {
-		recordingSupported = isAudioRecordingSupported();
-		audioRecorder = new AudioRecorder();
+		setTimeout(() => inputAreaRef?.focus(), 10);
 	});
 
-	/**
-	 *
-	 *
-	 * PUBLIC API
-	 *
-	 *
-	 */
+	afterNavigate(() => {
+		setTimeout(() => inputAreaRef?.focus(), 10);
+	});
 
-	export function focus() {
-		textareaRef?.focus();
-	}
-
-	export function resetTextareaHeight() {
-		textareaRef?.resetHeight();
-	}
-
-	export function openModelSelector() {
-		chatFormActionsRef?.openModelSelector();
-	}
-
-	/**
-	 * Check if a model is selected, open selector if not
-	 * @returns true if model is selected, false otherwise
-	 */
-	export function checkModelSelected(): boolean {
-		if (!hasModelSelected) {
-			chatFormActionsRef?.openModelSelector();
-			return false;
-		}
-		return true;
-	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - File Management
-	 *
-	 *
-	 */
-
-	function handleFileSelect(files: File[]) {
-		onFilesAdd?.(files);
-	}
-
-	function handleFileUpload() {
-		fileInputRef?.click();
-	}
-
-	function handleFileRemove(fileId: string) {
-		if (fileId.startsWith('attachment-')) {
-			const index = parseInt(fileId.replace('attachment-', ''), 10);
-			if (!isNaN(index) && index >= 0 && index < attachments.length) {
-				onAttachmentRemove?.(index);
-			}
-		} else {
-			onUploadedFileRemove?.(fileId);
-		}
-	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Input & Keyboard
-	 *
-	 *
-	 */
-
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-
-			if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
-
-			onSubmit?.();
-		}
-	}
-
-	function handlePaste(event: ClipboardEvent) {
-		if (!event.clipboardData) return;
-
-		const files = Array.from(event.clipboardData.items)
-			.filter((item) => item.kind === 'file')
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-
-		if (files.length > 0) {
-			event.preventDefault();
-			onFilesAdd?.(files);
-			return;
+	$effect(() => {
+		if (previousIsLoading && !isLoading) {
+			setTimeout(() => inputAreaRef?.focus(), 10);
 		}
 
-		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
-
-		if (text.startsWith(CLIPBOARD_CONTENT_QUOTE_PREFIX)) {
-			const parsed = parseClipboardContent(text);
-
-			if (parsed.textAttachments.length > 0) {
-				event.preventDefault();
-				value = parsed.message;
-				onValueChange?.(parsed.message);
-
-				// Handle text attachments as files
-				if (parsed.textAttachments.length > 0) {
-					const attachmentFiles = parsed.textAttachments.map(
-						(att) =>
-							new File([att.content], att.name, {
-								type: MimeTypeText.PLAIN
-							})
-					);
-					onFilesAdd?.(attachmentFiles);
-				}
-
-				setTimeout(() => {
-					textareaRef?.focus();
-				}, 10);
-
-				return;
-			}
-		}
-
-		if (
-			text.length > 0 &&
-			pasteLongTextToFileLength > 0 &&
-			text.length > pasteLongTextToFileLength
-		) {
-			event.preventDefault();
-
-			const textFile = new File([text], 'Pasted', {
-				type: MimeTypeText.PLAIN
-			});
-
-			onFilesAdd?.([textFile]);
-		}
-	}
-
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - Audio Recording
-	 *
-	 *
-	 */
-
-	async function handleMicClick() {
-		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
-			return;
-		}
-
-		if (isRecording) {
-			try {
-				const audioBlob = await audioRecorder.stopRecording();
-				const wavBlob = await convertToWav(audioBlob);
-				const audioFile = createAudioFile(wavBlob);
-
-				onFilesAdd?.([audioFile]);
-				isRecording = false;
-			} catch (error) {
-				console.error('Failed to stop recording:', error);
-				isRecording = false;
-			}
-		} else {
-			try {
-				await audioRecorder.startRecording();
-				isRecording = true;
-			} catch (error) {
-				console.error('Failed to start recording:', error);
-			}
-		}
-	}
+		previousIsLoading = isLoading;
+	});
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<div class="relative mx-auto max-w-[48rem]">
+	<ChatFormInputArea
+		bind:this={inputAreaRef}
+		bind:value={message}
+		bind:uploadedFiles
+		class={className}
+		{disabled}
+		{isLoading}
+		showMcpPromptButton={true}
+		onFilesAdd={handleFilesAdd}
+		{onStop}
+		onSubmit={handleSubmit}
+		onSystemPromptClick={onSystemPromptAdd}
+		onUploadedFileRemove={handleUploadedFileRemove}
+	/>
+</div>
 
-<form
-	class="relative {className}"
-	onsubmit={(e) => {
-		e.preventDefault();
-		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
-		onSubmit?.();
-	}}
->
-	<div
-			class="flex-column relative min-h-[48px] items-center rounded-3xl p-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!p-3"
-		onpaste={handlePaste}
-	>
-		<ChatFormTextarea
-				class="px-2 py-1 md:py-0"
-			bind:value={message}
-			onKeydown={handleKeydown}
-			{disabled}
-		/>
-
-		<ChatFormActions
-			class="px-3"
-			bind:this={chatFormActionsRef}
-			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
-			hasText={message.trim().length > 0}
-			{disabled}
-			{isLoading}
-			{isRecording}
-			{uploadedFiles}
-			onFileUpload={handleFileUpload}
-			onMicClick={handleMicClick}
-			onStop={handleStop}
-			onSystemPromptClick={onSystemPromptAdd}
-		/>
-	</div>
-</form>
+<ChatFormHelperText show={showHelperText} />

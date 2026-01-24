@@ -17,13 +17,17 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		showDeleteDialog: boolean;
+		onCancelEdit: () => void;
+		onSaveEdit: () => void;
+		onSaveEditOnly?: () => void;
+		onEditedContentChange: (content: string) => void;
+		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
+		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
+		onCopy: () => void;
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy: () => void;
 	}
 
 	let {
@@ -31,13 +35,18 @@
 		message,
 		siblingInfo = null,
 		deletionInfo,
-		showDeleteDialog,
+		onCancelEdit,
+		onSaveEdit,
+		onSaveEditOnly,
+		onEditedContentChange,
+		onEditedExtrasChange,
+		onEditedUploadedFilesChange,
+		onCopy,
 		onEdit,
 		onDelete,
 		onConfirmDelete,
-		onShowDeleteDialogChange,
 		onNavigateToSibling,
-		onCopy
+		onShowDeleteDialogChange
 	}: Props = $props();
 
 	// Get contexts
@@ -79,7 +88,6 @@
 >
 	{#if isEditing}
 		<ChatMessageEditForm
-			bind:textareaElement
 			{editedContent}
 			{editedExtras}
 			{editedUploadedFiles}
@@ -89,7 +97,6 @@
 			{onCancelEdit}
 			{onSaveEdit}
 			{onSaveEditOnly}
-			{onEditKeydown}
 			{onEditedContentChange}
 			{onEditedExtrasChange}
 			{onEditedUploadedFilesChange}

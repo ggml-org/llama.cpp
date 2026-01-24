@@ -34,6 +34,18 @@ export async function parseFilesToMessageExtras(
 	const emptyFiles: string[] = [];
 
 	for (const file of files) {
+		if (file.type === 'mcp-prompt' && file.mcpPrompt) {
+			extras.push({
+				type: AttachmentType.MCP_PROMPT,
+				name: file.name,
+				serverName: file.mcpPrompt.serverName,
+				promptName: file.mcpPrompt.promptName,
+				content: file.textContent ?? '',
+				arguments: file.mcpPrompt.arguments
+			});
+			continue;
+		}
+
 		if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
 			if (file.preview) {
 				let base64Url = file.preview;

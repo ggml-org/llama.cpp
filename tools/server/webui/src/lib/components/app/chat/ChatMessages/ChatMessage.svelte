@@ -10,6 +10,7 @@
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
+	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
 		class?: string;
@@ -213,7 +214,12 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onNavigateToSibling={handleNavigateToSibling}
+		onEditedContentChange={handleEditedContentChange}
+		onEditedExtrasChange={handleEditedExtrasChange}
+		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
+		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onSaveEditOnly={handleSaveEditOnly}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
