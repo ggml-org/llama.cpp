@@ -22,6 +22,7 @@
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
 	import type { Component } from 'svelte';
+	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 
 	interface Props {
 		onSave?: () => void;
@@ -342,44 +343,18 @@
 
 		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
-		const numericFields = [
-			'temperature',
-			'top_k',
-			'top_p',
-			'min_p',
-			'max_tokens',
-			'pasteLongTextToFileLen',
-			'dynatemp_range',
-			'dynatemp_exponent',
-			'typ_p',
-			'xtc_probability',
-			'xtc_threshold',
-			'repeat_last_n',
-			'repeat_penalty',
-			'presence_penalty',
-			'frequency_penalty',
-			'dry_multiplier',
-			'dry_base',
-			'dry_allowed_length',
-			'dry_penalty_last_n',
-			'agenticMaxTurns',
-			'agenticMaxToolPreviewLines'
-		];
 
-		const positiveIntegerFields = ['agenticMaxTurns', 'agenticMaxToolPreviewLines'];
-
-		for (const field of numericFields) {
+		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
 				if (!isNaN(numValue)) {
-					if (positiveIntegerFields.includes(field)) {
+					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
 						processedConfig[field] = Math.max(1, Math.round(numValue));
 					} else {
 						processedConfig[field] = numValue;
 					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
-
 					return;
 				}
 			}
