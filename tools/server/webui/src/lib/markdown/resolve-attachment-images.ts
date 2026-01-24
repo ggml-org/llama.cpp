@@ -1,6 +1,7 @@
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
 import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
+import { AttachmentType } from '$lib/enums';
 
 /**
  * Rehype plugin to resolve attachment image sources.
@@ -19,7 +20,8 @@ export function rehypeResolveAttachmentImages(options: { message?: DatabaseMessa
 
 				// Find matching attachment
 				const attachment = options.message?.extra?.find(
-					(a): a is DatabaseMessageExtraImageFile => a.type === 'IMAGE' && a.name === src
+					(a): a is DatabaseMessageExtraImageFile =>
+						a.type === AttachmentType.IMAGE && a.name === src
 				);
 
 				// Replace with base64 URL if found

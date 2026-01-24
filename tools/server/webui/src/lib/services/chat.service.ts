@@ -1,6 +1,6 @@
 import { getJsonHeaders } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
-import { AttachmentType, MessageRole } from '$lib/enums';
+import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 

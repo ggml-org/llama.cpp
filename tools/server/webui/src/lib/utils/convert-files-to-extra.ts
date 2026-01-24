@@ -1,7 +1,7 @@
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory, AttachmentType } from '$lib/enums';
+import { FileTypeCategory, AttachmentType, SpecialFileType } from '$lib/enums';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
@@ -34,7 +34,7 @@ export async function parseFilesToMessageExtras(
 	const emptyFiles: string[] = [];
 
 	for (const file of files) {
-		if (file.type === 'mcp-prompt' && file.mcpPrompt) {
+		if (file.type === SpecialFileType.MCP_PROMPT && file.mcpPrompt) {
 			extras.push({
 				type: AttachmentType.MCP_PROMPT,
 				name: file.name,

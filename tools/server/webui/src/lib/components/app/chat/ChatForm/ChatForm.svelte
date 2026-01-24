@@ -8,7 +8,7 @@
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { MimeTypeText } from '$lib/enums';
+	import { MimeTypeText, SpecialFileType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -189,7 +189,7 @@
 			id: placeholderId,
 			name: promptName,
 			size: 0,
-			type: 'mcp-prompt',
+			type: SpecialFileType.MCP_PROMPT,
 			file: new File([], 'loading'),
 			isLoading: true,
 			mcpPrompt: {
