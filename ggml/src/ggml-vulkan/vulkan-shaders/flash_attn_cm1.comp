@@ -191,14 +191,15 @@ void main() {
 
         [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
 #if BLOCK_SIZE == 1
-            if (KV_bounds_check) {
+            if (KV_bounds_check || d * 16 + 16 > HSK) {
 #endif
+            barrier();
             [[unroll]] for (uint32_t idx = 0; idx < Bc * MatBr / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t col_vec = (idx + tid) % (MatBr / 4);
                 uint32_t row = (idx + tid) / (MatBr / 4);
                 if (idx + tid < Bc * MatBr / 4) {
                     f16vec4 K_Tf = f16vec4(0);
-                    if (!KV_bounds_check || j * Bc + row < KV) {
+                    if ((!KV_bounds_check || j * Bc + row < KV) && (HSK == HSK_pad || d * 16 + col_vec * 4 < HSK)) {
 #if BLOCK_SIZE > 1
                         uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE + d * 16 + col_vec * 4;
                         uint ib = coord / BLOCK_SIZE;
@@ -218,7 +219,7 @@ void main() {
 #endif
 
 #if BLOCK_SIZE == 1
-            if (KV_bounds_check)
+            if (KV_bounds_check || d * 16 + 16 > HSK)
 #endif
             {
                 uint coord = (gl_SubgroupID * MatBc) * kshstride;
@@ -421,15 +422,12 @@ void main() {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 const uint row = tile_row(r);
 
-                [[unroll]] for (uint32_t d0 = d_start; d0 < d_end; d0 += threads_per_rowgroup) {
-                    const uint d = d0 + col_tid;
-                    if (d >= d_end) break;
-
+                [[unroll]] for (uint32_t d_local = 0; d_local < d_per_thread; ++d_local) {
+                    const uint d = d_local * threads_per_rowgroup + col_tid;
                     const uint hsv_col = 4 * d;
-                    const uint local_hsv = (hsv_col - hsv_base) / 4;
 
-                    if (!KV_bounds_check || hsv_col < HSV) {
-                        const uint d_local = d0 / threads_per_rowgroup;
+                    if (hsv_col >= hsv_base && hsv_col < hsv_base + hsv_per_tile && hsv_col < HSV) {
+                        const uint local_hsv = (hsv_col - hsv_base) / 4;
                         Of[r][d_local] += ACC_TYPEV4(sfsh[row * osh_stride + local_hsv]);
                     }
                 }
