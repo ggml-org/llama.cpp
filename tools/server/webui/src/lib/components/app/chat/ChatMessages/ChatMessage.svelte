@@ -5,12 +5,14 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
-	import { MessageRole } from '$lib/enums';
+	import { MessageRole, AttachmentType } from '$lib/enums';
 	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
+	import ChatMessageMcpPrompt from './ChatMessageMcpPrompt.svelte';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -41,6 +43,20 @@
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
+
+	let mcpPromptExtra = $derived.by(() => {
+		if (message.role !== MessageRole.USER) return null;
+		if (message.content.trim()) return null;
+		if (!message.extra || message.extra.length !== 1) return null;
+
+		const extra = message.extra[0];
+
+		if (extra.type === AttachmentType.MCP_PROMPT) {
+			return extra as DatabaseMessageExtraMcpPrompt;
+		}
+
+		return null;
+	});
 
 	// Auto-start edit mode if this message is the pending edit target
 	$effect(() => {
@@ -201,6 +217,21 @@
 		onDelete={handleDelete}
 		onEdit={handleEdit}
 		onNavigateToSibling={handleNavigateToSibling}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
+{:else if mcpPromptExtra}
+	<ChatMessageMcpPrompt
+		class={className}
+		{deletionInfo}
+		{message}
+		mcpPrompt={mcpPromptExtra}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		{onNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
