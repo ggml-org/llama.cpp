@@ -137,6 +137,7 @@ Status: Draft (2026-01-24)
 - 机器型号、OS、编译参数
 - 完整 bench 命令行 + env
 - 原始输出（tok/s）
+- 如需定位瓶颈：补充 xctrace CPU Counters 采样（模板：`test.tracetemplate`，方案：`IFAIRY_ARM_3W_LUT_V2_XCTRACE_CPU_COUNTERS.md`）
 
 ---
 
@@ -162,4 +163,3 @@ Status: Draft (2026-01-24)
 - 16 行 tile kernel（TBL 查表 + int16 累加 + scale 写回）
 
 其余（`lut_c/main.c`、测试数据脚本）不进入 ggml 生产路径，可仅作为开发对照。
-
