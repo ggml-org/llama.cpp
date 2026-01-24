@@ -1,0 +1,739 @@
+{
+  "version": "1.0",
+  "kernels": [
+    "mmvq_aos",
+    "mmvq_aos_baseline",
+    "mmvq_soa",
+    "mmvq_soa_baseline",
+    "mmvq_coalesced",
+    "mmvq_slm_cached",
+    "mmvq_prefetch",
+    "mmvq_wide_load",
+    "mmvq_esimd_block_load",
+    "mmvq_esimd_slm",
+    "mmvq_xmx_tile_8x8",
+    "mmvq_xmx_tile_16x16",
+    "mmvq_xmx_aos_direct",
+    "mmvq_xmx_soa_direct",
+    "mmvq_xmx_double_buffer",
+    "mmvq_esimd_dpas_1x16x32",
+    "mmvq_esimd_dpas_8x16x32",
+    "mmvq_esimd_dpas_chained",
+    "mmvq_xmx_tile_64x64",
+    "mmvq_xmx_register_accum",
+    "mmvq_xmx_multi_wg",
+    "mmvq_xmx_persistent",
+    "mmvq_esimd_large_tile",
+    "mmvq_esimd_persistent",
+    "mmvq_esimd_lsc_prefetch",
+    "mmvq_hybrid_adaptive",
+    "mmvq_xmx_fused",
+    "mmvq_coalesced_xmx_aligned",
+    "mmvq_esimd_hybrid",
+    "mmvq_esimd_cooperative",
+    "mmvq_q4_0_specialized",
+    "mmvq_q6_k_specialized",
+    "mmvq_mxfp4_native",
+    "mmq_aos",
+    "mmq_soa",
+    "mmq_coalesced",
+    "dpas_memory_patterns"
+  ],
+  "quant_types": [
+    "Q4_0",
+    "Q8_0",
+    "Q6_K",
+    "MXFP4",
+    "Q4_K",
+    "Q2_K",
+    "Q3_K",
+    "Q5_K"
+  ],
+  "memory_modes": [
+    "USM_DEVICE",
+    "USM_SHARED",
+    "BUFFER"
+  ],
+  "dimension_sets": {
+    "standard": [
+      4096,
+      5120,
+      6144,
+      8192,
+      14336
+    ],
+    "transitional": [
+      4096,
+      8192
+    ],
+    "moe": [
+      2048,
+      4096,
+      8192,
+      16384
+    ],
+    "coalesced_q6k": [
+      8192,
+      16384
+    ],
+    "memory_compare": [
+      4096,
+      8192
+    ]
+  },
+  "batch_sets": {
+    "core": [
+      1,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      256,
+      512
+    ],
+    "transitional": [
+      8,
+      16,
+      32,
+      64
+    ],
+    "transitional_esimd": [
+      8,
+      16,
+      32
+    ],
+    "hybrid_thresholds": [
+      1,
+      4,
+      32,
+      64
+    ],
+    "moe": [
+      2,
+      6,
+      96
+    ],
+    "memory_compare": [
+      1,
+      32,
+      128
+    ],
+    "compute": [
+      64,
+      128
+    ]
+  },
+  "config_sets": [
+    {
+      "name": "core_aos",
+      "kernels": [
+        "mmvq_aos"
+      ],
+      "quant_types": "all",
+      "dimensions": "standard",
+      "batches": "core",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Baseline AOS coverage across standard model dims and batch regimes."
+    },
+    {
+      "name": "core_soa",
+      "kernels": [
+        "mmvq_soa"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K",
+        "Q4_K"
+      ],
+      "dimensions": "standard",
+      "batches": "core",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "SoA layout coverage for supported quant types."
+    },
+    {
+      "name": "core_coalesced",
+      "kernels": [
+        "mmvq_coalesced"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "MXFP4"
+      ],
+      "dimensions": "standard",
+      "batches": "core",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Coalesced layout coverage for block-32 quant types."
+    },
+    {
+      "name": "tier1_esimd",
+      "kernels": [
+        "mmvq_esimd_block_load",
+        "mmvq_esimd_slm"
+      ],
+      "quant_types": "all",
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        1,
+        4
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-1 ESIMD kernels for memory-bound batches (1-4)."
+    },
+    {
+      "name": "tier2_xmx",
+      "kernels": [
+        "mmvq_xmx_tile_8x8",
+        "mmvq_xmx_tile_16x16",
+        "mmvq_xmx_aos_direct",
+        "mmvq_xmx_soa_direct",
+        "mmvq_xmx_double_buffer"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K",
+        "MXFP4",
+        "Q4_K"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        8,
+        16
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-2 XMX kernels for transitional batches (8-16), single dim to stay under cap."
+    },
+    {
+      "name": "tier2_esimd",
+      "kernels": [
+        "mmvq_esimd_dpas_1x16x32",
+        "mmvq_esimd_dpas_8x16x32",
+        "mmvq_esimd_dpas_chained"
+      ],
+      "quant_types": "all",
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        8,
+        16
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "ESIMD MMVQ variants for transitional batches (8-16), single dim to stay under cap."
+    },
+    {
+      "name": "tier3_xmx",
+      "kernels": [
+        "mmvq_xmx_tile_64x64",
+        "mmvq_xmx_register_accum",
+        "mmvq_xmx_multi_wg",
+        "mmvq_xmx_persistent"
+      ],
+      "quant_types": "all",
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-3 XMX kernels for compute-bound batches (64-128), single dim to stay under cap."
+    },
+    {
+      "name": "mmq_aos_compute",
+      "kernels": [
+        "mmq_aos"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K",
+        "Q4_K",
+        "Q2_K",
+        "Q3_K",
+        "Q5_K"
+      ],
+      "dimensions": "standard",
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "MMQ AOS coverage for compute-bound batches (64-128)."
+    },
+    {
+      "name": "mmq_soa_compute",
+      "kernels": [
+        "mmq_soa"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K",
+        "MXFP4",
+        "Q4_K"
+      ],
+      "dimensions": "standard",
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "MMQ SoA layout coverage for supported quant types."
+    },
+    {
+      "name": "mmq_coalesced_compute",
+      "kernels": [
+        "mmq_coalesced"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K"
+      ],
+      "dimensions": "standard",
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "MMQ coalesced layout coverage for block-32 quant types."
+    },
+    {
+      "name": "tier3_esimd",
+      "kernels": [
+        "mmvq_esimd_large_tile",
+        "mmvq_esimd_persistent",
+        "mmvq_esimd_lsc_prefetch"
+      ],
+      "quant_types": "all",
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-3 ESIMD kernels for compute-bound batches (64-128), single dim to stay under cap."
+    },
+    {
+      "name": "tier4_hybrid_adaptive",
+      "kernels": [
+        "mmvq_hybrid_adaptive"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": "hybrid_thresholds",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 adaptive hybrid routing across batch thresholds."
+    },
+    {
+      "name": "tier4_xmx_fused",
+      "kernels": [
+        "mmvq_xmx_fused"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        8,
+        16
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 fused XMX path for transitional batches."
+    },
+    {
+      "name": "tier4_coalesced_xmx_aligned",
+      "kernels": [
+        "mmvq_coalesced_xmx_aligned"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        8,
+        16
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 coalesced routing for aligned XMX workloads."
+    },
+    {
+      "name": "tier4_esimd_hybrid",
+      "kernels": [
+        "mmvq_esimd_hybrid"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": [
+        1,
+        4,
+        64
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 ESIMD hybrid coverage across memory and compute regimes."
+    },
+    {
+      "name": "tier4_esimd_cooperative",
+      "kernels": [
+        "mmvq_esimd_cooperative"
+      ],
+      "quant_types": [
+        "Q4_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 ESIMD cooperative persistent kernel coverage."
+    },
+    {
+      "name": "tier4_q4_0_specialized",
+      "kernels": [
+        "mmvq_q4_0_specialized"
+      ],
+      "quant_types": [
+        "Q4_0"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 Q4_0 specialized large-tile XMX coverage."
+    },
+    {
+      "name": "tier4_q6_k_specialized",
+      "kernels": [
+        "mmvq_q6_k_specialized"
+      ],
+      "quant_types": [
+        "Q6_K"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 Q6_K specialized large-tile XMX coverage."
+    },
+    {
+      "name": "tier4_mxfp4_native",
+      "kernels": [
+        "mmvq_mxfp4_native"
+      ],
+      "quant_types": [
+        "MXFP4"
+      ],
+      "dimensions": [
+        4096
+      ],
+      "batches": "compute",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Tier-4 MXFP4 native large-tile XMX coverage."
+    },
+    {
+      "name": "coalesced_q6k",
+      "kernels": [
+        "mmvq_coalesced"
+      ],
+      "quant_types": [
+        "Q6_K"
+      ],
+      "dimensions": "coalesced_q6k",
+      "batches": [
+        1,
+        32,
+        128,
+        512
+      ],
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "Q6_K coalesced requires k/256 multiple of 32 blocks (k multiple of 8192)."
+    },
+    {
+      "name": "moe_aos",
+      "kernels": [
+        "mmvq_aos"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "Q6_K",
+        "MXFP4"
+      ],
+      "dimensions": "moe",
+      "batches": "moe",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "MoE expert dims in AOS layout."
+    },
+    {
+      "name": "moe_coalesced",
+      "kernels": [
+        "mmvq_coalesced"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0",
+        "MXFP4"
+      ],
+      "dimensions": "moe",
+      "batches": "moe",
+      "memory_modes": [
+        "USM_DEVICE"
+      ],
+      "notes": "MoE expert dims in coalesced layout (block-32 quant types)."
+    },
+    {
+      "name": "memory_mode_compare",
+      "kernels": [
+        "mmvq_aos",
+        "mmvq_coalesced"
+      ],
+      "quant_types": [
+        "Q4_0",
+        "Q8_0"
+      ],
+      "dimensions": "memory_compare",
+      "batches": "memory_compare",
+      "memory_modes": [
+        "USM_SHARED",
+        "BUFFER"
+      ],
+      "notes": "USM vs buffer comparisons on representative dims/batches."
+    }
+  ],
+  "edge_cases": [
+    {
+      "name": "non_aligned_dim",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 1,
+      "dim": 4097,
+      "memory_mode": "USM_DEVICE",
+      "expected_failure": true,
+      "notes": "K not divisible by 32 (Q4_0)."
+    },
+    {
+      "name": "non_aligned_batch",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 63,
+      "dim": 4096,
+      "memory_mode": "USM_DEVICE",
+      "notes": "Batch not power-of-two."
+    },
+    {
+      "name": "minimum_dim",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 1,
+      "dim": 64,
+      "memory_mode": "USM_DEVICE",
+      "notes": "Smallest viable dim (multiple of 32)."
+    },
+    {
+      "name": "batch_boundary_5",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 5,
+      "dim": 4096,
+      "memory_mode": "USM_DEVICE",
+      "notes": "Boundary between batch=4 and batch=5."
+    },
+    {
+      "name": "batch_boundary_31",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 31,
+      "dim": 4096,
+      "memory_mode": "USM_DEVICE",
+      "notes": "Power-of-two boundary (31)."
+    },
+    {
+      "name": "batch_boundary_33",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 33,
+      "dim": 4096,
+      "memory_mode": "USM_DEVICE",
+      "notes": "Power-of-two boundary (33)."
+    },
+    {
+      "name": "coalesced_q6k_non_tile",
+      "kernel": "mmvq_coalesced",
+      "quant": "Q6_K",
+      "batch": 1,
+      "dim": 4096,
+      "memory_mode": "USM_DEVICE",
+      "expected_failure": true,
+      "notes": "Q6_K coalesced requires k multiple of 8192."
+    },
+    {
+      "name": "odd_k_dimension",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 1,
+      "dim_m": 4096,
+      "dim_k": 127,
+      "memory_mode": "USM_DEVICE",
+      "expected_failure": true,
+      "notes": "Odd K dimension; block alignment violation."
+    }
+  ],
+  "stress_tests": [
+    {
+      "name": "near_limit",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 65536,
+      "dim": 32768,
+      "memory_mode": "USM_DEVICE",
+      "skip": true,
+      "notes": "Approx ~11GB allocation (near 14GB budget); skip by default."
+    },
+    {
+      "name": "fragmented",
+      "kernel": "mmvq_aos",
+      "quant": "Q4_0",
+      "batch": 8192,
+      "dim": 16384,
+      "memory_mode": "USM_DEVICE",
+      "skip": true,
+      "memory_pattern": "alternating",
+      "repeat": 4,
+      "notes": "Fragmentation stress via alternating alloc/free pattern."
+    }
+  ],
+  "dpas_tests": [
+    {
+      "name": "dpas_device_opt_repeat1",
+      "kernel": "dpas_memory_patterns",
+      "quant": "Q8_0",
+      "batch": 1,
+      "dim_m": 2048,
+      "dim_n": 256,
+      "dim_k": 4096,
+      "memory_mode": "USM_DEVICE",
+      "dpas_repeat": 1,
+      "dpas_device_opt": true,
+      "notes": "Device-opt heuristic sanity for repeat=1."
+    },
+    {
+      "name": "dpas_device_opt_repeat2",
+      "kernel": "dpas_memory_patterns",
+      "quant": "Q8_0",
+      "batch": 1,
+      "dim_m": 2048,
+      "dim_n": 256,
+      "dim_k": 4096,
+      "memory_mode": "USM_DEVICE",
+      "dpas_repeat": 2,
+      "dpas_device_opt": true,
+      "notes": "Device-opt heuristic sanity for repeat=2."
+    },
+    {
+      "name": "dpas_device_opt_repeat4",
+      "kernel": "dpas_memory_patterns",
+      "quant": "Q8_0",
+      "batch": 1,
+      "dim_m": 2048,
+      "dim_n": 256,
+      "dim_k": 4096,
+      "memory_mode": "USM_DEVICE",
+      "dpas_repeat": 4,
+      "dpas_device_opt": true,
+      "notes": "Device-opt heuristic sanity for repeat=4."
+    },
+    {
+      "name": "dpas_device_opt_repeat8",
+      "kernel": "dpas_memory_patterns",
+      "quant": "Q8_0",
+      "batch": 1,
+      "dim_m": 2048,
+      "dim_n": 256,
+      "dim_k": 4096,
+      "memory_mode": "USM_DEVICE",
+      "dpas_repeat": 8,
+      "dpas_device_opt": true,
+      "notes": "Device-opt heuristic sanity for repeat=8."
+    }
+  ],
+  "required_batches": [
+    4,
+    5,
+    31,
+    32,
+    33,
+    64
+  ],
+  "estimation": {
+    "iterations": 100,
+    "warmup": 10,
+    "assumed_tps": {
+      "memory_bound": 1200,
+      "transitional": 3000,
+      "compute_bound": 8000
+    }
+  },
+  "limits": {
+    "max_memory_gb": 16.0,
+    "headroom_gb": 2.0,
+    "min_configs": 800,
+    "max_configs": 1150
+  }
+}

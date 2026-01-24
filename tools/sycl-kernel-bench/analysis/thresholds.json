@@ -1,0 +1,34 @@
+{
+  "MXFP4": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q2_K": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q3_K": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q4_0": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q4_K": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q5_K": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q6_K": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  },
+  "Q8_0": {
+    "MMVQ_MAX_BATCH": 4,
+    "XMX_SMALL_MAX_BATCH": 32
+  }
+}

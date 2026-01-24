@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "shape": {
+    "m_tiles": 64,
+    "n_tiles": 8,
+    "k_tiles": 4
+  },
+  "iterations": 100,
+  "warmup": 10,
+  "repeats": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "type_combos": [
+    {
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "int32"
+    },
+    {
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "float"
+    },
+    {
+      "type_a": "fp16",
+      "type_b": "fp16",
+      "type_acc": "float"
+    },
+    {
+      "type_a": "bf16",
+      "type_b": "bf16",
+      "type_acc": "float"
+    }
+  ],
+  "memory_patterns": [
+    "direct_global",
+    "slm_buffer",
+    "reg_prefetch",
+    "double_buffer",
+    "lsc_streaming",
+    "lsc_prefetch"
+  ],
+  "grf_modes": [
+    "128",
+    "256"
+  ],
+  "priority": [
+    {
+      "name": "baseline_int8_r8",
+      "kernel": "dpas_baseline",
+      "repeat": 8,
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "int32",
+      "memory_pattern": "direct_global",
+      "grf_mode": "128",
+      "m_tiles": 64,
+      "n_tiles": 8,
+      "k_tiles": 4
+    },
+    {
+      "name": "k128_chain_r1",
+      "kernel": "dpas_sweep",
+      "repeat": 1,
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "int32",
+      "memory_pattern": "direct_global",
+      "grf_mode": "128",
+      "m_tiles": 64,
+      "n_tiles": 8,
+      "k_tiles": 4
+    },
+    {
+      "name": "batch1_viability",
+      "kernel": "dpas_sweep",
+      "repeat": 1,
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "float",
+      "memory_pattern": "direct_global",
+      "grf_mode": "128",
+      "m_tiles": 1,
+      "n_tiles": 1,
+      "k_tiles": 4
+    },
+    {
+      "name": "misaligned_int8_r1",
+      "kernel": "dpas_sweep",
+      "repeat": 1,
+      "type_a": "int8",
+      "type_b": "int8",
+      "type_acc": "int32",
+      "memory_pattern": "direct_global",
+      "grf_mode": "128",
+      "m_tiles": 8,
+      "n_tiles": 2,
+      "k_tiles": 4,
+      "misaligned": true
+    }
+  ]
+}

@@ -1,0 +1,282 @@
+{
+  "MXFP4": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 5754.27
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 21268.68
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 39780.05
+    },
+    "best_at_batch_64": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_tile_64x64",
+      "throughput_tps": 35486.65
+    },
+    "best_at_batch_128": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_register_accum",
+      "throughput_tps": 37708.6
+    }
+  },
+  "Q2_K": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_wide_load",
+      "throughput_tps": 11812.51
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_aos_direct",
+      "throughput_tps": 18938.36
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_aos_direct",
+      "throughput_tps": 36142.71
+    },
+    "best_at_batch_64": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_tile_64x64",
+      "throughput_tps": 33702.7
+    },
+    "best_at_batch_128": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_persistent",
+      "throughput_tps": 34224.5
+    }
+  },
+  "Q3_K": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_wide_load",
+      "throughput_tps": 4533.42
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_tile_8x8",
+      "throughput_tps": 13756.11
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_aos_direct",
+      "throughput_tps": 26088.75
+    },
+    "best_at_batch_64": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_register_accum",
+      "throughput_tps": 23394.68
+    },
+    "best_at_batch_128": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_persistent",
+      "throughput_tps": 29548.26
+    }
+  },
+  "Q4_0": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 168543.11
+    },
+    "best_at_batch_2": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 182368.6
+    },
+    "best_at_batch_3": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 180344.82
+    },
+    "best_at_batch_4": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 181080.69
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_esimd_v2",
+      "throughput_tps": 38137.94
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_esimd_v2",
+      "throughput_tps": 76294.41
+    },
+    "best_at_batch_32": {
+      "category": "xmx_small",
+      "kernel": "mmvq_esimd_v2",
+      "throughput_tps": 155960.19
+    },
+    "best_at_batch_64": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_cf2_soa",
+      "throughput_tps": 72175.89
+    },
+    "best_at_batch_128": {
+      "category": "mmq",
+      "kernel": "mmq_aos",
+      "throughput_tps": 227476.65
+    }
+  },
+  "Q4_K": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_soa_baseline",
+      "throughput_tps": 21853.15
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 25748.74
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 47754.28
+    },
+    "best_at_batch_64": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_tile_64x64",
+      "throughput_tps": 42684.62
+    },
+    "best_at_batch_128": {
+      "category": "mmq",
+      "kernel": "mmq_aos",
+      "throughput_tps": 152619.1
+    }
+  },
+  "Q5_K": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_aos_baseline",
+      "throughput_tps": 12439.05
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 22429.3
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_double_buffer",
+      "throughput_tps": 42459.88
+    },
+    "best_at_batch_64": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_multi_wg",
+      "throughput_tps": 36230.34
+    },
+    "best_at_batch_128": {
+      "category": "mmq",
+      "kernel": "mmq_aos",
+      "throughput_tps": 110255.53
+    }
+  },
+  "Q6_K": {
+    "xmx_to_mmq": {
+      "batch": 16,
+      "margin_pct": 72.8
+    },
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_soa_baseline",
+      "throughput_tps": 40820.99
+    },
+    "best_at_batch_2": {
+      "category": "mmvq",
+      "kernel": "mmvq_soa_baseline",
+      "throughput_tps": 46529.81
+    },
+    "best_at_batch_3": {
+      "category": "mmvq",
+      "kernel": "mmvq_soa_baseline",
+      "throughput_tps": 45142.65
+    },
+    "best_at_batch_4": {
+      "category": "mmvq",
+      "kernel": "mmvq_soa_baseline",
+      "throughput_tps": 46608.75
+    },
+    "best_at_batch_8": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 21680.08
+    },
+    "best_at_batch_16": {
+      "category": "mmq",
+      "kernel": "mmq_soa",
+      "throughput_tps": 48420.63
+    },
+    "best_at_batch_32": {
+      "category": "mmq",
+      "kernel": "mmq_soa",
+      "throughput_tps": 47670.97
+    },
+    "best_at_batch_64": {
+      "category": "mmq",
+      "kernel": "mmq_coalesced",
+      "throughput_tps": 52427.88
+    },
+    "best_at_batch_128": {
+      "category": "mmq",
+      "kernel": "mmq_coalesced",
+      "throughput_tps": 39903.93
+    }
+  },
+  "Q8_0": {
+    "best_at_batch_1": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 143086.08
+    },
+    "best_at_batch_2": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 160859.63
+    },
+    "best_at_batch_3": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 162011.54
+    },
+    "best_at_batch_4": {
+      "category": "mmvq",
+      "kernel": "mmvq_coalesced",
+      "throughput_tps": 161943.32
+    },
+    "best_at_batch_8": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_tile_soa",
+      "throughput_tps": 32585.41
+    },
+    "best_at_batch_16": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_tile_soa",
+      "throughput_tps": 51695.44
+    },
+    "best_at_batch_32": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_cf2_soa",
+      "throughput_tps": 58728.2
+    },
+    "best_at_batch_64": {
+      "category": "xmx_small",
+      "kernel": "mmvq_xmx_cf2_soa",
+      "throughput_tps": 70686.17
+    },
+    "best_at_batch_128": {
+      "category": "xmx_large",
+      "kernel": "mmvq_xmx_register_accum",
+      "throughput_tps": 39102.09
+    }
+  }
+}
