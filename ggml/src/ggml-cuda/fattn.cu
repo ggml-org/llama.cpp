@@ -46,7 +46,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
     //     are put into the template specialization without GQA optimizations.
     bool use_gqa_opt = mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
-        if (t == nullptr) {
+        if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
         }
         for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
@@ -236,7 +236,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // The kernel versions without this optimization are also used for ALiBi, if there is no mask, or if the KV cache is not padded,
     bool gqa_opt_applies = gqa_ratio % 2 == 0 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
-        if (t == nullptr) {
+        if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
         }
         for (size_t i = 1; i < GGML_MAX_DIMS; ++i) {
@@ -246,6 +246,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
         }
     }
+
+    const bool V_is_K_view = V->op == GGML_OP_VIEW && V->src[0] == K && V->data == K->data;
 
     const int cc = ggml_cuda_info().devices[device].cc;
 
@@ -267,6 +269,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             if (!gqa_opt_applies || gqa_ratio % 4 != 0) {
+                return BEST_FATTN_KERNEL_NONE;
+            }
+            if (!V_is_K_view) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
