@@ -4,6 +4,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
+	import { formatPerformanceTime } from '$lib/utils/formatters';
 
 	interface Props {
 		predictedTokens?: number;
@@ -95,8 +96,8 @@
 			: 0
 	);
 
-	let agenticToolsTimeInSeconds = $derived(
-		hasAgenticStats ? (agenticTimings!.toolsMs / 1000).toFixed(2) : '0.00'
+	let formattedAgenticToolsTime = $derived(
+		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : '0s'
 	);
 
 	let agenticTotalTimeMs = $derived(
@@ -105,7 +106,7 @@
 			: 0
 	);
 
-	let agenticTotalTimeInSeconds = $derived((agenticTotalTimeMs / 1000).toFixed(2));
+	let formattedAgenticTotalTime = $derived(formatPerformanceTime(agenticTotalTimeMs));
 </script>
 
 <div class="inline-flex items-center text-xs text-muted-foreground">
@@ -231,7 +232,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{agenticToolsTimeInSeconds}s"
+				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
 			/>
 			<BadgeChatStatistic
@@ -256,7 +257,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{agenticTotalTimeInSeconds}s"
+				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
 			/>
 		{:else if hasPromptStats}
