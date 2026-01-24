@@ -103,7 +103,7 @@
 				bind:this={contentContainer}
 				class="overflow-y-auto border-t border-muted px-3 pb-3"
 				onscroll={handleScroll}
-				style="max-height: calc(100dvh - var(--chat-form-area-height));"
+				style="max-height: var(--max-message-height);"
 			>
 				{@render children()}
 			</div>
