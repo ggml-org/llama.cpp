@@ -59,6 +59,10 @@ const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * nu
 const uint vsh_stride = v_cols;
 shared f16vec4 ksh[(kshstride >= vsh_stride) ? (Bc * kshstride) : (Bc * vsh_stride)];
 
+// Output buffer
+const uint32_t ofsh_stride = HSV / 4 + 2;
+shared ACC_TYPEV4 Ofsh[Br * ofsh_stride];
+
 shared float slope[Br];
 
 void main() {
@@ -101,14 +105,13 @@ void main() {
             Qf[r * qstride + d] = f16vec4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
         }
     }
-    barrier();
 
-    ACC_TYPEV4 Of[rows_per_thread][HSV / 4];
-    [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
-        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d] = ACC_TYPEV4(0.0);
+    [[unroll]] for (uint idx = 0; idx < Br * ofsh_stride; idx += gl_WorkGroupSize.x) {
+        if (idx + tid < Br * ofsh_stride) {
+            Ofsh[idx + tid] = ACC_TYPEV4(0.0);
         }
     }
+    barrier();
 
     float Lf[rows_per_thread], Mf[rows_per_thread];
 
@@ -271,7 +274,7 @@ void main() {
 
         [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
+                Ofsh[tile_row(r) * ofsh_stride + d] = ACC_TYPE(eMf[r]) * Ofsh[tile_row(r) * ofsh_stride + d];
             }
         }
 
@@ -361,7 +364,7 @@ void main() {
                 SfMat = coopMatMulAdd(KMat, QMat, SfMat);
             }
 
-            // Store SfMat to sfsh and load into Of
+            // Store SfMat to sfsh and load into Ofsh
             const uint osh_stride = row_split * MatBc;
             const uint o_offset = gl_SubgroupID * MatBc;
             coopMatStore(SfMat, sfsh, o_offset, osh_stride, gl_CooperativeMatrixLayoutRowMajor);
@@ -383,7 +386,7 @@ void main() {
                     const uint local_hsv = hsv_col - hsv_base;
 
                     if (!KV_bounds_check || hsv_col < HSV) {
-                        Of[r][d] += ACC_TYPEV4(
+                        Ofsh[tile_row(r) * ofsh_stride + d] += ACC_TYPEV4(
                             sfsh[row * osh_stride + local_hsv],
                             sfsh[row * osh_stride + local_hsv + 1],
                             sfsh[row * osh_stride + local_hsv + 2],
@@ -411,7 +414,7 @@ void main() {
             if (tile_row(r) < N) {
                 [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
                     [[unroll]] for (uint32_t comp = 0; comp < 4; ++comp) {
-                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Of[r][d][comp]), o_offset, iq2, N);
+                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Ofsh[tile_row(r) * ofsh_stride + d][comp]), o_offset, iq2, N);
                     }
                 }
             }
@@ -439,7 +442,7 @@ void main() {
                 ms = exp(Mf[r] - sink);
 
                 [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
-                    Of[r][d] *= ACC_TYPE(ms);
+                    Ofsh[tile_row(r) * ofsh_stride + d] *= ACC_TYPE(ms);
                 }
             } else {
                 vs = exp(sink - Mf[r]);
@@ -456,10 +459,11 @@ void main() {
 
     [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d] *= ACC_TYPE(Lfrcp[r]);
+            ACC_TYPEV4 Of = Ofsh[tile_row(r) * ofsh_stride + d] * ACC_TYPE(Lfrcp[r]);
 #if defined(ACC_TYPE_MAX)
-            Of[r][d] = clamp(Of[r][d], -ACC_TYPE_MAX, ACC_TYPE_MAX);
+            Of = clamp(Of, -ACC_TYPE_MAX, ACC_TYPE_MAX);
 #endif
+            Ofsh[tile_row(r) * ofsh_stride + d] = Of;
         }
     }
 
@@ -470,7 +474,7 @@ void main() {
             if (tile_row(r) < N) {
                 [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
                     [[unroll]] for (uint32_t comp = 0; comp < 4; ++comp) {
-                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Of[r][d][comp]), o_offset, iq2, N);
+                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Ofsh[tile_row(r) * ofsh_stride + d][comp]), o_offset, iq2, N);
                     }
                 }
             }
@@ -480,7 +484,7 @@ void main() {
             if (i * Br + tile_row(r) < N) {
                 [[unroll]] for (uint32_t d = 0; d < HSV / 4; ++d) {
                     [[unroll]] for (uint32_t comp = 0; comp < 4; ++comp) {
-                        data_o[o_offset + iq2 * HSV + (i * Br + tile_row(r)) * p.ne1 * HSV + 4 * d + comp] = D_TYPE(Of[r][d][comp]);
+                        data_o[o_offset + iq2 * HSV + (i * Br + tile_row(r)) * p.ne1 * HSV + 4 * d + comp] = D_TYPE(Ofsh[tile_row(r) * ofsh_stride + d][comp]);
                     }
                 }
             }
