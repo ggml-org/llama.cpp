@@ -48,6 +48,7 @@ struct llama_mmap {
     void * addr() const;
 
     void unmap_fragment(size_t first, size_t last);
+    void prefetch(size_t offset, size_t len) const;
 
     static const bool SUPPORTED;
 

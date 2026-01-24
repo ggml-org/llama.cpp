@@ -448,6 +448,22 @@ struct llama_mmap::impl {
         mapped_fragments.emplace_back(0, file->size());
     }
 
+    void prefetch(size_t offset, size_t len) const {
+
+        int page_size = sysconf(_SC_PAGESIZE);
+        size_t last = offset + len;
+        align_range(&offset, &last, page_size);
+        size_t aligned_len = last - offset;
+
+        int err = posix_madvise((void*)((uint8_t *)addr + offset),
+                                aligned_len,
+                                POSIX_MADV_WILLNEED);
+        if (err != 0) {
+            LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+                           strerror(err));
+        }
+    }
+
     static void align_range(size_t * first, size_t * last, size_t page_size) {
         size_t offset_in_page = *first & (page_size - 1);
         size_t offset_to_page = offset_in_page == 0 ? 0 : page_size - offset_in_page;
@@ -587,6 +603,7 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+void llama_mmap::prefetch(size_t offset, size_t len) const { pimpl->prefetch(offset, len); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;

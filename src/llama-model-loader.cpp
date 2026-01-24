@@ -536,21 +536,15 @@ llama_model_loader::llama_model_loader(
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-    files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
 
-    if (use_mmap && use_direct_io) {
-        if (files.back()->has_direct_io()) {
-            // Disable mmap, as DirectIO is available
-            use_mmap = false;
-            LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
-        } else {
-            // Disable DirectIO and reopen file using std::fopen for mmap
-            use_direct_io = false;
-            files.pop_back();
-            files.emplace_back(new llama_file(fname.c_str(), "rb", false));
-            LLAMA_LOG_WARN("%s: direct I/O is not available, using mmap\n", __func__);
-        }
+    files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
+
+    if (use_direct_io && !files.back()->has_direct_io()) {
+        use_direct_io = false;
+        LLAMA_LOG_WARN("%s: direct I/O is not available, disabling\n", __func__);
+        files.pop_back();
+        files.emplace_back(new llama_file(fname.c_str(), "rb", false));
     }
 
     // Save tensors data offset of the main file.
@@ -997,7 +991,7 @@ bool llama_model_loader::load_all_data(
     std::vector<void *> host_ptrs;
     size_t buffer_idx = 0; // buffer to use for async loads
     ggml_backend_t upload_backend = [&](const char * func) -> ggml_backend_t {
-        if (use_mmap || check_tensors) {
+        if (!use_direct_io || check_tensors) {
             return nullptr;
         }
         // When not using mmaped io use async uploads from pinned memory to GPU memory.
@@ -1092,7 +1086,7 @@ bool llama_model_loader::load_all_data(
 
         size_t n_size = ggml_nbytes(cur);
 
-        if (use_mmap) {
+        if (use_mmap && (!use_direct_io || !upload_backend || ggml_backend_buffer_is_host(cur->buffer))) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
             if (bufs.count(weight->idx)) {
@@ -1108,6 +1102,8 @@ bool llama_model_loader::load_all_data(
 
             GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
             if (buf_mmap && cur->data == nullptr) {
+                mapping->prefetch(weight->offs, n_size);
+
                 ggml_backend_tensor_alloc(buf_mmap, cur, data);
                 if (lmlocks) {
                     const auto & lmlock = lmlocks->at(weight->idx);
