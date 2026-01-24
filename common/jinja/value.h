@@ -327,6 +327,18 @@ struct value_object_t : public value_t {
     }
     virtual std::string type() const override { return "Object"; }
     virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const override { return val_obj.ordered; }
+    virtual string as_string() const override {
+        std::ostringstream ss;
+        ss << "{";
+        for (size_t i = 0; i < val_obj.ordered.size(); i++) {
+            if (i > 0) ss << ", ";
+            auto entry = val_obj.ordered.at(i);
+            ss << "\"" << entry.first << "\":" << entry.second; // TODO: sanitize?
+        }
+        ss << "}";
+        return ss.str();
+
+    }
     virtual bool as_bool() const override {
         return !val_obj.unordered.empty();
     }
@@ -353,6 +365,8 @@ struct value_undefined_t : public value_t {
     value_undefined_t(const std::string & h = "") : hint(h) {}
     virtual std::string type() const override { return hint.empty() ? "Undefined" : "Undefined (hint: '" + hint + "')"; }
     virtual bool is_undefined() const override { return true; }
+    // note: some templates use "is none" as equivalent to "is undefined"
+    virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;

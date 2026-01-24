@@ -401,6 +401,13 @@ static void test_set_statement(testing & t) {
         json::object(),
         "1"
     );
+
+    test_template(t, "set thinking",
+        "{%- if not thinking is defined -%}{%- if enable_thinking is defined -%}{%- set thinking = enable_thinking -%}{%- else -%}{%- set thinking = false %}{%- endif -%}{%- endif -%}{{ thinking }}",
+        {{"enable_thinking",true}},
+        "True"
+    );
+
 }
 
 static void test_filters(testing & t) {
@@ -948,6 +955,30 @@ static void test_tests(testing & t) {
         "{% if x is mapping %}yes{% endif %}",
         {{"x", {{"a", 1}}}},
         "yes"
+    );
+
+    test_template(t, "something in undefined",
+        "{% if x in y %}yes{% else %}no{% endif %}",
+        {{"x", 1}},
+        "no"
+    );
+
+    test_template(t, "null is undefined",
+        "{% if null is not defined %}yes{% else %}no{% endif %}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "select in",
+        "{% for item in items|select('in', '0020') %}{{ item }} {% endfor %}",
+        {{"items", json::array({"1", "0", "20"})}},
+        "0 20 "
+    );
+
+    test_template(t, "select in",
+        "{% for item in items|select('in', ['0','20']) %}{{ item }} {% endfor %}",
+        {{"items", json::array({0, "0", false, "20"})}},
+        "0 20 "
     );
 }
 

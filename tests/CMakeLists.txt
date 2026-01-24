@@ -183,11 +183,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 endif()
 
-llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-jinja.cpp)
 llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
+llama_build_and_test(test-chat-auto-parser-helpers.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
@@ -260,3 +259,5 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+
