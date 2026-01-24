@@ -45,7 +45,7 @@ D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TY
 const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
 
-shared FLOAT_TYPE tmpsh[WorkGroupSize / row_split];
+shared FLOAT_TYPE tmpsh[row_split];
 
 const uint32_t qstride = HSK_pad / 4 + 2; // in units of f16vec4
 shared f16vec4 Qf[Br * qstride];
@@ -172,7 +172,6 @@ void main() {
             }
             // skip the block if the mask is entirely -inf
             bool all_less = subgroupAll(max_mask <= NEG_FLT_MAX_OVER_2);
-            barrier();
             if (gl_SubgroupInvocationID == 0) {
                 tmpsh[gl_SubgroupID] = all_less ? NEG_FLT_MAX_OVER_2 : 0.0f;
             }
@@ -213,7 +212,7 @@ void main() {
         coopmat<float16_t, gl_ScopeSubgroup, MatBc, 16, gl_MatrixUseA> KMat;
         coopmat<float16_t, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
 
-        for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
+        [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
             coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
 
             uint coord = (gl_SubgroupID * MatBc) * kshstride + d * 16 / 4;
