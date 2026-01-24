@@ -358,7 +358,14 @@
 
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
-<div class="relative {className}">
+<form
+	class="relative {className}"
+	onsubmit={(e) => {
+		e.preventDefault();
+		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
+		onSubmit?.();
+	}}
+>
 	<ChatFormPromptPicker
 		bind:this={promptPickerRef}
 		isOpen={isPromptPickerOpen}
@@ -420,4 +427,4 @@
 			/>
 		</div>
 	</div>
-</div>
+</form>
