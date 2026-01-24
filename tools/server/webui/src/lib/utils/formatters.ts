@@ -82,3 +82,44 @@ export function formatTime(date: Date): string {
 		second: '2-digit'
 	});
 }
+
+/**
+ * Formats milliseconds to a human-readable time string for performance metrics.
+ * Examples: "4h 12min 54s", "12min 34s", "45s", "0.5s"
+ *
+ * @param ms - Time in milliseconds
+ * @returns Formatted time string
+ */
+export function formatPerformanceTime(ms: number): string {
+	if (ms < 0) return '0s';
+
+	const totalSeconds = ms / 1000;
+
+	if (totalSeconds < 1) {
+		return `${totalSeconds.toFixed(1)}s`;
+	}
+
+	if (totalSeconds < 10) {
+		return `${totalSeconds.toFixed(1)}s`;
+	}
+
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = Math.floor(totalSeconds % 60);
+
+	const parts: string[] = [];
+
+	if (hours > 0) {
+		parts.push(`${hours}h`);
+	}
+
+	if (minutes > 0) {
+		parts.push(`${minutes}min`);
+	}
+
+	if (seconds > 0 || parts.length === 0) {
+		parts.push(`${seconds}s`);
+	}
+
+	return parts.join(' ');
+}

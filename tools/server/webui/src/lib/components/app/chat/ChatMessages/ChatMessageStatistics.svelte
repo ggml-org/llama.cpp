@@ -4,6 +4,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
+	import { formatPerformanceTime } from '$lib/utils/formatters';
 
 	interface Props {
 		predictedTokens?: number;
@@ -57,8 +58,8 @@
 	);
 
 	let tokensPerSecond = $derived(hasGenerationStats ? (predictedTokens! / predictedMs!) * 1000 : 0);
-	let timeInSeconds = $derived(
-		predictedMs !== undefined ? (predictedMs / 1000).toFixed(2) : '0.00'
+	let formattedTime = $derived(
+		predictedMs !== undefined ? formatPerformanceTime(predictedMs) : '0s'
 	);
 
 	let promptTokensPerSecond = $derived(
@@ -67,15 +68,15 @@
 			: undefined
 	);
 
-	let promptTimeInSeconds = $derived(
-		promptMs !== undefined ? (promptMs / 1000).toFixed(2) : undefined
+	let formattedPromptTime = $derived(
+		promptMs !== undefined ? formatPerformanceTime(promptMs) : undefined
 	);
 
 	let hasPromptStats = $derived(
 		promptTokens !== undefined &&
 			promptMs !== undefined &&
 			promptTokensPerSecond !== undefined &&
-			promptTimeInSeconds !== undefined
+			formattedPromptTime !== undefined
 	);
 
 	// In live mode, generation tab is disabled until we have generation stats
@@ -89,8 +90,8 @@
 			: 0
 	);
 
-	let agenticToolsTimeInSeconds = $derived(
-		hasAgenticStats ? (agenticTimings!.toolsMs / 1000).toFixed(2) : '0.00'
+	let formattedAgenticToolsTime = $derived(
+		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : '0s'
 	);
 
 	let agenticTotalTimeMs = $derived(
@@ -99,7 +100,7 @@
 			: 0
 	);
 
-	let agenticTotalTimeInSeconds = $derived((agenticTotalTimeMs / 1000).toFixed(2));
+	let formattedAgenticTotalTime = $derived(formatPerformanceTime(agenticTotalTimeMs));
 </script>
 
 <div class="inline-flex items-center text-xs text-muted-foreground">
@@ -200,7 +201,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{timeInSeconds}s"
+				value={formattedTime}
 				tooltipLabel="Generation time"
 			/>
 			<BadgeChatStatistic
@@ -219,7 +220,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{agenticToolsTimeInSeconds}s"
+				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
 			/>
 			<BadgeChatStatistic
@@ -244,7 +245,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{agenticTotalTimeInSeconds}s"
+				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
 			/>
 		{:else if hasPromptStats}
@@ -257,7 +258,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{promptTimeInSeconds}s"
+				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
 			/>
 			<BadgeChatStatistic
