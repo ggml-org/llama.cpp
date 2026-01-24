@@ -7,15 +7,19 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
-	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
+	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
+	import type { Root as MdastRoot } from 'mdast';
 	import { browser } from '$app/environment';
+	import { onDestroy, tick } from 'svelte';
+	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
+	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
+	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
+	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
+	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
 	import '$styles/katex-custom.scss';
-
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
 	interface Props {
@@ -23,33 +27,24 @@
 		class?: string;
 	}
 
+	interface MarkdownBlock {
+		id: string;
+		html: string;
+	}
+
 	let { content, class: className = '' }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
-	let processedHtml = $state('');
+	let renderedBlocks = $state<MarkdownBlock[]>([]);
+	let unstableBlockHtml = $state('');
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 
-	function loadHighlightTheme(isDark: boolean) {
-		if (!browser) return;
+	let pendingMarkdown: string | null = null;
+	let isProcessing = false;
 
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
-		existingThemes.forEach((style) => style.remove());
-
-		const style = document.createElement('style');
-		style.setAttribute('data-highlight-theme', 'true');
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
-
-		document.head.appendChild(style);
-	}
-
-	$effect(() => {
-		const currentMode = mode.current;
-		const isDark = currentMode === 'dark';
-
-		loadHighlightTheme(isDark);
-	});
+	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
 		return remark()
@@ -61,139 +56,64 @@
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
-			.use(rehypeStringify); // Convert to HTML string
+			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
-	function enhanceLinks(html: string): string {
-		if (!html.includes('<a')) {
-			return html;
+	/**
+	 * Removes click event listeners from copy and preview buttons.
+	 * Called on component destroy.
+	 */
+	function cleanupEventListeners() {
+		if (!containerRef) return;
+
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+
+		for (const button of copyButtons) {
+			button.removeEventListener('click', handleCopyClick);
 		}
 
-		const tempDiv = document.createElement('div');
-		tempDiv.innerHTML = html;
-
-		// Make all links open in new tabs
-		const linkElements = tempDiv.querySelectorAll('a[href]');
-		let mutated = false;
-
-		for (const link of linkElements) {
-			const target = link.getAttribute('target');
-			const rel = link.getAttribute('rel');
-
-			if (target !== '_blank' || rel !== 'noopener noreferrer') {
-				mutated = true;
-			}
-
-			link.setAttribute('target', '_blank');
-			link.setAttribute('rel', 'noopener noreferrer');
-		}
-
-		return mutated ? tempDiv.innerHTML : html;
-	}
-
-	function enhanceCodeBlocks(html: string): string {
-		if (!html.includes('<pre')) {
-			return html;
-		}
-
-		const tempDiv = document.createElement('div');
-		tempDiv.innerHTML = html;
-
-		const preElements = tempDiv.querySelectorAll('pre');
-		let mutated = false;
-
-		for (const [index, pre] of Array.from(preElements).entries()) {
-			const codeElement = pre.querySelector('code');
-
-			if (!codeElement) {
-				continue;
-			}
-
-			mutated = true;
-
-			let language = 'text';
-			const classList = Array.from(codeElement.classList);
-
-			for (const className of classList) {
-				if (className.startsWith('language-')) {
-					language = className.replace('language-', '');
-					break;
-				}
-			}
-
-			const rawCode = codeElement.textContent || '';
-			const codeId = `code-${Date.now()}-${index}`;
-			codeElement.setAttribute('data-code-id', codeId);
-			codeElement.setAttribute('data-raw-code', rawCode);
-
-			const wrapper = document.createElement('div');
-			wrapper.className = 'code-block-wrapper';
-
-			const header = document.createElement('div');
-			header.className = 'code-block-header';
-
-			const languageLabel = document.createElement('span');
-			languageLabel.className = 'code-language';
-			languageLabel.textContent = language;
-
-			const copyButton = document.createElement('button');
-			copyButton.className = 'copy-code-btn';
-			copyButton.setAttribute('data-code-id', codeId);
-			copyButton.setAttribute('title', 'Copy code');
-			copyButton.setAttribute('type', 'button');
-
-			copyButton.innerHTML = `
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                        `;
-
-			const actions = document.createElement('div');
-			actions.className = 'code-block-actions';
-
-			actions.appendChild(copyButton);
-
-			if (language.toLowerCase() === 'html') {
-				const previewButton = document.createElement('button');
-				previewButton.className = 'preview-code-btn';
-				previewButton.setAttribute('data-code-id', codeId);
-				previewButton.setAttribute('title', 'Preview code');
-				previewButton.setAttribute('type', 'button');
-
-				previewButton.innerHTML = `
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
-                                `;
-
-				actions.appendChild(previewButton);
-			}
-
-			header.appendChild(languageLabel);
-			header.appendChild(actions);
-			wrapper.appendChild(header);
-
-			const clonedPre = pre.cloneNode(true) as HTMLElement;
-			wrapper.appendChild(clonedPre);
-
-			pre.parentNode?.replaceChild(wrapper, pre);
-		}
-
-		return mutated ? tempDiv.innerHTML : html;
-	}
-
-	async function processMarkdown(text: string): Promise<string> {
-		try {
-			let normalized = preprocessLaTeX(text);
-			const result = await processor().process(normalized);
-			const html = String(result);
-			const enhancedLinks = enhanceLinks(html);
-
-			return enhanceCodeBlocks(enhancedLinks);
-		} catch (error) {
-			console.error('Markdown processing error:', error);
-
-			// Fallback to plain text with line breaks
-			return text.replace(/\n/g, '<br>');
+		for (const button of previewButtons) {
+			button.removeEventListener('click', handlePreviewClick);
 		}
 	}
 
+	/**
+	 * Removes this component's highlight.js theme style from the document head.
+	 * Called on component destroy to clean up injected styles.
+	 */
+	function cleanupHighlightTheme() {
+		if (!browser) return;
+
+		const existingTheme = document.getElementById(themeStyleId);
+		existingTheme?.remove();
+	}
+
+	/**
+	 * Loads the appropriate highlight.js theme based on dark/light mode.
+	 * Injects a scoped style element into the document head.
+	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
+	 */
+	function loadHighlightTheme(isDark: boolean) {
+		if (!browser) return;
+
+		const existingTheme = document.getElementById(themeStyleId);
+		existingTheme?.remove();
+
+		const style = document.createElement('style');
+		style.id = themeStyleId;
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
+
+		document.head.appendChild(style);
+	}
+
+	/**
+	 * Extracts code information from a button click target within a code block.
+	 * @param target - The clicked button element
+	 * @returns Object with rawCode and language, or null if extraction fails
+	 */
 	function getCodeInfoFromTarget(target: HTMLElement) {
 		const wrapper = target.closest('.code-block-wrapper');
 
@@ -209,12 +129,7 @@
 			return null;
 		}
 
-		const rawCode = codeElement.getAttribute('data-raw-code');
-
-		if (rawCode === null) {
-			console.error('No raw code found');
-			return null;
-		}
+		const rawCode = codeElement.textContent ?? '';
 
 		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
 		const language = languageLabel?.textContent?.trim() || 'text';
@@ -222,6 +137,28 @@
 		return { rawCode, language };
 	}
 
+	/**
+	 * Generates a unique identifier for a HAST node based on its position.
+	 * Used for stable block identification during incremental rendering.
+	 * @param node - The HAST root content node
+	 * @param indexFallback - Fallback index if position is unavailable
+	 * @returns Unique string identifier for the node
+	 */
+	function getHastNodeId(node: HastRootContent, indexFallback: number): string {
+		const position = node.position;
+
+		if (position?.start?.offset != null && position?.end?.offset != null) {
+			return `hast-${position.start.offset}-${position.end.offset}`;
+		}
+
+		return `${node.type}-${indexFallback}`;
+	}
+
+	/**
+	 * Handles click events on copy buttons within code blocks.
+	 * Copies the raw code content to the clipboard.
+	 * @param event - The click event from the copy button
+	 */
 	async function handleCopyClick(event: Event) {
 		event.preventDefault();
 		event.stopPropagation();
@@ -245,6 +182,25 @@
 		}
 	}
 
+	/**
+	 * Handles preview dialog open state changes.
+	 * Clears preview content when dialog is closed.
+	 * @param open - Whether the dialog is being opened or closed
+	 */
+	function handlePreviewDialogOpenChange(open: boolean) {
+		previewDialogOpen = open;
+
+		if (!open) {
+			previewCode = '';
+			previewLanguage = 'text';
+		}
+	}
+
+	/**
+	 * Handles click events on preview buttons within HTML code blocks.
+	 * Opens a preview dialog with the rendered HTML content.
+	 * @param event - The click event from the preview button
+	 */
 	function handlePreviewClick(event: Event) {
 		event.preventDefault();
 		event.stopPropagation();
@@ -266,6 +222,61 @@
 		previewDialogOpen = true;
 	}
 
+	/**
+	 * Processes markdown content into stable and unstable HTML blocks.
+	 * Uses incremental rendering: stable blocks are cached, unstable block is re-rendered.
+	 * @param markdown - The raw markdown string to process
+	 */
+	async function processMarkdown(markdown: string) {
+		if (!markdown) {
+			renderedBlocks = [];
+			unstableBlockHtml = '';
+			return;
+		}
+
+		const normalized = preprocessLaTeX(markdown);
+		const processorInstance = processor();
+		const ast = processorInstance.parse(normalized) as MdastRoot;
+		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
+		const processedChildren = processedRoot.children ?? [];
+		const stableCount = Math.max(processedChildren.length - 1, 0);
+		const nextBlocks: MarkdownBlock[] = [];
+
+		for (let index = 0; index < stableCount; index++) {
+			const hastChild = processedChildren[index];
+			const id = getHastNodeId(hastChild, index);
+			const existing = renderedBlocks[index];
+
+			if (existing && existing.id === id) {
+				nextBlocks.push(existing);
+				continue;
+			}
+
+			const html = stringifyProcessedNode(
+				processorInstance,
+				processedRoot,
+				processedChildren[index]
+			);
+
+			nextBlocks.push({ id, html });
+		}
+
+		let unstableHtml = '';
+
+		if (processedChildren.length > stableCount) {
+			const unstableChild = processedChildren[stableCount];
+			unstableHtml = stringifyProcessedNode(processorInstance, processedRoot, unstableChild);
+		}
+
+		renderedBlocks = nextBlocks;
+		await tick(); // Force DOM sync before updating unstable HTML block
+		unstableBlockHtml = unstableHtml;
+	}
+
+	/**
+	 * Attaches click event listeners to copy and preview buttons in code blocks.
+	 * Uses data-listener-bound attribute to prevent duplicate bindings.
+	 */
 	function setupCodeBlockActions() {
 		if (!containerRef) return;
 
@@ -287,40 +298,97 @@
 		}
 	}
 
-	function handlePreviewDialogOpenChange(open: boolean) {
-		previewDialogOpen = open;
+	/**
+	 * Converts a single HAST node to an enhanced HTML string.
+	 * Applies link and code block enhancements to the output.
+	 * @param processorInstance - The remark/rehype processor instance
+	 * @param processedRoot - The full processed HAST root (for context)
+	 * @param child - The specific HAST child node to stringify
+	 * @returns Enhanced HTML string representation of the node
+	 */
+	function stringifyProcessedNode(
+		processorInstance: ReturnType<typeof processor>,
+		processedRoot: HastRoot,
+		child: unknown
+	) {
+		const root: HastRoot = {
+			...(processedRoot as HastRoot),
+			children: [child as never]
+		};
 
-		if (!open) {
-			previewCode = '';
-			previewLanguage = 'text';
+		return processorInstance.stringify(root);
+	}
+
+	/**
+	 * Queues markdown for processing with coalescing support.
+	 * Only processes the latest markdown when multiple updates arrive quickly.
+	 * @param markdown - The markdown content to render
+	 */
+	async function updateRenderedBlocks(markdown: string) {
+		pendingMarkdown = markdown;
+
+		if (isProcessing) {
+			return;
+		}
+
+		isProcessing = true;
+
+		try {
+			while (pendingMarkdown !== null) {
+				const nextMarkdown = pendingMarkdown;
+				pendingMarkdown = null;
+
+				await processMarkdown(nextMarkdown);
+			}
+		} catch (error) {
+			console.error('Failed to process markdown:', error);
+			renderedBlocks = [];
+			unstableBlockHtml = markdown.replace(/\n/g, '<br>');
+		} finally {
+			isProcessing = false;
 		}
 	}
 
 	$effect(() => {
-		if (content) {
-			processMarkdown(content)
-				.then((result) => {
-					processedHtml = result;
-				})
-				.catch((error) => {
-					console.error('Failed to process markdown:', error);
-					processedHtml = content.replace(/\n/g, '<br>');
-				});
-		} else {
-			processedHtml = '';
-		}
+		const currentMode = mode.current;
+		const isDark = currentMode === 'dark';
+
+		loadHighlightTheme(isDark);
 	});
 
 	$effect(() => {
-		if (containerRef && processedHtml) {
+		updateRenderedBlocks(content);
+	});
+
+	$effect(() => {
+		const hasRenderedBlocks = renderedBlocks.length > 0;
+		const hasUnstableBlock = Boolean(unstableBlockHtml);
+
+		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 		}
+	});
+
+	onDestroy(() => {
+		cleanupEventListeners();
+		cleanupHighlightTheme();
 	});
 </script>
 
 <div bind:this={containerRef} class={className}>
-	<!-- eslint-disable-next-line no-at-html-tags -->
-	{@html processedHtml}
+	{#each renderedBlocks as block (block.id)}
+		<div class="markdown-block" data-block-id={block.id}>
+			<!-- eslint-disable-next-line no-at-html-tags -->
+			{@html block.html}
+		</div>
+	{/each}
+
+	{#if unstableBlockHtml}
+		<div class="markdown-block markdown-block--unstable" data-block-id="unstable">
+			<!-- eslint-disable-next-line no-at-html-tags -->
+			{@html unstableBlockHtml}
+		</div>
+	{/if}
 </div>
 
 <CodePreviewDialog
@@ -331,6 +399,11 @@
 />
 
 <style>
+	.markdown-block,
+	.markdown-block--unstable {
+		display: contents;
+	}
+
 	/* Base typography styles */
 	div :global(p:not(:last-child)) {
 		margin-bottom: 1rem;
@@ -504,6 +577,14 @@
 		background: hsl(var(--muted) / 0.1);
 	}
 
+	/* User message markdown should keep table borders visible on light primary backgrounds */
+	div.markdown-user-content :global(table),
+	div.markdown-user-content :global(th),
+	div.markdown-user-content :global(td),
+	div.markdown-user-content :global(.table-wrapper) {
+		border-color: currentColor;
+	}
+
 	/* Horizontal rules */
 	div :global(hr) {
 		border: none;
@@ -640,6 +721,21 @@
 	div :global(th:hover),
 	div :global(td:hover) {
 		background: var(--muted);
+	}
+
+	/* Disable hover effects when rendering user messages */
+	.markdown-user-content :global(a),
+	.markdown-user-content :global(a:hover) {
+		color: var(--primary-foreground);
+	}
+
+	.markdown-user-content :global(table:hover) {
+		box-shadow: none;
+	}
+
+	.markdown-user-content :global(th:hover),
+	.markdown-user-content :global(td:hover) {
+		background: inherit;
 	}
 
 	/* Enhanced blockquotes */

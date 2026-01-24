@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt install -y --no-install-recommends \
         git cmake ccache ninja-build \
         # WARNING: Do not use libopenblas-openmp-dev. libopenblas-dev is faster.
-        libopenblas-dev libcurl4-openssl-dev && \
+        libopenblas-dev libssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -105,7 +105,7 @@ WORKDIR /llama.cpp/bin
 
 # Copy llama.cpp binaries and libraries
 COPY --from=collector /llama.cpp/bin/*.so /llama.cpp/bin
-COPY --from=collector /llama.cpp/bin/llama-cli /llama.cpp/bin
+COPY --from=collector /llama.cpp/bin/llama-cli /llama.cpp/bin/llama-completion /llama.cpp/bin
 
 ENTRYPOINT [ "/llama.cpp/bin/llama-cli" ]
 

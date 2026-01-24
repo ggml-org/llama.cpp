@@ -65,10 +65,10 @@ cmake --build build --config Release
       cmake --preset x64-windows-llvm-release
       cmake --build build-x64-windows-llvm-release
       ```
-- Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
-  - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  # (or `libcurl4-gnutls-dev` if you prefer GnuTLS)
-  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
-  - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
+- If you want HTTPS/TLS features, you may install OpenSSL development libraries. If not installed, the project will build and run without SSL support.
+  - **Debian / Ubuntu:** `sudo apt-get install libssl-dev`
+  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install openssl-devel`
+  - **Arch / Manjaro:** `sudo pacman -S openssl`
 
 ## BLAS Build
 
@@ -150,19 +150,38 @@ We also have a [guide](./backend/CUDA-FEDORA.md) for setting up CUDA toolkit in 
 
 
 ### Compilation
+
+Make sure to read the notes about the CPU build for general instructions for e.g. speeding up the compilation.
+
 ```bash
 cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Release
 ```
 
+### Non-Native Builds
+
+By default llama.cpp will be built for the hardware that is connected to the system at that time.
+For a build covering all CUDA GPUs, disable `GGML_NATIVE`:
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF
+```
+
+The resulting binary should run on all CUDA GPUs with optimal performance, though some just-in-time compilation may be required.
+
 ### Override Compute Capability Specifications
 
-If `nvcc` cannot detect your gpu, you may get compile-warnings such as:
+If `nvcc` cannot detect your gpu, you may get compile warnings such as:
  ```text
 nvcc warning : Cannot find valid GPU for '-arch=native', default arch is used
 ```
 
-To override the `native` GPU detection:
+One option is to do a non-native build as described above.
+However, this will result in a large binary that takes a long time to compile.
+Alternatively it is also possible to explicitly specify CUDA architectures.
+This may also make sense for a non-native build, for that one should look at the logic in `ggml/src/ggml-cuda/CMakeLists.txt` as a starting point.
+
+To override the default CUDA architectures:
 
 #### 1. Take note of the `Compute Capability` of your NVIDIA devices: ["CUDA: Your GPU Compute > Capability"](https://developer.nvidia.com/cuda-gpus).
 

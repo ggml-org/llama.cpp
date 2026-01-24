@@ -85,7 +85,7 @@ for ncols in [8, 16, 32, 64]:
                     continue
                 if head_size_kq != 576 and ncols2 == 16:
                     continue
-                if head_size_kq == 576 and ncols2 != 16:
+                if head_size_kq == 576 and ncols2 not in (4, 16):
                     continue
                 head_size_v = head_size_kq if head_size_kq != 576 else 512
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))

@@ -57,6 +57,8 @@ extern const char * LLAMA_COMMIT;
 extern const char * LLAMA_COMPILER;
 extern const char * LLAMA_BUILD_TARGET;
 
+const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
+
 struct common_control_vector_load_info;
 
 //
@@ -80,9 +82,12 @@ int32_t cpu_get_num_math();
 //
 
 enum llama_example {
+    LLAMA_EXAMPLE_BATCHED,
+    LLAMA_EXAMPLE_DEBUG,
     LLAMA_EXAMPLE_COMMON,
     LLAMA_EXAMPLE_SPECULATIVE,
-    LLAMA_EXAMPLE_MAIN,
+    LLAMA_EXAMPLE_COMPLETION,
+    LLAMA_EXAMPLE_CLI,
     LLAMA_EXAMPLE_EMBEDDING,
     LLAMA_EXAMPLE_PERPLEXITY,
     LLAMA_EXAMPLE_RETRIEVAL,
@@ -98,6 +103,7 @@ enum llama_example {
     LLAMA_EXAMPLE_TTS,
     LLAMA_EXAMPLE_DIFFUSION,
     LLAMA_EXAMPLE_FINETUNE,
+    LLAMA_EXAMPLE_FIT_PARAMS,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -115,6 +121,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
+    COMMON_SAMPLER_TYPE_ADAPTIVE_P  = 12,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -162,38 +169,39 @@ enum common_params_sampling_config : uint64_t {
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
 
-    int32_t n_prev             = 64;    // number of previous tokens to remember
-    int32_t n_probs            = 0;     // if greater than 0, output the probabilities of top n_probs tokens.
-    int32_t min_keep           = 0;     // 0 = disabled, otherwise samplers should return at least min_keep tokens
-    int32_t top_k              = 40;    // <= 0 to use vocab size
-    float   top_p              = 0.95f; // 1.0 = disabled
-    float   min_p              = 0.05f; // 0.0 = disabled
-    float   xtc_probability    = 0.00f; // 0.0 = disabled
-    float   xtc_threshold      = 0.10f; // > 0.5 disables XTC
-    float   typ_p              = 1.00f; // typical_p, 1.0 = disabled
-    float   temp               = 0.80f; // <= 0.0 to sample greedily, 0.0 to not output probabilities
-    float   dynatemp_range     = 0.00f; // 0.0 = disabled
-    float   dynatemp_exponent  = 1.00f; // controls how entropy maps to temperature in dynamic temperature sampler
-    int32_t penalty_last_n     = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
-    float   penalty_repeat     = 1.00f; // 1.0 = disabled
-    float   penalty_freq       = 0.00f; // 0.0 = disabled
-    float   penalty_present    = 0.00f; // 0.0 = disabled
-    float   dry_multiplier     = 0.0f;  // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
-    float   dry_base           = 1.75f; // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
-    int32_t dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
-    int32_t dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
-    int32_t mirostat           = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
-    float   top_n_sigma        = -1.00f;// -1.0 = disabled
-    float   mirostat_tau       = 5.00f; // target entropy
-    float   mirostat_eta       = 0.10f; // learning rate
+    int32_t n_prev             = 64;     // number of previous tokens to remember
+    int32_t n_probs            = 0;      // if greater than 0, output the probabilities of top n_probs tokens.
+    int32_t min_keep           = 0;      // 0 = disabled, otherwise samplers should return at least min_keep tokens
+    int32_t top_k              = 40;     // <= 0 to use vocab size
+    float   top_p              = 0.95f;  // 1.0 = disabled
+    float   min_p              = 0.05f;  // 0.0 = disabled
+    float   xtc_probability    = 0.00f;  // 0.0 = disabled
+    float   xtc_threshold      = 0.10f;  // > 0.5 disables XTC
+    float   typ_p              = 1.00f;  // typical_p, 1.0 = disabled
+    float   temp               = 0.80f;  // <= 0.0 to sample greedily, 0.0 to not output probabilities
+    float   dynatemp_range     = 0.00f;  // 0.0 = disabled
+    float   dynatemp_exponent  = 1.00f;  // controls how entropy maps to temperature in dynamic temperature sampler
+    int32_t penalty_last_n     = 64;     // last n tokens to penalize (0 = disable penalty, -1 = context size)
+    float   penalty_repeat     = 1.00f;  // 1.0 = disabled
+    float   penalty_freq       = 0.00f;  // 0.0 = disabled
+    float   penalty_present    = 0.00f;  // 0.0 = disabled
+    float   dry_multiplier     = 0.0f;   // 0.0 = disabled;      DRY repetition penalty for tokens extending repetition:
+    float   dry_base           = 1.75f;  // 0.0 = disabled;      multiplier * base ^ (length of sequence before token - allowed length)
+    int32_t dry_allowed_length = 2;      // tokens extending repetitions beyond this receive penalty
+    int32_t dry_penalty_last_n = -1;     // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
+    float   adaptive_target    = -1.0f;  // select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+    float   adaptive_decay     = 0.90f;  // EMA decay for adaptation; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
+    int32_t mirostat           = 0;      // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+    float   top_n_sigma        = -1.00f; // -1.0 = disabled
+    float   mirostat_tau       = 5.00f;  // target entropy
+    float   mirostat_eta       = 0.10f;  // learning rate
     bool    ignore_eos         = false;
-    bool    no_perf            = false; // disable performance metrics
+    bool    no_perf            = false;  // disable performance metrics
     bool    timing_per_token   = false;
 
     uint64_t user_sampling_config = 0; // bitfield to track user-specified samplers
 
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
-
 
     std::vector<enum common_sampler_type> samplers = {
         COMMON_SAMPLER_TYPE_PENALTIES,
@@ -214,6 +222,12 @@ struct common_params_sampling {
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
+
+    bool backend_sampling = false;
+
+    bool has_logit_bias() const {
+        return !logit_bias.empty();
+    }
 
     // print the parameters into a string
     std::string print() const;
@@ -272,6 +286,7 @@ struct common_params_diffusion {
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
+// only used by server
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_AUTO,            // Same as deepseek, using `message.reasoning_content`
@@ -302,8 +317,8 @@ struct lr_opt {
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
 struct common_params {
-    int32_t n_predict             =    -1; // new tokens to predict
-    int32_t n_ctx                 =  4096; // context size
+    int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
+    int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
@@ -324,9 +339,14 @@ struct common_params {
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    int32_t n_gpu_layers      = -1;  // number of layers to store in VRAM (-1 - use default)
-    int32_t main_gpu          = 0;   // the GPU that is used for scratch and small tensors
-    float   tensor_split[128] = {0}; // how split tensors should be distributed across GPUs
+    int32_t n_gpu_layers       = -1;   // number of layers to store in VRAM, -1 is auto, <= -2 is all
+    int32_t main_gpu           = 0;    // the GPU that is used for scratch and small tensors
+    float   tensor_split[128]  = {0};  // how split tensors should be distributed across GPUs
+    bool    fit_params         = true; // whether to fit unset model/context parameters to free device memory
+    int32_t fit_params_min_ctx = 4096; // minimum context size to set when trying to reduce memory use
+
+    // margin per device in bytes for fitting parameters to free memory:
+    std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
@@ -361,6 +381,11 @@ struct common_params {
     std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
+
+    // llama-debug specific options
+    std::string logits_output_dir = "data"; // directory for saving logits output files                     // NOLINT
+    bool        save_logits       = false;  // whether to save logits to files                              // NOLINT
+    std::vector<std::string> tensor_filter; // filter tensor names for debug output (regex)                 // NOLINT
 
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
@@ -406,12 +431,14 @@ struct common_params {
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool no_perf           = false; // disable performance metrics
+    bool show_timings      = true;  // show timing information on CLI
     bool ctx_shift         = false; // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // use mmap for faster loads
+    bool use_mmap          = true;  // enable mmap to use filesystem cache
+    bool use_direct_io     = true;  // read from disk without buffering for faster model loading
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
@@ -455,6 +482,7 @@ struct common_params {
     int32_t timeout_write     = timeout_read; // http write timeout in seconds
     int32_t n_threads_http    = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse     = 0;            // min chunk size to reuse from the cache via KV shifting
+    bool    cache_prompt      = true;         // whether to enable prompt caching
     int32_t n_ctx_checkpoints = 8;            // max number of context checkpoints per slot
     int32_t cache_ram_mib     = 8192;         // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
@@ -462,11 +490,12 @@ struct common_params {
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
-    bool use_jinja = false;                                                                                 // NOLINT
+    bool use_jinja = true;                                                                                  // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int reasoning_budget = -1;
-    bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
+    bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
+    int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
     std::vector<std::string> api_keys;
 
@@ -475,16 +504,20 @@ struct common_params {
 
     std::map<std::string, std::string> default_template_kwargs;
 
+    // webui configs
+    bool webui = true;
+    std::string webui_config_json;
+
     // "advanced" endpoints are disabled by default for better security
-    bool webui            = true;
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
     // router server configs
-    std::string models_dir = ""; // directory containing models for the router server
-    int models_max = 4;          // maximum number of models to load simultaneously
-    bool models_autoload = true; // automatically load models when requested via the router server
+    std::string models_dir    = ""; // directory containing models for the router server
+    std::string models_preset = ""; // directory containing model presets for the router server
+    int models_max = 4;             // maximum number of models to load simultaneously
+    bool models_autoload = true;    // automatically load models when requested via the router server
 
     bool log_json = false;
 
@@ -656,18 +689,41 @@ struct common_file_info {
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
 
 //
+// TTY utils
+//
+
+// Auto-detect if colors can be enabled based on terminal and environment
+bool tty_can_use_colors();
+
+//
 // Model utils
 //
 
-// note: defines object's lifetime
-struct common_init_result {
-    llama_model_ptr   model;
-    llama_context_ptr context;
+struct common_sampler;
 
-    std::vector<llama_adapter_lora_ptr> lora;
+// note: defines the model, context, samplers, ets. lifetimes
+struct common_init_result {
+    common_init_result(common_params & params);
+    ~common_init_result();
+
+    llama_model * model();
+    llama_context * context();
+
+    common_sampler * sampler(llama_seq_id seq_id);
+    void reset_samplers();
+
+    std::vector<llama_adapter_lora_ptr> & lora();
+
+    void free_context();
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
 };
 
-struct common_init_result     common_init_from_params(common_params & params);
+using common_init_result_ptr = std::unique_ptr<common_init_result>;
+
+common_init_result_ptr common_init_from_params(common_params & params);
 
 struct llama_model_params     common_model_params_to_llama  (      common_params & params);
 struct llama_context_params   common_context_params_to_llama(const common_params & params);

@@ -15,10 +15,11 @@ Below is the build script: it requires utilizing RISC-V vector instructions for 
 cmake -B build \
     -DCMAKE_BUILD_TYPE=Release \
     -DGGML_CPU_RISCV64_SPACEMIT=ON \
-    -DLLAMA_CURL=OFF \
+    -DLLAMA_OPENSSL=OFF \
     -DGGML_RVV=ON \
     -DGGML_RV_ZFH=ON \
     -DGGML_RV_ZICBOP=ON \
+    -DGGML_RV_ZIHINTPAUSE=ON \
     -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
     -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake \
     -DCMAKE_INSTALL_PREFIX=build/installed
