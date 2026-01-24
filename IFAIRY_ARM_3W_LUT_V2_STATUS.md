@@ -16,7 +16,7 @@ Status: Draft (2026-01-24)
 - Machine: Mac16,12 (Apple M4), macOS 26.2 (25C56)
 - Build: `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release` + `cmake --build build-rel` (OpenMP not found)
 - Command:
-  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+  - `./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
 - Result (build `a3329995`):
   - `pp128`: `162.82 tok/s`
   - `tg256`: `87.78 tok/s`
@@ -26,7 +26,7 @@ Status: Draft (2026-01-24)
   - `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
   - `cmake --build build-rel-lut`
 - Command:
-  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
 - Result (build `a3329995`):
   - `pp128`: `32.43 tok/s`
   - `tg256`: `25.56 tok/s`
@@ -44,6 +44,18 @@ Status: Draft (2026-01-24)
 
 ### 2026-01-24
 - 初始化 V2 文档占位（尚未进行代码重构与 lut_c 接入）。
+
+### 2026-01-24 (working tree)
+- `test-ifairy`:
+  - `./build-rel/bin/test-ifairy`: PASS (LUT tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel-lut/bin/test-ifairy`: PASS
+- `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256):
+  - `./build-rel/bin/llama-bench ...`: `pp128=169.09 tok/s`, `tg256=91.25 tok/s`
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=35.36 tok/s`, `tg256=31.10 tok/s`
+- microbench (`GGML_IFAIRY_ARM_LUT=ON` build):
+  - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=634.91`
+  - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=58.49`
+  - `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=179699.4`
 
 ---
 

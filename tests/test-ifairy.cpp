@@ -492,115 +492,6 @@ static bool test_ifairy_lut_transform_invalid_shape() {
     return true;
 }
 
-static bool test_ifairy_lut_layout_auto_policy() {
-#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
-    printf("\n=== Test 2.3: iFairy LUT layout auto policy (SKIP) ===\n");
-    return true;
-#else
-    printf("\n=== Test 2.3: iFairy LUT layout auto policy ===\n");
-
-    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
-    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
-
-    struct ggml_init_params params = {
-        /*.mem_size   =*/4 * 1024 * 1024,
-        /*.mem_buffer =*/NULL,
-        /*.no_alloc   =*/false,
-    };
-    struct ggml_context * ctx = ggml_init(params);
-    if (!ctx) {
-        fprintf(stderr, "Failed to init ggml context\n");
-        return false;
-    }
-
-    const int64_t M   = 2;
-    const int64_t N   = 2;
-    const int64_t K   = QK_K;
-    ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
-    ggml_tensor * a   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
-    ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, M, N);
-    if (!w || !a || !dst) {
-        fprintf(stderr, "Failed to allocate tensors for layout test\n");
-        ggml_free(ctx);
-        return false;
-    }
-
-    env_layout.set("legacy");
-    const size_t wsize_legacy = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-
-    env_layout.set("merged64");
-    const size_t wsize_merged64 = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-
-    env_kernel.unset();
-    env_layout.set("auto");
-    const size_t wsize_auto = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-
-    ggml_free(ctx);
-
-    if (wsize_legacy == 0 || wsize_merged64 == 0 || wsize_auto == 0 || wsize_auto != wsize_merged64) {
-        fprintf(stderr, "layout auto mismatch: legacy=%zu merged64=%zu auto=%zu\n", wsize_legacy, wsize_merged64,
-                wsize_auto);
-        return false;
-    }
-
-    printf("  layout auto - PASS\n");
-    return true;
-#endif
-}
-
-static bool test_ifairy_lut_layout_auto_decode_default_merged64() {
-#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
-    printf("\n=== Test 2.3.1: iFairy LUT auto decode default merged64 (SKIP) ===\n");
-    return true;
-#else
-    printf("\n=== Test 2.3.1: iFairy LUT auto decode default merged64 ===\n");
-
-    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
-    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
-
-    struct ggml_init_params params = {
-        /*.mem_size   =*/4 * 1024 * 1024,
-        /*.mem_buffer =*/NULL,
-        /*.no_alloc   =*/false,
-    };
-    struct ggml_context * ctx = ggml_init(params);
-    if (!ctx) {
-        fprintf(stderr, "Failed to init ggml context\n");
-        return false;
-    }
-
-    const int64_t M   = 2;
-    const int64_t N   = 1;
-    const int64_t K   = QK_K;
-    ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
-    ggml_tensor * a   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
-    ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, M, N);
-    if (!w || !a || !dst) {
-        fprintf(stderr, "Failed to allocate tensors for auto decode policy test\n");
-        ggml_free(ctx);
-        return false;
-    }
-
-    env_layout.set("merged64");
-    env_kernel.unset();
-    const size_t wsize_merged64 = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-
-    env_layout.set("auto");
-    env_kernel.unset();
-    const size_t wsize_auto = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-
-    ggml_free(ctx);
-
-    if (wsize_merged64 == 0 || wsize_auto == 0 || wsize_auto != wsize_merged64) {
-        fprintf(stderr, "auto decode default mismatch: merged64=%zu auto=%zu\n", wsize_merged64, wsize_auto);
-        return false;
-    }
-
-    printf("  auto decode default merged64 - PASS\n");
-    return true;
-#endif
-}
-
 // ============================================================================
 // 测试 2.4: 索引对齐/误对齐缓冲
 // ============================================================================
@@ -680,7 +571,6 @@ static bool test_ifairy_lut_env_semantics() {
     printf("\n=== Test 2.6: iFairy LUT env semantics ===\n");
 
     scoped_env_var env_lut("GGML_IFAIRY_LUT");
-    scoped_env_var env_bk("GGML_IFAIRY_LUT_BK_BLOCKS");
 
     struct ggml_init_params params = {
         /*.mem_size   =*/4 * 1024 * 1024,
@@ -706,21 +596,18 @@ static bool test_ifairy_lut_env_semantics() {
     }
 
     env_lut.set("0");
-    const bool can_disabled = ggml_ifairy_lut_can_mul_mat(w, a, dst);
+    const bool   can_disabled   = ggml_ifairy_lut_can_mul_mat(w, a, dst);
+    const size_t wsize_disabled = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
 
     env_lut.set("1");
-    const bool can_enabled = ggml_ifairy_lut_can_mul_mat(w, a, dst);
-
-    env_bk.set("-1");
-    const size_t wsize_neg = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
-    env_bk.set("0");
-    const size_t wsize_zero = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
+    const bool   can_enabled   = ggml_ifairy_lut_can_mul_mat(w, a, dst);
+    const size_t wsize_enabled = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
 
     ggml_free(ctx);
 
-    if (can_disabled || !can_enabled || wsize_zero == 0 || wsize_neg != wsize_zero) {
-        fprintf(stderr, "env semantics mismatch: disabled=%d enabled=%d wsize(-1)=%zu wsize(0)=%zu\n",
-                (int) can_disabled, (int) can_enabled, wsize_neg, wsize_zero);
+    if (can_disabled || !can_enabled || wsize_disabled != 0 || wsize_enabled == 0) {
+        fprintf(stderr, "env semantics mismatch: can_disabled=%d can_enabled=%d wsize_disabled=%zu wsize_enabled=%zu\n",
+                (int) can_disabled, (int) can_enabled, wsize_disabled, wsize_enabled);
         return false;
     }
 
@@ -994,7 +881,7 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
             blk.d_imag = GGML_FP32_TO_FP16(w_scale);
             for (int j = 0; j < QK_K; ++j) {
                 const int     k_idx = (int) (b * QK_K + j);
-                const uint8_t code  = (uint8_t) ((k_idx + (int) r) & 0x1);
+                const uint8_t code  = (uint8_t) ((k_idx + (int) r) & 0x3);
                 set_ifairy_code(blk, j, code);
             }
             weights[(size_t) r * (size_t) blocks_per_row + (size_t) b] = blk;
@@ -1082,58 +969,23 @@ static bool test_ifairy_lut_scalar_small_dims() {
     return ok;
 }
 
-static bool test_ifairy_lut_scalar_sym16_matmul() {
-    printf("\n=== Test 4.2: iFairy LUT scalar sym16 matmul ===\n");
-
-    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
-    env_layout.set("sym16");
-
-    const bool ok = run_ifairy_lut_scalar_case(2, 2, QK_K);
-    if (!ok) {
-        fprintf(stderr, "Scalar LUT sym16 matmul mismatch\n");
-    }
-    return ok;
-}
-
 // ============================================================================
-// 测试 5: CPU backend LUT tiling 回归（非 tiling vs BK/BM tiling）
+// 测试 5: CPU backend LUT 核心一致性回归（env on/off, F32 vs Q16）
 // ============================================================================
 
 static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
-                                             bool                    tiling,
                                              int64_t                 M,
                                              int64_t                 N,
                                              int64_t                 K,
-                                             const char *            layout,
-                                             const char *            kernel) {
-    // Keep other tests isolated.
+                                             enum ggml_type          act_type,
+                                             const void *            act_data,
+                                             size_t                  act_bytes,
+                                             const char *            lut_env) {
     scoped_env_var env_lut("GGML_IFAIRY_LUT");
-    scoped_env_var env_strict("GGML_IFAIRY_LUT_VALIDATE_STRICT");
-    scoped_env_var env_bk("GGML_IFAIRY_LUT_BK_BLOCKS");
-    scoped_env_var env_bm("GGML_IFAIRY_LUT_BM");
-    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
-    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
-
-    env_lut.set("1");
-    env_strict.unset();
-    if (layout) {
-        env_layout.set(layout);
+    if (lut_env) {
+        env_lut.set(lut_env);
     } else {
-        env_layout.unset();
-    }
-    if (kernel) {
-        env_kernel.set(kernel);
-    } else {
-        env_kernel.unset();
-    }
-
-    if (tiling) {
-        // force multi-tile: K>=512 => BK_BLOCKS=1 => multiple tiles
-        env_bk.set("1");
-        env_bm.set("4");
-    } else {
-        env_bk.set("0");
-        env_bm.unset();
+        env_lut.unset();
     }
 
     if (M <= 0 || N <= 0 || K <= 0 || (K % QK_K) != 0) {
@@ -1161,14 +1013,9 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
             weights[(size_t) r * (size_t) blocks_per_row + (size_t) b] = blk;
         }
     }
-
-    std::vector<float> act_f32((size_t) K * (size_t) N);
-    for (int64_t c = 0; c < N; ++c) {
-        for (int64_t k_idx = 0; k_idx < K; ++k_idx) {
-            const float xr                                    = (float) (((k_idx + 7 * c) % 17) - 8) / 7.0f;
-            const float xi                                    = (float) (((k_idx * 2 + 3 * c) % 15) - 7) / 6.0f;
-            act_f32[(size_t) c * (size_t) K + (size_t) k_idx] = pack_bf16_pair(xr, xi);
-        }
+    if (!act_data || act_bytes == 0) {
+        fprintf(stderr, "Invalid activation buffer\n");
+        return false;
     }
 
     // Build a minimal backend graph to hit ggml_compute_forward_mul_mat() in ggml-cpu.
@@ -1192,7 +1039,7 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
     }
 
     struct ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
-    struct ggml_tensor * a   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
+    struct ggml_tensor * a   = ggml_new_tensor_2d(ctx, act_type, K, N);
     struct ggml_tensor * out = ggml_mul_mat(ctx, w, a);
 
     struct ggml_cgraph * gf = ggml_new_graph(ctx);
@@ -1207,7 +1054,7 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
     }
 
     ggml_backend_tensor_set(w, weights.data(), 0, ggml_nbytes(w));
-    ggml_backend_tensor_set(a, act_f32.data(), 0, ggml_nbytes(a));
+    ggml_backend_tensor_set(a, act_data, 0, act_bytes);
 
     if (ggml_backend_graph_compute(backend, gf) != GGML_STATUS_SUCCESS) {
         ggml_backend_buffer_free(buf);
@@ -1231,162 +1078,94 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
     return true;
 }
 
-static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out,
-                                       bool                    tiling,
-                                       int64_t                 n_cols,
-                                       const char *            layout,
-                                       const char *            kernel) {
-    return run_ifairy_backend_mul_mat_shape(packed_out, tiling, 8, n_cols, 2 * QK_K, layout, kernel);
+static void fill_ifairy_backend_act_f32(std::vector<float> & act_f32, int64_t N, int64_t K) {
+    act_f32.assign((size_t) N * (size_t) K, 0.0f);
+    for (int64_t c = 0; c < N; ++c) {
+        for (int64_t k_idx = 0; k_idx < K; ++k_idx) {
+            const float xr                                    = (float) (((k_idx + 7 * c) % 17) - 8) / 7.0f;
+            const float xi                                    = (float) (((k_idx * 2 + 3 * c) % 15) - 7) / 6.0f;
+            act_f32[(size_t) c * (size_t) K + (size_t) k_idx] = pack_bf16_pair(xr, xi);
+        }
+    }
 }
 
-static bool test_ifairy_lut_backend_tiling_regression() {
+static void quantize_ifairy_backend_act_q16(std::vector<block_ifairy_q16> & act_q16,
+                                            const std::vector<float> &      act_f32,
+                                            int64_t                         N,
+                                            int64_t                         K) {
+    const int64_t blocks = K / QK_K;
+    act_q16.assign((size_t) N * (size_t) blocks, block_ifairy_q16{});
+    for (int64_t c = 0; c < N; ++c) {
+        quantize_row_ifairy_q16_tensor(act_f32.data() + (size_t) c * (size_t) K,
+                                       act_q16.data() + (size_t) c * (size_t) blocks, K);
+    }
+}
+
+static bool test_ifairy_lut_backend_smoke() {
 #ifndef GGML_IFAIRY_ARM_LUT
-    printf("\n=== Test 5: iFairy LUT backend tiling regression (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+    printf("\n=== Test 5: iFairy LUT backend smoke (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
     return true;
 #else
-    printf("\n=== Test 5: iFairy LUT backend tiling regression ===\n");
+    printf("\n=== Test 5: iFairy LUT backend smoke ===\n");
 
-    std::vector<uint32_t> out_no_tile;
-    std::vector<uint32_t> out_tile;
-    if (!run_ifairy_backend_mul_mat(out_no_tile, false, 2, NULL, NULL)) {
-        return false;
-    }
-    if (!run_ifairy_backend_mul_mat(out_tile, true, 2, NULL, NULL)) {
-        return false;
-    }
+    const int64_t M = 8;
+    const int64_t N = 2;
+    const int64_t K = 2 * QK_K;
 
-    if (out_no_tile.size() != out_tile.size()) {
-        fprintf(stderr, "Size mismatch: %zu vs %zu\n", out_no_tile.size(), out_tile.size());
-        return false;
-    }
+    std::vector<float>            act_f32;
+    std::vector<block_ifairy_q16> act_q16;
+    fill_ifairy_backend_act_f32(act_f32, N, K);
+    quantize_ifairy_backend_act_q16(act_q16, act_f32, N, K);
 
-    if (!compare_u32_arrays(out_tile.data(), out_no_tile.data(), out_no_tile.size())) {
+    std::vector<uint32_t> out_off;
+    std::vector<uint32_t> out_on;
+    if (!run_ifairy_backend_mul_mat_shape(out_off, M, N, K, GGML_TYPE_IFAIRY_Q16, act_q16.data(),
+                                          act_q16.size() * sizeof(block_ifairy_q16),
+                                          /*lut_env*/ "0")) {
         return false;
     }
-
-    // Merged64 tiling regression (prefill-like: N > 1): tiling must not change results.
-    std::vector<uint32_t> out_merged64_no_tile;
-    std::vector<uint32_t> out_merged64_tile;
-    if (!run_ifairy_backend_mul_mat(out_merged64_no_tile, false, 2, "merged64", NULL)) {
+    if (!run_ifairy_backend_mul_mat_shape(out_on, M, N, K, GGML_TYPE_IFAIRY_Q16, act_q16.data(),
+                                          act_q16.size() * sizeof(block_ifairy_q16),
+                                          /*lut_env*/ "1")) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat(out_merged64_tile, true, 2, "merged64", NULL)) {
-        return false;
-    }
-    if (out_merged64_no_tile.size() != out_merged64_tile.size()) {
-        fprintf(stderr, "Size mismatch (merged64): %zu vs %zu\n", out_merged64_no_tile.size(),
-                out_merged64_tile.size());
-        return false;
-    }
-    if (!compare_u32_arrays(out_merged64_tile.data(), out_merged64_no_tile.data(), out_merged64_no_tile.size())) {
-        return false;
-    }
-
-    // sym16 tiling regression (prefill-like: N > 1): tiling must not change results.
-    std::vector<uint32_t> out_sym16_no_tile;
-    std::vector<uint32_t> out_sym16_tile;
-    if (!run_ifairy_backend_mul_mat(out_sym16_no_tile, false, 2, "sym16", NULL)) {
-        return false;
-    }
-    if (!run_ifairy_backend_mul_mat(out_sym16_tile, true, 2, "sym16", NULL)) {
-        return false;
-    }
-    if (out_sym16_no_tile.size() != out_sym16_tile.size()) {
-        fprintf(stderr, "Size mismatch (sym16): %zu vs %zu\n", out_sym16_no_tile.size(), out_sym16_tile.size());
-        return false;
-    }
-    if (!compare_u32_arrays(out_sym16_tile.data(), out_sym16_no_tile.data(), out_sym16_no_tile.size())) {
-        return false;
-    }
-
-    // Decode-like regression: N == 1, plus layout equivalence (legacy vs compact) for the same backend graph.
-    std::vector<uint32_t> out_legacy;
-    std::vector<uint32_t> out_compact;
-    if (!run_ifairy_backend_mul_mat(out_legacy, false, 1, "legacy", NULL)) {
-        return false;
-    }
-    if (!run_ifairy_backend_mul_mat(out_compact, false, 1, "compact", NULL)) {
-        return false;
-    }
-    if (out_legacy.size() != out_compact.size()) {
-        fprintf(stderr, "Size mismatch (layout): %zu vs %zu\n", out_legacy.size(), out_compact.size());
-        return false;
-    }
-
-    std::vector<uint32_t> out_sym16;
-    if (!run_ifairy_backend_mul_mat(out_sym16, false, 1, "sym16", NULL)) {
-        return false;
-    }
-    if (out_sym16.size() != out_legacy.size()) {
-        fprintf(stderr, "Size mismatch (sym16): %zu vs %zu\n", out_sym16.size(), out_legacy.size());
-        return false;
-    }
-
-    if (!compare_u32_arrays(out_compact.data(), out_legacy.data(), out_legacy.size())) {
-        return false;
-    }
-    return compare_u32_arrays(out_sym16.data(), out_legacy.data(), out_legacy.size());
+    return true;
 #endif
 }
 
-// ============================================================================
-// 测试 5.1: CPU backend LUT 大维度回归
-// ============================================================================
-
-static bool test_ifairy_lut_backend_large_dims() {
+static bool test_ifairy_lut_backend_f32_vs_q16() {
 #ifndef GGML_IFAIRY_ARM_LUT
-    printf("\n=== Test 5.1: iFairy LUT backend large dims (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+    printf("\n=== Test 5.1: iFairy LUT backend F32 vs Q16 (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
     return true;
 #else
-    printf("\n=== Test 5.1: iFairy LUT backend large dims ===\n");
+    printf("\n=== Test 5.1: iFairy LUT backend F32 vs Q16 ===\n");
 
-    const int64_t M = 16;
-    const int64_t N = 8;
-    const int64_t K = 4 * QK_K;
+    const int64_t M = 8;
+    const int64_t N = 2;
+    const int64_t K = 2 * QK_K;
 
-    std::vector<uint32_t> out_no_tile;
-    std::vector<uint32_t> out_tile;
-    if (!run_ifairy_backend_mul_mat_shape(out_no_tile, false, M, N, K, NULL, NULL)) {
+    std::vector<float>            act_f32;
+    std::vector<block_ifairy_q16> act_q16;
+    fill_ifairy_backend_act_f32(act_f32, N, K);
+    quantize_ifairy_backend_act_q16(act_q16, act_f32, N, K);
+
+    std::vector<uint32_t> out_f32;
+    std::vector<uint32_t> out_q16;
+    if (!run_ifairy_backend_mul_mat_shape(out_f32, M, N, K, GGML_TYPE_F32, act_f32.data(),
+                                          act_f32.size() * sizeof(float),
+                                          /*lut_env*/ "1")) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat_shape(out_tile, true, M, N, K, NULL, NULL)) {
+    if (!run_ifairy_backend_mul_mat_shape(out_q16, M, N, K, GGML_TYPE_IFAIRY_Q16, act_q16.data(),
+                                          act_q16.size() * sizeof(block_ifairy_q16),
+                                          /*lut_env*/ "1")) {
         return false;
     }
-
-    if (out_no_tile.size() != out_tile.size()) {
-        fprintf(stderr, "Size mismatch (large dims): %zu vs %zu\n", out_no_tile.size(), out_tile.size());
+    if (out_f32.size() != out_q16.size()) {
+        fprintf(stderr, "Size mismatch (F32 vs Q16): %zu vs %zu\n", out_f32.size(), out_q16.size());
         return false;
     }
-
-    return compare_u32_arrays(out_tile.data(), out_no_tile.data(), out_no_tile.size());
-#endif
-}
-
-// ============================================================================
-// 测试 5.2: CPU backend LUT kernel 选择一致性（auto vs sdot）
-// ============================================================================
-
-static bool test_ifairy_lut_kernel_sdot_consistency() {
-#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
-    printf("\n=== Test 5.2: iFairy LUT kernel sdot consistency (SKIP) ===\n");
-    return true;
-#else
-    printf("\n=== Test 5.2: iFairy LUT kernel sdot consistency ===\n");
-
-    std::vector<uint32_t> out_auto;
-    std::vector<uint32_t> out_sdot;
-    if (!run_ifairy_backend_mul_mat(out_auto, false, 1, "compact", "auto")) {
-        return false;
-    }
-    if (!run_ifairy_backend_mul_mat(out_sdot, false, 1, "compact", "sdot")) {
-        return false;
-    }
-
-    if (out_auto.size() != out_sdot.size()) {
-        fprintf(stderr, "Size mismatch (kernel): %zu vs %zu\n", out_auto.size(), out_sdot.size());
-        return false;
-    }
-    return compare_u32_arrays(out_sdot.data(), out_auto.data(), out_auto.size());
+    return compare_u32_arrays(out_q16.data(), out_f32.data(), out_f32.size());
 #endif
 }
 
@@ -1500,16 +1279,6 @@ int main(int argc, char ** argv) {
             num_failed++;
         }
 
-        if (!test_ifairy_lut_layout_auto_policy()) {
-            fprintf(stderr, "Test 2.3 FAILED\n");
-            num_failed++;
-        }
-
-        if (!test_ifairy_lut_layout_auto_decode_default_merged64()) {
-            fprintf(stderr, "Test 2.3.1 FAILED\n");
-            num_failed++;
-        }
-
         if (!test_ifairy_lut_index_alignment()) {
             fprintf(stderr, "Test 2.4 FAILED\n");
             num_failed++;
@@ -1540,23 +1309,13 @@ int main(int argc, char ** argv) {
             num_failed++;
         }
 
-        if (!test_ifairy_lut_scalar_sym16_matmul()) {
-            fprintf(stderr, "Test 4.2 FAILED\n");
-            num_failed++;
-        }
-
-        if (!test_ifairy_lut_backend_tiling_regression()) {
+        if (!test_ifairy_lut_backend_smoke()) {
             fprintf(stderr, "Test 5 FAILED\n");
             num_failed++;
         }
 
-        if (!test_ifairy_lut_backend_large_dims()) {
+        if (!test_ifairy_lut_backend_f32_vs_q16()) {
             fprintf(stderr, "Test 5.1 FAILED\n");
-            num_failed++;
-        }
-
-        if (!test_ifairy_lut_kernel_sdot_consistency()) {
-            fprintf(stderr, "Test 5.2 FAILED\n");
             num_failed++;
         }
 

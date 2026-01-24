@@ -18,7 +18,7 @@ static void usage(const char * argv0) {
     std::fprintf(stderr,
                  "usage: %s [--m M] [--k K] [--iters N] [--warmup N] [--seed S]\n"
                  "\n"
-                 "Benchmarks ggml_ifairy_lut_qgemm_ex_merged64() with N==1 (decode-style).\n"
+                 "Benchmarks ggml_ifairy_lut_qgemm_merged64() with N==1 (decode-style).\n"
                  "K must be a multiple of 256.\n",
                  argv0);
 }
@@ -138,10 +138,11 @@ static int main_impl(int argc, char ** argv) {
     std::vector<float> dst((size_t) m * 2);
 
     auto run_once = [&]() {
-        ggml_ifairy_lut_qgemm_ex_merged64(m, k, /*n*/ 1, qweights.data(), indexes.data(), lut.data(), lut_scales.data(),
-                                          /*act*/ nullptr, /*act_stride*/ 0, dst.data(), /*dst_col_stride*/ 0,
-                                          /*dst_row_stride*/ 2 * sizeof(float),
-                                          /*pack_bf16*/ false, /*strict*/ false, /*add*/ false);
+        ggml_ifairy_lut_qgemm_merged64(m, k, /*n*/ 1, qweights.data(), indexes.data(), lut.data(), lut_scales.data(),
+                                       dst.data(),
+                                       /*dst_col_stride*/ 0,
+                                       /*dst_row_stride*/ 2 * sizeof(float),
+                                       /*pack_bf16*/ false, /*add*/ false);
     };
 
     for (int i = 0; i < warmup; ++i) {

@@ -21,29 +21,10 @@ Primary integration points:
 
 ## Runtime toggles (current implementation)
 
-- `GGML_IFAIRY_LUT=0/1`
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`
-- `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`
-- `GGML_IFAIRY_LUT_BM=<int>`
-- `GGML_IFAIRY_LUT_FULLACC=0/1`
-- `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`
+- `GGML_IFAIRY_LUT=0/1` (enable unless explicitly set to `0`)
 - `GGML_IFAIRY_LUT_DEBUG=0/1`
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`
-- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`
-- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`
-- `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`
-- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`
-- `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`
-- `GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0/1`
-- `GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0/1`
-- `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`
-- `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`
-- `GGML_IFAIRY_LUT_MERGED64_UNROLL8_2X4=0/1`
-- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`
-- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`
 
-These toggles reflect the current implementation. V2 aims to consolidate/remove most of them; do not add new knobs unless strictly necessary.
+V2 keeps a single production LUT path and removes layout/kernel/tiling knobs to reduce surface area. Do not add new knobs unless strictly necessary.
 
 If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` and keep a safe default.
 
@@ -55,20 +36,19 @@ Follow repo-root `AGENTS.md` for `git clang-format` / `clang-tidy` (diff-only, a
 
 1) Release build:
 - `cmake --build build-rel -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)` (multi-config: add `--config Release`)
+- `cmake --build build-rel-lut -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)` (multi-config: add `--config Release`)
 
 2) Unit/functional test:
 - `./build-rel/bin/test-ifairy`
+- `./build-rel-lut/bin/test-ifairy`
 
-3) Strict validation (slow but required):
-- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
-
-4) CLI sanity (quick smoke) + bench tok/s baseline:
-- `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
-- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+3) CLI sanity (quick smoke) + bench tok/s baseline:
+- `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
+- `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
 
 Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics, transform concurrency).
 
 ## Performance claims
 
 - Use `eval tok/s` only, and always include the full command + env.
-- Record results in `IFAIRY_ARM_3W_LUT_STATUS.md` (or link to raw logs/TSV paths).
+- Record results in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` (or link to raw logs/TSV paths).

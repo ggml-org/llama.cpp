@@ -16,10 +16,6 @@
 #include <string.h>
 
 #include <algorithm>
-#include <atomic>
-
-static std::atomic<bool> g_ifairy_lut_warned_bad_layout(false);
-static std::atomic<bool> g_ifairy_lut_warned_bad_kernel(false);
 
 static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
     GGML_ASSERT(a == 0 || b <= SIZE_MAX / a);
@@ -29,97 +25,6 @@ static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
 static inline size_t ggml_ifairy_checked_add_size(size_t a, size_t b) {
     GGML_ASSERT(a <= SIZE_MAX - b);
     return a + b;
-}
-
-ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
-    // Strict validation is a correctness gate; keep it on the most proven path.
-    if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT")) {
-        return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
-    }
-
-    const char * env = getenv("GGML_IFAIRY_LUT_LAYOUT");
-    if (env) {
-        if (strcmp(env, "legacy") == 0) {
-            return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
-        }
-        if (strcmp(env, "compact") == 0) {
-            return GGML_IFAIRY_LUT_LAYOUT_COMPACT;
-        }
-        if (strcmp(env, "tbl64") == 0) {
-            return GGML_IFAIRY_LUT_LAYOUT_TBL64;
-        }
-        if (strcmp(env, "merged64") == 0) {
-            return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
-        }
-        if (strcmp(env, "sym16") == 0) {
-            return GGML_IFAIRY_LUT_LAYOUT_SYM16;
-        }
-        if (strcmp(env, "auto") != 0) {
-            if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_layout.exchange(true)) {
-                GGML_LOG_WARN(
-                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: "
-                    "legacy|compact|tbl64|merged64|sym16|auto), "
-                    "using default\n",
-                    env);
-            }
-        }
-        // "auto" or unknown -> default policy below
-    }
-
-    // Default policy:
-    // - prefer merged64 when kernel is "auto" (best known tok/s on Apple Silicon as of 2025-12-26)
-    // - keep "tbl"/"sdot" as decode-only overrides (N==1), otherwise fall back to legacy
-    const ggml_ifairy_lut_kernel kernel = ggml_ifairy_lut_kernel_from_env();
-    if (kernel == GGML_IFAIRY_LUT_KERNEL_AUTO || kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
-        return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
-    }
-    if (n == 1 && kernel == GGML_IFAIRY_LUT_KERNEL_SDOT) {
-        return GGML_IFAIRY_LUT_LAYOUT_COMPACT;
-    }
-    if (n == 1 && kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
-        return GGML_IFAIRY_LUT_LAYOUT_TBL64;
-    }
-    return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
-}
-
-ggml_ifairy_lut_kernel ggml_ifairy_lut_kernel_from_env(void) {
-    static std::atomic<int> cached(-1);  // -1=unset, else ggml_ifairy_lut_kernel
-    int                     v = cached.load(std::memory_order_relaxed);
-    if (v >= 0) {
-        return (ggml_ifairy_lut_kernel) v;
-    }
-
-    const char * env = getenv("GGML_IFAIRY_LUT_KERNEL");
-    if (env) {
-        if (strcmp(env, "auto") == 0) {
-            v = GGML_IFAIRY_LUT_KERNEL_AUTO;
-        } else if (strcmp(env, "sdot") == 0) {
-            v = GGML_IFAIRY_LUT_KERNEL_SDOT;
-        } else if (strcmp(env, "tbl") == 0) {
-            v = GGML_IFAIRY_LUT_KERNEL_TBL;
-        } else if (strcmp(env, "merged64") == 0) {
-            v = GGML_IFAIRY_LUT_KERNEL_MERGED64;
-        } else {
-            v = GGML_IFAIRY_LUT_KERNEL_AUTO;
-            if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_kernel.exchange(true)) {
-                GGML_LOG_WARN(
-                    "ifairy_lut: unknown GGML_IFAIRY_LUT_KERNEL='%s' (expected: auto|sdot|tbl|merged64), using "
-                    "default\n",
-                    env);
-            }
-        }
-    } else {
-        v = GGML_IFAIRY_LUT_KERNEL_AUTO;
-    }
-
-    cached.store(v, std::memory_order_relaxed);
-    return (ggml_ifairy_lut_kernel) v;
-}
-
-static inline uint64_t
-ggml_ifairy_pack_u8_8(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3, uint8_t b4, uint8_t b5, uint8_t b6, uint8_t b7) {
-    return ((uint64_t) b0) | ((uint64_t) b1 << 8) | ((uint64_t) b2 << 16) | ((uint64_t) b3 << 24) |
-           ((uint64_t) b4 << 32) | ((uint64_t) b5 << 40) | ((uint64_t) b6 << 48) | ((uint64_t) b7 << 56);
 }
 
 bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
@@ -168,120 +73,6 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
     return true;
 }
 
-size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
-                                     const struct ggml_tensor * src1,
-                                     const struct ggml_tensor * dst,
-                                     int                        n_threads,
-                                     bool                       strict,
-                                     int                        lut_layout,
-                                     int                        bk_blocks,
-                                     int                        bm,
-                                     int                        fullacc_mode) {
-    if (!src0 || !src1 || !dst) {
-        return 0;
-    }
-    if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
-        return 0;
-    }
-    if (dst->type != GGML_TYPE_F32) {
-        return 0;
-    }
-    if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
-        return 0;
-    }
-    GGML_ASSERT(n_threads > 0);
-
-    const int64_t M                = src0->ne[1];
-    const int64_t K                = src0->ne[0];
-    const int64_t N                = src1->ne[1];
-    const int64_t blocks_per_col   = K / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3;
-
-    GGML_ASSERT(M >= 0);
-    GGML_ASSERT(K >= 0);
-    GGML_ASSERT(N >= 0);
-    GGML_ASSERT(blocks_per_col >= 0);
-    GGML_ASSERT(groups_per_block > 0);
-
-    ggml_ifairy_lut_layout layout = (ggml_ifairy_lut_layout) lut_layout;
-    if (strict) {
-        layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;
-    }
-
-    int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 ||
-        ((layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 || layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) && N == 1)) {
-        tile_blocks = 0;
-    }
-    const int bm_local = tile_blocks > 0 ? std::max(bm, 1) : 64;
-
-    size_t quant_bytes = 0;
-    if (src1->type == GGML_TYPE_F32) {
-        const size_t q_elems = ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col);
-        quant_bytes          = GGML_PAD(ggml_ifairy_checked_mul_size(q_elems, sizeof(block_ifairy_q16)), 64);
-    }
-
-    const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
-    const int64_t groups_tile = blocks_tile * groups_per_block;
-
-    const size_t lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
-    size_t       lut_bytes  = 0;
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
-        lut_bytes = ggml_ifairy_checked_mul_size(
-            ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
-            sizeof(int16_t));
-    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_COMPACT) {
-        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
-    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64) {
-        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_tbl64_group_bytes);
-    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
-        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
-    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) {
-        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_sym16_group_bytes);
-    } else {
-        GGML_ASSERT(false && "unknown ifairy LUT layout");
-    }
-
-    const size_t scale_bytes = ggml_ifairy_checked_mul_size(
-        ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
-        sizeof(float));
-
-    const size_t shared_lut_bytes      = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
-    const bool   use_lut_double_buffer = tile_blocks > 0 && blocks_tile < blocks_per_col;
-    const size_t lut_buffers           = use_lut_double_buffer ? 2u : 1u;
-    size_t       shared_bytes          = ggml_ifairy_checked_mul_size(shared_lut_bytes, lut_buffers);
-
-    bool fullacc = false;
-    if (tile_blocks > 0 && M > 0) {
-        const size_t acc_elems = ggml_ifairy_checked_mul_size((size_t) M, ggml_ifairy_checked_mul_size(4u, (size_t) N));
-        const size_t acc_bytes = ggml_ifairy_checked_mul_size(acc_elems, sizeof(float));
-        const bool   auto_ok   = (N <= 2) && (acc_bytes <= (size_t) (8 * 1024 * 1024));
-        if (fullacc_mode == 0) {
-            fullacc = false;
-        } else if (fullacc_mode > 0) {
-            fullacc = true;
-        } else {
-            fullacc = auto_ok;
-        }
-        if (fullacc) {
-            shared_bytes = ggml_ifairy_checked_add_size(shared_bytes, GGML_PAD(acc_bytes, 64));
-        }
-    }
-
-    size_t tmp_elems = 0;
-    if (tile_blocks == 0) {
-        tmp_elems = (size_t) N;
-    } else if (fullacc) {
-        tmp_elems = 16u;
-    } else {
-        tmp_elems = ggml_ifairy_checked_mul_size((size_t) bm_local, ggml_ifairy_checked_mul_size(4u, (size_t) N));
-    }
-    const size_t tmp_bytes = GGML_PAD(ggml_ifairy_checked_mul_size(tmp_elems, sizeof(float)), 64);
-
-    return ggml_ifairy_checked_add_size(ggml_ifairy_checked_add_size(quant_bytes, shared_bytes),
-                                        ggml_ifairy_checked_mul_size(tmp_bytes, (size_t) n_threads));
-}
-
 size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
                                  const struct ggml_tensor * src1,
                                  const struct ggml_tensor * dst,
@@ -289,9 +80,25 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     if (!ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
         return 0;
     }
-    GGML_ASSERT(n_threads > 0);
+    (void) n_threads;
 
-    // V2 core path: merged64 only (no runtime layout/kernel selection; no tiling/fullacc).
-    return ggml_ifairy_lut_get_wsize_cfg(src0, src1, dst, n_threads, /* strict */ false, GGML_IFAIRY_LUT_LAYOUT_MERGED64,
-                                         /* bk_blocks */ 0, /* bm */ 64, /* fullacc_mode */ 0);
+    const int64_t K              = src0->ne[0];
+    const int64_t N              = src1->ne[1];
+    const int64_t blocks_per_col = K / QK_K;
+    const int64_t groups         = blocks_per_col * ((QK_K + 2) / 3);
+
+    size_t quant_bytes = 0;
+    if (src1->type == GGML_TYPE_F32) {
+        const size_t q_elems = ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col);
+        quant_bytes          = GGML_PAD(ggml_ifairy_checked_mul_size(q_elems, sizeof(block_ifairy_q16)), 64);
+    }
+
+    const size_t lut_groups  = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups);
+    const size_t lut_bytes   = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    const size_t scale_bytes = ggml_ifairy_checked_mul_size(
+        ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col), 2u),
+        sizeof(float));
+    const size_t shared_bytes = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
+
+    return ggml_ifairy_checked_add_size(quant_bytes, shared_bytes);
 }

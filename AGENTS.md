@@ -86,8 +86,7 @@ For complex changes (e.g. adding a new architecture, changing hot-path kernels),
 This repo includes an iFairy 3-weight complex LUT path. When touching it:
 
 - Semantic invariant: must match baseline exactly (`w * conj(x)`)
-- Correctness gate: `./build-rel/bin/test-ifairy` + strict mode must pass:
-  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
+- Correctness gate: `./build-rel/bin/test-ifairy` and `./build-rel-lut/bin/test-ifairy` must pass
 - Performance claims must include reproducible commands + raw `eval tok/s` logs
 - Edge-case coverage lives in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics); keep docs in sync.
 - If adding/changing iFairy LUT env knobs or routing, update the V2 docs (do not modify the legacy `IFAIRY_ARM_3W_LUT_*.md` series):
