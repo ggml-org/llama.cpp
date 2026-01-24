@@ -1,6 +1,5 @@
 <script lang="ts">
-	import ChatMessageActions from './ChatMessageActions.svelte';
-	import McpPromptContent from '../McpPromptContent.svelte';
+	import { ChatMessageActions, ChatMessageMcpPromptContent } from '$lib/components/app';
 	import { MessageRole } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
@@ -45,7 +44,7 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	<McpPromptContent prompt={mcpPrompt} variant="message" class="w-full max-w-[80%]" />
+	<ChatMessageMcpPromptContent prompt={mcpPrompt} variant="message" class="w-full max-w-[80%]" />
 
 	{#if message.timestamp}
 		<div class="max-w-[80%]">

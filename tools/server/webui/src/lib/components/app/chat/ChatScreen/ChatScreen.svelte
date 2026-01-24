@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import {
-		ChatForm,
+		ChatScreenForm,
 		ChatScreenHeader,
 		ChatMessages,
 		ChatScreenProcessingInfo,
@@ -391,7 +391,7 @@
 			{/if}
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
-				<ChatForm
+				<ChatScreenForm
 					disabled={hasPropsError || isEditing()}
 					{initialMessage}
 					isLoading={isCurrentConversationLoading}
@@ -451,7 +451,7 @@
 			{/if}
 
 			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
-				<ChatForm
+				<ChatScreenForm
 					disabled={hasPropsError}
 					{initialMessage}
 					isLoading={isCurrentConversationLoading}
