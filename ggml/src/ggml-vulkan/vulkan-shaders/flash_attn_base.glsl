@@ -8,6 +8,7 @@ layout (constant_id = 3) const uint32_t HSK = 32;
 layout (constant_id = 4) const uint32_t HSV = 32;
 layout (constant_id = 5) const uint32_t Clamp = 0;
 layout (constant_id = 6) const uint32_t D_split = 16;
+layout (constant_id = 7) const uint32_t SubGroupSize = 32;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;

@@ -15,10 +15,14 @@
 #include "types.glsl"
 #include "flash_attn_base.glsl"
 
+// These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
+const uint32_t MatBr = 16;
+const uint32_t MatBc = 16;
+
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
 
-const uint32_t row_split = 4;
+const uint32_t row_split = Bc / MatBc;
 const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = gl_WorkGroupSize.x / D_split / row_split;
 const uint32_t cols_per_thread = Bc / cols_per_iter;
@@ -40,10 +44,6 @@ D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TY
     data_o[o_offset + offset] = D_TYPE(elem);
     return elem;
 }
-
-// These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
-const uint32_t MatBr = 16;
-const uint32_t MatBc = 16;
 
 shared FLOAT_TYPE tmpsh[row_split];
 
@@ -262,7 +262,7 @@ void main() {
             float Moldf = Mf[r];
 
             // Compute max across the row
-            [[unroll]] for (uint s = D_split; s < 32; s *= 2) {
+            [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
                 rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
             }
 
@@ -406,7 +406,7 @@ void main() {
     }
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        [[unroll]] for (uint s = D_split; s < 32; s *= 2) {
+        [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
             Lf[r] += subgroupShuffleXor(Lf[r], s);
         }
     }
