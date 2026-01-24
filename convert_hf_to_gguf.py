@@ -2688,6 +2688,7 @@ class ArceeModel(LlamaModel):
 @ModelBase.register("AfmoeForCausalLM")
 class AfmoeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.AFMOE
+    undo_permute = False
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -10725,6 +10726,7 @@ class CogVLMVisionModel(MmprojModel):
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.COGVLM
+    undo_permute = False
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # block vision tensors
