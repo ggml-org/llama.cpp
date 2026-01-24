@@ -385,17 +385,20 @@
 			'agenticMaxToolPreviewLines'
 		];
 
-		for (const field of NUMERIC_FIELDS) {
+		const positiveIntegerFields = ['agenticMaxTurns', 'agenticMaxToolPreviewLines'];
+
+		for (const field of numericFields) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
 				if (!isNaN(numValue)) {
-					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
+					if (positiveIntegerFields.includes(field)) {
 						processedConfig[field] = Math.max(1, Math.round(numValue));
 					} else {
 						processedConfig[field] = numValue;
 					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+
 					return;
 				}
 			}
