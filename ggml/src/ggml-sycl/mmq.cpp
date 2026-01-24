@@ -11,28 +11,295 @@
 //
 
 #include "mmq.hpp"
+#include "ggml-sycl-bench.hpp"
+
+#include <utility>
 #include "vecdotq.hpp"
 #include "mmq-esimd.hpp"
+#include "mmq-xmx.hpp"
 
+
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
 #include <type_traits>
+#include <utility>
+
+#include <sycl/ext/intel/experimental/grf_size_properties.hpp>
+#include <sycl/ext/oneapi/properties/properties.hpp>
 
 // Kernel names for VTune profiling
 template<bool check> class mmq_q4_0_kernel;
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_soa_kernel;  // SoA layout variant
+template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_soa_persistent_kernel;  // Persistent work-stealing variant
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_coalesced_kernel;  // Coalesced layout variant
+template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_coalesced_persistent_kernel;  // Persistent work-stealing variant
 template<bool check> class mmq_q4_1_kernel;
 template<bool check> class mmq_q5_0_kernel;
 template<bool check> class mmq_q5_1_kernel;
 template<bool check> class mmq_q8_0_kernel;
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q8_0_soa_kernel;  // SoA layout variant
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q8_0_coalesced_kernel;  // Coalesced layout variant
+
+// Forward declaration for bench launcher.
+static void ggml_sycl_mmq_dispatch(const ggml_tensor *     src0,
+                                   const char *            src0_dd_i,
+                                   const void *            layout_base,
+                                   layout_mode             layout,
+                                   int                     device_id,
+                                   int64_t                 ne00,
+                                   int64_t                 layout_rows,
+                                   int64_t                 ne10,
+                                   int64_t                 row_low,
+                                   int64_t                 row_high,
+                                   int64_t                 src1_ncols,
+                                   int64_t                 src1_padded_row_size,
+                                   const char *            src1_ddq_i,
+                                   float *                 dst_dd_i,
+                                   int64_t                 nrows_dst,
+                                   int64_t                 layout_row_low,
+                                   const dpct::queue_ptr & stream);
 template<bool check> class mmq_q2_K_kernel;
 template<bool check> class mmq_q3_K_kernel;
 template<bool check> class mmq_q4_K_kernel;
 template<bool check> class mmq_q5_K_kernel;
-template<bool check> class mmq_q6_K_kernel;
+template<int mmq_x, int mmq_y, int nwarps, bool check, int variant_id> class mmq_q6_K_kernel;
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q6_K_soa_kernel;  // SoA layout variant
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q6_K_coalesced_kernel;  // Coalesced layout variant
+template <typename KernelName> class ggml_sycl_grf128_kernel;
+template <typename KernelName> class ggml_sycl_grf256_kernel;
+
+enum class ggml_sycl_grf_size {
+    automatic,
+    grf_128,
+    grf_256,
+};
+
+enum class ggml_sycl_q6k_tune {
+    spillfree,
+    perf,
+};
+
+static bool ggml_sycl_env_equals(const char *value, const char *expected) {
+    if (value == nullptr || expected == nullptr) {
+        return false;
+    }
+    while (*value != '\0' && *expected != '\0') {
+        const unsigned char lhs = static_cast<unsigned char>(*value);
+        const unsigned char rhs = static_cast<unsigned char>(*expected);
+        if (std::tolower(lhs) != std::tolower(rhs)) {
+            return false;
+        }
+        ++value;
+        ++expected;
+    }
+    return *value == '\0' && *expected == '\0';
+}
+
+static ggml_sycl_grf_size ggml_sycl_get_grf_size() {
+    static const ggml_sycl_grf_size cached = [] {
+        const char *env = std::getenv("GGML_SYCL_GRF_SIZE");
+        if (env == nullptr || env[0] == '\0') {
+            return ggml_sycl_grf_size::automatic;
+        }
+        if (ggml_sycl_env_equals(env, "128")) {
+            return ggml_sycl_grf_size::grf_128;
+        }
+        if (ggml_sycl_env_equals(env, "256")) {
+            return ggml_sycl_grf_size::grf_256;
+        }
+        if (ggml_sycl_env_equals(env, "auto")) {
+            return ggml_sycl_grf_size::automatic;
+        }
+        return ggml_sycl_grf_size::automatic;
+    }();
+    return cached;
+}
+
+static ggml_sycl_q6k_tune ggml_sycl_get_q6k_tune() {
+    static const ggml_sycl_q6k_tune cached = [] {
+        const char *env = std::getenv("GGML_SYCL_MMQ_Q6K_TUNE");
+        if (env == nullptr || env[0] == '\0') {
+            return ggml_sycl_q6k_tune::spillfree;
+        }
+        if (ggml_sycl_env_equals(env, "perf")) {
+            return ggml_sycl_q6k_tune::perf;
+        }
+        if (ggml_sycl_env_equals(env, "spillfree")) {
+            return ggml_sycl_q6k_tune::spillfree;
+        }
+        return ggml_sycl_q6k_tune::spillfree;
+    }();
+    return cached;
+}
+
+// Persistent kernel with work-stealing: breaks "convoy effect" where all work-groups
+// stall simultaneously on memory. Uses atomic counter for dynamic tile distribution.
+// Enable via GGML_SYCL_PERSISTENT=1 (default: off for safety)
+static bool use_persistent_mmq_kernel() {
+    static const bool enabled = [] {
+        const char *env = std::getenv("GGML_SYCL_PERSISTENT");
+        return env != nullptr && ggml_sycl_env_equals(env, "1");
+    }();
+    return enabled;
+}
+
+// Work-groups per XeCore for persistent kernel
+// 2 WGs/XeCore is typical for memory-bound kernels (matches MoE pattern)
+// Can be tuned via environment variable for experimentation
+static int get_persistent_wgs_per_xecore() {
+    static const int wgs = [] {
+        const char *env = std::getenv("GGML_SYCL_PERSISTENT_WGS_PER_XE");
+        if (env != nullptr) {
+            int val = std::atoi(env);
+            if (val >= 1 && val <= 8) {
+                return val;
+            }
+        }
+        return 2;  // Default: 2 WGs per XeCore (proven pattern from MoE)
+    }();
+    return wgs;
+}
+
+// Get optimal number of persistent work-groups for a device
+// Queries hardware to determine XeCore count dynamically
+//
+// Note on Intel Arc GPU compute units:
+// - SYCL reports Execution Units (EUs) via max_compute_units
+// - Intel Arc has 8 EUs per XeCore (Vector Engine)
+// - For work-group scheduling, we want WGs per XeCore, not per EU
+// - Arc B580: 160 EUs / 8 = 20 XeCores
+// - Arc B50 Pro: 128 EUs / 8 = 16 XeCores
+static int get_persistent_groups(int device_id) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return 40;  // Fallback for invalid device
+    }
+
+    const int eu_count = ggml_sycl_info().devices[device_id].nsm;
+    const int wgs_per_xe = get_persistent_wgs_per_xecore();
+
+    // Convert EUs to XeCores (8 EUs per XeCore on Intel Arc)
+    // Use integer division, minimum 1 XeCore
+    constexpr int EUS_PER_XECORE = 8;
+    const int xecore_count = std::max(1, eu_count / EUS_PER_XECORE);
+    const int groups = xecore_count * wgs_per_xe;
+
+    // Log once per device for debugging
+    static bool logged[GGML_SYCL_MAX_DEVICES] = { false };
+    if (!logged[device_id]) {
+        fprintf(stderr, "[MMQ] Device %d: %d EUs / %d = %d XeCores × %d WGs = %d persistent groups\n",
+                device_id, eu_count, EUS_PER_XECORE, xecore_count, wgs_per_xe, groups);
+        logged[device_id] = true;
+    }
+    return groups;
+}
+
+// Number of tiles each work-group acquires at once (batched work-stealing)
+// Reduces atomic contention while maintaining dynamic load balancing
+// Can be tuned via environment variable
+static int get_tiles_per_batch() {
+    static const int tiles = [] {
+        const char *env = std::getenv("GGML_SYCL_PERSISTENT_TILE_BATCH");
+        if (env != nullptr) {
+            int val = std::atoi(env);
+            if (val >= 1 && val <= 32) {
+                return val;
+            }
+        }
+        return 4;  // Default: 4 tiles per batch
+    }();
+    return tiles;
+}
+
+// Static work counter for persistent kernel (per-device, lazily allocated)
+// Uses device memory for atomic operations
+static std::mutex s_mmq_persistent_mutex;
+static int32_t* s_mmq_work_counters[GGML_SYCL_MAX_DEVICES] = { nullptr };
+
+// Get or allocate work counter for a device
+static int32_t* get_mmq_work_counter(dpct::queue_ptr stream) {
+    int device_id = dpct::dev_mgr::instance().current_device_id();
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return nullptr;
+    }
+
+    // Fast path: already allocated
+    if (s_mmq_work_counters[device_id] != nullptr) {
+        return s_mmq_work_counters[device_id];
+    }
+
+    // Slow path: allocate with lock
+    std::lock_guard<std::mutex> lock(s_mmq_persistent_mutex);
+    if (s_mmq_work_counters[device_id] == nullptr) {
+        s_mmq_work_counters[device_id] = sycl::malloc_device<int32_t>(1, *stream);
+    }
+    return s_mmq_work_counters[device_id];
+}
+
+template <typename KernelFunc, typename PropertiesT, int Dims>
+struct ggml_sycl_kernel_with_properties {
+    KernelFunc func;
+    PropertiesT props;
+
+    void operator()(sycl::nd_item<Dims> item) const {
+        func(item);
+    }
+
+    auto get(sycl::ext::oneapi::experimental::properties_tag) const {
+        return props;
+    }
+};
+
+template <typename KernelName, int Dims, typename KernelFunc>
+static void ggml_sycl_parallel_for_grf(sycl::handler &cgh,
+                                       const sycl::nd_range<Dims> &range,
+                                       KernelFunc &&func) {
+    const ggml_sycl_grf_size grf_size = ggml_sycl_get_grf_size();
+    if (grf_size == ggml_sycl_grf_size::automatic) {
+        cgh.parallel_for<KernelName>(range, std::forward<KernelFunc>(func));
+        return;
+    }
+
+    if (grf_size == ggml_sycl_grf_size::grf_128) {
+        auto props = sycl::ext::oneapi::experimental::properties{
+            sycl::ext::intel::experimental::grf_size<128>};
+        using kernel_t = ggml_sycl_kernel_with_properties<
+            std::decay_t<KernelFunc>, decltype(props), Dims>;
+        cgh.parallel_for<ggml_sycl_grf128_kernel<KernelName>>(
+            range, kernel_t{std::forward<KernelFunc>(func), props});
+        return;
+    }
+
+    auto props = sycl::ext::oneapi::experimental::properties{
+        sycl::ext::intel::experimental::grf_size<256>};
+    using kernel_t = ggml_sycl_kernel_with_properties<
+        std::decay_t<KernelFunc>, decltype(props), Dims>;
+    cgh.parallel_for<ggml_sycl_grf256_kernel<KernelName>>(
+        range, kernel_t{std::forward<KernelFunc>(func), props});
+}
+
+static thread_local std::vector<sycl::event> * g_mmq_bench_events = nullptr;
+
+struct mmq_bench_event_scope {
+    std::vector<sycl::event> * prev = nullptr;
+    explicit mmq_bench_event_scope(std::vector<sycl::event> * events) {
+        prev = g_mmq_bench_events;
+        g_mmq_bench_events = events;
+    }
+    ~mmq_bench_event_scope() {
+        g_mmq_bench_events = prev;
+    }
+};
+
+template <typename SubmitFunc>
+static sycl::event mmq_submit(const dpct::queue_ptr & stream, SubmitFunc && fn) {
+    sycl::event ev = stream->submit(std::forward<SubmitFunc>(fn));
+    if (g_mmq_bench_events) {
+        g_mmq_bench_events->push_back(ev);
+    }
+    return ev;
+}
 
 // MMQ tile size in K dimension, decoupled from WARP_SIZE for portability.
 // The K dimension of the tiles has either 1*MMQ_TILE_NE_K==32 or 2*MMQ_TILE_NE_K==64.
@@ -112,7 +379,7 @@ load_tiles_q4_0(const void *__restrict__ vx, int *__restrict__ x_ql,
 
     float * x_dmf = (float *) x_dm;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
         int i = i0 + i_offset;
 
@@ -176,7 +443,7 @@ load_tiles_q4_0_soa(const uint8_t *__restrict__ qs_base,
     const sycl::half * d_base = (const sycl::half *)(qs_base + d_offset);
 
     // Load quantized values from SoA layout
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
         int i = i0 + i_offset;
 
@@ -247,7 +514,7 @@ load_tiles_q4_0_coalesced(const uint8_t *__restrict__ qs_base,
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
     const size_t row_stride = tiles_per_row * tile_bytes;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
         int i = i0 + i_offset;
 
@@ -337,6 +604,9 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat_soa(
          y_ds[j * (MMQ_TILE_NE_K/QI8_1) + (2*k/QI8_1) % (MMQ_TILE_NE_K/QI8_1)]);
 }
 
+// Unified loading kernel - loads X and Y for same K blocks together
+#include "mmq-soa-unified.hpp"
+
 template <int mmq_y>
 static __dpct_inline__ void
 allocate_tiles_q4_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
@@ -366,7 +636,7 @@ load_tiles_q4_1(const void *__restrict__ vx, int *__restrict__ x_ql,
 
     const block_q4_1 * bx0 = (const block_q4_1 *) vx;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
         int i = i0 + i_offset;
 
@@ -484,7 +754,7 @@ load_tiles_q5_0(const void *__restrict__ vx, int *__restrict__ x_ql,
     const int kbxd = k % blocks_per_tile_x_row;
     float * x_dmf = (float *) x_dm;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI5_0) {
         int i = i0 + i_offset * QI5_0 + k / blocks_per_tile_x_row;
 
@@ -512,7 +782,7 @@ static __dpct_inline__ float vec_dot_q5_0_q8_1_mul_mat(
 
     int u[2*VDR_Q5_0_Q8_1_MMQ];
 
-#pragma unroll
+#pragma unroll 1
     for (int l = 0; l < VDR_Q5_0_Q8_1_MMQ; ++l) {
         u[2*l+0] = y_qs[j * WARP_SIZE + (kyqs + l)         % WARP_SIZE];
         u[2*l+1] = y_qs[j * WARP_SIZE + (kyqs + l + QI5_0) % WARP_SIZE];
@@ -1499,7 +1769,7 @@ load_tiles_q6_K(const void *__restrict__ vx, int *__restrict__ x_ql,
     const int kbxd = k % blocks_per_tile_x_row;          // == 0 if QK_K == 256
     float * x_dmf = (float *) x_dm;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI6_K) {
         int i = (i0 + i_offset * QI6_K + k / blocks_per_tile_x_row) % mmq_y;
 
@@ -1513,7 +1783,7 @@ load_tiles_q6_K(const void *__restrict__ vx, int *__restrict__ x_ql,
         x_dmf[i * (MMQ_TILE_NE_K/QI6_K) + i / QI6_K + kbxd] = bxi->d;
     }
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 8) {
         // MMQ_TILE_NE_K/8 = 32/8 = 4 (was WARP_SIZE/8 = 16/8 = 2)
         int i = (i0 + i_offset * 8 + k / (MMQ_TILE_NE_K/8)) % mmq_y;
@@ -1538,11 +1808,11 @@ vec_dot_q6_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
 
     float sumf_d = 0.0f;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < VDR_Q6_K_Q8_1_MMQ; i0 += 4) {
         sycl::int2 sumi_d = {0, 0}; // 2 q6_K scales per q8_1 scale
 
-#pragma unroll
+#pragma unroll 1
         for (int i = i0; i < i0 + 2; ++i) {
             sumi_d.x() = dpct::dp4a(v[2 * i + 0], u[2 * i + 0],
                                     sumi_d.x()); // SIMD dot product
@@ -1747,7 +2017,34 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
 
     const sycl::half * d_base = (const sycl::half *)(qs_base + d_offset);
 
-#pragma unroll
+    const int block_in_row = block_offset + kbx;
+    int tile_size = 32;
+    int tile_offset = 0;
+    size_t tile_byte_offset = 0;
+    {
+        int remaining = blocks_per_row;
+        int acc       = 0;
+        size_t byte_acc = 0;
+        while (remaining > 0) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            if (block_in_row < acc + ts) {
+                tile_size = ts;
+                tile_offset = acc;
+                tile_byte_offset = byte_acc;
+                break;
+            }
+            acc += ts;
+            byte_acc += ts * (128 + 64 + 16);
+            remaining -= ts;
+        }
+    }
+    const int word_stride   = tile_size * 4;
+    const int ql_tile_bytes = tile_size * 128;
+
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps) {
         int i = i0 + i_offset;
 
@@ -1755,51 +2052,12 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
             i = sycl::min(i, i_max);
         }
 
-        const int global_row = row_low + row_offset + i;
-        const int block_in_row = block_offset + kbx;
-
-        // Find which tile this block belongs to using variable tile decomposition
-        int tile = 0, tile_offset = 0, tile_size = 32;
-        {
-            int remaining = blocks_per_row;
-            int acc = 0;
-            while (remaining > 0) {
-                int ts = 1;
-                while (ts * 2 <= remaining && ts < 32) {
-                    ts *= 2;
-                }
-                if (block_in_row < acc + ts) {
-                    tile_size = ts;
-                    tile_offset = acc;
-                    break;
-                }
-                acc += ts;
-                remaining -= ts;
-                tile++;
-            }
-        }
+        const int global_row   = row_low + row_offset + i;
         const int block_in_tile = block_in_row - tile_offset;
 
-        // Compute byte offset to this tile within the row
-        size_t tile_byte_offset = 0;
-        {
-            int remaining = blocks_per_row;
-            for (int t = 0; t < tile && remaining > 0; t++) {
-                int ts = 1;
-                while (ts * 2 <= remaining && ts < 32) {
-                    ts *= 2;
-                }
-                tile_byte_offset += ts * (128 + 64 + 16);
-                remaining -= ts;
-            }
-        }
-
-        const int word_stride = tile_size * 4;
-        const int ql_tile_bytes = tile_size * 128;
-
         const uint8_t * tile_base = qs_base + global_row * row_stride + tile_byte_offset;
-        const uint8_t * tile_ql = tile_base;
-        const uint8_t * tile_qh = tile_ql + ql_tile_bytes;
+        const uint8_t * tile_ql   = tile_base;
+        const uint8_t * tile_qh   = tile_ql + ql_tile_bytes;
 
         const int ql_offset = kqsx * word_stride + block_in_tile * 4;
         const int qh_word_idx = (QI6_K / 4) * (kqsx / (QI6_K / 2)) + kqsx % (QI6_K / 4);
@@ -1828,7 +2086,7 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
     const int kbxd = k % blocks_per_tile_x_row;
     float * x_dmf = (float *) x_dm;
 
-#pragma unroll
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * QI6_K) {
         int i = (i0 + i_offset * QI6_K + k / blocks_per_tile_x_row) % mmq_y;
 
@@ -1842,7 +2100,35 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
         x_dmf[i * (MMQ_TILE_NE_K/QI6_K) + i / QI6_K + kbxd] = d_val;
     }
 
-#pragma unroll
+    const int block_in_row_sc = block_offset + (k % (MMQ_TILE_NE_K/8)) / 4;
+    int tile_size_sc = 32;
+    int tile_offset_sc = 0;
+    size_t tile_byte_offset_sc = 0;
+    {
+        int remaining = blocks_per_row;
+        int acc       = 0;
+        size_t byte_acc = 0;
+        while (remaining > 0) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            if (block_in_row_sc < acc + ts) {
+                tile_size_sc = ts;
+                tile_offset_sc = acc;
+                tile_byte_offset_sc = byte_acc;
+                break;
+            }
+            acc += ts;
+            byte_acc += ts * (128 + 64 + 16);
+            remaining -= ts;
+        }
+    }
+    const int word_stride_sc   = tile_size_sc * 4;
+    const int ql_tile_bytes_sc = tile_size_sc * 128;
+    const int qh_tile_bytes_sc = tile_size_sc * 64;
+
+#pragma unroll 1
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * 8) {
         int i = (i0 + i_offset * 8 + k / (MMQ_TILE_NE_K/8)) % mmq_y;
 
@@ -1850,54 +2136,14 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
             i = sycl::min(i, i_max);
         }
 
-        const int global_row = row_low + row_offset + i;
-        const int block_in_row = block_offset + (k % (MMQ_TILE_NE_K/8)) / 4;
+        const int global_row   = row_low + row_offset + i;
+        const int block_in_tile = block_in_row_sc - tile_offset_sc;
 
-        // Find which tile this block belongs to using variable tile decomposition
-        int tile = 0, tile_offset_sc = 0, tile_size_sc = 32;
-        {
-            int remaining = blocks_per_row;
-            int acc = 0;
-            while (remaining > 0) {
-                int ts = 1;
-                while (ts * 2 <= remaining && ts < 32) {
-                    ts *= 2;
-                }
-                if (block_in_row < acc + ts) {
-                    tile_size_sc = ts;
-                    tile_offset_sc = acc;
-                    break;
-                }
-                acc += ts;
-                remaining -= ts;
-                tile++;
-            }
-        }
-        const int block_in_tile = block_in_row - tile_offset_sc;
-
-        // Compute byte offset to this tile within the row
-        size_t tile_byte_offset = 0;
-        {
-            int remaining = blocks_per_row;
-            for (int t = 0; t < tile && remaining > 0; t++) {
-                int ts = 1;
-                while (ts * 2 <= remaining && ts < 32) {
-                    ts *= 2;
-                }
-                tile_byte_offset += ts * (128 + 64 + 16);
-                remaining -= ts;
-            }
-        }
-
-        const int word_stride = tile_size_sc * 4;
-        const int ql_tile_bytes = tile_size_sc * 128;
-        const int qh_tile_bytes = tile_size_sc * 64;
-
-        const uint8_t * tile_base = qs_base + global_row * row_stride + tile_byte_offset;
-        const int8_t * tile_sc = (const int8_t *)(tile_base + ql_tile_bytes + qh_tile_bytes);
+        const uint8_t * tile_base = qs_base + global_row * row_stride + tile_byte_offset_sc;
+        const int8_t * tile_sc = (const int8_t *)(tile_base + ql_tile_bytes_sc + qh_tile_bytes_sc);
 
         const int sc_word_idx = k % (MMQ_TILE_NE_K/8);
-        const int sc_offset = sc_word_idx * word_stride + block_in_tile * 4;
+        const int sc_offset = sc_word_idx * word_stride_sc + block_in_tile * 4;
         const int sc_val = get_int_from_int8_aligned(tile_sc + sc_offset, 0);
         x_sc[i * (MMQ_TILE_NE_K/8) + i / 8 + k % (MMQ_TILE_NE_K/8)] = sc_val;
     }
@@ -1995,12 +2241,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
         }
 #endif
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -2018,7 +2264,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids = (ids0 + item_ct1.get_local_id(1) * QI8_1 +
                      item_ct1.get_local_id(2) / (WARP_SIZE / QI8_1)) % mmq_x;
@@ -2100,9 +2346,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
 
             // k-loop: compute dot products
             for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         const float dot_result = vec_dot_q6_K_q8_1_mul_mat(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
@@ -2157,7 +2403,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
     }
 
     // Output results
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -2165,7 +2411,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -2237,12 +2483,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
             nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
             blocks_per_row_x, row_x_0, ib0, row_low);
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -2258,7 +2504,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -2311,9 +2557,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
 #endif
 
             for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         const float dot_result = vec_dot_q6_K_q8_1_mul_mat(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
@@ -2362,7 +2608,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
         }
     }
 
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -2370,7 +2616,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check, bool need_sum = fal
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -2440,12 +2686,12 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
     constexpr int y_stride = use_qr_stride ? (qr * WARP_SIZE) : WARP_SIZE;
     constexpr int y_ds_stride = y_stride / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -2460,7 +2706,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                     by0->qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -2497,9 +2743,9 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
 // #pragma unroll // unrolling this loop causes too much register pressure
             for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int j = 0; j < mmq_x; j += nwarps) {
-#pragma unroll
+#pragma unroll 1
                     for (int i = 0; i < mmq_y; i += WARP_SIZE) {
                         sum[i / WARP_SIZE][j / nwarps] += vec_dot(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
@@ -2522,7 +2768,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
         }
     }
 
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -2530,7 +2776,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -2585,6 +2831,165 @@ template <bool need_check> static void
               vec_dot_q4_0_q8_1_mul_mat>(
         vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y, nrows_dst, tile_x_ql,
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
+}
+
+// Persistent kernel for Q4_0 SoA layout with work-stealing
+// Breaks "convoy effect" where all work-groups stall simultaneously on memory
+// Uses atomic counter for dynamic tile distribution across fixed work-groups
+template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
+    mul_mat_q4_0_soa_persistent(
+    const uint8_t * __restrict__ qs_base, const size_t d_offset,
+    const void * __restrict__ vy, float * __restrict__ dst,
+    const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y,
+    const int nrows_y_unpadded, const int nrows_dst, const int row_low,
+    // Persistent kernel parameters
+    int32_t * __restrict__ work_counter, const int total_tiles, const int num_col_tiles,
+    const sycl::nd_item<3> &item_ct1, int *tile_x_qs_q4_0, float *tile_x_d_q4_0,
+    int *tile_y_qs, sycl::half2 *tile_y_ds) {
+
+    int   * tile_x_ql = nullptr;
+    sycl::half2 *tile_x_dm = nullptr;
+    int   * tile_x_qh = nullptr;
+    int   * tile_x_sc = nullptr;
+
+    allocate_tiles_q4_0<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
+                               tile_x_qs_q4_0, tile_x_d_q4_0);
+
+    const int y_col_stride = nrows_y + (nrows_y / QK8_1) * sizeof(sycl::half2);
+
+    constexpr int qk = QK4_0;
+    constexpr int qr = QR4_0;
+    constexpr int qi = QI4_0;
+    constexpr int vdr = VDR_Q4_0_Q8_1_MMQ;
+
+    const int blocks_per_row_x = ncols_x / qk;
+
+    constexpr int blocks_per_iter = (qi > WARP_SIZE) ? (MMQ_ITER_K / qk) : (WARP_SIZE / qi);
+    static_assert(blocks_per_iter > 0, "blocks_per_iter must be positive");
+
+    constexpr int phases_per_iter = (qi > WARP_SIZE) ? (qk / WARP_SIZE) : qr;
+
+    const int & ncols_dst = ncols_y;
+    const int local_id = item_ct1.get_local_linear_id();
+
+    // Persistent loop - work until all tiles processed
+    while (true) {
+        // Work-stealing: thread 0 atomically acquires next tile
+        int work_idx;
+        if (local_id == 0) {
+            sycl::atomic_ref<int32_t, sycl::memory_order::relaxed,
+                            sycl::memory_scope::device,
+                            sycl::access::address_space::global_space>
+                counter(*work_counter);
+            work_idx = counter.fetch_add(1);
+        }
+
+        // Broadcast work_idx to all threads in work-group
+        work_idx = sycl::group_broadcast(item_ct1.get_group(), work_idx, 0);
+
+        // Exit condition
+        if (work_idx >= total_tiles) {
+            break;
+        }
+
+        // Compute tile coordinates from linear work index
+        const int tile_row = work_idx / num_col_tiles;
+        const int tile_col = work_idx % num_col_tiles;
+        const int row_dst_0 = tile_row * mmq_y;
+        const int row_x_0 = row_dst_0;
+        const int col_dst_0 = tile_col * mmq_x;
+        const int col_y_0 = col_dst_0;
+
+        float sum[mmq_y/WARP_SIZE][mmq_x/nwarps] = {{0.0f}};
+
+        for (int ib0 = 0; ib0 < blocks_per_row_x; ib0 += blocks_per_iter) {
+            load_tiles_q4_0_soa<mmq_y, nwarps, need_check>(
+                qs_base, d_offset, tile_x_ql, tile_x_dm,
+                tile_x_qh, tile_x_sc, item_ct1.get_local_id(1),
+                nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
+                blocks_per_row_x, row_x_0, ib0, row_low);
+
+#pragma unroll 1
+            for (int ir = 0; ir < phases_per_iter; ++ir) {
+                const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
+                const int kbxd = kqs / QI8_1;
+
+#pragma unroll 1
+                for (int i = 0; i < mmq_x; i += nwarps) {
+                    const int col_y_eff = dpct::min(
+                        (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
+                        ncols_y - 1);
+
+                    const int block_idx = ib0 * (qk/QK8_1) + kbxd;
+                    const int8_t * y_col_qs = (const int8_t*)vy + col_y_eff * y_col_stride;
+                    const int8_t * y_block_qs = y_col_qs + block_idx * QK8_1;
+
+                    const int index_y = (item_ct1.get_local_id(1) + i) * MMQ_TILE_NE_K +
+                                        kqs % MMQ_TILE_NE_K;
+                    tile_y_qs[index_y] = get_int_from_int8_aligned(
+                        y_block_qs, item_ct1.get_local_id(2) % QI8_1);
+                }
+
+#pragma unroll 1
+                for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
+                    const int ids =
+                        (ids0 + item_ct1.get_local_id(1) * QI8_1 +
+                         item_ct1.get_local_id(2) / (MMQ_TILE_NE_K / QI8_1)) %
+                        mmq_x;
+                    const int kby = item_ct1.get_local_id(2) % (MMQ_TILE_NE_K / QI8_1);
+                    const int col_y_eff = sycl::min(col_y_0 + ids, ncols_y - 1);
+
+                    const int block_idx = ib0 * (qk/QK8_1) + ir*(MMQ_TILE_NE_K/QI8_1) + kby;
+                    const char * y_col_base = (const char*)vy + col_y_eff * y_col_stride;
+                    const sycl::half2 * y_col_ds = (const sycl::half2*)(y_col_base + nrows_y_unpadded);
+
+                    tile_y_ds[ids * (MMQ_TILE_NE_K / QI8_1) + kby] = y_col_ds[block_idx];
+                }
+
+                item_ct1.barrier();
+
+                for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
+#pragma unroll 1
+                    for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
+#pragma unroll 1
+                        for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
+                            sum[iy][ix] += vec_dot_q4_0_q8_1_mul_mat_soa(
+                                tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
+                                tile_y_qs, tile_y_ds,
+                                item_ct1.get_local_id(2) + iy * WARP_SIZE,
+                                item_ct1.get_local_id(1) + ix * nwarps, k);
+                        }
+                    }
+                }
+
+                item_ct1.barrier();
+            }
+        }
+
+        // Output loop for this tile
+#pragma unroll 1
+        for (int j = 0; j < mmq_x; j += nwarps) {
+            const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
+
+            if (col_dst >= ncols_dst) {
+                continue;  // Continue to next tile instead of return
+            }
+
+#pragma unroll 1
+            for (int i = 0; i < mmq_y; i += WARP_SIZE) {
+                const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
+
+                if (row_dst >= nrows_dst) {
+                    continue;
+                }
+
+                dst[col_dst*nrows_dst + row_dst] = sum[i/WARP_SIZE][j/nwarps];
+            }
+        }
+
+        // Barrier before next tile iteration to ensure all writes complete
+        item_ct1.barrier();
+    }
 }
 
 // SoA version of mul_mat_q4_0 kernel
@@ -2656,12 +3061,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
         // vec_dot_q4_0_q8_1_mul_mat_soa reads: y_qs[j * MMQ_TILE_NE_K + ...]
         // So we must STORE with the same stride.
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -2679,7 +3084,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -2702,9 +3107,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
 
             // Critical: k-loop matches AoS mul_mat_q template
             for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q4_0_q8_1_mul_mat_soa(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
@@ -2720,7 +3125,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
     }
 
 // Output loop: must match AoS mul_mat_q column-major output format
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -2728,7 +3133,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -2790,12 +3195,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
             blocks_per_row_x, row_x_0, ib0, row_low);
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -2811,7 +3216,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -2830,9 +3235,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             item_ct1.barrier();
 
             for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q4_0_q8_1_mul_mat_soa(
                             tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
@@ -2847,7 +3252,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
         }
     }
 
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -2855,7 +3260,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -2866,6 +3271,174 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             dst[col_dst*nrows_dst + row_dst] = sum[i/WARP_SIZE][j/nwarps];
         }
     }
+}
+
+// Persistent coalesced version of mul_mat_q4_0 kernel with work-stealing
+// Uses atomic counter for dynamic tile distribution to break convoy effect
+template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
+    mul_mat_q4_0_coalesced_persistent(
+    const uint8_t * __restrict__ qs_base, const size_t d_offset,
+    const void * __restrict__ vy, float * __restrict__ dst,
+    const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y,
+    const int nrows_y_unpadded, const int nrows_dst, const int row_low,
+    // Persistent kernel parameters
+    int32_t * __restrict__ work_counter, const int total_tiles, const int num_col_tiles,
+    const sycl::nd_item<3> &item_ct1, int *tile_x_qs_q4_0, float *tile_x_d_q4_0,
+    int *tile_y_qs, sycl::half2 *tile_y_ds) {
+
+    int   * tile_x_ql = nullptr;
+    sycl::half2 *tile_x_dm = nullptr;
+    int   * tile_x_qh = nullptr;
+    int   * tile_x_sc = nullptr;
+
+    allocate_tiles_q4_0<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
+                               tile_x_qs_q4_0, tile_x_d_q4_0);
+
+    const int y_col_stride = nrows_y + (nrows_y / QK8_1) * sizeof(sycl::half2);
+
+    constexpr int qk = QK4_0;
+    constexpr int qr = QR4_0;
+    constexpr int qi = QI4_0;
+    constexpr int vdr = VDR_Q4_0_Q8_1_MMQ;
+
+    const int blocks_per_row_x = ncols_x / qk;
+
+    constexpr int blocks_per_iter = (qi > WARP_SIZE) ? (MMQ_ITER_K / qk) : (WARP_SIZE / qi);
+    static_assert(blocks_per_iter > 0, "blocks_per_iter must be positive");
+
+    constexpr int phases_per_iter = (qi > WARP_SIZE) ? (qk / WARP_SIZE) : qr;
+
+    const int & ncols_dst = ncols_y;
+
+    const int local_id = item_ct1.get_local_linear_id();
+
+    // Persistent loop - work until all tiles processed
+    // Batched work-stealing: acquire tiles_per_batch tiles at once to reduce atomic contention
+    constexpr int tiles_per_batch = 4;  // Reduces atomic ops by 4x while maintaining load balance
+
+    while (true) {
+        // Work-stealing: thread 0 atomically acquires a batch of tiles
+        int batch_start;
+        if (local_id == 0) {
+            sycl::atomic_ref<int32_t, sycl::memory_order::relaxed,
+                            sycl::memory_scope::device,
+                            sycl::access::address_space::global_space>
+                counter(*work_counter);
+            batch_start = counter.fetch_add(tiles_per_batch);
+        }
+
+        // Broadcast batch_start to all threads in work-group
+        batch_start = sycl::group_broadcast(item_ct1.get_group(), batch_start, 0);
+
+        // Exit if entire batch is beyond total tiles
+        if (batch_start >= total_tiles) {
+            break;
+        }
+
+        // Calculate end of this batch (clamped to total_tiles)
+        const int batch_end = sycl::min(batch_start + tiles_per_batch, total_tiles);
+
+        // Process each tile in the batch
+        for (int work_idx = batch_start; work_idx < batch_end; ++work_idx) {
+            // Compute tile coordinates from linear work index
+            const int tile_row = work_idx / num_col_tiles;
+            const int tile_col = work_idx % num_col_tiles;
+            const int row_dst_0 = tile_row * mmq_y;
+            const int row_x_0 = row_dst_0;
+            const int col_dst_0 = tile_col * mmq_x;
+            const int col_y_0 = col_dst_0;
+
+            float sum[mmq_y/WARP_SIZE][mmq_x/nwarps] = {{0.0f}};
+
+            for (int ib0 = 0; ib0 < blocks_per_row_x; ib0 += blocks_per_iter) {
+                load_tiles_q4_0_coalesced<mmq_y, nwarps, need_check>(
+                    qs_base, d_offset, tile_x_ql, tile_x_dm,
+                    tile_x_qh, tile_x_sc, item_ct1.get_local_id(1),
+                    nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
+                    blocks_per_row_x, row_x_0, ib0, row_low);
+
+#pragma unroll 1
+            for (int ir = 0; ir < phases_per_iter; ++ir) {
+                const int kqs = ir * WARP_SIZE + item_ct1.get_local_id(2);
+                const int kbxd = kqs / QI8_1;
+
+#pragma unroll 1
+                for (int i = 0; i < mmq_x; i += nwarps) {
+                    const int col_y_eff = dpct::min(
+                        (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
+                        ncols_y - 1);
+
+                    const int block_idx = ib0 * (qk/QK8_1) + kbxd;
+                    const int8_t * y_col_qs = (const int8_t*)vy + col_y_eff * y_col_stride;
+                    const int8_t * y_block_qs = y_col_qs + block_idx * QK8_1;
+
+                    const int index_y = (item_ct1.get_local_id(1) + i) * MMQ_TILE_NE_K +
+                                        kqs % MMQ_TILE_NE_K;
+                    tile_y_qs[index_y] = get_int_from_int8_aligned(
+                        y_block_qs, item_ct1.get_local_id(2) % QI8_1);
+                }
+
+#pragma unroll 1
+                for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
+                    const int ids =
+                        (ids0 + item_ct1.get_local_id(1) * QI8_1 +
+                         item_ct1.get_local_id(2) / (MMQ_TILE_NE_K / QI8_1)) %
+                        mmq_x;
+                    const int kby = item_ct1.get_local_id(2) % (MMQ_TILE_NE_K / QI8_1);
+                    const int col_y_eff = sycl::min(col_y_0 + ids, ncols_y - 1);
+
+                    const int block_idx = ib0 * (qk/QK8_1) + ir*(MMQ_TILE_NE_K/QI8_1) + kby;
+                    const char * y_col_base = (const char*)vy + col_y_eff * y_col_stride;
+                    const sycl::half2 * y_col_ds = (const sycl::half2*)(y_col_base + nrows_y_unpadded);
+
+                    tile_y_ds[ids * (MMQ_TILE_NE_K / QI8_1) + kby] = y_col_ds[block_idx];
+                }
+
+                item_ct1.barrier();
+
+                for (int k = ir*WARP_SIZE/qr; k < (ir+1)*WARP_SIZE/qr; k += vdr) {
+#pragma unroll 1
+                    for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
+#pragma unroll 1
+                        for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
+                            sum[iy][ix] += vec_dot_q4_0_q8_1_mul_mat_soa(
+                                tile_x_ql, tile_x_dm, tile_x_qh, tile_x_sc,
+                                tile_y_qs, tile_y_ds,
+                                item_ct1.get_local_id(2) + iy * WARP_SIZE,
+                                item_ct1.get_local_id(1) + ix * nwarps, k);
+                        }
+                    }
+                }
+
+                item_ct1.barrier();
+            }
+        }
+
+        // Write results for this tile
+#pragma unroll 1
+        for (int j = 0; j < mmq_x; j += nwarps) {
+            const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
+
+            if (col_dst >= ncols_dst) {
+                continue;
+            }
+
+#pragma unroll 1
+            for (int i = 0; i < mmq_y; i += WARP_SIZE) {
+                const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
+
+                if (row_dst >= nrows_dst) {
+                    continue;
+                }
+
+                dst[col_dst*nrows_dst + row_dst] = sum[i/WARP_SIZE][j/nwarps];
+            }
+        }
+
+            // Barrier after each tile in batch
+            item_ct1.barrier();
+        }  // end of for (int work_idx ...)
+    }  // end of while (true)
 }
 
 #define  MMQ_X_Q4_1_RDNA2  64
@@ -3069,12 +3642,12 @@ template <bool need_check> static void
 
         // Y tile loading - Q8_0 has qr=1, so single phase
         // Use MMQ_TILE_NE_K (32) for tile indexing to match CUDA tile sizing
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * MMQ_TILE_NE_K + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -3086,7 +3659,7 @@ template <bool need_check> static void
                     get_int_from_int8_aligned(by0->qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -3105,9 +3678,9 @@ template <bool need_check> static void
 
             // K-loop for vec_dot with float* parameters
             for (int k = ir*MMQ_TILE_NE_K/qr; k < (ir+1)*MMQ_TILE_NE_K/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q8_0_q8_1_mul_mat(
                             tile_x_ql, tile_x_df, nullptr, nullptr,
@@ -3123,7 +3696,7 @@ template <bool need_check> static void
     }
 
     // Output loop
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -3131,7 +3704,7 @@ template <bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -3196,12 +3769,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
 
         // Y tile loading - Q8_0 has qr=1, so single phase
         // Use MMQ_TILE_NE_K (32) for tile indexing to match CUDA tile sizing
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * MMQ_TILE_NE_K + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -3213,7 +3786,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
                     get_int_from_int8_aligned(by0->qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -3232,9 +3805,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
 
             // K-loop for vec_dot
             for (int k = ir*MMQ_TILE_NE_K/qr; k < (ir+1)*MMQ_TILE_NE_K/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q8_0_q8_1_mul_mat(
                             tile_x_ql, tile_x_df, nullptr, nullptr,
@@ -3250,7 +3823,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
     }
 
     // Output loop
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -3258,7 +3831,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -3328,12 +3901,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
 
         // Y tile loading - Use MMQ_TILE_NE_K stride to match vec_dot_q8_0_q8_1_mul_mat
         // vec_dot reads: y_qs[j * MMQ_TILE_NE_K + k], y_df[j * (MMQ_TILE_NE_K/QI8_1) + k/QI8_1]
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * MMQ_TILE_NE_K + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -3351,7 +3924,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -3373,9 +3946,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
 
             // K-loop for vec_dot
             for (int k = ir*MMQ_TILE_NE_K/qr; k < (ir+1)*MMQ_TILE_NE_K/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q8_0_q8_1_mul_mat(
                             tile_x_ql, tile_x_df, nullptr, nullptr,
@@ -3391,7 +3964,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
     }
 
     // Output loop
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -3399,7 +3972,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -3457,12 +4030,12 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
             blocks_per_row_x, row_x_0, ib0, row_low, debug_stream, debug_counter);
 
-#pragma unroll
+#pragma unroll 1
         for (int ir = 0; ir < phases_per_iter; ++ir) {
             const int kqs = ir * MMQ_TILE_NE_K + item_ct1.get_local_id(2);
             const int kbxd = kqs / QI8_1;
 
-#pragma unroll
+#pragma unroll 1
             for (int i = 0; i < mmq_x; i += nwarps) {
                 const int col_y_eff = dpct::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
@@ -3478,7 +4051,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
                     y_block_qs, item_ct1.get_local_id(2) % QI8_1);
             }
 
-#pragma unroll
+#pragma unroll 1
             for (int ids0 = 0; ids0 < mmq_x; ids0 += nwarps * QI8_1) {
                 const int ids =
                     (ids0 + item_ct1.get_local_id(1) * QI8_1 +
@@ -3497,9 +4070,9 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             item_ct1.barrier();
 
             for (int k = ir*MMQ_TILE_NE_K/qr; k < (ir+1)*MMQ_TILE_NE_K/qr; k += vdr) {
-#pragma unroll
+#pragma unroll 1
                 for (int iy = 0; iy < mmq_y / WARP_SIZE; ++iy) {
-#pragma unroll
+#pragma unroll 1
                     for (int ix = 0; ix < mmq_x / nwarps; ++ix) {
                         sum[iy][ix] += vec_dot_q8_0_q8_1_mul_mat(
                             tile_x_ql, tile_x_df, nullptr, nullptr,
@@ -3514,7 +4087,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
         }
     }
 
-#pragma unroll
+#pragma unroll 1
     for (int j = 0; j < mmq_x; j += nwarps) {
         const int col_dst = col_dst_0 + j + item_ct1.get_local_id(1);
 
@@ -3522,7 +4095,7 @@ template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
             return;
         }
 
-#pragma unroll
+#pragma unroll 1
         for (int i = 0; i < mmq_y; i += WARP_SIZE) {
             const int row_dst = row_dst_0 + item_ct1.get_local_id(2) + i;
 
@@ -3632,8 +4205,8 @@ mul_mat_q3_K(
 #define NWARPS_Q4_K_RDNA1  8
 #if defined(SYCL_USE_XMX)
 #define  MMQ_X_Q4_K_AMPERE 64
-#define  MMQ_Y_Q4_K_AMPERE 128
-#define NWARPS_Q4_K_AMPERE 8
+#define  MMQ_Y_Q4_K_AMPERE 64
+#define NWARPS_Q4_K_AMPERE 4
 #else
 #define  MMQ_X_Q4_K_AMPERE 64
 #define  MMQ_Y_Q4_K_AMPERE 128
@@ -3676,8 +4249,8 @@ template <bool need_check> static void
 #define NWARPS_Q5_K_RDNA1  8
 #if defined(SYCL_USE_XMX)
 #define  MMQ_X_Q5_K_AMPERE 64
-#define  MMQ_Y_Q5_K_AMPERE 128
-#define NWARPS_Q5_K_AMPERE 8
+#define  MMQ_Y_Q5_K_AMPERE 64
+#define NWARPS_Q5_K_AMPERE 4
 #else
 #define  MMQ_X_Q5_K_AMPERE 64
 #define  MMQ_Y_Q5_K_AMPERE 128
@@ -3712,26 +4285,35 @@ mul_mat_q5_K(
         tile_x_dm, tile_x_qh, tile_x_sc, item_ct1, tile_y_qs, tile_y_ds);
 }
 
-#define  MMQ_X_Q6_K_RDNA2  64
-#define  MMQ_Y_Q6_K_RDNA2  128
-#define NWARPS_Q6_K_RDNA2  8
+#define  MMQ_X_Q6_K_RDNA2_PERF      64
+#define  MMQ_Y_Q6_K_RDNA2_PERF      128
+#define NWARPS_Q6_K_RDNA2_PERF      8
+#define  MMQ_X_Q6_K_RDNA2_SPILLFREE 32
+#define  MMQ_Y_Q6_K_RDNA2_SPILLFREE 64
+#define NWARPS_Q6_K_RDNA2_SPILLFREE 8
 #define  MMQ_X_Q6_K_RDNA1  32
 #define  MMQ_Y_Q6_K_RDNA1  64
 #define NWARPS_Q6_K_RDNA1  8
 #if defined(SYCL_USE_XMX)
-#define  MMQ_X_Q6_K_AMPERE 64
-#define  MMQ_Y_Q6_K_AMPERE 128
-#define NWARPS_Q6_K_AMPERE 8
+#define  MMQ_X_Q6_K_AMPERE_PERF      64
+#define  MMQ_Y_Q6_K_AMPERE_PERF      128
+#define NWARPS_Q6_K_AMPERE_PERF      8
+#define  MMQ_X_Q6_K_AMPERE_SPILLFREE 32
+#define  MMQ_Y_Q6_K_AMPERE_SPILLFREE 64
+#define NWARPS_Q6_K_AMPERE_SPILLFREE 8
 #else
-#define  MMQ_X_Q6_K_AMPERE 64
-#define  MMQ_Y_Q6_K_AMPERE 64
-#define NWARPS_Q6_K_AMPERE 4
+#define  MMQ_X_Q6_K_AMPERE_PERF      64
+#define  MMQ_Y_Q6_K_AMPERE_PERF      64
+#define NWARPS_Q6_K_AMPERE_PERF      4
+#define  MMQ_X_Q6_K_AMPERE_SPILLFREE 64
+#define  MMQ_Y_Q6_K_AMPERE_SPILLFREE 64
+#define NWARPS_Q6_K_AMPERE_SPILLFREE 4
 #endif
 #define  MMQ_X_Q6_K_PASCAL 64
 #define  MMQ_Y_Q6_K_PASCAL 64
 #define NWARPS_Q6_K_PASCAL 8
 
-template <bool need_check> static void
+template <int mmq_x, int mmq_y, int nwarps, bool need_check> static void
     mul_mat_q6_K(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int ncols_y, const int nrows_y, const int nrows_dst,
@@ -3742,10 +4324,6 @@ template <bool need_check> static void
     int   * tile_x_qh = nullptr;
     // int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
-    const int mmq_x  =  MMQ_X_Q6_K_AMPERE;
-    const int mmq_y  =  MMQ_Y_Q6_K_AMPERE;
-    const int nwarps = NWARPS_Q6_K_AMPERE;
     allocate_tiles_q6_K<mmq_y>(&tile_x_ql, &tile_x_dm, &tile_x_qh, &tile_x_sc,
                                tile_x_ql, tile_x_dm, tile_x_sc);
     mul_mat_q<QK_K, QR6_K, QI6_K, false, block_q6_K, mmq_x, mmq_y, nwarps,
@@ -3803,7 +4381,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
@@ -3816,7 +4394,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_0<need_check>(
@@ -3840,7 +4418,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
@@ -3853,7 +4431,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_0<need_check>(
@@ -3873,6 +4451,82 @@ catch (sycl::exception const &exc) {
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
 }
+
+namespace ggml_sycl {
+
+bool ggml_sycl_mmq_bench_launch(const mmq_bench_args & args, std::vector<sycl::event> * events) {
+    if (!args.stream || !args.weights || !args.activations || !args.output) {
+        return false;
+    }
+    if (args.ncols <= 0 || args.nrows <= 0 || args.batch <= 0) {
+        return false;
+    }
+    if (args.ncols % QK8_1 != 0) {
+        return false;
+    }
+    if (args.row_low < 0 || args.row_high <= args.row_low || args.row_high > args.nrows) {
+        return false;
+    }
+    if (args.src1_padded_row_size <= 0 || args.dst_row_stride <= 0) {
+        return false;
+    }
+
+    layout_mode use_layout = GGML_LAYOUT_AOS;
+    const void * layout_base = nullptr;
+    switch (args.layout) {
+        case GGML_LAYOUT_AOS:
+            use_layout = GGML_LAYOUT_AOS;
+            break;
+        case GGML_LAYOUT_SOA:
+            use_layout = GGML_LAYOUT_SOA;
+            layout_base = args.layout_base;
+            if (!layout_base) {
+                return false;
+            }
+            break;
+        case GGML_LAYOUT_COALESCED:
+            use_layout = GGML_LAYOUT_COALESCED;
+            layout_base = args.layout_base;
+            if (!layout_base) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+    }
+
+    int device_id = args.device_id;
+    if (device_id < 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+    }
+
+    ggml_tensor fake{};
+    fake.type = args.weight_type;
+    fake.name[0] = '\0';
+
+    mmq_bench_event_scope scope(events);
+    ::ggml_sycl_mmq_dispatch(&fake,
+                             static_cast<const char *>(args.weights),
+                             layout_base,
+                             use_layout,
+                             device_id,
+                             args.ncols,
+                             args.nrows,
+                             args.ncols,
+                             args.row_low,
+                             args.row_high,
+                             args.batch,
+                             args.src1_padded_row_size,
+                             static_cast<const char *>(args.activations),
+                             args.output,
+                             args.dst_row_stride,
+                             0,
+                             args.stream);
+
+    return true;
+}
+
+}  // namespace ggml_sycl
 
 // Coalesced Q6_K MMQ dispatch function
 static void ggml_mul_mat_q6_K_q8_1_sycl_coalesced(const void *vx, const void *vy,
@@ -3904,7 +4558,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_coalesced(const void *vx, const void *vy
         const bool need_check = (nrows_x % mmq_y != 0);                                        \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});              \
         if (!need_check) {                                                                     \
-            stream->submit([&](sycl::handler &cgh) {                                           \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                           \
                 sycl::local_accessor<int, 1> tile_x_qs(                                        \
                     sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                  \
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm(                                \
@@ -3915,7 +4569,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_coalesced(const void *vx, const void *vy
                     sycl::range<1>(mmq_x * WARP_SIZE), cgh);                                   \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(                                \
                     sycl::range<1>(mmq_x * (WARP_SIZE / QI8_1)), cgh);                         \
-                cgh.parallel_for<mmq_q6_K_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(      \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,       \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                    \
                     [=](sycl::nd_item<3> item_ct1) {                                           \
                         mul_mat_q6_K_coalesced<mmq_x, mmq_y, nwarps, false>(                   \
@@ -3928,7 +4582,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_coalesced(const void *vx, const void *vy
                     });                                                                        \
             });                                                                                \
         } else {                                                                               \
-            stream->submit([&](sycl::handler &cgh) {                                           \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                           \
                 sycl::local_accessor<int, 1> tile_x_qs(                                        \
                     sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                  \
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm(                                \
@@ -3939,7 +4593,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_coalesced(const void *vx, const void *vy
                     sycl::range<1>(mmq_x * WARP_SIZE), cgh);                                   \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(                                \
                     sycl::range<1>(mmq_x * (WARP_SIZE / QI8_1)), cgh);                         \
-                cgh.parallel_for<mmq_q6_K_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(       \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,        \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                    \
                     [=](sycl::nd_item<3> item_ct1) {                                           \
                         mul_mat_q6_K_coalesced<mmq_x, mmq_y, nwarps, true>(                    \
@@ -3988,6 +4642,74 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_soa(const void *vx, const void *vy,
 
     // Dispatch to architecture-specific kernel instantiation
     // Template parameters must be compile-time constants, so we use separate branches
+    // Check for persistent kernel mode first
+    if (use_persistent_mmq_kernel()) {
+        // Persistent kernel path: fixed work-groups with atomic work-stealing
+        constexpr int mmq_x = 64;
+        constexpr int mmq_y = 128;
+        constexpr int nwarps = 8;
+        const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
+        const int block_num_y = (ncols_y + mmq_x - 1) / mmq_x;
+        const int total_tiles = block_num_x * block_num_y;
+        const int num_col_tiles = block_num_y;
+
+        // Query hardware for optimal persistent group count
+        int device_id;
+        SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+        const int persistent_groups = get_persistent_groups(device_id);
+        const sycl::range<3> block_nums_persistent(1, 1, persistent_groups);
+        const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
+        const bool need_check = (nrows_x % mmq_y != 0);
+
+        // Get or allocate work counter for this device
+        int32_t* work_counter = get_mmq_work_counter(stream);
+        if (!work_counter) {
+            // Fallback to static kernel if allocation fails
+            goto static_kernel_path;
+        }
+
+        // Reset work counter to 0
+        stream->memset(work_counter, 0, sizeof(int32_t));
+
+        dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+        if (!need_check) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
+                sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh);
+                sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh);
+                sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
+                ggml_sycl_parallel_for_grf<mmq_q4_0_soa_persistent_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,
+                    sycl::nd_range<3>(block_nums_persistent * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        mul_mat_q4_0_soa_persistent<mmq_x, mmq_y, nwarps, false>(
+                            qs_base, d_offset, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                            nrows_y_unpadded, nrows_dst, row_low,
+                            work_counter, total_tiles, num_col_tiles, item_ct1,
+                            get_pointer(tile_x_qs), get_pointer(tile_x_d),
+                            get_pointer(tile_y_qs), get_pointer(tile_y_ds));
+                    });
+            });
+        } else {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
+                sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh);
+                sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh);
+                sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
+                ggml_sycl_parallel_for_grf<mmq_q4_0_soa_persistent_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,
+                    sycl::nd_range<3>(block_nums_persistent * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        mul_mat_q4_0_soa_persistent<mmq_x, mmq_y, nwarps, true>(
+                            qs_base, d_offset, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                            nrows_y_unpadded, nrows_dst, row_low,
+                            work_counter, total_tiles, num_col_tiles, item_ct1,
+                            get_pointer(tile_x_qs), get_pointer(tile_x_d),
+                            get_pointer(tile_y_qs), get_pointer(tile_y_ds));
+                    });
+            });
+        }
+    } else {
+static_kernel_path:
+        // Static kernel path: original tile-per-workgroup assignment
 #define LAUNCH_Q4_0_SOA_KERNEL(MMQ_X, MMQ_Y, NWARPS)                                          \
     do {                                                                                      \
         constexpr int mmq_x = MMQ_X;                                                          \
@@ -4000,12 +4722,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_soa(const void *vx, const void *vy,
         const bool need_check = (nrows_x % mmq_y != 0);                                       \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});             \
         if (!need_check) {                                                                    \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q4_0_soa_kernel<mmq_x, mmq_y, nwarps, false>>(           \
+                ggml_sycl_parallel_for_grf<mmq_q4_0_soa_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,            \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q4_0_soa<mmq_x, mmq_y, nwarps, false>(                        \
@@ -4016,12 +4738,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_soa(const void *vx, const void *vy,
                     });                                                                       \
             });                                                                               \
         } else {                                                                              \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q4_0_soa_kernel<mmq_x, mmq_y, nwarps, true>>(            \
+                ggml_sycl_parallel_for_grf<mmq_q4_0_soa_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,             \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q4_0_soa<mmq_x, mmq_y, nwarps, true>(                         \
@@ -4034,13 +4756,14 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_soa(const void *vx, const void *vy,
         }                                                                                     \
     } while (0)
 
-    // Intel SYCL backend: Use single optimized configuration for Intel Arc GPUs
-    // The AMPERE/RDNA naming is legacy from CUDA port - these are just tile sizes
-    // Must match AoS nwarps=8 for correct tile loading iteration counts
-    (void)compute_capability;  // Unused for now - single config for all Intel GPUs
-    LAUNCH_Q4_0_SOA_KERNEL(64, 128, 8);
+        // Intel SYCL backend: Use single optimized configuration for Intel Arc GPUs
+        // The AMPERE/RDNA naming is legacy from CUDA port - these are just tile sizes
+        // Must match AoS nwarps=8 for correct tile loading iteration counts
+        (void)compute_capability;  // Unused for now - single config for all Intel GPUs
+        LAUNCH_Q4_0_SOA_KERNEL(64, 128, 8);
 
 #undef LAUNCH_Q4_0_SOA_KERNEL
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -4065,6 +4788,75 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_coalesced(const void *vx, const void *vy
 
     const uint8_t * qs_base = (const uint8_t *) vx;
 
+    // Check for persistent kernel mode first (COALESCED dispatch)
+    if (use_persistent_mmq_kernel()) {
+        // Persistent kernel path: fixed work-groups with atomic work-stealing
+        constexpr int mmq_x = 64;
+        constexpr int mmq_y = 128;
+        constexpr int nwarps = 8;
+        const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
+        const int block_num_y = (ncols_y + mmq_x - 1) / mmq_x;
+        const int total_tiles = block_num_x * block_num_y;
+        const int num_col_tiles = block_num_y;
+
+        // Query hardware for optimal persistent group count (id already available)
+        const int persistent_groups = get_persistent_groups(id);
+        const sycl::range<3> block_nums_persistent(1, 1, persistent_groups);
+        const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
+        const bool need_check = (nrows_x % mmq_y != 0);
+
+        // Get or allocate work counter for this device
+        int32_t* work_counter = get_mmq_work_counter(stream);
+        if (!work_counter) {
+            // Fallback to static kernel if allocation fails
+            goto static_kernel_path;
+        }
+
+        // Reset work counter to 0
+        stream->memset(work_counter, 0, sizeof(int32_t));
+
+        dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});
+        if (!need_check) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
+                sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh);
+                sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh);
+                sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
+                ggml_sycl_parallel_for_grf<mmq_q4_0_coalesced_persistent_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,
+                    sycl::nd_range<3>(block_nums_persistent * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        mul_mat_q4_0_coalesced_persistent<mmq_x, mmq_y, nwarps, false>(
+                            qs_base, d_offset, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                            nrows_y_unpadded, nrows_dst, row_low,
+                            work_counter, total_tiles, num_col_tiles, item_ct1,
+                            get_pointer(tile_x_qs), get_pointer(tile_x_d),
+                            get_pointer(tile_y_qs), get_pointer(tile_y_ds));
+                    });
+            });
+        } else {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
+                sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh);
+                sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh);
+                sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
+                ggml_sycl_parallel_for_grf<mmq_q4_0_coalesced_persistent_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,
+                    sycl::nd_range<3>(block_nums_persistent * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) {
+                        mul_mat_q4_0_coalesced_persistent<mmq_x, mmq_y, nwarps, true>(
+                            qs_base, d_offset, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                            nrows_y_unpadded, nrows_dst, row_low,
+                            work_counter, total_tiles, num_col_tiles, item_ct1,
+                            get_pointer(tile_x_qs), get_pointer(tile_x_d),
+                            get_pointer(tile_y_qs), get_pointer(tile_y_ds));
+                    });
+            });
+        }
+        return;  // Persistent path complete
+    }
+
+static_kernel_path:
+    // Static kernel path: original tile-per-workgroup assignment
+
 #define LAUNCH_Q4_0_COALESCED_KERNEL(MMQ_X, MMQ_Y, NWARPS)                                    \
     do {                                                                                      \
         constexpr int mmq_x = MMQ_X;                                                          \
@@ -4077,12 +4869,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_coalesced(const void *vx, const void *vy
         const bool need_check = (nrows_x % mmq_y != 0);                                       \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});             \
         if (!need_check) {                                                                    \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q4_0_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(     \
+                ggml_sycl_parallel_for_grf<mmq_q4_0_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,      \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q4_0_coalesced<mmq_x, mmq_y, nwarps, false>(                  \
@@ -4093,12 +4885,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl_coalesced(const void *vx, const void *vy
                     });                                                                       \
             });                                                                               \
         } else {                                                                              \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI4_0) + mmq_y / QI4_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q4_0_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(      \
+                ggml_sycl_parallel_for_grf<mmq_q4_0_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,       \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q4_0_coalesced<mmq_x, mmq_y, nwarps, true>(                   \
@@ -4170,7 +4962,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
@@ -4181,7 +4973,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_1_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_1_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_1<need_check>(
@@ -4205,7 +4997,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
@@ -4216,7 +5008,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_1_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_1_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_1<need_check>(
@@ -4285,7 +5077,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
@@ -4296,7 +5088,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_0<need_check>(
@@ -4320,7 +5112,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
@@ -4331,7 +5123,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_0<need_check>(
@@ -4400,7 +5192,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
@@ -4411,7 +5203,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_1_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_1_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_1<need_check>(
@@ -4435,7 +5227,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
@@ -4446,7 +5238,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_1_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_1_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_1<need_check>(
@@ -4515,7 +5307,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
@@ -4527,7 +5319,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<float, 1> tile_y_df_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q8_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q8_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q8_0<need_check>(
@@ -4551,7 +5343,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
@@ -4563,7 +5355,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<float, 1> tile_y_df_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q8_0_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q8_0_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q8_0<need_check>(
@@ -4621,12 +5413,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl_soa(const void *vx, const void *vy,
         const bool need_check = (nrows_x % mmq_y != 0);                                       \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});             \
         if (!need_check) {                                                                    \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI8_0) + mmq_y / QI8_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<float, 1> tile_y_df(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q8_0_soa_kernel<mmq_x, mmq_y, nwarps, false>>(           \
+                ggml_sycl_parallel_for_grf<mmq_q8_0_soa_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,            \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q8_0_soa<mmq_x, mmq_y, nwarps, false>(                        \
@@ -4638,12 +5430,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl_soa(const void *vx, const void *vy,
                     });                                                                       \
             });                                                                               \
         } else {                                                                              \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI8_0) + mmq_y / QI8_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<float, 1> tile_y_df(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q8_0_soa_kernel<mmq_x, mmq_y, nwarps, true>>(            \
+                ggml_sycl_parallel_for_grf<mmq_q8_0_soa_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,             \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q8_0_soa<mmq_x, mmq_y, nwarps, true>(                         \
@@ -4697,12 +5489,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl_coalesced(const void *vx, const void *vy
         const bool need_check = (nrows_x % mmq_y != 0);                                       \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});             \
         if (!need_check) {                                                                    \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI8_0) + mmq_y / QI8_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<float, 1> tile_y_df(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q8_0_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(     \
+                ggml_sycl_parallel_for_grf<mmq_q8_0_coalesced_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,      \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q8_0_coalesced<mmq_x, mmq_y, nwarps, false>(                  \
@@ -4713,12 +5505,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl_coalesced(const void *vx, const void *vy
                     });                                                                       \
             });                                                                               \
         } else {                                                                              \
-            stream->submit([&](sycl::handler &cgh) {                                          \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                          \
                 sycl::local_accessor<int, 1> tile_x_qs(sycl::range<1>(mmq_y * MMQ_TILE_NE_K + mmq_y), cgh); \
                 sycl::local_accessor<float, 1> tile_x_d(sycl::range<1>(mmq_y * (MMQ_TILE_NE_K/QI8_0) + mmq_y / QI8_0), cgh); \
                 sycl::local_accessor<int, 1> tile_y_qs(sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh); \
                 sycl::local_accessor<float, 1> tile_y_df(sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh); \
-                cgh.parallel_for<mmq_q8_0_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(      \
+                ggml_sycl_parallel_for_grf<mmq_q8_0_coalesced_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,       \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                   \
                     [=](sycl::nd_item<3> item_ct1) {                                          \
                         mul_mat_q8_0_coalesced<mmq_x, mmq_y, nwarps, true>(                   \
@@ -4790,7 +5582,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
@@ -4803,7 +5595,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q2_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q2_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q2_K<need_check>(
@@ -4828,7 +5620,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
@@ -4841,7 +5633,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q2_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q2_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q2_K<need_check>(
@@ -4913,7 +5705,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
@@ -4928,7 +5720,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q3_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q3_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q3_K<need_check>(
@@ -4954,7 +5746,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
@@ -4969,7 +5761,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q3_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q3_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q3_K<need_check>(
@@ -5041,7 +5833,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
@@ -5054,7 +5846,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QR4_K * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_K<need_check>(
@@ -5079,7 +5871,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
@@ -5092,7 +5884,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QR4_K * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q4_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q4_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_K<need_check>(
@@ -5162,7 +5954,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
@@ -5175,7 +5967,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QR5_K * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_K<need_check>(
@@ -5200,7 +5992,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
             dpct::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            mmq_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
@@ -5213,7 +6005,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QR5_K * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for<mmq_q5_K_kernel<need_check>>(
+                ggml_sycl_parallel_for_grf<mmq_q5_K_kernel<need_check>>(cgh, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_K<need_check>(
@@ -5246,117 +6038,103 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
         CHECK_TRY_ERROR(id = get_current_device_id()));
     const int compute_capability = ggml_sycl_info().devices[id].cc;
 
-    int mmq_x, mmq_y, nwarps;
+#if defined(GGML_SYCL_MMQ_Q6K_PERF)
+    const ggml_sycl_q6k_tune tune = ggml_sycl_get_q6k_tune();
+#endif
+
+#define LAUNCH_Q6_K_KERNEL(MMQ_X, MMQ_Y, NWARPS, VARIANT_ID)                                   \
+    do {                                                                                      \
+        constexpr int mmq_x = MMQ_X;                                                          \
+        constexpr int mmq_y = MMQ_Y;                                                          \
+        constexpr int nwarps = NWARPS;                                                        \
+        const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;                                \
+        const int block_num_y = (ncols_y + mmq_x - 1) / mmq_x;                                \
+        const sycl::range<3> block_nums(1, block_num_y, block_num_x);                         \
+        const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);                                \
+        const bool need_check = (nrows_x % mmq_y != 0);                                       \
+        dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});             \
+        if (!need_check) {                                                                    \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                      \
+                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(                               \
+                    sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                \
+                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(                       \
+                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / QI6_K) + mmq_y / QI6_K), cgh);    \
+                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(                               \
+                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / 8) + mmq_y / 8), cgh);            \
+                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(                               \
+                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);                          \
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(                       \
+                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);                  \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_kernel<mmq_x, mmq_y, nwarps, false, VARIANT_ID>>(cgh, \
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),                  \
+                    [=](sycl::nd_item<3> item_ct1) {                                          \
+                        mul_mat_q6_K<mmq_x, mmq_y, nwarps, false>(                             \
+                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,                  \
+                            nrows_dst, item_ct1,                                              \
+                            get_pointer(tile_x_ql_acc_ct1),                                   \
+                            get_pointer(tile_x_dm_acc_ct1),                                   \
+                            get_pointer(tile_x_sc_acc_ct1),                                   \
+                            get_pointer(tile_y_qs_acc_ct1),                                   \
+                            get_pointer(tile_y_ds_acc_ct1));                                  \
+                    });                                                                       \
+            });                                                                               \
+        } else {                                                                              \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                      \
+                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(                               \
+                    sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                \
+                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(                       \
+                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / QI6_K) + mmq_y / QI6_K), cgh);    \
+                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(                               \
+                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / 8) + mmq_y / 8), cgh);            \
+                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(                               \
+                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);                          \
+                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(                       \
+                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);                  \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_kernel<mmq_x, mmq_y, nwarps, true, VARIANT_ID>>(cgh,  \
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),                  \
+                    [=](sycl::nd_item<3> item_ct1) {                                          \
+                        mul_mat_q6_K<mmq_x, mmq_y, nwarps, true>(                              \
+                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,                  \
+                            nrows_dst, item_ct1,                                              \
+                            get_pointer(tile_x_ql_acc_ct1),                                   \
+                            get_pointer(tile_x_dm_acc_ct1),                                   \
+                            get_pointer(tile_x_sc_acc_ct1),                                   \
+                            get_pointer(tile_y_qs_acc_ct1),                                   \
+                            get_pointer(tile_y_ds_acc_ct1));                                  \
+                    });                                                                       \
+            });                                                                               \
+        }                                                                                     \
+    } while (0)
+
     if (compute_capability >= VER_GEN13) {
-        mmq_x  =  MMQ_X_Q6_K_RDNA2;
-        mmq_y  =  MMQ_Y_Q6_K_RDNA2;
-        nwarps = NWARPS_Q6_K_RDNA2;
+#if defined(GGML_SYCL_MMQ_Q6K_PERF)
+        if (tune == ggml_sycl_q6k_tune::perf) {
+            LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_RDNA2_PERF, MMQ_Y_Q6_K_RDNA2_PERF, NWARPS_Q6_K_RDNA2_PERF, 0);
+        } else {
+            LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_RDNA2_SPILLFREE, MMQ_Y_Q6_K_RDNA2_SPILLFREE, NWARPS_Q6_K_RDNA2_SPILLFREE, 1);
+        }
+#else
+        LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_RDNA2_SPILLFREE, MMQ_Y_Q6_K_RDNA2_SPILLFREE, NWARPS_Q6_K_RDNA2_SPILLFREE, 1);
+#endif
     } else if (compute_capability >= VER_GEN12) {
-        mmq_x  =  MMQ_X_Q6_K_RDNA1;
-        mmq_y  =  MMQ_Y_Q6_K_RDNA1;
-        nwarps = NWARPS_Q6_K_RDNA1;
+        LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_RDNA1, MMQ_Y_Q6_K_RDNA1, NWARPS_Q6_K_RDNA1, 2);
     } else if (compute_capability >= VER_GEN9) {
-        mmq_x  =  MMQ_X_Q6_K_AMPERE;
-        mmq_y  =  MMQ_Y_Q6_K_AMPERE;
-        nwarps = NWARPS_Q6_K_AMPERE;
+#if defined(GGML_SYCL_MMQ_Q6K_PERF)
+        if (tune == ggml_sycl_q6k_tune::perf) {
+            LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_AMPERE_PERF, MMQ_Y_Q6_K_AMPERE_PERF, NWARPS_Q6_K_AMPERE_PERF, 3);
+        } else {
+            LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_AMPERE_SPILLFREE, MMQ_Y_Q6_K_AMPERE_SPILLFREE, NWARPS_Q6_K_AMPERE_SPILLFREE, 4);
+        }
+#else
+        LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_AMPERE_SPILLFREE, MMQ_Y_Q6_K_AMPERE_SPILLFREE, NWARPS_Q6_K_AMPERE_SPILLFREE, 4);
+#endif
     } else if (compute_capability >= VER_4VEC) {
-        mmq_x  =  MMQ_X_Q6_K_PASCAL;
-        mmq_y  =  MMQ_Y_Q6_K_PASCAL;
-        nwarps = NWARPS_Q6_K_PASCAL;
+        LAUNCH_Q6_K_KERNEL(MMQ_X_Q6_K_PASCAL, MMQ_Y_Q6_K_PASCAL, NWARPS_Q6_K_PASCAL, 5);
     } else {
         GGML_ABORT("fatal error");
     }
 
-    const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
-    const int block_num_y = (ncols_y + mmq_x - 1) / mmq_x;
-    const sycl::range<3> block_nums(1, block_num_y, block_num_x);
-    const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
-
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
-        /*
-        DPCT1049:38: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                // Use MMQ_TILE_NE_K (32) for x-tile allocations to match CUDA tile sizing
-                // and quantization block dimensions (QI6_K=32)
-                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
-                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / QI6_K) + mmq_y / QI6_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(
-                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / 8) + mmq_y / 8), cgh);
-                // Y-tile uses QR6_K * WARP_SIZE = 64 stride per column for 2-phase quants.
-                // Each phase writes WARP_SIZE elements, total 64 per column.
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for<mmq_q6_K_kernel<need_check>>(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q6_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_acc_ct1),
-                            get_pointer(tile_x_dm_acc_ct1),
-                            get_pointer(tile_x_sc_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
-    } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:39: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                // Use MMQ_TILE_NE_K (32) for x-tile allocations to match CUDA tile sizing
-                // and quantization block dimensions (QI6_K=32)
-                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
-                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / QI6_K) + mmq_y / QI6_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(
-                    sycl::range<1>(mmq_y * (MMQ_TILE_NE_K / 8) + mmq_y / 8), cgh);
-                // Y-tile uses QR6_K * WARP_SIZE = 64 stride per column for 2-phase quants.
-                // Each phase writes WARP_SIZE elements, total 64 per column.
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for<mmq_q6_K_kernel<need_check>>(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q6_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_acc_ct1),
-                            get_pointer(tile_x_dm_acc_ct1),
-                            get_pointer(tile_x_sc_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
-    }
+#undef LAUNCH_Q6_K_KERNEL
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -5397,7 +6175,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_soa(const void *vx, const void *vy,
         const bool need_check = (nrows_x % mmq_y != 0);                                        \
         dpct::has_capability_or_fail(stream->get_device(), {sycl::aspect::fp16});              \
         if (!need_check) {                                                                     \
-            stream->submit([&](sycl::handler &cgh) {                                           \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                           \
                 /* X-tile: ql+qh combined, dm (half2), scales - using MMQ_TILE_NE_K */         \
                 sycl::local_accessor<int, 1> tile_x_qs(                                        \
                     sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                  \
@@ -5412,7 +6190,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_soa(const void *vx, const void *vy,
                     sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);                           \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(                                \
                     sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);                        \
-                cgh.parallel_for<mmq_q6_K_soa_kernel<mmq_x, mmq_y, nwarps, false>>(            \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_soa_kernel<mmq_x, mmq_y, nwarps, false>>(cgh,             \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                    \
                     [=](sycl::nd_item<3> item_ct1) {                                           \
                         mul_mat_q6_K_soa<mmq_x, mmq_y, nwarps, false>(                         \
@@ -5425,7 +6203,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_soa(const void *vx, const void *vy,
                     });                                                                        \
             });                                                                                \
         } else {                                                                               \
-            stream->submit([&](sycl::handler &cgh) {                                           \
+            mmq_submit(stream, [&](sycl::handler &cgh) {                                           \
                 sycl::local_accessor<int, 1> tile_x_qs(                                        \
                     sycl::range<1>(mmq_y * (2 * MMQ_TILE_NE_K) + mmq_y), cgh);                  \
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm(                                \
@@ -5439,7 +6217,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_soa(const void *vx, const void *vy,
                     sycl::range<1>(mmq_x * QR6_K * WARP_SIZE), cgh);                           \
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds(                                \
                     sycl::range<1>(mmq_x * QR6_K * WARP_SIZE / QI8_1), cgh);                        \
-                cgh.parallel_for<mmq_q6_K_soa_kernel<mmq_x, mmq_y, nwarps, true>>(             \
+                ggml_sycl_parallel_for_grf<mmq_q6_K_soa_kernel<mmq_x, mmq_y, nwarps, true>>(cgh,              \
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),                    \
                     [=](sycl::nd_item<3> item_ct1) {                                           \
                         mul_mat_q6_K_soa<mmq_x, mmq_y, nwarps, true>(                          \
@@ -5456,8 +6234,17 @@ static void ggml_mul_mat_q6_K_q8_1_sycl_soa(const void *vx, const void *vy,
 
     // Intel SYCL backend: Use optimized configuration for Intel Arc GPUs
     (void)compute_capability;  // Single config for all Intel GPUs
-    // Must match AoS nwarps=8 for correct tile loading iteration counts
-    LAUNCH_Q6_K_SOA_KERNEL(64, 128, 8);
+    // Smaller tile reduces register pressure/spills; keep nwarps=8 for tile loading.
+#if defined(GGML_SYCL_MMQ_Q6K_PERF)
+    const ggml_sycl_q6k_tune tune = ggml_sycl_get_q6k_tune();
+    if (tune == ggml_sycl_q6k_tune::perf) {
+        LAUNCH_Q6_K_SOA_KERNEL(64, 64, 8);
+    } else {
+        LAUNCH_Q6_K_SOA_KERNEL(16, 64, 8);
+    }
+#else
+    LAUNCH_Q6_K_SOA_KERNEL(16, 64, 8);
+#endif
 
 #undef LAUNCH_Q6_K_SOA_KERNEL
 }
@@ -5666,8 +6453,14 @@ static void ggml_sycl_mmq_dispatch(const ggml_tensor *     src0,
                                    int64_t                 layout_row_low,
                                    const dpct::queue_ptr & stream) {
     const int64_t row_diff   = row_high - row_low;
-    GGML_UNUSED(device_id);
     layout_mode   use_layout = layout;
+
+#if SYCL_XMX_MMQ_AVAILABLE
+    // Get XMX capabilities for this device
+    const auto & xmx_caps = ggml_sycl_info().devices[device_id].xmx_caps;
+#else
+    GGML_UNUSED(device_id);
+#endif
     if ((use_layout == GGML_LAYOUT_SOA || use_layout == GGML_LAYOUT_COALESCED) && !layout_base) {
         use_layout = GGML_LAYOUT_AOS;
     }
@@ -5724,6 +6517,31 @@ static void ggml_sycl_mmq_dispatch(const ggml_tensor *     src0,
                                         src1_padded_row_size, nrows_dst, stream);
             break;
         case GGML_TYPE_Q8_0:
+#if SYCL_XMX_MMQ_AVAILABLE
+            // XMX path: Use tensor core hardware for matrix multiplication
+            // Gated by GGML_SYCL_XMX_MMQ=1 environment variable
+            if (mmq_xmx::can_use_xmx_q8_0(xmx_caps, static_cast<int>(ne00))) {
+                GGML_SYCL_KTRACE("mmq_q8_0_xmx", " ne00=%lld row_diff=%lld ncols=%lld nrows_dst=%lld",
+                    (long long)ne00, (long long)row_diff, (long long)src1_ncols, (long long)nrows_dst);
+
+                // XMX kernel parameters:
+                // vx: Q8_0 weights (src0_dd_i), indexed by [nrows_x, ncols_x]
+                // vy: Q8_1 activations (src1_ddq_i), indexed by [ncols_y, ncols_x]
+                // ncols_x = ne00 (input features, K dimension)
+                // nrows_x = row_diff (output rows, M dimension)
+                // ncols_y = src1_ncols (batch size, N dimension)
+                mmq_xmx::launch_mmq_xmx_q8_0<64, 32, 8>(
+                    src0_dd_i,                        // Q8_0 weights
+                    src1_ddq_i,                       // Q8_1 activations
+                    dst_dd_i,                         // Output
+                    static_cast<int>(ne00),           // ncols_x (K)
+                    static_cast<int>(row_diff),       // nrows_x (M)
+                    static_cast<int>(src1_ncols),     // ncols_y (N)
+                    static_cast<int>(src1_padded_row_size),  // nrows_y (for compat)
+                    static_cast<int>(nrows_dst),      // nrows_dst
+                    *stream);
+            } else
+#endif
             if (use_layout == GGML_LAYOUT_COALESCED) {
                 const size_t nblocks        = static_cast<size_t>(layout_rows) * static_cast<size_t>(ne00 / QK8_0);
                 const size_t total_qs_bytes = nblocks * QK8_0;
@@ -5990,7 +6808,9 @@ void ggml_sycl_op_mul_mat_q(
     int64_t layout_row_low = 0;
 
     layout_mode chosen = GGML_LAYOUT_AOS;
-    if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
+    const bool explicit_layout =
+        ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen);
+    if (explicit_layout) {
         if (chosen == GGML_LAYOUT_SOA) {
             mode = reorder_mode::SOA;
             layout = GGML_LAYOUT_SOA;
@@ -6008,14 +6828,47 @@ void ggml_sycl_op_mul_mat_q(
         }
     }
 
+    const layout_mode preferred_layout = layout;
+    const bool coalesced_supported =
+        src0->type == GGML_TYPE_Q4_0 ||
+        src0->type == GGML_TYPE_Q8_0 ||
+        src0->type == GGML_TYPE_Q6_K;
+    const bool prefer_coalesced =
+        !explicit_layout && coalesced_supported && src1_ncols >= 64;
+    bool forced_coalesced = false;
+    if (prefer_coalesced && preferred_layout != GGML_LAYOUT_COALESCED) {
+        layout = GGML_LAYOUT_COALESCED;
+        mode = reorder_mode::COALESCED;
+        forced_coalesced = true;
+    }
+
     if (layout != GGML_LAYOUT_AOS) {
         storage = get_storage_tensor(src0);
         layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
         if (!layout_base) {
-            GGML_SYCL_DEBUG("[MMQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
-                            src0->name ? src0->name : "?", (int) layout);
-            layout = GGML_LAYOUT_AOS;
-            mode = reorder_mode::NONE;
+            if (forced_coalesced) {
+                layout = preferred_layout;
+                mode = (layout == GGML_LAYOUT_SOA) ? reorder_mode::SOA : reorder_mode::NONE;
+                forced_coalesced = false;
+                if (layout != GGML_LAYOUT_AOS) {
+                    storage = get_storage_tensor(src0);
+                    layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
+                }
+            }
+
+            if (!layout_base) {
+                GGML_SYCL_DEBUG("[MMQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                                src0->name ? src0->name : "?", (int) layout);
+                layout = GGML_LAYOUT_AOS;
+                mode = reorder_mode::NONE;
+            } else {
+                layout_rows = storage->ne[1];
+                if (src0->view_src != nullptr) {
+                    layout_row_low = row_low + src0->view_offs / src0->nb[1];
+                } else {
+                    layout_row_low = row_low;
+                }
+            }
         } else {
             layout_rows = storage->ne[1];
             if (src0->view_src != nullptr) {
