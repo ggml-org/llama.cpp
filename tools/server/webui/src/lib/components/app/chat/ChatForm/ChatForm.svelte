@@ -27,12 +27,13 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		initialMessage?: string;
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
-		onSystemPromptAdd?: () => void;
+		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
@@ -40,6 +41,7 @@
 	let {
 		class: className,
 		disabled = false,
+		initialMessage = '',
 		isLoading = false,
 		onFileRemove,
 		onFileUpload,
@@ -55,14 +57,27 @@
 	let currentConfig = $derived(config());
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
-	let message = $state('');
+	let message = $state(initialMessage);
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 	let previousIsLoading = $state(isLoading);
+	let previousInitialMessage = $state(initialMessage);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
+
+	// Sync message when initialMessage prop changes (e.g., after draft restoration)
+	$effect(() => {
+		if (initialMessage !== previousInitialMessage) {
+			message = initialMessage;
+			previousInitialMessage = initialMessage;
+		}
+	});
+
+	function handleSystemPromptClick() {
+		onSystemPromptAdd?.({ message, files: uploadedFiles });
+	}
 
 	// Check if model is selected (in ROUTER mode)
 	let conversationModel = $derived(
@@ -310,7 +325,7 @@
 			onFileUpload={handleFileUpload}
 			onMicClick={handleMicClick}
 			onStop={handleStop}
-			onSystemPromptClick={onSystemPromptAdd}
+			onSystemPromptClick={handleSystemPromptClick}
 		/>
 	</div>
 </form>

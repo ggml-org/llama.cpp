@@ -78,6 +78,9 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
+	// Draft preservation for navigation (e.g., when adding system prompt from welcome page)
+	private _pendingDraftMessage = $state<string>('');
+	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -1541,6 +1544,31 @@ class ChatStore {
 
 	getAddFilesHandler(): ((files: File[]) => void) | null {
 		return this.addFilesHandler;
+	}
+
+	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
+		this._pendingDraftMessage = message;
+		this._pendingDraftFiles = [...files];
+	}
+
+	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
+		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) {
+			return null;
+		}
+
+		const draft = {
+			message: this._pendingDraftMessage,
+			files: [...this._pendingDraftFiles]
+		};
+
+		this._pendingDraftMessage = '';
+		this._pendingDraftFiles = [];
+
+		return draft;
+	}
+
+	hasPendingDraft(): boolean {
+		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
 	}
 
 	public getAllLoadingChats(): string[] {
