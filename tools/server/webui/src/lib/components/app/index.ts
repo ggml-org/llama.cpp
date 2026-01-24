@@ -23,10 +23,13 @@ export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessageActions } from './chat/ChatMessages/ChatMessageActions.svelte';
 export { default as ChatMessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessageStatistics.svelte';
+export { default as ChatMessageMcpPrompt } from './chat/ChatMessages/ChatMessageMcpPrompt.svelte';
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as CollapsibleContentBlock } from './chat/ChatMessages/CollapsibleContentBlock.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
+
+export { default as McpPromptContent } from './chat/McpPromptContent.svelte';
 
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
 export { default as KeyValuePairs } from './misc/KeyValuePairs.svelte';

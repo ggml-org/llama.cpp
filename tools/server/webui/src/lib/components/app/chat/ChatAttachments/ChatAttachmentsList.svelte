@@ -28,9 +28,6 @@
 		limitToSingleRow?: boolean;
 		// For vision modality check
 		activeModelId?: string;
-		// For MCP prompt argument editing
-		isEditingAllowed?: boolean;
-		onMcpPromptArgumentsChange?: (fileId: string, args: Record<string, string>) => void;
 	}
 
 	let {
@@ -45,9 +42,7 @@
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
 		limitToSingleRow = false,
-		activeModelId,
-		isEditingAllowed = false,
-		onMcpPromptArgumentsChange
+		activeModelId
 	}: Props = $props();
 
 	let displayItems = $derived(getAttachmentDisplayItems({ uploadedFiles, attachments }));
@@ -158,11 +153,7 @@
 									{readonly}
 									isLoading={item.isLoading}
 									loadError={item.loadError}
-									{isEditingAllowed}
 									onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
-									onArgumentsChange={onMcpPromptArgumentsChange
-										? (args) => onMcpPromptArgumentsChange(item.id, args)
-										: undefined}
 								/>
 							{/if}
 						{:else if item.isImage && item.preview}
@@ -247,11 +238,7 @@
 								{readonly}
 								isLoading={item.isLoading}
 								loadError={item.loadError}
-								{isEditingAllowed}
 								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
-								onArgumentsChange={onMcpPromptArgumentsChange
-									? (args) => onMcpPromptArgumentsChange(item.id, args)
-									: undefined}
 							/>
 						{/if}
 					{:else if item.isImage && item.preview}

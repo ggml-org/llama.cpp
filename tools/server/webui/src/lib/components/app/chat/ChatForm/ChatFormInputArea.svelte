@@ -36,7 +36,6 @@
 		value?: string;
 		onAttachmentRemove?: (index: number) => void;
 		onFilesAdd?: (files: File[]) => void;
-		onMcpPromptArgumentsChange?: (fileId: string, args: Record<string, string>) => void;
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
@@ -56,7 +55,6 @@
 		value = $bindable(''),
 		onAttachmentRemove,
 		onFilesAdd,
-		onMcpPromptArgumentsChange,
 		onStop,
 		onSubmit,
 		onSystemPromptClick,
@@ -342,14 +340,6 @@
 		}
 	}
 
-	function handleMcpPromptArgsChange(fileId: string, args: Record<string, string>) {
-		uploadedFiles = uploadedFiles.map((f) =>
-			f.id === fileId && f.mcpPrompt ? { ...f, mcpPrompt: { ...f.mcpPrompt, arguments: args } } : f
-		);
-		onUploadedFilesChange?.(uploadedFiles);
-		onMcpPromptArgumentsChange?.(fileId, args);
-	}
-
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
@@ -390,8 +380,6 @@
 			class="py-5"
 			style="scroll-padding: 1rem;"
 			activeModelId={activeModelId ?? undefined}
-			isEditingAllowed={true}
-			onMcpPromptArgumentsChange={handleMcpPromptArgsChange}
 		/>
 
 		<div
