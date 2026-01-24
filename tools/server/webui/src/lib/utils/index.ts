@@ -104,12 +104,6 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 // Agentic utilities
 export { toAgenticMessages, getAgenticConfig } from './agentic';
 
-// Base64 utilities
-export { decodeBase64 } from './base64';
-
-// Chat stream utilities
-export { mergeToolCallDeltas, extractModelName } from './chat-stream';
-
 // Debounce utilities
 export { debounce } from './debounce';
 
