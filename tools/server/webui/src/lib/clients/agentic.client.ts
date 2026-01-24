@@ -564,7 +564,7 @@ export class AgenticClient {
 				sessionMessages.push({
 					role: 'tool',
 					tool_call_id: toolCall.id,
-					content: contentParts.length === 1 ? contentParts[0].text : contentParts
+					content: contentParts.length === 1 ? cleanedResult : contentParts
 				});
 			}
 
