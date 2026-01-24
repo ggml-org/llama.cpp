@@ -37,7 +37,7 @@ export type AgenticMessage =
 	| {
 			role: 'tool';
 			tool_call_id: string;
-			content: string;
+			content: string | ApiChatMessageContentPart[];
 	  };
 
 export type AgenticAssistantMessage = Extract<AgenticMessage, { role: 'assistant' }>;

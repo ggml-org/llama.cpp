@@ -29,7 +29,11 @@ import { config } from '$lib/stores/settings.svelte';
 import { getAgenticConfig } from '$lib/utils/agentic';
 import { toAgenticMessages } from '$lib/utils';
 import type { AgenticMessage, AgenticToolCallList } from '$lib/types/agentic';
-import type { ApiChatCompletionToolCall, ApiChatMessageData } from '$lib/types/api';
+import type {
+	ApiChatCompletionToolCall,
+	ApiChatMessageData,
+	ApiChatMessageContentPart
+} from '$lib/types/api';
 import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
@@ -38,7 +42,12 @@ import type {
 	ChatMessageAgenticTurnStats
 } from '$lib/types/chat';
 import type { MCPToolCall } from '$lib/types';
-import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '$lib/types/database';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraImageFile,
+	McpServerOverride
+} from '$lib/types/database';
 import { AttachmentType } from '$lib/enums';
 
 export interface AgenticFlowCallbacks {
@@ -538,12 +547,24 @@ export class AgenticClient {
 
 				this.emitToolCallResult(cleanedResult, maxToolPreviewLines, onChunk);
 
-				// Add tool result to session (sanitize base64 payloads for context)
-				const contextValue = attachments.length > 0 ? cleanedResult : result;
+				// Add tool result to session
+				// If images were extracted, include them as content parts so the model
+				// can describe them immediately in the same agentic loop
+				const contentParts: ApiChatMessageContentPart[] = [{ type: 'text', text: cleanedResult }];
+
+				for (const attachment of attachments) {
+					if (attachment.type === AttachmentType.IMAGE) {
+						contentParts.push({
+							type: 'image_url',
+							image_url: { url: (attachment as DatabaseMessageExtraImageFile).base64Url }
+						});
+					}
+				}
+
 				sessionMessages.push({
 					role: 'tool',
 					tool_call_id: toolCall.id,
-					content: contextValue
+					content: contentParts.length === 1 ? contentParts[0].text : contentParts
 				});
 			}
 
