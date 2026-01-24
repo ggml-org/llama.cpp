@@ -54,7 +54,7 @@ shared f16vec4 Psh[Bc * psh_stride];
 const uint32_t sfshstride = (HSK <= 128) ? (Br / 4 + 2) : Br / 4;
 shared ACC_TYPEV4 sfsh[Bc * sfshstride];
 
-const uint32_t kshstride = HSK_pad / 4 + 2; // in units of f16vec4
+const uint32_t kshstride = MatBr / 4 + 2; // in units of f16vec4
 const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * number of subgroups
 const uint vsh_stride = v_cols;
 shared f16vec4 ksh[(kshstride >= vsh_stride) ? (Bc * kshstride) : (Bc * vsh_stride)];
@@ -182,27 +182,6 @@ void main() {
             }
         }
 
-        [[unroll]] for (uint32_t idx = 0; idx < Bc * HSK / 4; idx += gl_WorkGroupSize.x) {
-            uint32_t d = (idx + tid) % (HSK / 4);
-            uint32_t c = (idx + tid) / (HSK / 4);
-            if (c < Bc && d < HSK / 4) {
-                f16vec4 K_Tf = f16vec4(0);
-                if (!KV_bounds_check || j * Bc + c < KV) {
-#if BLOCK_SIZE > 1
-                    uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE + 4 * d;
-                    uint ib = coord / BLOCK_SIZE;
-                    uint iqs = (coord % BLOCK_SIZE);
-                    K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
-#else
-                    K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
-#endif
-                }
-
-                ksh[c * kshstride + d] = K_Tf;
-            }
-        }
-        barrier();
-
         // K * Q^T -> S^T: Bc x HSK_pad * HSK_pad x Br -> Bc x Br
         // Bc split across workgroup (four subgroups), loop over HSK in chunks of 16: 16 x 16 * 16 x 16 -> 16 x 16
         // This is written transposed in order to allow for N being 8 if implementations need it
@@ -211,10 +190,48 @@ void main() {
         coopmat<float16_t, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
 
         [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
-            coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
+#if BLOCK_SIZE == 1
+            if (KV_bounds_check) {
+#endif
+            [[unroll]] for (uint32_t idx = 0; idx < Bc * MatBr / 4; idx += gl_WorkGroupSize.x) {
+                uint32_t col_vec = (idx + tid) % (MatBr / 4);
+                uint32_t row = (idx + tid) / (MatBr / 4);
+                if (idx + tid < Bc * MatBr / 4) {
+                    f16vec4 K_Tf = f16vec4(0);
+                    if (!KV_bounds_check || j * Bc + row < KV) {
+#if BLOCK_SIZE > 1
+                        uint coord = (j * Bc + row) * k_stride * BLOCK_SIZE + d * 16 + col_vec * 4;
+                        uint ib = coord / BLOCK_SIZE;
+                        uint iqs = (coord % BLOCK_SIZE);
+                        K_Tf = f16vec4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
+#else
+                        K_Tf = f16vec4(data_kv4[k_offset / 4 + (j * Bc + row) * k_stride / 4 + d * 16 / 4 + col_vec]);
+#endif
+                    }
 
-            uint coord = (gl_SubgroupID * MatBc) * kshstride + d * 16 / 4;
-            coopMatLoad(KMat, ksh, coord, kshstride, gl_CooperativeMatrixLayoutRowMajor);
+                    ksh[row * kshstride + col_vec] = K_Tf;
+                }
+            }
+            barrier();
+#if BLOCK_SIZE == 1
+            }
+#endif
+
+#if BLOCK_SIZE == 1
+            if (KV_bounds_check)
+#endif
+            {
+                uint coord = (gl_SubgroupID * MatBc) * kshstride;
+                coopMatLoad(KMat, ksh, coord, kshstride, gl_CooperativeMatrixLayoutRowMajor);
+            }
+#if BLOCK_SIZE == 1
+            else {
+                const uint coord = k_offset / 4 + (j * Bc + gl_SubgroupID * MatBc) * k_stride / 4 + d * 16 / 4;
+                coopMatLoad(KMat, data_kv4, coord, k_stride / 4, gl_CooperativeMatrixLayoutRowMajor);
+            }
+#endif
+
+            coopMatLoad(QMat, Qf, d * 16 / 4, qstride, gl_CooperativeMatrixLayoutColumnMajor);
 
             SfMat = coopMatMulAdd(KMat, QMat, SfMat);
         }
