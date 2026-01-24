@@ -1,5 +1,6 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { STATS_UNITS } from '$lib/constants/processing-info';
 
 export interface LiveProcessingStats {
 	tokensProcessed: number;
@@ -163,7 +164,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} t/s`);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		if (stateToUse.speculative) {

@@ -1,6 +1,6 @@
 import { getJsonHeaders } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
-import { AttachmentType, MessageRole } from '$lib/enums';
+import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
@@ -169,7 +169,9 @@ export class ChatService {
 			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = disableReasoningParsing ? 'none' : 'auto';
+		requestBody.reasoning_format = disableReasoningParsing
+			? ReasoningFormat.NONE
+			: ReasoningFormat.AUTO;
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {

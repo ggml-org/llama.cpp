@@ -2,7 +2,7 @@ export { AttachmentType } from './attachment';
 
 export { AgenticSectionType } from './agentic';
 
-export { ChatMessageStatsView, MessageRole, MessageType } from './chat';
+export { ChatMessageStatsView, MessageRole, MessageType, ReasoningFormat } from './chat';
 
 export {
 	FileTypeCategory,
@@ -17,7 +17,8 @@ export {
 	MimeTypeApplication,
 	MimeTypeAudio,
 	MimeTypeImage,
-	MimeTypeText
+	MimeTypeText,
+	SpecialFileType
 } from './files';
 
 export { MCPConnectionPhase, MCPLogLevel, MCPTransportType, HealthCheckStatus } from './mcp';

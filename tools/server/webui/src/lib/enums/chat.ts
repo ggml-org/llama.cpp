@@ -6,6 +6,14 @@ export enum ChatMessageStatsView {
 }
 
 /**
+ * Reasoning format options for API requests.
+ */
+export enum ReasoningFormat {
+	NONE = 'none',
+	AUTO = 'auto'
+}
+
+/**
  * Message roles for chat messages.
  */
 export enum MessageRole {
