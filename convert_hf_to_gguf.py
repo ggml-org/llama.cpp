@@ -4516,6 +4516,27 @@ class Qwen3VLTextModel(Qwen3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMoeModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNIMOE
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_eos_token_id(151645)  # from Qwen3-VL, because null in config.json
+        self.gguf_writer.add_bos_token_id(151643)  # from Qwen3-VL, because null in config.json
+        # same as in Qwen3VLForConditionalGeneration
+        vision_config = self.hparams.get("vision_config", {})
+        deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
+        self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "", 1)
+        if name.startswith(("audio_tower.", "visual.", "talker.", "code2wav.")):
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3VLMoeForConditionalGeneration")
 class Qwen3VLMoeTextModel(Qwen3MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
