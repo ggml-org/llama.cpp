@@ -8,6 +8,7 @@
 
 #extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_vote : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_cooperative_matrix : enable
 
@@ -44,8 +45,7 @@ D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TY
 const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
 
-shared FLOAT_TYPE tmpsh[gl_WorkGroupSize.x];
-shared ACC_TYPEV4 tmpshv4[gl_WorkGroupSize.x];
+shared FLOAT_TYPE tmpsh[WorkGroupSize / row_split];
 
 const uint32_t qstride = HSK_pad / 4 + 2; // in units of f16vec4
 shared f16vec4 Qf[Br * qstride];
@@ -264,17 +264,10 @@ void main() {
             }
             float Moldf = Mf[r];
 
-            tmpsh[tid] = rowmaxf;
             // Compute max across the row
-            barrier();
-            [[unroll]] for (int s = int(gl_WorkGroupSize.x / row_split) / 2; s >= D_split; s >>= 1) {
-                rowmaxf = max(rowmaxf, tmpsh[tid ^ s]);
-                barrier();
-                tmpsh[tid] = rowmaxf;
-                barrier();
+            [[unroll]] for (uint s = D_split; s < 32; s *= 2) {
+                rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
             }
-            rowmaxf = tmpsh[d_tid + row_tid * threads_per_rowgroup];
-            barrier();
 
             // M = max(rowmax, Mold)
             // P = e^(S - M)
@@ -415,18 +408,9 @@ void main() {
     }
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        float L = Lf[r];
-        tmpsh[tid] = L;
-        // Compute sum across the row
-        barrier();
-        [[unroll]] for (int s = int(gl_WorkGroupSize.x / row_split) / 2; s >= D_split; s >>= 1) {
-            L += tmpsh[tid ^ s];
-            barrier();
-            tmpsh[tid] = L;
-            barrier();
+        [[unroll]] for (uint s = D_split; s < 32; s *= 2) {
+            Lf[r] += subgroupShuffleXor(Lf[r], s);
         }
-        Lf[r] = tmpsh[d_tid + row_tid * threads_per_rowgroup];
-        barrier();
     }
 
     // If there is split_k, then the split_k resolve shader does the final
