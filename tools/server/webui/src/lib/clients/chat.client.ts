@@ -12,10 +12,10 @@ import {
 	normalizeModelName,
 	filterByLeafNodeId,
 	findDescendantMessages,
-	findLeafNode
+	findLeafNode,
+	getAgenticConfig
 } from '$lib/utils';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
-import { getAgenticConfig } from '$lib/utils/agentic';
 import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';

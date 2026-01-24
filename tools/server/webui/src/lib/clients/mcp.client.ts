@@ -49,9 +49,158 @@ import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPError } from '$lib/errors';
-import { buildMcpClientConfig, detectMcpTransportFromUrl } from '$lib/utils/mcp';
+import { detectMcpTransportFromUrl } from '$lib/utils';
 import { config } from '$lib/stores/settings.svelte';
-import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import type { MCPServerConfig, MCPServerSettingsEntry } from '$lib/types';
+import type { SettingsConfigType } from '$lib/types/settings';
+
+/**
+ * Generates a valid MCP server ID from user input.
+ * Returns the trimmed ID if valid, otherwise generates 'server-{index+1}'.
+ */
+function generateMcpServerId(id: unknown, index: number): string {
+	if (typeof id === 'string' && id.trim()) {
+		return id.trim();
+	}
+
+	return `${MCP_SERVER_ID_PREFIX}${index + 1}`;
+}
+
+/**
+ * Parses MCP server settings from a JSON string or array.
+ * requestTimeoutSeconds is not user-configurable in the UI, so we always use the default value.
+ * @param rawServers - The raw servers to parse
+ * @returns An empty array if the input is invalid.
+ */
+function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
+	if (!rawServers) return [];
+
+	let parsed: unknown;
+	if (typeof rawServers === 'string') {
+		const trimmed = rawServers.trim();
+		if (!trimmed) return [];
+
+		try {
+			parsed = JSON.parse(trimmed);
+		} catch (error) {
+			console.warn('[MCP] Failed to parse mcpServers JSON, ignoring value:', error);
+			return [];
+		}
+	} else {
+		parsed = rawServers;
+	}
+
+	if (!Array.isArray(parsed)) return [];
+
+	return parsed.map((entry, index) => {
+		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
+		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
+
+		return {
+			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
+			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
+			url,
+			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+			headers: headers || undefined
+		} satisfies MCPServerSettingsEntry;
+	});
+}
+
+/**
+ * Builds an MCP server configuration from a server settings entry.
+ * @param entry - The server settings entry to build the configuration from
+ * @param connectionTimeoutMs - The connection timeout in milliseconds
+ * @returns The built server configuration, or undefined if the entry is invalid
+ */
+function buildServerConfig(
+	entry: MCPServerSettingsEntry,
+	connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
+): MCPServerConfig | undefined {
+	if (!entry?.url) {
+		return undefined;
+	}
+
+	let headers: Record<string, string> | undefined;
+	if (entry.headers) {
+		try {
+			const parsed = JSON.parse(entry.headers);
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				headers = parsed as Record<string, string>;
+			}
+		} catch {
+			console.warn('[MCP] Failed to parse custom headers JSON, ignoring:', entry.headers);
+		}
+	}
+
+	return {
+		url: entry.url,
+		transport: detectMcpTransportFromUrl(entry.url),
+		handshakeTimeoutMs: connectionTimeoutMs,
+		requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
+		headers
+	};
+}
+
+/**
+ * Checks if a server is enabled for the current chat.
+ * Server must be available (server.enabled) AND have a per-chat override enabling it.
+ * Pure helper function - no side effects.
+ */
+function checkServerEnabled(
+	server: MCPServerSettingsEntry,
+	perChatOverrides?: McpServerOverride[]
+): boolean {
+	if (!server.enabled) {
+		return false;
+	}
+
+	if (perChatOverrides) {
+		const override = perChatOverrides.find((o) => o.serverId === server.id);
+		return override?.enabled ?? false;
+	}
+
+	return false;
+}
+
+/**
+ * Builds MCP client configuration from settings.
+ * Returns undefined if no valid servers are configured.
+ * @param config - Global settings configuration
+ * @param perChatOverrides - Optional per-chat server overrides
+ */
+export function buildMcpClientConfig(
+	config: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): MCPClientConfig | undefined {
+	const rawServers = parseMcpServerSettings(config.mcpServers);
+
+	if (!rawServers.length) {
+		return undefined;
+	}
+
+	const servers: Record<string, MCPServerConfig> = {};
+	for (const [index, entry] of rawServers.entries()) {
+		if (!checkServerEnabled(entry, perChatOverrides)) continue;
+
+		const normalized = buildServerConfig(entry);
+		if (normalized) {
+			servers[generateMcpServerId(entry.id, index)] = normalized;
+		}
+	}
+
+	if (Object.keys(servers).length === 0) {
+		return undefined;
+	}
+
+	return {
+		protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+		capabilities: DEFAULT_MCP_CONFIG.capabilities,
+		clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
+		servers
+	};
+}
 
 /**
  * Build capabilities info from server and client capabilities
@@ -612,8 +761,6 @@ export class MCPClient {
 		if (!connection) {
 			throw new MCPError(`Server "${serverName}" is not connected`, -32000);
 		}
-
-		mcpStore.incrementServerUsage(serverName);
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
 

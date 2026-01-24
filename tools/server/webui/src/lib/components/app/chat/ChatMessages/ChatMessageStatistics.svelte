@@ -4,7 +4,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
-	import { formatPerformanceTime } from '$lib/utils/formatters';
+	import { formatPerformanceTime } from '$lib/utils';
 
 	interface Props {
 		predictedTokens?: number;

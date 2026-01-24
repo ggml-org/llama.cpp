@@ -16,14 +16,13 @@
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
-	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
+	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
-	import { getImageErrorFallbackHtml } from '$lib/utils/image-error-fallback';
 
 	interface Props {
 		message?: DatabaseMessage;

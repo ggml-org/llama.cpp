@@ -7,3 +7,5 @@ export const DEFAULT_MCP_CONFIG = {
 	requestTimeoutSeconds: 300, // 5 minutes for long-running tools
 	connectionTimeoutMs: 10_000 // 10 seconds for connection establishment
 } as const;
+
+export const MCP_SERVER_ID_PREFIX = 'LlamaCpp-WebUI-MCP-Server-';

@@ -7,7 +7,7 @@
 	import { SearchableDropdownMenu } from '$lib/components/app';
 	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { getMcpServerLabel, getFaviconUrl } from '$lib/utils/mcp';
+	import { getFaviconUrl } from '$lib/utils';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -56,7 +56,7 @@
 	);
 
 	function getServerLabel(server: MCPServerSettingsEntry): string {
-		return getMcpServerLabel(server, mcpStore.getHealthCheckState(server.id));
+		return mcpStore.getServerLabel(server);
 	}
 
 	function handleDropdownOpen(open: boolean) {

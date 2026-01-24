@@ -19,44 +19,18 @@
  * @see MCPService in services/mcp.ts for protocol operations
  */
 
-import { mcpClient } from '$lib/clients/mcp.client';
+import { mcpClient, buildMcpClientConfig } from '$lib/clients/mcp.client';
 import type {
 	HealthCheckState,
 	MCPServerSettingsEntry,
-	McpServerUsageStats,
 	MCPPromptInfo,
 	GetPromptResult
 } from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
-import { buildMcpClientConfig, parseMcpServerSettings, getMcpServerLabel } from '$lib/utils/mcp';
+import { parseMcpServerSettings } from '$lib/utils';
 import { HealthCheckStatus } from '$lib/enums';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-
-/**
- * Parses MCP server usage stats from settings.
- * @param rawStats - The raw stats to parse
- * @returns MCP server usage stats or empty object if invalid
- */
-function parseMcpServerUsageStats(rawStats: unknown): McpServerUsageStats {
-	if (!rawStats) return {};
-
-	if (typeof rawStats === 'string') {
-		const trimmed = rawStats.trim();
-		if (!trimmed) return {};
-
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-				return parsed as McpServerUsageStats;
-			}
-		} catch {
-			console.warn('[MCP] Failed to parse mcpServerUsageStats JSON, ignoring value');
-		}
-	}
-
-	return {};
-}
 
 class MCPStore {
 	private _isInitializing = $state(false);
@@ -179,6 +153,21 @@ class MCPStore {
 	}
 
 	/**
+	 * Gets a display label for an MCP server.
+	 * Automatically fetches health state from store.
+	 */
+	getServerLabel(server: MCPServerSettingsEntry): string {
+		const healthState = this.getHealthCheckState(server.id);
+		if (healthState?.status === HealthCheckStatus.Success) {
+			return (
+				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
+			);
+		}
+
+		return server.url;
+	}
+
+	/**
 	 * Check if any server is still loading (idle or connecting).
 	 */
 	isAnyServerLoading(): boolean {
@@ -205,8 +194,8 @@ class MCPStore {
 
 		// Sort alphabetically by display label once all health checks are done
 		return [...servers].sort((a, b) => {
-			const labelA = getMcpServerLabel(a, this.getHealthCheckState(a.id));
-			const labelB = getMcpServerLabel(b, this.getHealthCheckState(b.id));
+			const labelA = this.getServerLabel(a);
+			const labelB = this.getServerLabel(b);
 			return labelA.localeCompare(labelB);
 		});
 	}
@@ -266,33 +255,24 @@ class MCPStore {
 	}
 
 	/**
-	 *
-	 * Server Usage Stats
-	 *
+	 * Gets enabled MCP servers for a conversation based on per-chat overrides.
+	 * Returns servers that are both globally enabled AND enabled for this chat.
 	 */
+	getEnabledServersForConversation(
+		perChatOverrides?: McpServerOverride[]
+	): MCPServerSettingsEntry[] {
+		if (!perChatOverrides?.length) {
+			return [];
+		}
 
-	/**
-	 * Get parsed usage stats for all servers
-	 */
-	getUsageStats(): McpServerUsageStats {
-		return parseMcpServerUsageStats(config().mcpServerUsageStats);
-	}
+		const allServers = this.getServers();
 
-	/**
-	 * Get usage count for a specific server
-	 */
-	getServerUsageCount(serverId: string): number {
-		const stats = this.getUsageStats();
-		return stats[serverId] || 0;
-	}
+		return allServers.filter((server) => {
+			if (!server.enabled) return false;
+			const override = perChatOverrides.find((o) => o.serverId === server.id);
 
-	/**
-	 * Increment usage count for a server
-	 */
-	incrementServerUsage(serverId: string): void {
-		const stats = this.getUsageStats();
-		stats[serverId] = (stats[serverId] || 0) + 1;
-		settingsStore.updateConfig('mcpServerUsageStats', JSON.stringify(stats));
+			return override?.enabled ?? false;
+		});
 	}
 
 	/**

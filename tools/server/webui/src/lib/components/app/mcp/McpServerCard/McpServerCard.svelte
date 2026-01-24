@@ -3,7 +3,6 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
-	import { getMcpServerLabel } from '$lib/utils/mcp';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
@@ -27,7 +26,7 @@
 	let { server, faviconUrl, enabled, onToggle, onUpdate, onDelete }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
-	let displayName = $derived(getMcpServerLabel(server, healthState));
+	let displayName = $derived(mcpStore.getServerLabel(server));
 	let isIdle = $derived(healthState.status === HealthCheckStatus.Idle);
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.Connecting);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.Success);

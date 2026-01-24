@@ -4,6 +4,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatFormInputArea, DialogConfirmation } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
 	interface Props {
 		editedContent: string;
@@ -104,7 +105,6 @@
 	async function handleFilesAdd(files: File[]) {
 		if (!onEditedUploadedFilesChange) return;
 
-		const { processFilesToChatUploaded } = await import('$lib/utils/browser-only');
 		const processed = await processFilesToChatUploaded(files);
 
 		onEditedUploadedFilesChange([...editedUploadedFiles, processed].flat());

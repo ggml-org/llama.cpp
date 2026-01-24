@@ -15,7 +15,7 @@
 	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
 	import { AGENTIC_TAGS, AGENTIC_REGEX, REASONING_TAGS } from '$lib/constants/agentic';
-	import { formatJsonPretty } from '$lib/utils/formatters';
+	import { formatJsonPretty } from '$lib/utils';
 	import type { DatabaseMessage } from '$lib/types/database';
 
 	interface Props {

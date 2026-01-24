@@ -2,11 +2,10 @@
 	import { mcpClient } from '$lib/clients/mcp.client';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl, getMcpServerLabel } from '$lib/utils/mcp';
+	import { getFaviconUrl, debounce } from '$lib/utils';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { debounce } from '$lib/utils/debounce';
 	import { SearchInput } from '$lib/components/app';
 
 	interface Props {
@@ -65,11 +64,9 @@
 
 	function getServerLabel(serverId: string): string {
 		const server = serverSettingsMap.get(serverId);
-
 		if (!server) return serverId;
 
-		const healthState = mcpStore.getHealthCheckState(serverId);
-		return getMcpServerLabel(server, healthState);
+		return mcpStore.getServerLabel(server);
 	}
 
 	$effect(() => {
