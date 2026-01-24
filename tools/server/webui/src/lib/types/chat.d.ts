@@ -6,6 +6,13 @@ export interface ChatUploadedFile {
 	file: File;
 	preview?: string;
 	textContent?: string;
+	mcpPrompt?: {
+		serverName: string;
+		promptName: string;
+		arguments?: Record<string, string>;
+	};
+	isLoading?: boolean;
+	loadError?: string;
 }
 
 export interface ChatAttachmentDisplayItem {
@@ -14,6 +21,9 @@ export interface ChatAttachmentDisplayItem {
 	size?: number;
 	preview?: string;
 	isImage: boolean;
+	isMcpPrompt?: boolean;
+	isLoading?: boolean;
+	loadError?: string;
 	uploadedFile?: ChatUploadedFile;
 	attachment?: DatabaseMessageExtra;
 	attachmentIndex?: number;

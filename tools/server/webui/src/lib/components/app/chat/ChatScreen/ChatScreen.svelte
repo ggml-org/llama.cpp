@@ -220,8 +220,9 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const result = files
-			? await parseFilesToMessageExtras(files, activeModelId ?? undefined)
+		const plainFiles = files ? $state.snapshot(files) : undefined;
+		const result = plainFiles
+			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
 			: undefined;
 
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {

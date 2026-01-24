@@ -19,7 +19,9 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type {
 	Tool,
-	ListChangedHandlers,
+	Prompt,
+	GetPromptResult,
+	ListChangedHandlers
 } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type {
@@ -152,6 +154,7 @@ export class MCPService {
 	 * Connect to a single MCP server with detailed phase tracking.
 	 * Returns connection object with client, transport, discovered tools, and connection details.
 	 * @param onPhase - Optional callback for connection phase changes
+	 * @param listChangedHandlers - Optional handlers for list changed notifications
 	 */
 	static async connect(
 		serverName: string,
@@ -159,7 +162,7 @@ export class MCPService {
 		clientInfo?: Implementation,
 		capabilities?: ClientCapabilities,
 		onPhase?: MCPPhaseCallback,
-		listChangedHandlers?: ListChangedHandlers,
+		listChangedHandlers?: ListChangedHandlers
 	): Promise<MCPConnection> {
 		const startTime = performance.now();
 		const effectiveClientInfo = clientInfo ?? DEFAULT_MCP_CONFIG.clientInfo;
@@ -296,7 +299,39 @@ export class MCPService {
 			return result.tools ?? [];
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Failed to list tools:`, error);
+
 			return [];
+		}
+	}
+
+	/**
+	 * List prompts from a connection.
+	 */
+	static async listPrompts(connection: MCPConnection): Promise<Prompt[]> {
+		try {
+			const result = await connection.client.listPrompts();
+			return result.prompts ?? [];
+		} catch (error) {
+			console.warn(`[MCPService][${connection.serverName}] Failed to list prompts:`, error);
+
+			return [];
+		}
+	}
+
+	/**
+	 * Get a specific prompt with arguments.
+	 */
+	static async getPrompt(
+		connection: MCPConnection,
+		name: string,
+		args?: Record<string, string>
+	): Promise<GetPromptResult> {
+		try {
+			return await connection.client.getPrompt({ name, arguments: args });
+		} catch (error) {
+			console.error(`[MCPService][${connection.serverName}] Failed to get prompt:`, error);
+
+			throw error;
 		}
 	}
 
@@ -368,5 +403,39 @@ export class MCPService {
 		}
 
 		return JSON.stringify(content);
+	}
+
+	/**
+	 *
+	 *
+	 * Completions Operations
+	 *
+	 *
+	 */
+
+	/**
+	 * Request completion suggestions from a server.
+	 * Used for autocompleting prompt arguments or resource URI templates.
+	 *
+	 * @param connection - The MCP connection to use
+	 * @param ref - Reference to the prompt or resource template
+	 * @param argument - The argument being completed (name and current value)
+	 * @returns Completion result with suggested values
+	 */
+	static async complete(
+		connection: MCPConnection,
+		ref: { type: 'ref/prompt'; name: string } | { type: 'ref/resource'; uri: string },
+		argument: { name: string; value: string }
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		try {
+			const result = await connection.client.complete({
+				ref,
+				argument
+			});
+			return result.completion;
+		} catch (error) {
+			console.error(`[MCPService] Failed to get completions:`, error);
+			return null;
+		}
 	}
 }

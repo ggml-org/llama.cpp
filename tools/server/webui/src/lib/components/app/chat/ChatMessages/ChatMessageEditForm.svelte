@@ -1,15 +1,9 @@
 <script lang="ts">
-	import { X, ArrowUp, Paperclip, AlertTriangle } from '@lucide/svelte';
+	import { X, AlertTriangle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/css-classes';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { MimeTypeText } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { ChatFormInputArea, DialogConfirmation } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { autoResizeTextarea, parseClipboardContent } from '$lib/utils';
 
 	interface Props {
 		editedContent: string;
@@ -21,11 +15,9 @@
 		onCancelEdit: () => void;
 		onSaveEdit: () => void;
 		onSaveEditOnly?: () => void;
-		onEditKeydown: (event: KeyboardEvent) => void;
 		onEditedContentChange: (content: string) => void;
 		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
 		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
-		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
@@ -38,24 +30,14 @@
 		onCancelEdit,
 		onSaveEdit,
 		onSaveEditOnly,
-		onEditKeydown,
 		onEditedContentChange,
 		onEditedExtrasChange,
-		onEditedUploadedFilesChange,
-		textareaElement = $bindable()
+		onEditedUploadedFilesChange
 	}: Props = $props();
 
-	let fileInputElement: HTMLInputElement | undefined = $state();
+	let inputAreaRef: ChatFormInputArea | undefined = $state(undefined);
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
-	let isRouter = $derived(isRouterMode());
-	let currentConfig = $derived(config());
-
-	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
-
-		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
-	});
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editedContent !== originalContent) return true;
@@ -77,16 +59,6 @@
 
 	let canSubmit = $derived(editedContent.trim().length > 0 || hasAttachments);
 
-	function handleFileInputChange(event: Event) {
-		const input = event.target as HTMLInputElement;
-		if (!input.files || input.files.length === 0) return;
-
-		const files = Array.from(input.files);
-
-		processNewFiles(files);
-		input.value = '';
-	}
-
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
 			event.preventDefault();
@@ -102,23 +74,6 @@
 		}
 	}
 
-	function handleRemoveExistingAttachment(index: number) {
-		if (!onEditedExtrasChange) return;
-
-		const newExtras = [...editedExtras];
-
-		newExtras.splice(index, 1);
-		onEditedExtrasChange(newExtras);
-	}
-
-	function handleRemoveUploadedFile(fileId: string) {
-		if (!onEditedUploadedFilesChange) return;
-
-		const newFiles = editedUploadedFiles.filter((f) => f.id !== fileId);
-
-		onEditedUploadedFilesChange(newFiles);
-	}
-
 	function handleSubmit() {
 		if (!canSubmit) return;
 
@@ -131,79 +86,36 @@
 		saveWithoutRegenerate = false;
 	}
 
-	async function processNewFiles(files: File[]) {
+	function handleAttachmentRemove(index: number) {
+		if (!onEditedExtrasChange) return;
+
+		const newExtras = [...editedExtras];
+		newExtras.splice(index, 1);
+		onEditedExtrasChange(newExtras);
+	}
+
+	function handleUploadedFileRemove(fileId: string) {
+		if (!onEditedUploadedFilesChange) return;
+
+		const newFiles = editedUploadedFiles.filter((f) => f.id !== fileId);
+		onEditedUploadedFilesChange(newFiles);
+	}
+
+	async function handleFilesAdd(files: File[]) {
 		if (!onEditedUploadedFilesChange) return;
 
 		const { processFilesToChatUploaded } = await import('$lib/utils/browser-only');
 		const processed = await processFilesToChatUploaded(files);
 
-		onEditedUploadedFilesChange([...editedUploadedFiles, ...processed]);
+		onEditedUploadedFilesChange([...editedUploadedFiles, processed].flat());
 	}
 
-	function handlePaste(event: ClipboardEvent) {
-		if (!event.clipboardData) return;
-
-		const files = Array.from(event.clipboardData.items)
-			.filter((item) => item.kind === 'file')
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-
-		if (files.length > 0) {
-			event.preventDefault();
-			processNewFiles(files);
-
-			return;
-		}
-
-		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
-
-		if (text.startsWith('"')) {
-			const parsed = parseClipboardContent(text);
-
-			if (parsed.textAttachments.length > 0) {
-				event.preventDefault();
-				onEditedContentChange(parsed.message);
-
-				const attachmentFiles = parsed.textAttachments.map(
-					(att) =>
-						new File([att.content], att.name, {
-							type: MimeTypeText.PLAIN
-						})
-				);
-
-				processNewFiles(attachmentFiles);
-
-				setTimeout(() => {
-					textareaElement?.focus();
-				}, 10);
-
-				return;
-			}
-		}
-
-		if (
-			text.length > 0 &&
-			pasteLongTextToFileLength > 0 &&
-			text.length > pasteLongTextToFileLength
-		) {
-			event.preventDefault();
-
-			const textFile = new File([text], 'Pasted', {
-				type: MimeTypeText.PLAIN
-			});
-
-			processNewFiles([textFile]);
-		}
+	function handleUploadedFilesChange(files: ChatUploadedFile[]) {
+		onEditedUploadedFilesChange?.(files);
 	}
 
 	$effect(() => {
-		if (textareaElement) {
-			autoResizeTextarea(textareaElement);
-		}
-	});
-
-	$effect(() => {
-		chatStore.setEditModeActive(processNewFiles);
+		chatStore.setEditModeActive(handleFilesAdd);
 
 		return () => {
 			chatStore.clearEditMode();
@@ -213,82 +125,20 @@
 
 <svelte:window onkeydown={handleGlobalKeydown} />
 
-<input
-	bind:this={fileInputElement}
-	type="file"
-	multiple
-	class="hidden"
-	onchange={handleFileInputChange}
-/>
-
-<div
-	class="{INPUT_CLASSES} w-full max-w-[80%] overflow-hidden rounded-3xl backdrop-blur-md"
-	data-slot="edit-form"
->
-	<ChatAttachmentsList
+<div class="relative w-full max-w-[80%]">
+	<ChatFormInputArea
+		bind:this={inputAreaRef}
+		value={editedContent}
 		attachments={editedExtras}
 		uploadedFiles={editedUploadedFiles}
-		readonly={false}
-		onFileRemove={(fileId) => {
-			if (fileId.startsWith('attachment-')) {
-				const index = parseInt(fileId.replace('attachment-', ''), 10);
-				if (!isNaN(index) && index >= 0 && index < editedExtras.length) {
-					handleRemoveExistingAttachment(index);
-				}
-			} else {
-				handleRemoveUploadedFile(fileId);
-			}
-		}}
-		limitToSingleRow
-		class="py-5"
-		style="scroll-padding: 1rem;"
+		placeholder="Edit your message..."
+		onValueChange={onEditedContentChange}
+		onAttachmentRemove={handleAttachmentRemove}
+		onUploadedFileRemove={handleUploadedFileRemove}
+		onUploadedFilesChange={handleUploadedFilesChange}
+		onFilesAdd={handleFilesAdd}
+		onSubmit={handleSubmit}
 	/>
-
-	<div class="relative min-h-[48px] px-5 py-3">
-		<textarea
-			bind:this={textareaElement}
-			bind:value={editedContent}
-			class="field-sizing-content max-h-80 min-h-10 w-full resize-none bg-transparent text-sm outline-none"
-			onkeydown={onEditKeydown}
-			oninput={(e) => {
-				autoResizeTextarea(e.currentTarget);
-				onEditedContentChange(e.currentTarget.value);
-			}}
-			onpaste={handlePaste}
-			placeholder="Edit your message..."
-		></textarea>
-
-		<div class="flex w-full items-center gap-3" style="container-type: inline-size">
-			<Button
-				class="h-8 w-8 shrink-0 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
-				onclick={() => fileInputElement?.click()}
-				type="button"
-				title="Add attachment"
-			>
-				<span class="sr-only">Attach files</span>
-
-				<Paperclip class="h-4 w-4" />
-			</Button>
-
-			<div class="flex-1"></div>
-
-			{#if isRouter}
-				<ModelsSelector forceForegroundText={true} useGlobalSelection={true} />
-			{/if}
-
-			<Button
-				class="h-8 w-8 shrink-0 rounded-full p-0"
-				onclick={handleSubmit}
-				disabled={!canSubmit}
-				type="button"
-				title={saveWithoutRegenerate ? 'Save changes' : 'Send and regenerate'}
-			>
-				<span class="sr-only">{saveWithoutRegenerate ? 'Save' : 'Send'}</span>
-
-				<ArrowUp class="h-5 w-5" />
-			</Button>
-		</div>
-	</div>
 </div>
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">

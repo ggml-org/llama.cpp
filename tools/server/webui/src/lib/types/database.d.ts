@@ -52,11 +52,21 @@ export interface DatabaseMessageExtraTextFile {
 	content: string;
 }
 
+export interface DatabaseMessageExtraMcpPrompt {
+	type: AttachmentType.MCP_PROMPT;
+	name: string;
+	serverName: string;
+	promptName: string;
+	content: string;
+	arguments?: Record<string, string>;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
 	| DatabaseMessageExtraPdfFile
+	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
@@ -66,8 +76,8 @@ export interface DatabaseMessage {
 	timestamp: number;
 	role: ChatRole;
 	content: string;
-	parent: string;
-	thinking: string;
+	parent: string | null;
+	thinking?: string;
 	toolCalls?: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];

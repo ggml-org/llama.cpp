@@ -11,6 +11,7 @@
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
+	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
 		class?: string;
@@ -216,8 +217,8 @@
 			return editedExtras;
 		}
 
-		const { parseFilesToMessageExtras } = await import('$lib/utils/browser-only');
-		const result = await parseFilesToMessageExtras(editedUploadedFiles);
+		const plainFiles = $state.snapshot(editedUploadedFiles);
+		const result = await parseFilesToMessageExtras(plainFiles);
 		const newExtras = result?.extras || [];
 
 		return [...editedExtras, ...newExtras];
@@ -251,7 +252,6 @@
 	/>
 {:else if message.role === MessageRole.USER}
 	<ChatMessageUser
-		bind:textareaElement
 		class={className}
 		{deletionInfo}
 		{editedContent}
@@ -264,7 +264,6 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditKeydown={handleEditKeydown}
 		onEditedContentChange={handleEditedContentChange}
 		onEditedExtrasChange={handleEditedExtrasChange}
 		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}

@@ -20,7 +20,13 @@
  */
 
 import { mcpClient } from '$lib/clients/mcp.client';
-import type { HealthCheckState, MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types';
+import type {
+	HealthCheckState,
+	MCPServerSettingsEntry,
+	McpServerUsageStats,
+	MCPPromptInfo,
+	GetPromptResult
+} from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
 import { buildMcpClientConfig, parseMcpServerSettings, getMcpServerLabel } from '$lib/utils/mcp';
 import { HealthCheckStatus } from '$lib/enums';
@@ -179,7 +185,9 @@ class MCPStore {
 		const servers = this.getServers();
 		return servers.some((s) => {
 			const state = this.getHealthCheckState(s.id);
-			return state.status === HealthCheckStatus.Idle || state.status === HealthCheckStatus.Connecting;
+			return (
+				state.status === HealthCheckStatus.Idle || state.status === HealthCheckStatus.Connecting
+			);
 		});
 	}
 
@@ -189,12 +197,12 @@ class MCPStore {
 	 */
 	getServersSorted(): MCPServerSettingsEntry[] {
 		const servers = this.getServers();
-		
+
 		// Don't sort while any server is still loading - prevents UI jumping
 		if (this.isAnyServerLoading()) {
 			return servers;
 		}
-		
+
 		// Sort alphabetically by display label once all health checks are done
 		return [...servers].sort((a, b) => {
 			const labelA = getMcpServerLabel(a, this.getHealthCheckState(a.id));
@@ -285,6 +293,38 @@ class MCPStore {
 		const stats = this.getUsageStats();
 		stats[serverId] = (stats[serverId] || 0) + 1;
 		settingsStore.updateConfig('mcpServerUsageStats', JSON.stringify(stats));
+	}
+
+	/**
+	 *
+	 * Prompts
+	 *
+	 */
+
+	/**
+	 * Check if any connected server supports prompts
+	 */
+	hasPromptsSupport(): boolean {
+		return mcpClient.hasPromptsSupport();
+	}
+
+	/**
+	 * Get all prompts from all connected servers
+	 */
+	async getAllPrompts(): Promise<MCPPromptInfo[]> {
+		return mcpClient.getAllPrompts();
+	}
+
+	/**
+	 * Get a specific prompt by name from a server.
+	 * Throws an error if the server is not found or prompt execution fails.
+	 */
+	async getPrompt(
+		serverName: string,
+		promptName: string,
+		args?: Record<string, string>
+	): Promise<GetPromptResult> {
+		return mcpClient.getPrompt(serverName, promptName, args);
 	}
 }
 

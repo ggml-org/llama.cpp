@@ -1,9 +1,23 @@
-import { FileTypeCategory } from '$lib/enums';
+import { AttachmentType, FileTypeCategory } from '$lib/enums';
 import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
 
 export interface AttachmentDisplayItemsOptions {
 	uploadedFiles?: ChatUploadedFile[];
 	attachments?: DatabaseMessageExtra[];
+}
+
+/**
+ * Check if an uploaded file is an MCP prompt
+ */
+function isMcpPromptUpload(file: ChatUploadedFile): boolean {
+	return file.type === 'mcp-prompt' && !!file.mcpPrompt;
+}
+
+/**
+ * Check if an attachment is an MCP prompt
+ */
+function isMcpPromptAttachment(attachment: DatabaseMessageExtra): boolean {
+	return attachment.type === AttachmentType.MCP_PROMPT;
 }
 
 /**
@@ -37,6 +51,9 @@ export function getAttachmentDisplayItems(
 			size: file.size,
 			preview: file.preview,
 			isImage: getUploadedFileCategory(file) === FileTypeCategory.IMAGE,
+			isMcpPrompt: isMcpPromptUpload(file),
+			isLoading: file.isLoading,
+			loadError: file.loadError,
 			uploadedFile: file,
 			textContent: file.textContent
 		});
@@ -45,12 +62,14 @@ export function getAttachmentDisplayItems(
 	// Add stored attachments (ChatMessage)
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
+		const isMcpPrompt = isMcpPromptAttachment(attachment);
 
 		items.push({
 			id: `attachment-${index}`,
 			name: attachment.name,
 			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
 			isImage,
+			isMcpPrompt,
 			attachment,
 			attachmentIndex: index,
 			textContent: 'content' in attachment ? attachment.content : undefined

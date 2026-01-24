@@ -85,7 +85,7 @@
 			/>
 		</div>
 
-		<div class={cn('overflow-y-auto', 'max-h-[10rem]')}>
+		<div class={cn('overflow-y-auto', 'max-h-[16rem]')}>
 			{@render children()}
 
 			{#if isEmpty}

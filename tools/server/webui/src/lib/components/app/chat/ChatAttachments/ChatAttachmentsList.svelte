@@ -1,9 +1,15 @@
 <script lang="ts">
-	import { ChatAttachmentThumbnailImage, ChatAttachmentThumbnailFile } from '$lib/components/app';
+	import {
+		ChatAttachmentMcpPrompt,
+		ChatAttachmentThumbnailImage,
+		ChatAttachmentThumbnailFile
+	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { DialogChatAttachmentPreview, DialogChatAttachmentsViewAll } from '$lib/components/app';
 	import { getAttachmentDisplayItems } from '$lib/utils';
+	import { AttachmentType } from '$lib/enums';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -22,6 +28,9 @@
 		limitToSingleRow?: boolean;
 		// For vision modality check
 		activeModelId?: string;
+		// For MCP prompt argument editing
+		isEditingAllowed?: boolean;
+		onMcpPromptArgumentsChange?: (fileId: string, args: Record<string, string>) => void;
 	}
 
 	let {
@@ -36,7 +45,9 @@
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
 		limitToSingleRow = false,
-		activeModelId
+		activeModelId,
+		isEditingAllowed = false,
+		onMcpPromptArgumentsChange
 	}: Props = $props();
 
 	let displayItems = $derived(getAttachmentDisplayItems({ uploadedFiles, attachments }));
@@ -124,7 +135,37 @@
 					onscroll={updateScrollButtons}
 				>
 					{#each displayItems as item (item.id)}
-						{#if item.isImage && item.preview}
+						{#if item.isMcpPrompt}
+							{@const mcpPrompt =
+								item.attachment?.type === AttachmentType.MCP_PROMPT
+									? (item.attachment as DatabaseMessageExtraMcpPrompt)
+									: item.uploadedFile?.mcpPrompt
+										? {
+												type: AttachmentType.MCP_PROMPT as const,
+												name: item.name,
+												serverName: item.uploadedFile.mcpPrompt.serverName,
+												promptName: item.uploadedFile.mcpPrompt.promptName,
+												content: item.textContent ?? '',
+												arguments: item.uploadedFile.mcpPrompt.arguments
+											}
+										: null}
+							{#if mcpPrompt}
+								<ChatAttachmentMcpPrompt
+									class="max-w-[300px] min-w-[200px] flex-shrink-0 {limitToSingleRow
+										? 'first:ml-4 last:mr-4'
+										: ''}"
+									prompt={mcpPrompt}
+									{readonly}
+									isLoading={item.isLoading}
+									loadError={item.loadError}
+									{isEditingAllowed}
+									onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+									onArgumentsChange={onMcpPromptArgumentsChange
+										? (args) => onMcpPromptArgumentsChange(item.id, args)
+										: undefined}
+								/>
+							{/if}
+						{:else if item.isImage && item.preview}
 							<ChatAttachmentThumbnailImage
 								class="flex-shrink-0 cursor-pointer {limitToSingleRow
 									? 'first:ml-4 last:mr-4'
@@ -185,7 +226,35 @@
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
 				{#each displayItems as item (item.id)}
-					{#if item.isImage && item.preview}
+					{#if item.isMcpPrompt}
+						{@const mcpPrompt =
+							item.attachment?.type === AttachmentType.MCP_PROMPT
+								? (item.attachment as DatabaseMessageExtraMcpPrompt)
+								: item.uploadedFile?.mcpPrompt
+									? {
+											type: AttachmentType.MCP_PROMPT as const,
+											name: item.name,
+											serverName: item.uploadedFile.mcpPrompt.serverName,
+											promptName: item.uploadedFile.mcpPrompt.promptName,
+											content: item.textContent ?? '',
+											arguments: item.uploadedFile.mcpPrompt.arguments
+										}
+									: null}
+						{#if mcpPrompt}
+							<ChatAttachmentMcpPrompt
+								class="max-w-[300px] min-w-[200px]"
+								prompt={mcpPrompt}
+								{readonly}
+								isLoading={item.isLoading}
+								loadError={item.loadError}
+								{isEditingAllowed}
+								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+								onArgumentsChange={onMcpPromptArgumentsChange
+									? (args) => onMcpPromptArgumentsChange(item.id, args)
+									: undefined}
+							/>
+						{/if}
+					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="cursor-pointer"
 							id={item.id}

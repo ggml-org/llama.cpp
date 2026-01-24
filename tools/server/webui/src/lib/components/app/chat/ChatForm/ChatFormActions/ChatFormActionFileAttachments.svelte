@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, MessageSquare } from '@lucide/svelte';
+	import { Plus, MessageSquare, Zap } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -11,8 +11,10 @@
 		disabled?: boolean;
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
-		onFileUpload?: (fileType?: FileTypeCategory) => void;
+		hasMcpPromptsSupport?: boolean;
+		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
+		onMcpPromptClick?: () => void;
 		onMcpServersClick?: () => void;
 	}
 
@@ -21,12 +23,19 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
+		hasMcpPromptsSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
+		onMcpPromptClick,
 		onMcpServersClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
+
+	function handleMcpPromptClick() {
+		dropdownOpen = false;
+		onMcpPromptClick?.();
+	}
 
 	function handleMcpServersClick() {
 		dropdownOpen = false;
@@ -137,7 +146,7 @@
 					>
 						<MessageSquare class="h-4 w-4" />
 
-						<span>System Prompt</span>
+						<span>System Message</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
@@ -145,6 +154,25 @@
 					<p>Add a custom system message for this conversation</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
+
+			{#if hasMcpPromptsSupport}
+				<Tooltip.Root>
+					<Tooltip.Trigger class="w-full">
+						<DropdownMenu.Item
+							class="flex cursor-pointer items-center gap-2"
+							onclick={handleMcpPromptClick}
+						>
+							<Zap class="h-4 w-4" />
+
+							<span>MCP Prompt</span>
+						</DropdownMenu.Item>
+					</Tooltip.Trigger>
+
+					<Tooltip.Content usePortal={false}>
+						<p>Insert a prompt from an MCP server</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
 
 			<DropdownMenu.Separator />
 			<Tooltip.Root>

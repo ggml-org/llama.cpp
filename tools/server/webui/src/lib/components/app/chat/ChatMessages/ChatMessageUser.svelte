@@ -24,7 +24,6 @@
 		onCancelEdit: () => void;
 		onSaveEdit: () => void;
 		onSaveEditOnly?: () => void;
-		onEditKeydown: (event: KeyboardEvent) => void;
 		onEditedContentChange: (content: string) => void;
 		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
 		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
@@ -34,7 +33,6 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
@@ -50,7 +48,6 @@
 		onCancelEdit,
 		onSaveEdit,
 		onSaveEditOnly,
-		onEditKeydown,
 		onEditedContentChange,
 		onEditedExtrasChange,
 		onEditedUploadedFilesChange,
@@ -59,8 +56,7 @@
 		onDelete,
 		onConfirmDelete,
 		onNavigateToSibling,
-		onShowDeleteDialogChange,
-		textareaElement = $bindable()
+		onShowDeleteDialogChange
 	}: Props = $props();
 
 	let isMultiline = $state(false);
@@ -99,7 +95,6 @@
 >
 	{#if isEditing}
 		<ChatMessageEditForm
-			bind:textareaElement
 			{editedContent}
 			{editedExtras}
 			{editedUploadedFiles}
@@ -109,7 +104,6 @@
 			{onCancelEdit}
 			{onSaveEdit}
 			{onSaveEditOnly}
-			{onEditKeydown}
 			{onEditedContentChange}
 			{onEditedExtrasChange}
 			{onEditedUploadedFilesChange}

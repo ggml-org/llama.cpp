@@ -4,10 +4,13 @@ import type {
 	ServerCapabilities as SDKServerCapabilities,
 	Implementation as SDKImplementation,
 	Tool,
-	CallToolResult
+	CallToolResult,
+	Prompt,
+	GetPromptResult,
+	PromptMessage
 } from '@modelcontextprotocol/sdk/types.js';
 
-export type { Tool, CallToolResult };
+export type { Tool, CallToolResult, Prompt, GetPromptResult, PromptMessage };
 export type ClientCapabilities = SDKClientCapabilities;
 export type ServerCapabilities = SDKServerCapabilities;
 export type Implementation = SDKImplementation;
@@ -62,6 +65,21 @@ export interface MCPToolInfo {
 	name: string;
 	description?: string;
 	title?: string;
+}
+
+/**
+ * Prompt information for display
+ */
+export interface MCPPromptInfo {
+	name: string;
+	description?: string;
+	title?: string;
+	serverName: string;
+	arguments?: Array<{
+		name: string;
+		description?: string;
+		required?: boolean;
+	}>;
 }
 
 /**
