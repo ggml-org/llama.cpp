@@ -405,7 +405,7 @@
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
-					onSystemPromptAdd={() => chatStore.addSystemPrompt()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={false}
 					bind:uploadedFiles
 				/>
@@ -465,7 +465,7 @@
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
-					onSystemPromptAdd={() => chatStore.addSystemPrompt()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={true}
 					bind:uploadedFiles
 				/>

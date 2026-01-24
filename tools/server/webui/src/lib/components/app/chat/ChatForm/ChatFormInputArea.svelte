@@ -39,7 +39,7 @@
 		onMcpPromptArgumentsChange?: (fileId: string, args: Record<string, string>) => void;
 		onStop?: () => void;
 		onSubmit?: () => void;
-		onSystemPromptClick?: () => void;
+		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
@@ -422,7 +422,7 @@
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
-				{onSystemPromptClick}
+				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
 			/>
 		</div>
