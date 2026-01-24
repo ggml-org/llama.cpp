@@ -1,6 +1,6 @@
 import { getJsonHeaders } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType, MessageRole } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
@@ -141,7 +141,7 @@ export class ChatService {
 			})
 			.filter((msg) => {
 				// Filter out empty system messages
-				if (msg.role === 'system') {
+				if (msg.role === MessageRole.SYSTEM) {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
 					return content.trim().length > 0;
@@ -634,7 +634,7 @@ export class ChatService {
 	): ApiChatMessageData {
 		if (!message.extra || message.extra.length === 0) {
 			return {
-				role: message.role as 'user' | 'assistant' | 'system',
+				role: message.role as MessageRole,
 				content: message.content
 			};
 		}
@@ -735,7 +735,7 @@ export class ChatService {
 		}
 
 		return {
-			role: message.role as 'user' | 'assistant' | 'system',
+			role: message.role as MessageRole,
 			content: contentParts
 		};
 	}

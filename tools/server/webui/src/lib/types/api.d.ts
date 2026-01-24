@@ -1,5 +1,5 @@
 import type { ServerModelStatus, ServerRole } from '$lib/enums';
-import type { ChatMessagePromptProgress } from './chat';
+import type { ChatMessagePromptProgress, ChatRole } from './chat';
 
 export interface ApiChatCompletionToolFunction {
 	name: string;

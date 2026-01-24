@@ -11,7 +11,8 @@ export enum ChatMessageStatsView {
 export enum MessageRole {
 	USER = 'user',
 	ASSISTANT = 'assistant',
-	SYSTEM = 'system'
+	SYSTEM = 'system',
+	TOOL = 'tool'
 }
 
 /**

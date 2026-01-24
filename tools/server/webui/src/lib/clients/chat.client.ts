@@ -20,6 +20,7 @@ import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
+import { MessageRole, MessageType } from '$lib/enums';
 
 export interface ApiProcessingState {
 	status: 'idle' | 'preparing' | 'generating';
@@ -67,9 +68,6 @@ export interface ChatStreamCallbacks {
 	) => void;
 	onError?: (error: Error) => void;
 }
-
-type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
-type ChatMessageType = 'text' | 'root';
 
 interface ChatStoreStateCallbacks {
 	setChatLoading: (convId: string, loading: boolean) => void;
@@ -157,7 +155,7 @@ export class ChatClient {
 
 	private getMessageByIdWithRole(
 		messageId: string,
-		expectedRole?: ChatRole
+		expectedRole?: MessageRole
 	): { message: DatabaseMessage; index: number } | null {
 		const index = conversationsStore.findMessageIndex(messageId);
 		if (index === -1) return null;
@@ -178,9 +176,9 @@ export class ChatClient {
 	 * @returns The created message or null if failed
 	 */
 	async addMessage(
-		role: ChatRole,
+		role: MessageRole,
 		content: string,
-		type: ChatMessageType = 'text',
+		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
 		extras?: DatabaseMessageExtra[]
 	): Promise<DatabaseMessage | null> {
@@ -261,7 +259,7 @@ export class ChatClient {
 			}
 
 			const existingSystemMessage = allMessages.find(
-				(m) => m.role === 'system' && m.parent === rootId
+				(m) => m.role === MessageRole.SYSTEM && m.parent === rootId
 			);
 
 			if (existingSystemMessage) {
@@ -326,7 +324,7 @@ export class ChatClient {
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const systemMessage = allMessages.find((m) => m.id === messageId);
-			if (!systemMessage || systemMessage.role !== 'system') return false;
+			if (!systemMessage || systemMessage.role !== MessageRole.SYSTEM) return false;
 
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			if (!rootMessage) return false;
@@ -385,7 +383,7 @@ export class ChatClient {
 			{
 				convId: activeConv.id,
 				type: 'text',
-				role: 'assistant',
+				role: MessageRole.ASSISTANT,
 				content: '',
 				timestamp: Date.now(),
 				toolCalls: '',
@@ -443,9 +441,9 @@ export class ChatClient {
 			}
 
 			const userMessage = await this.addMessage(
-				'user',
+				MessageRole.USER,
 				content,
-				'text',
+				MessageType.TEXT,
 				parentIdForUserMessage ?? '-1',
 				extras
 			);
@@ -768,7 +766,7 @@ export class ChatClient {
 
 		const lastMessage = messages[messages.length - 1];
 
-		if (lastMessage?.role === 'assistant') {
+		if (lastMessage?.role === MessageRole.ASSISTANT) {
 			try {
 				const updateData: { content: string; timings?: ChatMessageTimings } = {
 					content: streamingState.response
@@ -818,7 +816,7 @@ export class ChatClient {
 		if (!activeConv) return;
 		if (this.isChatLoading(activeConv.id)) await this.stopGeneration();
 
-		const result = this.getMessageByIdWithRole(messageId, 'user');
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) return;
 		const { message: messageToUpdate, index: messageIndex } = result;
 		const originalContent = messageToUpdate.content;
@@ -886,7 +884,7 @@ export class ChatClient {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoading(activeConv.id)) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
 		const { index: messageIndex } = result;
 
@@ -929,7 +927,7 @@ export class ChatClient {
 			const idx = conversationsStore.findMessageIndex(messageId);
 			if (idx === -1) return;
 			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'assistant') return;
+			if (msg.role !== MessageRole.ASSISTANT) return;
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const parentMessage = allMessages.find((m) => m.id === msg.parent);
@@ -1006,10 +1004,10 @@ export class ChatClient {
 			assistantMessages = 0;
 		const messageTypes: string[] = [];
 		for (const msg of messagesToDelete) {
-			if (msg.role === 'user') {
+			if (msg.role === MessageRole.USER) {
 				userMessages++;
 				if (!messageTypes.includes('user message')) messageTypes.push('user message');
-			} else if (msg.role === 'assistant') {
+			} else if (msg.role === MessageRole.ASSISTANT) {
 				assistantMessages++;
 				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
 			}
@@ -1075,7 +1073,7 @@ export class ChatClient {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoading(activeConv.id)) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
 		const { message: msg, index: idx } = result;
 
@@ -1097,7 +1095,7 @@ export class ChatClient {
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
 				...conversationContext,
-				{ role: 'assistant' as const, content: originalContent }
+				{ role: MessageRole.ASSISTANT as const, content: originalContent }
 			];
 
 			let appendedContent = '';
@@ -1252,7 +1250,7 @@ export class ChatClient {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoading(activeConv.id)) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
 		const { message: msg, index: idx } = result;
 
@@ -1301,7 +1299,7 @@ export class ChatClient {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
 
-		const result = this.getMessageByIdWithRole(messageId, 'user');
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) return;
 		const { message: msg, index: idx } = result;
 
@@ -1347,10 +1345,10 @@ export class ChatClient {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoading(activeConv.id)) return;
 
-		let result = this.getMessageByIdWithRole(messageId, 'user');
+		let result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 
 		if (!result) {
-			result = this.getMessageByIdWithRole(messageId, 'system');
+			result = this.getMessageByIdWithRole(messageId, MessageRole.SYSTEM);
 		}
 
 		if (!result) return;
@@ -1360,7 +1358,7 @@ export class ChatClient {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 			const isFirstUserMessage =
-				msg.role === 'user' && rootMessage && msg.parent === rootMessage.id;
+				msg.role === MessageRole.USER && rootMessage && msg.parent === rootMessage.id;
 
 			const parentId = msg.parent || rootMessage?.id;
 			if (!parentId) return;
@@ -1397,7 +1395,7 @@ export class ChatClient {
 			}
 			await conversationsStore.refreshActiveMessages();
 
-			if (msg.role === 'user') {
+			if (msg.role === MessageRole.USER) {
 				await this.generateResponseForMessage(newMessage.id);
 			}
 		} catch (error) {
@@ -1426,7 +1424,7 @@ export class ChatClient {
 					convId: activeConv.id,
 					type: 'text',
 					timestamp: Date.now(),
-					role: 'assistant',
+					role: MessageRole.ASSISTANT,
 					content: '',
 					toolCalls: '',
 					children: [],
@@ -1566,7 +1564,7 @@ export class ChatClient {
 	restoreProcessingStateFromMessages(messages: DatabaseMessage[], conversationId: string): void {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
-			if (message.role === 'assistant' && message.timings) {
+			if (message.role === MessageRole.ASSISTANT && message.timings) {
 				const restoredState = this.parseTimingData({
 					prompt_n: message.timings.prompt_n || 0,
 					prompt_ms: message.timings.prompt_ms,
@@ -1592,7 +1590,7 @@ export class ChatClient {
 	getConversationModel(messages: DatabaseMessage[]): string | null {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
-			if (message.role === 'assistant' && message.model) {
+			if (message.role === MessageRole.ASSISTANT && message.model) {
 				return message.model;
 			}
 		}

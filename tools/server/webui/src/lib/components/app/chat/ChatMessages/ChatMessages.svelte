@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
+	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -45,7 +46,7 @@
 		// Filter out system messages if showSystemMessage is false
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
-			: messages.filter((msg) => msg.type !== 'system');
+			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
 		return filteredMessages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
