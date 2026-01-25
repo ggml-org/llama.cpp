@@ -94,6 +94,27 @@ Status: Draft (2026-01-25)
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=108.95 ± 1.10 tok/s`, `tg256=65.89 ± 2.05 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut16_2fb48487.txt`)
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-bench ...`: `pp128=101.21 ± 1.19 tok/s`, `tg256=68.98 ± 2.18 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut_c_2fb48487.txt`)
 
+### 2026-01-25 (xctrace: llama-bench, lut16 vs lut_c; build `2fb48487`)
+- Commands: 见 `IFAIRY_ARM_3W_LUT_V2_XCTRACE_CPU_COUNTERS.md`
+- Traces:
+  - CPU Counters: `tmp/xctrace/lut16_llama_bench_cpu_counters.trace`, `tmp/xctrace/lut_c_llama_bench_cpu_counters.trace`
+  - Time Profiler: `tmp/xctrace/lut16_llama_bench_time_profiler.trace`, `tmp/xctrace/lut_c_llama_bench_time_profiler.trace`
+- CPU Counters summary（schema=`counters-profile`；filter：`process==llama-bench` 且 `state==Running`）：
+  - lut16: `samples=90424`, `ARM_STALL=59300330463`, `CORE_ACTIVE_CYCLE=166258363154`, `ARM_L1D_CACHE_LMISS_RD=468689982`, `ARM_L1D_CACHE_RD=120092438462`, `L1D_TLB_MISS=172670353`
+    - `stall_ratio=0.356676`, `l1d_miss_rate=0.003903`, `tlb_miss_per_active=0.001039`
+  - lut_c: `samples=91377`, `ARM_STALL=76019849911`, `CORE_ACTIVE_CYCLE=198922166699`, `ARM_L1D_CACHE_LMISS_RD=658355729`, `ARM_L1D_CACHE_RD=143056368346`, `L1D_TLB_MISS=240202220`
+    - `stall_ratio=0.382159`, `l1d_miss_rate=0.004602`, `tlb_miss_per_active=0.001208`
+- Time Profiler leaf（Top 10）：
+  - lut16: `tmp/xctrace/lut16_llama_bench_time_profile.leaf.txt`
+    - `ggml_ifairy_lut_qgemm_lut16` (63.27%, 44485ms)
+    - `ggml_vec_dot_f16` (14.27%, 10031ms)
+    - `ggml_graph_compute_thread` (10.25%, 7207ms)
+  - lut_c: `tmp/xctrace/lut_c_llama_bench_time_profile.leaf.txt`
+    - `ggml_ifairy_lut_qgemm_lut16` (59.88%, 45996ms)
+    - `ggml_graph_compute_thread` (15.37%, 11805ms)
+    - `ggml_vec_dot_f16` (12.56%, 9645ms)
+- 下一步主攻热点（按 leaf 占比）：`ggml_ifairy_lut_qgemm_lut16`（接入 `lut_c` kernel 后应成为主要对比对象）
+
 ---
 
 ## A/B 结果（Raw Logs）

@@ -1,87 +1,101 @@
-# iFairy ARM 3W LUT (V2) — xctrace CPU Counters 方案（`test.tracetemplate`）
+# iFairy ARM 3W LUT (V2) — xctrace CPU Counters / Time Profiler 测试方案
 
-Status: Draft (2026-01-24)
+Status: Draft (2026-01-25)
 
-本文件记录一套可复用的 **xctrace CPU Counters** 测试方案，用于在 V2 重构与 `lut_c/` 接入阶段对性能瓶颈做定量分析。
+目标：
+- 用一套可复现的 xctrace 流程对 LUT 的端到端与 microbench 做性能归因
+- 统一记录：Time Profiler（热点符号）+ CPU Counters（stall/cache/tlb 指标）
+- 支持对比：`GGML_IFAIRY_LUT_IMPL=lut16` vs `GGML_IFAIRY_LUT_IMPL=lut_c`（或后续新 backend）
 
-参考（仅作方法说明，不修改）：
-- `IFAIRY_VEC_DOT_DECODE_BOUNDS_XCTRACE.md`
+注意：
+- 本方案使用本地模板 `test.tracetemplate`（不入库），其指标选择参考 `IFAIRY_VEC_DOT_DECODE_BOUNDS_XCTRACE.md`。
+- 模板中已选择 counters：
+  - `ARM_STALL`
+  - `CORE_ACTIVE_CYCLE`
+  - `ARM_L1D_CACHE_LMISS_RD`
+  - `ARM_L1D_CACHE_RD`
+  - `L1D_TLB_MISS`
 
 ---
 
-## 1) 模板与指标
+## 1) 环境 / 前置
 
-本 repo 根目录包含自定义 counters 模板：
-- `test.tracetemplate`
+- Xcode / Instruments 可用（`xcrun xctrace`）
+- 已编译：
+  - baseline: `build-rel`
+  - LUT build: `build-rel-lut`（`-DGGML_IFAIRY_ARM_LUT=ON`）
 
-模板中选择的指标：
-- `ARM_STALL`
-- `CORE_ACTIVE_CYCLE`
-- `ARM_L1D_CACHE_LMISS_RD`
-- `ARM_L1D_CACHE_RD`
-- `L1D_TLB_MISS`
+推荐命令（Release CPU）：
+- `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release`
+- `cmake --build build-rel`
+- `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
+- `cmake --build build-rel-lut`
 
-建议在分析时至少关注这些派生比值（用于快速判断瓶颈方向）：
+---
+
+## 2) 统一 workload（端到端）
+
+统一用 `--repetitions 3`：
+- `./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+- `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+
+对比 backend：
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 ...`
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ...`
+
+---
+
+## 3) 采样：CPU Counters（自定义 template）
+
+### 3.1 record
+
+样例（lut16）：
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 xcrun xctrace record --template test.tracetemplate --output tmp/xctrace/lut16_llama_bench_cpu_counters.trace --time-limit 30s --no-prompt --launch -- ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+
+样例（lut_c）：
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c xcrun xctrace record --template test.tracetemplate --output tmp/xctrace/lut_c_llama_bench_cpu_counters.trace --time-limit 30s --no-prompt --launch -- ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+
+说明：
+- `--time-limit 30s` 是上限；llama-bench 退出后 Instruments 仍可能等待到 time limit（TOC 会显示 `Time limit reached`）。
+- counters 的 event 顺序请以 `--toc` 输出为准：
+  - `xcrun xctrace export --toc --input tmp/xctrace/lut16_llama_bench_cpu_counters.trace`
+
+### 3.2 export（建议用 counters-profile）
+
+导出 `counters-profile`（每条采样窗口的 counters；便于直接求和）：
+- `xcrun xctrace export --input tmp/xctrace/lut16_llama_bench_cpu_counters.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"counters-profile\"]' > tmp/xctrace/lut16_llama_bench_counters_profile.xml`
+- `xcrun xctrace export --input tmp/xctrace/lut_c_llama_bench_cpu_counters.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"counters-profile\"]' > tmp/xctrace/lut_c_llama_bench_counters_profile.xml`
+
+### 3.3 summary（脚本）
+
+用脚本对 `process==llama-bench` + `state==Running` 的 samples 求和：
+- `python3 scripts/ifairy_xctrace_counters_profile_summary.py --process-name llama-bench --events ARM_STALL CORE_ACTIVE_CYCLE ARM_L1D_CACHE_LMISS_RD ARM_L1D_CACHE_RD L1D_TLB_MISS < tmp/xctrace/lut16_llama_bench_counters_profile.xml`
+
+建议派生指标（可在 V2_STATUS 中记录）：
 - `stall_ratio = ARM_STALL / CORE_ACTIVE_CYCLE`
 - `l1d_miss_rate = ARM_L1D_CACHE_LMISS_RD / ARM_L1D_CACHE_RD`
 - `tlb_miss_per_active = L1D_TLB_MISS / CORE_ACTIVE_CYCLE`
 
-> 说明：不同 macOS / 不同模板下，export 表里 counter 的顺序与字段名可能不同；以实际导出为准。
-
 ---
 
-## 2) 采集命令（推荐）
+## 4) 采样：Time Profiler（热点符号）
 
-### 2.1 目录准备
+### 4.1 record
 
-```bash
-mkdir -p tmp/xctrace
-```
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 xcrun xctrace record --template \"Time Profiler\" --output tmp/xctrace/lut16_llama_bench_time_profiler.trace --time-limit 30s --no-prompt --launch -- ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c xcrun xctrace record --template \"Time Profiler\" --output tmp/xctrace/lut_c_llama_bench_time_profiler.trace --time-limit 30s --no-prompt --launch -- ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
 
-### 2.2 microbench（更稳定，适合做内核迭代）
+### 4.2 export + leaf summary
 
-以 decode-style（N==1）为例：
+导出 `time-profile`（包含符号名；优先于 `time-sample`）：
+- `xcrun xctrace export --input tmp/xctrace/lut16_llama_bench_time_profiler.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]' > tmp/xctrace/lut16_llama_bench_time_profile.xml`
+- `xcrun xctrace export --input tmp/xctrace/lut_c_llama_bench_time_profiler.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]' > tmp/xctrace/lut_c_llama_bench_time_profile.xml`
 
-```bash
-xcrun xctrace record --template test.tracetemplate \
-  --output tmp/xctrace/ifairy_lut_microbench_cpu_counters.trace \
-  --time-limit 10s --no-prompt \
-  --launch -- ./build-rel-lut/bin/ifairy-microbench \
-    --m 256 --k 4096 --iters 1000000000 --warmup 0 --seed 1 \
-  > /dev/null
-```
+leaf（Top-N）：
+- `python3 scripts/ifairy_xctrace_leaf.py --top 60 < tmp/xctrace/lut16_llama_bench_time_profile.xml > tmp/xctrace/lut16_llama_bench_time_profile.leaf.txt`
+- `python3 scripts/ifairy_xctrace_leaf.py --top 60 < tmp/xctrace/lut_c_llama_bench_time_profile.xml > tmp/xctrace/lut_c_llama_bench_time_profile.leaf.txt`
 
-### 2.3 llama-bench（端到端）
+建议在 V2_STATUS 中记录：
+- Top 10 leaf 符号（% + ms）
+- 备注“下一步主攻热点”（通常是最大的 leaf）
 
-```bash
-GGML_IFAIRY_LUT=1 xcrun xctrace record --template test.tracetemplate \
-  --output tmp/xctrace/ifairy_lut_llama_bench_cpu_counters.trace \
-  --time-limit 30s --no-prompt \
-  --launch -- ./build-rel-lut/bin/llama-bench \
-    -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
-    --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3 \
-  > /dev/null
-```
-
----
-
-## 3) 导出与统计（最小工作流）
-
-导出 counters 表：
-
-```bash
-xcrun xctrace export \
-  --input tmp/xctrace/ifairy_lut_microbench_cpu_counters.trace \
-  --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"kdebug-counters-with-time-sample\"]' \
-  > tmp/xctrace/ifairy_lut_microbench_cpu_counters.xml
-```
-
-然后按 `IFAIRY_VEC_DOT_DECODE_BOUNDS_XCTRACE.md` 的方法：
-- 从导出的 `pmc-events` 序列中取相邻采样点增量
-- 只在 `Running` 且 core 不迁移时计入（避免污染）
-- 计算 `stall_ratio / l1d_miss_rate / tlb_miss_per_active`
-
-建议把每次采样的：
-- 完整命令（含 env）
-- 关键比值与原始计数
-追加记录到：`IFAIRY_ARM_3W_LUT_V2_STATUS.md`
