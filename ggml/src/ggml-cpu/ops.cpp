@@ -8461,6 +8461,11 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 float tile_max;
                 ggml_vec_max_f32(KV_TILE_SZ, &tile_max, kq_row);
 
+                if (tile_max == -INFINITY) {
+                    skip[tq] = true;
+                    continue;
+                }
+
                 const float Mold = M[tq];
                 const float Mnew = fmaxf(Mold, tile_max);
 
@@ -8471,10 +8476,6 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
                 M[tq] = Mnew;
 
-                if (tile_max == -INFINITY) {
-                    skip[tq] = true;
-                    continue;
-                }
 
                 S[tq] += ggml_vec_soft_max_f32(KV_TILE_SZ, kq_row, kq_row, Mnew);
             }
