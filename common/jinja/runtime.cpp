@@ -117,9 +117,9 @@ value binary_expression::execute_impl(context & ctx) {
     value right_val = right->execute(ctx);
     JJ_DEBUG("Executing binary expression %s '%s' %s", left_val->type().c_str(), op.value.c_str(), right_val->type().c_str());
     if (op.value == "==") {
-        return mk_val<value_bool>(value_compare(left_val, right_val, value_compare_op::eq));
+        return mk_val<value_bool>(*left_val == *right_val);
     } else if (op.value == "!=") {
-        return mk_val<value_bool>(!value_compare(left_val, right_val, value_compare_op::eq));
+        return mk_val<value_bool>(!(*left_val == *right_val));
     }
 
     auto workaround_concat_null_with_str = [&](value & res) -> bool {
@@ -220,7 +220,7 @@ value binary_expression::execute_impl(context & ctx) {
         auto & arr = right_val->as_array();
         bool member = false;
         for (const auto & item : arr) {
-            if (value_compare(left_val, item, value_compare_op::eq)) {
+            if (*left_val == *item) {
                 member = true;
                 break;
             }
@@ -455,8 +455,8 @@ value for_statement::execute_impl(context & ctx) {
         auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
             auto tuple = mk_val<value_array>();
-            tuple->push_back(std::get<1>(p));
-            tuple->push_back(std::get<2>(p));
+            tuple->push_back(p.first);
+            tuple->push_back(p.second);
             items.push_back(tuple);
         }
         if (ctx.is_get_stats) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "string.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,11 +19,6 @@ namespace jinja {
 struct value_t;
 using value = std::shared_ptr<value_t>;
 
-struct value_array_t;
-using value_array = std::shared_ptr<value_array_t>;
-
-struct value_object_t;
-using value_object = std::shared_ptr<value_object_t>;
 
 // Helper to check the type of a value
 template<typename T>
@@ -109,44 +105,9 @@ struct value_t {
     int64_t val_int;
     double val_flt;
     string val_str;
-    bool val_bool;
 
     std::vector<value> val_arr;
-
-    struct map {
-        std::map<std::string, value> unordered;
-        std::vector<std::tuple<std::string, value, value>> ordered;
-        std::string make_key_index(const value & key) {
-            if (!key->is_hashable()) {
-                throw std::runtime_error("Object key of unhashable type: " + key->type());
-            }
-            return key->unique_hash();
-        }
-        bool has_key_index(const std::string & key_idx) {
-            return unordered.find(key_idx) != unordered.end();
-        }
-        bool has_key(const value & key) {
-            return has_key_index(make_key_index(key));
-        }
-        void insert(const value & key, const value & val) {
-            const std::string key_idx = make_key_index(key);
-            bool replaced = false;
-            if (has_key_index(key_idx)) {
-                // if key exists, replace value in ordered list instead of appending
-                for (auto & ikv : ordered) {
-                    if (std::get<0>(ikv) == key_idx) {
-                        std::get<2>(ikv) = val;
-                        replaced = true;
-                        break;
-                    }
-                }
-            }
-            unordered[key_idx] = val;
-            if (!replaced) {
-                ordered.push_back({key_idx, key, val});
-            }
-        }
-    } val_obj;
+    std::vector<std::pair<value, value>> val_obj;
 
     func_handler val_func;
 
@@ -168,7 +129,7 @@ struct value_t {
     virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
     virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
     virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
-    virtual const std::vector<std::tuple<std::string, value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
+    virtual const std::vector<std::pair<value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
     virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
     virtual bool is_none() const { return false; }
     virtual bool is_undefined() const { return false; }
@@ -177,6 +138,7 @@ struct value_t {
     }
 
     virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual void insert(const value &, const value &) { throw std::runtime_error(type() + " is not an object value"); }
     virtual value & at(const value &, value &) { throw std::runtime_error(type() + " is not an object value"); }
     virtual value & at(const value &) { throw std::runtime_error(type() + " is not an object value"); }
     virtual value & at(const std::string &, value &) { throw std::runtime_error(type() + " is not an object value"); }
@@ -185,8 +147,52 @@ struct value_t {
     virtual value & at(int64_t) { throw std::runtime_error(type() + " is not an array value"); }
 
     virtual std::string as_repr() const { return as_string().str(); }
+    virtual bool is_numeric() const { return false; }
     virtual bool is_hashable() const { return false; }
-    virtual std::string unique_hash() const { return type() + "." + as_repr(); }
+    virtual bool is_immutable() const { return true; }
+    virtual size_t unique_hash() const noexcept = 0;
+    // TODO: C++20 <=> operator
+    // NOTE: We are treating == as equivalent (for normal comparisons) and != as strict nonequal (for strict (is) comparisons)
+    virtual bool operator==(const value_t & other) const { return equivalent(other); }
+    virtual bool operator!=(const value_t & other) const { return nonequal(other); }
+protected:
+    virtual bool equivalent(const value_t &) const = 0;
+    virtual bool nonequal(const value_t & other) const { return !equivalent(other); }
+};
+
+//
+// utils
+//
+
+const func_builtins & global_builtins();
+
+std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
+
+std::string value_to_string_repr(const value & val);
+
+struct not_implemented_exception : public std::runtime_error {
+    not_implemented_exception(const std::string & msg) : std::runtime_error("NotImplemented: " + msg) {}
+};
+
+struct value_hasher {
+    size_t operator()(const value & val) const noexcept {
+        return val->unique_hash();
+    }
+};
+
+struct value_equivalence {
+    bool operator()(const value & lhs, const value & rhs) const {
+        return *lhs == *rhs;
+    }
+    bool operator()(const std::pair<value, value> & lhs, const std::pair<value, value> & rhs) const {
+        return *(lhs.first) == *(rhs.first) && *(lhs.second) == *(rhs.second);
+    }
+};
+
+struct value_equality {
+    bool operator()(const value & lhs, const value & rhs) const {
+        return !(*lhs != *rhs);
+    }
 };
 
 //
@@ -194,26 +200,50 @@ struct value_t {
 //
 
 struct value_int_t : public value_t {
-    value_int_t(int64_t v) { val_int = v; }
+    value_int_t(int64_t v) {
+        val_int = v;
+        val_flt = static_cast<double>(v);
+        if (static_cast<int64_t>(val_flt) != v) {
+            val_flt = v < 0 ? -INFINITY : INFINITY;
+        }
+    }
     virtual std::string type() const override { return "Integer"; }
     virtual int64_t as_int() const override { return val_int; }
-    virtual double as_float() const override { return static_cast<double>(val_int); }
+    virtual double as_float() const override { return val_flt; }
     virtual string as_string() const override { return std::to_string(val_int); }
     virtual bool as_bool() const override {
         return val_int != 0;
     }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const override { return "Int." + as_string().str(); }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size(),
+            as_repr().data(), as_repr().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
+    }
+    virtual bool nonequal(const value_t & other) const override {
+        return !(type() == other.type() && val_int == other.val_int);
+    }
 };
 using value_int = std::shared_ptr<value_int_t>;
 
 
 struct value_float_t : public value_t {
-    value_float_t(double v) { val_flt = v; }
+    value val;
+    value_float_t(double v) {
+        val_flt = v;
+        val_int = std::isfinite(v) ? static_cast<int64_t>(v) : 0;
+        val = mk_val<value_int>(val_int);
+    }
     virtual std::string type() const override { return "Float"; }
     virtual double as_float() const override { return val_flt; }
-    virtual int64_t as_int() const override { return static_cast<int64_t>(val_flt); }
+    virtual int64_t as_int() const override { return val_int; }
     virtual string as_string() const override {
         std::string out = std::to_string(val_flt);
         out.erase(out.find_last_not_of('0') + 1, std::string::npos); // remove trailing zeros
@@ -224,12 +254,24 @@ struct value_float_t : public value_t {
         return val_flt != 0.0;
     }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const override {
-        if (std::trunc(val_flt) == val_flt) {
-            return "Int." + std::to_string(as_int());
+    virtual size_t unique_hash() const noexcept override {
+        if (static_cast<double>(val_int) == val_flt) {
+            return val->unique_hash();
+        } else {
+            return hash_bytes(
+                type().data(), type().size(),
+                as_repr().data(), as_repr().size()
+            );
         }
-        return type() + "." + std::to_string(val_flt);
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
+    }
+    virtual bool nonequal(const value_t & other) const override {
+        return !(type() == other.type() && val_flt == other.val_flt);
     }
 };
 using value_float = std::shared_ptr<value_float_t>;
@@ -253,23 +295,47 @@ struct value_string_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const override { return type() + "." + as_string().str(); }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size(),
+            as_string().str().data(), as_string().str().size()
+        );
+    }
     void mark_input() {
         val_str.mark_input();
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return type() == other.type() && val_str.str() == other.val_str.str();
     }
 };
 using value_string = std::shared_ptr<value_string_t>;
 
 
 struct value_bool_t : public value_t {
-    value_bool_t(bool v) { val_bool = v; }
+    value val;
+    value_bool_t(bool v) {
+        val_int = static_cast<int64_t>(v);
+        val_flt = static_cast<double>(v);
+        val = mk_val<value_int>(val_int);
+    }
     virtual std::string type() const override { return "Boolean"; }
-    virtual int64_t as_int() const override { return static_cast<int64_t>(val_bool); }
-    virtual bool as_bool() const override { return val_bool; }
-    virtual string as_string() const override { return std::string(val_bool ? "True" : "False"); }
+    virtual int64_t as_int() const override { return val_int; }
+    virtual bool as_bool() const override { return val_int; }
+    virtual string as_string() const override { return std::string(val_int ? "True" : "False"); }
     virtual const func_builtins & get_builtins() const override;
+    virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const override { return "Int." + std::to_string(as_int()); }
+    virtual size_t unique_hash() const noexcept override {
+        return val->unique_hash();
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
+    }
+    virtual bool nonequal(const value_t & other) const override {
+        return !(type() == other.type() && val_int == other.val_int);
+    }
 };
 using value_bool = std::shared_ptr<value_bool_t>;
 
@@ -279,13 +345,34 @@ struct value_array_t : public value_t {
     value_array_t(value & v) {
         val_arr = v->val_arr;
     }
+    value_array_t(std::vector<value> && arr) {
+        val_arr = arr;
+    }
     value_array_t(const std::vector<value> & arr) {
         val_arr = arr;
     }
-    void reverse() { std::reverse(val_arr.begin(), val_arr.end()); }
-    void push_back(const value & val) { val_arr.push_back(val); }
-    void push_back(value && val) { val_arr.push_back(std::move(val)); }
+    void reverse() {
+        if (is_immutable()) {
+            throw std::runtime_error("Attempting to modify immutable type");
+        }
+        std::reverse(val_arr.begin(), val_arr.end());
+    }
+    void push_back(const value & val) {
+        if (is_immutable()) {
+            throw std::runtime_error("Attempting to modify immutable type");
+        }
+        val_arr.push_back(val);
+    }
+    void push_back(value && val) {
+        if (is_immutable()) {
+            throw std::runtime_error("Attempting to modify immutable type");
+        }
+        val_arr.push_back(std::move(val));
+    }
     value pop_at(int64_t index) {
+        if (is_immutable()) {
+            throw std::runtime_error("Attempting to modify immutable type");
+        }
         if (index < 0) {
             index = static_cast<int64_t>(val_arr.size()) + index;
         }
@@ -297,17 +384,21 @@ struct value_array_t : public value_t {
         return val;
     }
     virtual std::string type() const override { return "Array"; }
+    virtual bool is_immutable() const override { return false; }
     virtual const std::vector<value> & as_array() const override { return val_arr; }
     virtual string as_string() const override {
+        const bool immutable = is_immutable();
         std::ostringstream ss;
-        ss << "[";
+        ss << (immutable ? "(" : "[");
         for (size_t i = 0; i < val_arr.size(); i++) {
             if (i > 0) ss << ", ";
             value val = val_arr.at(i);
-            // FIXME: Flip quotes and/or escape string depending on content
-            ss << (is_val<value_string>(val) ? "'" + val->as_string().str() + "'" : val->as_repr());
+            ss << value_to_string_repr(val);
         }
-        ss << "]";
+        if (immutable && val_arr.size() == 1) {
+            ss << ",";
+        }
+        ss << (immutable ? ")" : "]");
         return ss.str();
     }
     virtual bool as_bool() const override {
@@ -334,70 +425,119 @@ struct value_array_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
         if (std::all_of(val_arr.begin(), val_arr.end(), [&](auto & val) -> bool {
-            return !val->is_undefined() && !is_val<value_array>(val) && !is_val<value_object>(val);
+            return !val->is_undefined() && val->is_immutable();
         })) {
             return true;
         }
         return false;
     }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size(),
+            as_repr().data(), as_repr().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return type() == other.type() && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.val_arr.begin(), value_equivalence());
+    }
 };
+using value_array = std::shared_ptr<value_array_t>;
+
+
+struct value_tuple_t : public value_array_t {
+    value_tuple_t(value & v) {
+        val_arr = v->val_arr;
+    }
+    value_tuple_t(std::vector<value> && arr) {
+        val_arr = arr;
+    }
+    value_tuple_t(const std::vector<value> & arr) {
+        val_arr = arr;
+    }
+    virtual std::string type() const override { return "Tuple"; }
+    virtual bool is_immutable() const override { return true; }
+};
+using value_tuple = std::shared_ptr<value_tuple_t>;
 
 
 struct value_object_t : public value_t {
+    std::unordered_map<value, value, value_hasher, value_equivalence> unordered;
     bool has_builtins = true; // context and loop objects do not have builtins
     value_object_t() = default;
     value_object_t(value & v) {
         val_obj = v->val_obj;
+        for (const auto & pair : val_obj) {
+            unordered[pair.first] = pair.second;
+        }
     }
     value_object_t(const std::map<value, value> & obj) {
         for (const auto & pair : obj) {
-            val_obj.insert(pair.first, pair.second);
+            insert(pair.first, pair.second);
         }
     }
     value_object_t(const std::vector<std::pair<value, value>> & obj) {
         for (const auto & pair : obj) {
-            val_obj.insert(pair.first, pair.second);
+            insert(pair.first, pair.second);
         }
     }
-    void insert(const value & key, const value & val) {
-        val_obj.insert(key, val);
-    }
     void insert(const std::string & key, const value & val) {
-        val_obj.insert(mk_val<value_string>(key), val);
+        insert(mk_val<value_string>(key), val);
     }
     virtual std::string type() const override { return "Object"; }
-    virtual const std::vector<std::tuple<std::string, value, value>> & as_ordered_object() const override { return val_obj.ordered; }
+    virtual bool is_immutable() const override { return false; }
+    virtual const std::vector<std::pair<value, value>> & as_ordered_object() const override { return val_obj; }
     virtual string as_string() const override {
         std::ostringstream ss;
         ss << "{";
-        for (size_t i = 0; i < val_obj.ordered.size(); i++) {
+        for (size_t i = 0; i < val_obj.size(); i++) {
             if (i > 0) ss << ", ";
-            auto & [idx, key, val] = val_obj.ordered.at(i);
-            // FIXME: Flip quotes and/or escape string depending on content
-            ss << (is_val<value_string>(key) ? "'" + key->as_string().str() + "'" : key->as_repr()) << ": " << (is_val<value_string>(val) ? "'" + val->as_string().str() + "'" : val->as_repr());
+            auto & [key, val] = val_obj.at(i);
+            ss << value_to_string_repr(key) << ": " << value_to_string_repr(val);
         }
         ss << "}";
         return ss.str();
     }
     virtual bool as_bool() const override {
-        return !val_obj.unordered.empty();
+        return !unordered.empty();
     }
     virtual bool has_key(const value & key) override {
-        return val_obj.has_key(key);
+        if (!key->is_immutable() || !key->is_hashable()) {
+            throw std::runtime_error("Object key of unhashable type: " + key->type());
+        }
+        return unordered.find(key) != unordered.end();
+    }
+    virtual void insert(const value & key, const value & val) override {
+        bool replaced = false;
+        if (is_immutable()) {
+            throw std::runtime_error("Attempting to modify immutable type");
+        }
+        if (has_key(key)) {
+            // if key exists, replace value in ordered list instead of appending
+            for (auto & pair : val_obj) {
+                if (*(pair.first) == *key) {
+                    pair.second = val;
+                    replaced = true;
+                    break;
+                }
+            }
+        }
+        unordered[key] = val;
+        if (!replaced) {
+            val_obj.push_back({key, val});
+        }
     }
     virtual value & at(const value & key, value & default_val) override {
-        const std::string key_idx = val_obj.make_key_index(key);
-        if (!val_obj.has_key_index(key_idx)) {
+        if (!has_key(key)) {
             return default_val;
         }
-        return val_obj.unordered.at(key_idx);
+        return unordered.at(key);
     }
     virtual value & at(const value & key) override {
-        const std::string key_idx = val_obj.make_key_index(key);
-        if (!val_obj.has_key_index(key_idx)) {
+        if (!has_key(key)) {
             throw std::runtime_error("Key '" + key->as_string().str() + "' not found in value of type " + type());
         }
-        return val_obj.unordered.at(key_idx);
+        return unordered.at(key);
     }
     virtual value & at(const std::string & key, value & default_val) override {
         value key_val = mk_val<value_string>(key);
@@ -409,18 +549,29 @@ struct value_object_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
-            if (std::all_of(val_obj.ordered.begin(), val_obj.ordered.end(), [&](auto ikv) -> bool {
-                const auto & val = std::get<2>(ikv);
-                return !val->is_undefined() && !is_val<value_array>(val) && !is_val<value_object>(val);
+            if (std::all_of(val_obj.begin(), val_obj.end(), [&](auto & pair) -> bool {
+                const auto & val = pair.second;
+                return !val->is_undefined() && val->is_immutable();
             })) {
                 return true;
             }
             return false;
     }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size(),
+            as_repr().data(), as_repr().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return type() == other.type() && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.val_obj.begin(), value_equivalence());
+    }
 };
+using value_object = std::shared_ptr<value_object_t>;
 
 //
-// null and undefined types
+// none and undefined types
 //
 
 struct value_none_t : public value_t {
@@ -431,6 +582,15 @@ struct value_none_t : public value_t {
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return type() == other.type();
+    }
 };
 using value_none = std::shared_ptr<value_none_t>;
 
@@ -443,6 +603,15 @@ struct value_undefined_t : public value_t {
     virtual bool as_bool() const override { return false; }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        return is_undefined() == other.is_undefined();
+    }
 };
 using value_undefined = std::shared_ptr<value_undefined_t>;
 
@@ -525,6 +694,16 @@ struct value_func_t : public value_t {
     virtual std::string type() const override { return "Function"; }
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
     virtual bool is_hashable() const override { return true; }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            as_repr().data(), as_repr().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        const value_func_t & other_val = static_cast<const value_func_t &>(other);
+        return type() == other.type() && val_func.target_type() == other.val_func.target_type() && val_func.target<value(const func_args &)>() == other.val_func.target<value(const func_args &)>() && typeid(*this) == typeid(other) && arg0 == other_val.arg0;
+    }
 };
 using value_func = std::shared_ptr<value_func_t>;
 
@@ -536,19 +715,20 @@ struct value_kwarg_t : public value_t {
     virtual std::string type() const override { return "KwArg"; }
     virtual std::string as_repr() const override { return type(); }
     virtual bool is_hashable() const override { return true; }
-    virtual std::string unique_hash() const override { return type() + "." + key + ":" + val->as_repr(); }
+    virtual size_t unique_hash() const noexcept override {
+        return hash_bytes(
+            type().data(), type().size(),
+            key.data(), key.size(),
+            val->as_repr().data(), val->as_repr().size()
+        );
+    }
+protected:
+    virtual bool equivalent(const value_t & other) const override {
+        const value_kwarg_t & other_val = static_cast<const value_kwarg_t &>(other);
+        return type() == other.type() && typeid(*this) == typeid(other) && key == other_val.key && val == other_val.val;
+    }
 };
 using value_kwarg = std::shared_ptr<value_kwarg_t>;
-
-
-// utils
-
-const func_builtins & global_builtins();
-std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
-
-struct not_implemented_exception : public std::runtime_error {
-    not_implemented_exception(const std::string & msg) : std::runtime_error("NotImplemented: " + msg) {}
-};
 
 
 } // namespace jinja

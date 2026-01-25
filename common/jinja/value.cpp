@@ -741,6 +741,7 @@ const func_builtins & value_array_t::get_builtins() const {
             args.ensure_count(1, 4);
             args.ensure_vals<value_array, value_int, value_int, value_int>(true, true, false, false);
 
+            auto val  = args.get_pos(0);
             auto arg0 = args.get_pos(1);
             auto arg1 = args.get_pos(2, mk_val<value_undefined>());
             auto arg2 = args.get_pos(3, mk_val<value_undefined>());
@@ -762,10 +763,8 @@ const func_builtins & value_array_t::get_builtins() const {
             if (step == 0) {
                 throw raised_exception("slice step cannot be zero");
             }
-            auto arr = slice(args.get_pos(0)->as_array(), start, stop, step);
-            auto res = mk_val<value_array>();
-            res->val_arr = std::move(arr);
-            return res;
+            auto arr = slice(val->as_array(), start, stop, step);
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
         {"selectattr", selectattr<false>},
         {"select", selectattr<false>},
@@ -818,6 +817,7 @@ const func_builtins & value_array_t::get_builtins() const {
             if (!is_val<value_kwarg>(args.get_args().at(1))) {
                 throw not_implemented_exception("map: filter-mapping not implemented");
             }
+            value val       = args.get_pos(0);
             value attribute = args.get_kwarg_or_pos("attribute", 1);
             const bool attr_is_int = is_val<value_int>(attribute);
             if (!is_val<value_string>(attribute) && !attr_is_int) {
@@ -826,7 +826,7 @@ const func_builtins & value_array_t::get_builtins() const {
             const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
             value default_val = args.get_kwarg("default", mk_val<value_undefined>());
             auto out = mk_val<value_array>();
-            auto arr = args.get_pos(0)->as_array();
+            auto arr = val->as_array();
             for (const auto & item : arr) {
                 value attr_val;
                 if (attr_is_int) {
@@ -836,7 +836,7 @@ const func_builtins & value_array_t::get_builtins() const {
                 }
                 out->push_back(attr_val);
             }
-            return out;
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(out->as_array())) : out;
         }},
         {"append", [](const func_args & args) -> value {
             args.ensure_count(2);
@@ -863,6 +863,7 @@ const func_builtins & value_array_t::get_builtins() const {
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("sort: first argument must be an array");
             }
+            value val         = args.get_pos(0);
             value val_reverse = args.get_kwarg_or_pos("reverse",        1);
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 2);
             value attribute   = args.get_kwarg_or_pos("attribute",      3);
@@ -871,7 +872,7 @@ const func_builtins & value_array_t::get_builtins() const {
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool attr_is_int = is_val<value_int>(attribute);
             const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
-            std::vector<value> arr = cast_val<value_array>(args.get_pos(0))->as_array(); // copy
+            std::vector<value> arr = val->as_array(); // copy
             std::sort(arr.begin(), arr.end(),[&](const value & a, const value & b) {
                 value val_a = a;
                 value val_b = b;
@@ -888,13 +889,14 @@ const func_builtins & value_array_t::get_builtins() const {
                 }
                 return value_compare(val_a, val_b, reverse ? value_compare_op::gt : value_compare_op::lt);
             });
-            return mk_val<value_array>(arr);
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
         {"reverse", [](const func_args & args) -> value {
             args.ensure_vals<value_array>();
-            std::vector<value> arr = cast_val<value_array>(args.get_pos(0))->as_array(); // copy
+            value val = args.get_pos(0);
+            std::vector<value> arr = val->as_array(); // copy
             std::reverse(arr.begin(), arr.end());
-            return mk_val<value_array>(arr);
+            return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
         {"unique", [](const func_args &) -> value {
             throw not_implemented_exception("Array unique builtin not implemented");
@@ -933,7 +935,7 @@ const func_builtins & value_object_t::get_builtins() const {
             const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
-                result->push_back(std::get<1>(pair));
+                result->push_back(pair.first);
             }
             return result;
         }},
@@ -942,7 +944,7 @@ const func_builtins & value_object_t::get_builtins() const {
             const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
-                result->push_back(std::get<2>(pair));
+                result->push_back(pair.second);
             }
             return result;
         }},
@@ -952,8 +954,8 @@ const func_builtins & value_object_t::get_builtins() const {
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 auto item = mk_val<value_array>();
-                item->push_back(std::get<1>(pair));
-                item->push_back(std::get<2>(pair));
+                item->push_back(pair.first);
+                item->push_back(pair.second);
                 result->push_back(std::move(item));
             }
             return result;
@@ -983,11 +985,11 @@ const func_builtins & value_object_t::get_builtins() const {
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
             auto result = mk_val<value_object>(val_input); // copy
-            std::sort(result->val_obj.ordered.begin(), result->val_obj.ordered.end(), [&](const auto & a, const auto & b) {
+            std::sort(result->val_obj.begin(), result->val_obj.end(), [&](const auto & a, const auto & b) {
                 if (by_value) {
-                    return value_compare(std::get<2>(a), std::get<2>(b), reverse ? value_compare_op::gt : value_compare_op::lt);
+                    return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
                 } else {
-                    return value_compare(std::get<1>(a), std::get<1>(b), reverse ? value_compare_op::gt : value_compare_op::lt);
+                    return value_compare(a.first, b.first, reverse ? value_compare_op::gt : value_compare_op::lt);
                 }
             });
             return result;
@@ -1193,9 +1195,9 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
             size_t i = 0;
             for (const auto & pair : obj) {
                 oss << indent_str() << (indent > 0 ? std::string(indent, ' ') : "");
-                value_to_json_internal(oss, mk_val<value_string>(std::get<1>(pair)->as_string().str()), curr_lvl + 1, indent, item_sep, key_sep);
+                value_to_json_internal(oss, mk_val<value_string>(pair.first->as_string().str()), curr_lvl + 1, indent, item_sep, key_sep);
                 oss << key_sep;
-                value_to_json_internal(oss, std::get<2>(pair), curr_lvl + 1, indent, item_sep, key_sep);
+                value_to_json_internal(oss, pair.second, curr_lvl + 1, indent, item_sep, key_sep);
                 if (i < obj.size() - 1) {
                     oss << item_sep;
                 }
@@ -1215,6 +1217,20 @@ std::string value_to_json(const value & val, int indent, const std::string_view 
     value_to_json_internal(oss, val, 0, indent, item_sep, key_sep);
     JJ_DEBUG("value_to_json: result=%s", oss.str().c_str());
     return oss.str();
+}
+
+std::string value_to_string_repr(const value & val) {
+    if (is_val<value_string>(val)) {
+        const std::string val_str = val->as_string().str();
+
+        if (val_str.find('\'') != std::string::npos) {
+            return value_to_json(val);
+        } else {
+            return "'" + val_str + "'";
+        }
+    } else {
+        return val->as_repr();
+    }
 }
 
 } // namespace jinja

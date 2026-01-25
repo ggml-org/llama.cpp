@@ -71,7 +71,7 @@ struct context {
         // inherit variables (for example, when entering a new scope)
         auto & pvar = parent.env->as_ordered_object();
         for (const auto & pair : pvar) {
-            set_val(std::get<1>(pair), std::get<2>(pair));
+            set_val(pair.first, pair.second);
         }
         current_time = parent.current_time;
         is_get_stats = parent.is_get_stats;
@@ -344,9 +344,19 @@ struct array_literal : public expression {
     }
 };
 
-struct tuple_literal : public array_literal {
-    explicit tuple_literal(statements && val) : array_literal(std::move(val)) {}
+struct tuple_literal : public expression {
+    statements val;
+    explicit tuple_literal(statements && val) : val(std::move(val)) {
+        for (const auto& item : this->val) chk_type<expression>(item);
+    }
     std::string type() const override { return "TupleLiteral"; }
+    value execute_impl(context & ctx) override {
+        auto arr = mk_val<value_array>();
+        for (const auto & item_stmt : val) {
+            arr->push_back(item_stmt->execute(ctx));
+        }
+        return mk_val<value_tuple>(std::move(arr->as_array()));
+    }
 };
 
 struct object_literal : public expression {
