@@ -2763,10 +2763,7 @@ static std::array<uint32_t, 2> fa_rows_cols(FaCodePath path, uint32_t hsk, uint3
         if (small_rows) {
             return {scalar_flash_attention_num_small_rows, scalar_flash_attention_Bc};
         } else {
-            if ((ggml_is_quantized(type) && (hsk >= 256 || hsv >= 256)) || hsk >= 512 || hsv >= 512) {
-                return {16, 32};
-            }
-            return {16, 64};
+            return {coopmat1_flash_attention_num_large_rows, scalar_flash_attention_Bc};
         }
     }
 
