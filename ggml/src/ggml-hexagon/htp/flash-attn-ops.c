@@ -317,17 +317,19 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
 
+            const bool is_q_fp32 = (q->type == HTP_TYPE_F32);
+
             // Process in blocks of 32 (VLEN_FP32)
-            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 == 4, "FLASH_ATTN_BLOCK_SIZE changed, fix HVX_Vector_x4 usage");
+            static_assert(FLASH_ATTN_BLOCK_SIZE / VLEN_FP32 <= 4, "FLASH_ATTN_BLOCK_SIZE changed, fix HVX_Vector_x4 usage");
             HVX_Vector_x4 scores_x4;
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
-                float __attribute__((aligned(VLEN))) scores_arr[FLASH_ATTN_BLOCK_SIZE];
+                float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
                 for (int j = 0; j < VLEN_FP32; ++j) {
                     const uint32_t cur_ic = ic + j;
                     const uint8_t * k_ptr = k_base + cur_ic * size_k_row_padded;
-                    if (q->type == HTP_TYPE_F32) {
+                    if (is_q_fp32) {
                         hvx_dot_f32_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
                     } else {
                         hvx_dot_f16_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
@@ -403,7 +405,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 float s_val;
                 const uint8_t * k_ptr = k_base + ic * size_k_row_padded;
 
-                if (q->type == HTP_TYPE_F32) {
+                if (is_q_fp32) {
                     hvx_dot_f32_f16_aa(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
                 } else {
                     hvx_dot_f16_f16_aa(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
