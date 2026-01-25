@@ -52,3 +52,11 @@ Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/la
 
 - Use `eval tok/s` only, and always include the full command + env.
 - Record results in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` (or link to raw logs/TSV paths).
+
+## Current V2 core path (lut16)
+
+- LUT layout: 16 entries × 4 channels × int8 per group (`k_ifairy_lut_group_bytes==64`)
+- Weight layout: packed 16-row tiles (`struct ifairy_lut_wtile_16`), cached in `tensor->extra->packed_w`
+- Kernel entrypoints:
+  - `ggml_ifairy_lut_preprocess_ex_lut16()` (build per-column LUT tables)
+  - `ggml_ifairy_lut_qgemm_lut16()` (mul_mat core; consumes packed tiles)

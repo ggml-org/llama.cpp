@@ -1,6 +1,6 @@
 # iFairy ARM 3W LUT (V2) — 状态 / 性能记录
 
-Status: Draft (2026-01-24)
+Status: Draft (2026-01-25)
 
 本文件用于替代旧的 `IFAIRY_ARM_3W_LUT_STATUS.md` 的后续增量记录（旧文件不再修改）。
 
@@ -36,6 +36,10 @@ Status: Draft (2026-01-24)
 - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=45.42`
 - `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=170151.2`
 
+### lut16（当前 V2 核心路径）
+- microbench（GGML_IFAIRY_ARM_LUT=ON）:
+  - `./build-rel-lut/bin/ifairy-microbench` (lut16 N==1, m=256 k=4096): `ns/iter=42004.8`
+
 ---
 
 ## 变更记录（Changelog）
@@ -56,6 +60,15 @@ Status: Draft (2026-01-24)
   - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=634.91`
   - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=58.49`
   - `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=179699.4`
+
+### 2026-01-25 (working tree)
+- Correctness:
+  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel-lut/bin/test-ifairy`: PASS
+- microbench（GGML_IFAIRY_ARM_LUT=ON）:
+  - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=605.49`
+  - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=44.38`
+  - `./build-rel-lut/bin/ifairy-microbench` (lut16 N==1, m=256 k=4096): `ns/iter=42004.8`
 
 ---
 
