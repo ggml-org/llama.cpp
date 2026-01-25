@@ -3771,8 +3771,8 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
 // The optimized gemm and gemv kernels are used for large matrices without batch.
 // tensor is the quantized weights matrix.
 inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    int64_t threshold_ne0 = 32;
-    int64_t threshold_ne1 = 32;
+    int64_t threshold_ne0 = 512;
+    int64_t threshold_ne1 = 512;
     if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
          backend_ctx->adreno_cl_compiler_version.type != DX) {
         threshold_ne0 = 128;
@@ -8154,7 +8154,7 @@ static void ggml_cl_mul_mat_kq_kqv_adreno(ggml_backend_t backend, const ggml_ten
 }
 
 static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
     GGML_ASSERT(src1);
@@ -8262,7 +8262,7 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     size_t local_work_size[3] = {1, 1, 1};
     size_t global_work_size[3] = {1, 1, 1};
 
-    if(N == 1){
+    if (N == 1) {
         kernel = backend_ctx->CL_mul_mat_vec_q8_0_f32;
 
         int r2 = 1;
@@ -8293,9 +8293,7 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         global_work_size[0] = ((M + wavesize - 1) / wavesize) * wavesize;
         global_work_size[1] = 4; // reduce factor
         global_work_size[2] = 1;
-
-    } else{
-
+    } else {
         cl_ulong offsetd = extrad->offset + dst->view_offs;
         cl_mem              B_image1d_trans = nullptr;
         // for B transpose
@@ -8384,7 +8382,6 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         local_work_size[2] = 1;
     }
 
-
     // enqueue kernel with profiling
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
@@ -8395,8 +8392,7 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     CL_CHECK(clReleaseMemObject(S_image1d));
     CL_CHECK(clReleaseMemObject(D_sub_buffer));
     CL_CHECK(clReleaseMemObject(D_image1d));
-
-    return;
+#endif
 }
 
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
