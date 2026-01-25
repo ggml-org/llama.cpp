@@ -2035,9 +2035,10 @@ private:
                     GGML_ABORT("not supported by multimodal");
                 }
 
-                struct common_speculative_params params_spec;
-                params_spec.n_draft   = n_draft_max;
-                params_spec.p_min     = slot.task->params.speculative.p_min;
+                struct common_speculative_params params_spec = {
+                    /*.params_spec.n_draft =*/ n_draft_max,
+                    /*.params_spec.p_min   =*/ slot.task->params.speculative.p_min,
+                };
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
@@ -2814,7 +2815,6 @@ private:
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
-
         }
 
         SRV_DBG("%s", "run slots completed\n");
