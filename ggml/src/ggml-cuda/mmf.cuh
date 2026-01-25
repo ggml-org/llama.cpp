@@ -9,6 +9,14 @@ using namespace ggml_cuda_mma;
 #define MMF_ROWS_PER_BLOCK 32
 #define MMF_ROWS_PER_BLOCK_CDNA 64
 
+static __forceinline__ int64_t get_max_block_size(int cc) {
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        return 512;
+    } else {
+        return 256;
+    }
+}
+
 struct mmf_ids_data {
     const int32_t * ids_src_compact = nullptr;
     const int32_t * ids_dst_compact = nullptr;
@@ -621,7 +629,7 @@ void mul_mat_f_cuda(
 
     int64_t nwarps_best     = 1;
     int64_t niter_best      = (ncols_x + warp_size*2 - 1) / (warp_size*2);
-    int64_t max_block_size  = 256;
+    int64_t max_block_size  = get_max_block_size(cc);
     for (int64_t nwarps = 2; nwarps <= max_block_size/warp_size; nwarps++) {
         const int64_t niter = (ncols_x + nwarps*warp_size*2 - 1) / (nwarps*warp_size*2);
         if (niter < niter_best) {

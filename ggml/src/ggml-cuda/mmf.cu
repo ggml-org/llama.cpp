@@ -2,7 +2,7 @@
 #include "mmf.cuh"
 #include "mmid.cuh"
 
-static int get_mmf_rows_per_block(const int cc) {
+static __forceinline__ int get_mmf_rows_per_block(const int cc) {
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         return MMF_ROWS_PER_BLOCK_CDNA;
     } else {
