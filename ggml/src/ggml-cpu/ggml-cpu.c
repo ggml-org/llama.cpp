@@ -457,9 +457,16 @@ typedef pthread_mutex_t    ggml_mutex_t;
 
 // Threadpool def
 #ifdef GGML_IFAIRY_ARM_LUT
+enum ggml_ifairy_lut_impl {
+    GGML_IFAIRY_LUT_IMPL_AUTO  = 0,
+    GGML_IFAIRY_LUT_IMPL_LUT16 = 1,
+    GGML_IFAIRY_LUT_IMPL_LUT_C = 2,
+};
+
 struct ggml_ifairy_lut_threadpool_config {
-    bool dbg;
-    bool lut_enabled;
+    bool                      dbg;
+    bool                      lut_enabled;
+    enum ggml_ifairy_lut_impl impl;
 };
 #endif
 
@@ -601,6 +608,18 @@ static void ggml_ifairy_lut_threadpool_config_update(struct ggml_threadpool * th
 
     const char * enabled_env = getenv("GGML_IFAIRY_LUT");
     cfg.lut_enabled          = !(enabled_env && strcmp(enabled_env, "0") == 0);
+
+    cfg.impl              = GGML_IFAIRY_LUT_IMPL_AUTO;
+    const char * impl_env = getenv("GGML_IFAIRY_LUT_IMPL");
+    if (impl_env && impl_env[0] != '\0' && strcmp(impl_env, "0") != 0 && strcmp(impl_env, "auto") != 0) {
+        if (strcmp(impl_env, "lut16") == 0) {
+            cfg.impl = GGML_IFAIRY_LUT_IMPL_LUT16;
+        } else if (strcmp(impl_env, "lut_c") == 0) {
+            cfg.impl = GGML_IFAIRY_LUT_IMPL_LUT_C;
+        } else if (cfg.dbg) {
+            GGML_LOG_WARN("ifairy_lut: unknown GGML_IFAIRY_LUT_IMPL=%s (expected auto|lut16|lut_c)\n", impl_env);
+        }
+    }
 
     threadpool->ifairy_lut_cfg = cfg;
 }
@@ -1374,10 +1393,16 @@ void ggml_compute_forward_mul_mat(
                 const float * act_f32            = (const float *) src1->data;
                 const int64_t act_f32_col_stride = (int64_t) (nb11 / sizeof(float));
 
+                void (*quantize_act)(const float * GGML_RESTRICT, void * GGML_RESTRICT, int64_t) =
+                    quantize_row_ifairy_q16;
+                if (cfg->impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                    quantize_act = quantize_row_ifairy_q16_lut_c;
+                }
+
                 if (N >= nth) {
                     // Shard by columns.
                     for (int64_t c = ith; c < N; c += nth) {
-                        quantize_row_ifairy_q16(act_f32 + c * act_f32_col_stride, act_q + c * blocks_per_col, K);
+                        quantize_act(act_f32 + c * act_f32_col_stride, act_q + c * blocks_per_col, K);
                     }
                 } else {
                     // Decode-like: N is small (often 1). Shard each column by K-block ranges to keep all threads busy.
@@ -1388,7 +1413,7 @@ void ggml_compute_forward_mul_mat(
                         for (int64_t c = 0; c < N; ++c) {
                             const float * x = act_f32 + c * act_f32_col_stride + ib0 * QK_K;
                             void *        y = act_q + c * blocks_per_col + ib0;
-                            quantize_row_ifairy_q16(x, y, k_part);
+                            quantize_act(x, y, k_part);
                         }
                     }
                 }
@@ -3314,6 +3339,7 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
 #ifdef GGML_IFAIRY_ARM_LUT
         threadpool->ifairy_lut_cfg.dbg         = false;
         threadpool->ifairy_lut_cfg.lut_enabled = true;
+        threadpool->ifairy_lut_cfg.impl        = GGML_IFAIRY_LUT_IMPL_AUTO;
 #endif
     }
 

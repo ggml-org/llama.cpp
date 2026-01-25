@@ -1101,6 +1101,75 @@ static void quantize_ifairy_backend_act_q16(std::vector<block_ifairy_q16> & act_
     }
 }
 
+static void quantize_ifairy_backend_act_q16_lut_c(std::vector<block_ifairy_q16> & act_q16,
+                                                  const std::vector<float> &      act_f32,
+                                                  int64_t                         N,
+                                                  int64_t                         K) {
+    const int64_t blocks     = K / QK_K;
+    const float   k_scale_q8 = 42.6f;
+
+    act_q16.assign((size_t) N * (size_t) blocks, block_ifairy_q16{});
+
+    for (int64_t c = 0; c < N; ++c) {
+        const float * col = act_f32.data() + (size_t) c * (size_t) K;
+
+        for (int64_t b = 0; b < blocks; ++b) {
+            const float * blk = col + (size_t) b * (size_t) QK_K;
+
+            float max_real = 1e-5f;
+            float max_imag = 1e-5f;
+            for (int j = 0; j < QK_K; ++j) {
+                const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (blk + j))[0];
+                const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (blk + j))[1];
+
+                const float xr = GGML_BF16_TO_FP32(xr_bf16);
+                const float xi = GGML_BF16_TO_FP32(xi_bf16);
+
+                max_real = fmaxf(max_real, fabsf(xr));
+                max_imag = fmaxf(max_imag, fabsf(xi));
+            }
+
+            const float scale_real     = max_real / k_scale_q8;
+            const float scale_imag     = max_imag / k_scale_q8;
+            const float inv_scale_real = 1.0f / scale_real;
+            const float inv_scale_imag = 1.0f / scale_imag;
+
+            block_ifairy_q16 & out = act_q16[(size_t) c * (size_t) blocks + (size_t) b];
+            out.d_real             = GGML_FP32_TO_FP16(scale_real);
+            out.d_imag             = GGML_FP32_TO_FP16(scale_imag);
+
+            int8_t * xr_out = (int8_t *) out.x_real;
+            int8_t * xi_out = (int8_t *) out.x_imag;
+
+            for (int j = 0; j < QK_K; ++j) {
+                const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (blk + j))[0];
+                const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (blk + j))[1];
+
+                const float xr = GGML_BF16_TO_FP32(xr_bf16);
+                const float xi = GGML_BF16_TO_FP32(xi_bf16);
+
+                int vr = (int) lrintf(xr * inv_scale_real);
+                int vi = (int) lrintf(xi * inv_scale_imag);
+
+                if (vr > 42) {
+                    vr = 42;
+                } else if (vr < -42) {
+                    vr = -42;
+                }
+
+                if (vi > 42) {
+                    vi = 42;
+                } else if (vi < -42) {
+                    vi = -42;
+                }
+
+                xr_out[j] = (int8_t) vr;
+                xi_out[j] = (int8_t) vi;
+            }
+        }
+    }
+}
+
 static bool test_ifairy_lut_backend_smoke() {
 #ifndef GGML_IFAIRY_ARM_LUT
     printf("\n=== Test 5: iFairy LUT backend smoke (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
@@ -1163,6 +1232,45 @@ static bool test_ifairy_lut_backend_f32_vs_q16() {
     }
     if (out_f32.size() != out_q16.size()) {
         fprintf(stderr, "Size mismatch (F32 vs Q16): %zu vs %zu\n", out_f32.size(), out_q16.size());
+        return false;
+    }
+    return compare_u32_arrays(out_q16.data(), out_f32.data(), out_f32.size());
+#endif
+}
+
+static bool test_ifairy_lut_backend_lut_c_f32_vs_q16() {
+#ifndef GGML_IFAIRY_ARM_LUT
+    printf("\n=== Test 5.2: iFairy LUT backend lut_c F32 vs Q16 (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+    return true;
+#else
+    printf("\n=== Test 5.2: iFairy LUT backend lut_c F32 vs Q16 ===\n");
+
+    scoped_env_var env_impl("GGML_IFAIRY_LUT_IMPL");
+    env_impl.set("lut_c");
+
+    const int64_t M = 8;
+    const int64_t N = 2;
+    const int64_t K = 2 * QK_K;
+
+    std::vector<float>            act_f32;
+    std::vector<block_ifairy_q16> act_q16;
+    fill_ifairy_backend_act_f32(act_f32, N, K);
+    quantize_ifairy_backend_act_q16_lut_c(act_q16, act_f32, N, K);
+
+    std::vector<uint32_t> out_f32;
+    std::vector<uint32_t> out_q16;
+    if (!run_ifairy_backend_mul_mat_shape(out_f32, M, N, K, GGML_TYPE_F32, act_f32.data(),
+                                          act_f32.size() * sizeof(float),
+                                          /*lut_env*/ "1")) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat_shape(out_q16, M, N, K, GGML_TYPE_IFAIRY_Q16, act_q16.data(),
+                                          act_q16.size() * sizeof(block_ifairy_q16),
+                                          /*lut_env*/ "1")) {
+        return false;
+    }
+    if (out_f32.size() != out_q16.size()) {
+        fprintf(stderr, "Size mismatch (lut_c F32 vs Q16): %zu vs %zu\n", out_f32.size(), out_q16.size());
         return false;
     }
     return compare_u32_arrays(out_q16.data(), out_f32.data(), out_f32.size());
@@ -1316,6 +1424,11 @@ int main(int argc, char ** argv) {
 
         if (!test_ifairy_lut_backend_f32_vs_q16()) {
             fprintf(stderr, "Test 5.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_backend_lut_c_f32_vs_q16()) {
+            fprintf(stderr, "Test 5.2 FAILED\n");
             num_failed++;
         }
 
