@@ -253,14 +253,6 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
-struct common_speculative_config {
-    common_speculative_type type;
-    std::map<std::string, std::string> config; // map of incubative options (not yet in common_params)
-
-    common_speculative_config(common_speculative_type t,
-            const std::map<std::string, std::string>& c = {}) : type(t), config(c) {}
-};
-
 struct common_params_speculative {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
@@ -284,10 +276,10 @@ struct common_params_speculative {
     // draftless:
 
     common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
-    uint16_t spec_ngram_size_n = 12; // ngram size for lookup
-    uint16_t spec_ngram_size_m = 48; // mgram size for speculative tokens
-
-    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
+    uint16_t spec_ngram_size_n     = 12; // ngram size for lookup
+    uint16_t spec_ngram_size_m     = 48; // mgram size for speculative tokens
+    uint16_t spec_ngram_check_rate =  1; // check rate for ngram lookup
+    uint16_t spec_ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT

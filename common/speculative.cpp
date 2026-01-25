@@ -36,6 +36,14 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
+struct common_speculative_config {
+    common_speculative_type type;
+    common_params_speculative params;
+
+    common_speculative_config(common_speculative_type t,
+            const common_params_speculative & p = common_params_speculative{}) : type(t), params(p) {}
+};
+
 // state of an implementation of speculative decoding
 //
 // each implementation has a unique type and a state that is implementation-specific
@@ -208,67 +216,23 @@ struct common_speculative {
     common_speculative_state * curr_impl = nullptr; // current implementation in use (for stats)
 };
 
-static common_ngram_map get_common_ngram_map(const common_speculative_config & config, uint16_t size_ngram, uint16_t size_mgram) {
-    uint16_t size_key   = size_ngram;
-    uint16_t size_value = size_mgram;
-    bool     key_only   = false;
-    uint16_t check_rate = 2;
-    uint16_t min_hits   = 1;
-    const std::map<std::string, std::string> & cfg = config.config;
-    if (cfg.find("size_ngram") != cfg.end()) {
-        size_key = std::stoi(cfg.at("size_ngram"));
-        if (size_key < 1 || size_key > 1024) {
-            throw std::invalid_argument("size_ngram must be between 1 and 1024");
-        }
-    }
-    if (cfg.find("size_mgram") != cfg.end()) {
-        size_value = std::stoi(cfg.at("size_mgram"));
-        if (size_value < 1 || size_value > 1024) {
-            throw std::invalid_argument("size_mgram must be between 1 and 1024");
-        }
-    }
-    if (cfg.find("key_only") != cfg.end()) {
-        key_only = (cfg.at("key_only") == "true");
-    }
-    if (cfg.find("check_rate") != cfg.end()) {
-        check_rate = std::stoi(cfg.at("check_rate"));
-        if (check_rate < 1 || check_rate > 1024) {
-            throw std::invalid_argument("check_rate must be between 1 and 1024");
-        }
-    }
-    if (cfg.find("min_hits") != cfg.end()) {
-        min_hits = std::stoi(cfg.at("min_hits"));
-        if (min_hits < 1 || min_hits > 1024) {
-            throw std::invalid_argument("min_hits must be between 1 and 1024");
-        }
-    }
+static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
+    uint16_t size_key   = config.params.spec_ngram_size_n;
+    uint16_t size_value = config.params.spec_ngram_size_m;
+    bool     key_only   = (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+    uint16_t check_rate = config.params.spec_ngram_check_rate;
+    uint16_t min_hits   = config.params.spec_ngram_min_hits;
     return common_ngram_map(size_key, size_value, key_only, check_rate, min_hits);
 }
 
 static struct common_speculative_state_ngram_cache create_state_ngram_cache(
         const std::string & path_static, const std::string & path_dynamic,
         const common_speculative_config & config) {
-    uint16_t n_draft = 8;
+    uint16_t n_draft = 8; // TODO get from config?
 
+    // TODO bool param in common/common.h to set save_static/save_dynamic?
     bool save_static = false;
     bool save_dynamic = false;
-
-    const std::map<std::string, std::string> & cfg = config.config;
-
-    if (cfg.find("n_draft") != cfg.end()) {
-        n_draft = std::stoi(cfg.at("n_draft"));
-        if (n_draft < 1 || n_draft > 1024) {
-            throw std::invalid_argument("ngram-cache: n_draft must be between 1 and 1024");
-        }
-    }
-
-    if (cfg.find("save_static") != cfg.end()) {
-        save_static = (cfg.at("save_static") == "true");
-    }
-
-    if (cfg.find("save_dynamic") != cfg.end()) {
-        save_dynamic = (cfg.at("save_dynamic") == "true");
-    }
 
     common_speculative_state_ngram_cache state(config.type, path_static, path_dynamic, n_draft, save_static, save_dynamic);
 
@@ -324,9 +288,42 @@ struct common_speculative * common_speculative_init(
         }
     }
 
+    // Compute the implementations to use based on the config and their order of preference
+    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
+    {
+        bool has_draft =!params.model.path.empty();
+        bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
+        bool has_ngram_cache = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
+        bool has_ngram_simple = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+        bool has_ngram_map_k = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+        bool has_ngram_map_k4v = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+        // In a more complex implementation we could use the same implementation but with different parameters.
+        // This was initially used in PR-18471 but removed to simplify the code.
+        if (has_ngram_simple) {
+            // This implementation can guess a lot of tokens without any draft model.
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, params));
+        }
+        if (has_ngram_map_k) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, params));
+        }
+        if (has_ngram_map_k4v) {
+            // This implementation can guess tokens with high acceptance rate but is more expensive.
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, params));
+        }
+        if (has_ngram_cache) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
+        }
+        if (has_draft) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT, params));
+        }
+        if (has_draft_eagle3) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_EAGLE3, params));
+        }
+    }
+
     std::vector<std::unique_ptr<common_speculative_state>> implementations = {};
 
-    for (const common_speculative_config & config : params.configs) {
+    for (const common_speculative_config & config : configs) {
         LOG_DBG("%s: adding implementation %s\n", __func__, common_speculative_type_to_str(config.type).c_str());
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
@@ -344,7 +341,7 @@ struct common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
-                common_ngram_map ngram_map = get_common_ngram_map(config, params.spec_ngram_size_n, params.spec_ngram_size_m);
+                common_ngram_map ngram_map = get_common_ngram_map(config);
 
                 uint16_t ngram_size_key   = ngram_map.size_key;
                 uint16_t mgram_size_value = ngram_map.size_value;
@@ -365,14 +362,14 @@ struct common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
                     (config.type),
-                    get_common_ngram_map(config, params.spec_ngram_size_n, params.spec_ngram_size_m)
+                    get_common_ngram_map(config)
                 ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k4v>(
                             (config.type),
-                            get_common_ngram_map(config, params.spec_ngram_size_n, params.spec_ngram_size_m)
+                            get_common_ngram_map(config)
                 ));
                 break;
             }

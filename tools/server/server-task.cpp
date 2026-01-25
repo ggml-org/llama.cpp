@@ -77,6 +77,11 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
             {"speculative.p_min",         speculative.p_min},
+            {"speculative.draftless_t",   common_speculative_type_to_str(speculative.draftless_type)},
+            {"speculative.ngram_size_n",  speculative.spec_ngram_size_n},
+            {"speculative.ngram_size_m",  speculative.spec_ngram_size_m},
+            {"speculative.ngram_c_rate",  speculative.spec_ngram_check_rate},
+            {"speculative.ngram_m_hits",  speculative.spec_ngram_min_hits},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -136,6 +141,11 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
         {"speculative.p_min",         speculative.p_min},
+        {"speculative.draftless_t",   common_speculative_type_to_str(speculative.draftless_type)},
+        {"speculative.ngram_size_n",  speculative.spec_ngram_size_n},
+        {"speculative.ngram_size_m",  speculative.spec_ngram_size_m},
+        {"speculative.ngram_c_rate",  speculative.spec_ngram_check_rate},
+        {"speculative.ngram_m_hits",  speculative.spec_ngram_min_hits},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
@@ -239,44 +249,20 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.n_max     = json_value(data, "speculative.n_max", defaults.speculative.n_max);
     params.speculative.p_min     = json_value(data, "speculative.p_min", defaults.speculative.p_min);
 
-    // TODO: is this needed? remove?
-    //params.speculative.self_mode = json_value(data, "speculative.self_mode", defaults.speculative.self_mode);
-    //params.speculative.self_cfg  = json_value(data, "speculative.self_cfg", defaults.speculative.self_cfg);
-    // Set params.speculative.configs. Use json-array "speculative.configs" if provided in data, otherwise use {}
-    {
-        params.speculative.configs = defaults.speculative.configs;
-        const auto & configs = data.find("speculative.configs");
-        if (configs != data.end() && configs->is_array()) {
-            params.speculative.configs.clear();
-            for (const auto & config : *configs) {
-                if (config.is_object()) {
-                    // config should have keys "type" and "config" (optional)
-                    const auto & type = config.find("type");
-                    if (type != config.end() && type->is_string()) {
-                        const auto type_name = type->get<std::string>();
-                        const auto type_enum = common_speculative_type_from_name(type_name);
-                        if (type_enum != COMMON_SPECULATIVE_TYPE_COUNT) {
-                            common_speculative_config cfg(type_enum);
-                            const auto & cfg_map = config.find("config");
-                            if (cfg_map != config.end() && cfg_map->is_object()) {
-                                for (const auto & [key, value] : cfg_map->items()) {
-                                    cfg.config[key] = value.get<std::string>();
-                                }
-                            }
-                            params.speculative.configs.push_back(cfg);
-                        } else {
-                            SRV_WRN("Unknown speculative type: %s\n", type_name.c_str());
-                        }
-
-                    }
-                }
-            }
-        }
-    }
-
     params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
     params.speculative.n_min = std::max(params.speculative.n_min, 0);
     params.speculative.n_max = std::max(params.speculative.n_max, 0);
+
+    params.speculative.draftless_type         = common_speculative_type_from_name(json_value(data, "speculative.draftless_t", common_speculative_type_to_str(defaults.speculative.draftless_type)));
+    params.speculative.spec_ngram_size_n      = json_value(data, "speculative.ngram_size_n", defaults.speculative.spec_ngram_size_n);
+    params.speculative.spec_ngram_size_m      = json_value(data, "speculative.ngram_size_m", defaults.speculative.spec_ngram_size_m);
+    params.speculative.spec_ngram_check_rate  = json_value(data, "speculative.ngram_c_rate", defaults.speculative.spec_ngram_check_rate);
+    params.speculative.spec_ngram_min_hits    = json_value(data, "speculative.ngram_m_hits", defaults.speculative.spec_ngram_min_hits);
+
+    params.speculative.spec_ngram_size_n      = std::max(std::min(1, (int) params.speculative.spec_ngram_size_n),     1024);
+    params.speculative.spec_ngram_size_m      = std::max(std::min(1, (int) params.speculative.spec_ngram_size_m),     1024);
+    params.speculative.spec_ngram_check_rate  = std::max(std::min(1, (int) params.speculative.spec_ngram_check_rate), 1024);
+    params.speculative.spec_ngram_min_hits    = std::max(std::min(1, (int) params.speculative.spec_ngram_min_hits),   1024);
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
