@@ -1532,145 +1532,40 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 
             // ALL non-device memory needs cache/staging due to Level Zero driver bug that reports
             // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
+            // Check if this is a weight tensor (inline check to avoid forward declaration)
+            const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
+                                   ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 
-            // Check if SYCL graph recording is active - if so, we cannot use .wait() calls
-            const bool graph_active = ggml_sycl_graph_recording_active();
-
-            // Debug: trace ALL non-device tensor access during warmup and graph recording
-            static bool trace_nondevice = (std::getenv("GGML_SYCL_TRACE_NONDEVICE") != nullptr);
-            if (trace_nondevice) {
-                static std::mutex           trace_mtx;
-                std::lock_guard<std::mutex> lk(trace_mtx);
-                fprintf(stderr, "[TRACE-NONDEV] tensor=%s data=%p nbytes=%zu type=%d graph=%d\n", tensor->name,
-                        tensor->data, ggml_nbytes(tensor), (int) ptr_type, graph_active ? 1 : 0);
-            }
-
-            // Try to get from unified cache for ALL tensor types (weights AND non-weights like MoE ids)
-            if (ggml_sycl::unified_cache_enabled()) {
+            // Try to get from unified cache (already uploaded weights)
+            // Use get_or_wait() to block for IN_PROGRESS entries - prevents mmap fallback
+            if (ggml_sycl::unified_cache_enabled() && is_weight) {
                 if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                    // Use get_tensor_cache_key which handles both weight and non-weight tensors
-                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_tensor_cache_key(tensor, device);
+                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
                     if (cache_key.valid) {
-                        // DEBUG: Log full cache key during lookup
-                        if (graph_active) {
-                            // Note: can't check is_weight here due to declaration order in header
-                            GGML_SYCL_DEBUG(
-                                "[CACHE-KEY-LOOKUP] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] "
-                                "aux_id=%llu data=%p buffer=%p\n",
-                                tensor->name, (unsigned long long) cache_key.name_hash, (int) cache_key.type,
-                                cache_key.nbytes, (long long) cache_key.ne[0], (long long) cache_key.ne[1],
-                                (long long) cache_key.ne[2], (long long) cache_key.ne[3],
-                                (unsigned long long) cache_key.aux_id, tensor->data, (void *) tensor->buffer);
-                        }
-
-                        // During graph recording, only check if already cached (no waiting)
-                        // Outside graph recording, use get_or_wait to block for IN_PROGRESS entries
-                        void * cached = graph_active ? cache->get(cache_key, GGML_LAYOUT_AOS) :
-                                                       cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
+                        // get_or_wait waits for IN_PROGRESS entries to complete
+                        // This prevents returning mmap pointer while cache fill is in flight
+                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
                         if (cached) {
                             GGML_SYCL_DEBUG(
-                                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, cache hit=%p (type=%d, graph=%d)\n",
-                                tensor->name, device, cached, (int) ptr_type, graph_active);
+                                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, non-device fallback to cache=%p (type=%d)\n",
+                                tensor->name, device, cached, (int) ptr_type);
                             return cached;
                         }
-
-                        // During graph recording, try fallback lookup by data pointer.
-                        // This handles tensor name aliasing where same buffer has multiple names
-                        // (e.g., "norm-1" staged but accessed as "attn_norm-1").
-                        if (graph_active) {
-                            void * alias_ptr =
-                                cache->get_by_data_ptr(tensor->data, ggml_nbytes(tensor), GGML_LAYOUT_AOS);
-                            if (alias_ptr) {
-                                GGML_SYCL_DEBUG(
-                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, alias cache hit=%p (type=%d, "
-                                    "graph=%d)\n",
-                                    tensor->name, device, alias_ptr, (int) ptr_type, graph_active);
-                                return alias_ptr;
-                            }
-                        }
-
-                        // Debug: log cache miss with key details ALWAYS during graph mode
-                        if (graph_active) {
-                            GGML_SYCL_DEBUG(
-                                "[CACHE-MISS-GRAPH] name=%s hash=%llu type=%d nbytes=%zu ne=[%lld,%lld,%lld,%lld] "
-                                "aux_id=%llu data=%p\n",
-                                tensor->name, (unsigned long long) cache_key.name_hash, (int) cache_key.type,
-                                cache_key.nbytes, (long long) cache_key.ne[0], (long long) cache_key.ne[1],
-                                (long long) cache_key.ne[2], (long long) cache_key.ne[3],
-                                (unsigned long long) cache_key.aux_id, tensor->data);
-                        }
-
-                        // Debug: log cache miss with key details
-                        if (trace_nondevice) {
-                            static std::mutex           trace_mtx;
-                            std::lock_guard<std::mutex> lk(trace_mtx);
-                            fprintf(stderr, "[TRACE-NONDEV] CACHE MISS: tensor=%s aux_id=%llu nbytes=%zu graph=%d\n",
-                                    tensor->name, (unsigned long long) cache_key.aux_id, cache_key.nbytes,
-                                    graph_active ? 1 : 0);
-                        }
-
-                        // Not in cache - upload it now ONLY if not in graph recording mode
-                        // Graph mode uses .wait() internally which fails during recording
-                        if (!graph_active) {
-                            size_t nbytes   = ggml_nbytes(tensor);
-                            void * uploaded = cache->ensure_cached(
-                                cache_key, tensor->data, nbytes,
-                                ggml_sycl::cache_entry_type::DENSE_WEIGHT,  // Use DENSE_WEIGHT for simple copy
-                                -1,                                         // layer_id
-                                -1,                                         // expert_id
-                                GGML_LAYOUT_AOS,
-                                false                                       // validate_content
-                            );
-                            if (uploaded) {
-                                GGML_SYCL_DEBUG(
-                                    "ggml_sycl_get_data_ptr: tensor=%s, device=%d, uploaded to cache=%p (%zu bytes, "
-                                    "type=%d)\n",
-                                    tensor->name, device, uploaded, nbytes, (int) ptr_type);
-                                if (trace_nondevice) {
-                                    static std::mutex           trace_mtx;
-                                    std::lock_guard<std::mutex> lk(trace_mtx);
-                                    fprintf(stderr, "[TRACE-NONDEV] UPLOADED: tensor=%s aux_id=%llu -> %p\n",
-                                            tensor->name, (unsigned long long) cache_key.aux_id, uploaded);
-                                }
-                                return uploaded;
-                            }
-                        }
                     }
                 }
             }
 
-            // Unified cache not available or failed - fall back to staging cache
-            // ONLY if not in graph recording mode (staging also uses .wait())
-            if (!graph_active) {
-                size_t nbytes = ggml_nbytes(tensor);
-                void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
-                if (staged != nullptr) {
-                    GGML_SYCL_DEBUG(
-                        "ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, "
-                        "type=%d)\n",
-                        tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
-                    if (trace_nondevice) {
-                        static std::mutex           trace_mtx;
-                        std::lock_guard<std::mutex> lk(trace_mtx);
-                        fprintf(stderr, "[TRACE-NONDEV] STAGED: tensor=%s data=%p -> %p\n", tensor->name, tensor->data,
-                                staged);
-                    }
-                    return staged;
-                }
+            // Not cached - need to stage to device-local USM memory
+            size_t nbytes = ggml_nbytes(tensor);
+            void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+            if (staged != nullptr) {
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
+                                tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
+                return staged;
             }
-
-            // During graph recording, we cannot upload/stage - log error and return mmap pointer
-            // This will likely cause DEVICE_LOST, but at least we don't crash with .wait() error
-            if (graph_active) {
-                GGML_LOG_ERROR(
-                    "[SYCL] tensor=%s (data=%p, nbytes=%zu, type=%d) requires staging but graph recording is active - "
-                    "cannot upload\n",
-                    tensor->name, tensor->data, ggml_nbytes(tensor), (int) ptr_type);
-            }
-            GGML_SYCL_DEBUG(
-                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d, graph=%d), "
-                "using tensor->data=%p\n",
-                tensor->name, device, (int) ptr_type, graph_active, tensor->data);
+            // Staging failed - fall through and return original pointer (will likely fail)
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d), using tensor->data=%p\n",
+                            tensor->name, device, (int) ptr_type, tensor->data);
         }
     }
 

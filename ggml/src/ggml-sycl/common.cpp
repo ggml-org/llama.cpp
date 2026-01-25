@@ -200,16 +200,16 @@ struct StagedBuffer {
 static std::unordered_map<const void *, StagedBuffer> g_tp_staging_cache;
 static std::mutex                                     g_tp_staging_mutex;
 
-// Get or create a staged copy of mmap'd data for a specific device
-// Works in both TP mode and single-GPU mode to stage mmap'd memory to device USM
+// Get or create a staged copy of mmap'd data for a specific device in TP mode
+// Returns nullptr if not in TP mode or data is already USM
 void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device) {
-    // Multi-process mode: No cross-device staging needed (each process has its own data)
-    if (g_sycl_tp_config.enabled && g_sycl_tp_config.is_multiprocess) {
+    if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return nullptr;
     }
-
-    // Determine if we're in TP mode (affects queue selection)
-    const bool is_tp_mode = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
+    // Multi-process mode: No cross-device staging needed (each process has its own data)
+    if (g_sycl_tp_config.is_multiprocess) {
+        return nullptr;
+    }
     if (src == nullptr || size == 0) {
         return nullptr;
     }
@@ -226,19 +226,12 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
         if (it->second.size < size) {
             GGML_SYCL_DEBUG("[STAGING] Size mismatch for %p: cached=%zu, requested=%zu, reallocating\n", src,
                             it->second.size, size);
-            // Free all staged pointers
-            for (int dev = 0; dev < GGML_SYCL_MAX_DEVICES; dev++) {
-                if (it->second.ptrs[dev] != nullptr) {
-                    // Try to get a valid queue for freeing
-                    try {
-                        auto& dev_queue = dpct::dev_mgr::instance().get_device(dev).default_queue();
-                        sycl::free(it->second.ptrs[dev], dev_queue);
-                    } catch (...) {
-                        // If we cannot get the queue, try TP shared queue as fallback
-                        if (g_tp_shared_queues[dev] != nullptr) {
-                            sycl::free(it->second.ptrs[dev], *g_tp_shared_queues[dev]);
-                        }
-                    }
+            // Free all staged pointers (only local devices - already guarded by multiprocess check above)
+            int num_local_devices = g_sycl_tp_config.is_multiprocess ? 1 : g_sycl_tp_config.world_size;
+            for (int i = 0; i < num_local_devices; i++) {
+                int dev_id = g_sycl_tp_config.devices[i];
+                if (it->second.ptrs[dev_id] != nullptr && g_tp_shared_queues[dev_id] != nullptr) {
+                    sycl::free(it->second.ptrs[dev_id], *g_tp_shared_queues[dev_id]);
                 }
             }
             g_tp_staging_cache.erase(it);
@@ -246,8 +239,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
         }
     }
 
-    // Ensure shared context is initialized (only needed in TP mode)
-    if (is_tp_mode) {
+    // Ensure shared context is initialized
+    {
         std::lock_guard<std::mutex> ctx_lock(g_tp_context_mutex);
         if (g_tp_shared_context == nullptr) {
             ggml_sycl_init_tp_shared_context();
@@ -269,31 +262,17 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
 
     // Allocate on the requested device if not already done
     if (entry->ptrs[device] == nullptr) {
-        // In TP mode, use shared context queues. In single-GPU mode, use device default queue.
-        sycl::queue * queue = nullptr;
-        sycl::queue device_queue_storage;  // Storage for non-TP mode queue
-        if (is_tp_mode) {
-            queue = g_tp_shared_queues[device];
-        } else {
-            // Single-GPU mode: use the device default queue
-            try {
-                device_queue_storage = dpct::dev_mgr::instance().get_device(device).default_queue();
-                queue = &device_queue_storage;
-            } catch (...) {
-                GGML_LOG_ERROR("[STAGING] Failed to get default queue for device %d\n", device);
-                return nullptr;
-            }
-        }
-        if (queue == nullptr) {
-            GGML_LOG_ERROR("[STAGING] Queue not available for device %d\n", device);
+        sycl::queue * tp_queue = g_tp_shared_queues[device];
+        if (tp_queue == nullptr) {
+            GGML_LOG_ERROR("[STAGING] TP queue not initialized for device %d\n", device);
             return nullptr;
         }
 
         try {
-            GGML_SYCL_DEBUG("[STAGING] Allocating %zu bytes on device %d using queue=%p...\n", size, device,
-                            (void *) queue);
+            GGML_SYCL_DEBUG("[STAGING] Allocating %zu bytes on device %d using tp_queue=%p...\n", size, device,
+                            (void *) tp_queue);
             // Allocate device memory on this specific device using shared-context queue
-            void * staged = sycl::malloc_device(size, *queue);
+            void * staged = sycl::malloc_device(size, *tp_queue);
             if (staged == nullptr) {
                 GGML_LOG_ERROR("[STAGING] malloc_device returned nullptr for %zu bytes on device %d\n", size, device);
                 return nullptr;
@@ -306,7 +285,7 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
             void * host_staging = ggml_sycl_host_malloc(size);
             if (host_staging == nullptr) {
                 GGML_LOG_ERROR("[STAGING] failed to allocate pinned host staging buffer for %zu bytes\n", size);
-                sycl::free(staged, *queue);
+                sycl::free(staged, *tp_queue);
                 return nullptr;
             }
             GGML_SYCL_DEBUG("[STAGING] Host buffer at %p, doing std::memcpy...\n", host_staging);
@@ -317,9 +296,9 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
 
             // Copy from heap to device using shared-context queue
             // First wait for any pending operations on this queue
-            queue->wait();
+            tp_queue->wait();
             GGML_SYCL_DEBUG("[STAGING] Queue wait done, now memcpy...\n");
-            queue->memcpy(staged, host_staging, size).wait();
+            tp_queue->memcpy(staged, host_staging, size).wait();
             GGML_SYCL_DEBUG("[STAGING] SYCL memcpy done\n");
 
             // Free the temporary host staging buffer

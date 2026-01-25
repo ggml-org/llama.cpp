@@ -604,9 +604,6 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat_soa(
          y_ds[j * (MMQ_TILE_NE_K/QI8_1) + (2*k/QI8_1) % (MMQ_TILE_NE_K/QI8_1)]);
 }
 
-// Unified loading kernel - loads X and Y for same K blocks together
-#include "mmq-soa-unified.hpp"
-
 template <int mmq_y>
 static __dpct_inline__ void
 allocate_tiles_q4_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
