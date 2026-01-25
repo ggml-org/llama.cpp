@@ -49,11 +49,11 @@ static inline int8x16_t ggml_ifairy_neg_if(uint8x16_t mask, int8x16_t v) {
 
 // Decode per-lane 2-flag code (idx16+flags) into 4 int8 vectors using a 16-entry LUT (4x16B).
 // This is a branchless formulation of the scalar decode in ggml_ifairy_lut_decode_lane_scalar().
-static inline int8x16x4_t ggml_ifairy_lut_decode_16x3_3x1_with_lut(uint8x16_t   iweight_16x3,
-                                                                   int8x16x4_t  ilut,
-                                                                   uint8x16_t   mask_idx,
-                                                                   uint8x16_t   mask_b6,
-                                                                   uint8x16_t   mask_b7) {
+static inline int8x16x4_t ggml_ifairy_lut_decode_16x3_3x1_with_lut(uint8x16_t  iweight_16x3,
+                                                                   int8x16x4_t ilut,
+                                                                   uint8x16_t  mask_idx,
+                                                                   uint8x16_t  mask_b6,
+                                                                   uint8x16_t  mask_b7) {
     const uint8x16_t index = vandq_u8(iweight_16x3, mask_idx);
     const uint8x16_t fl0   = vtstq_u8(iweight_16x3, mask_b6);
     const uint8x16_t fl1   = vtstq_u8(iweight_16x3, mask_b7);
