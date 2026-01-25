@@ -16,20 +16,20 @@ Status: Draft (2026-01-25)
 - Machine: Mac16,12 (Apple M4), macOS 26.2 (25C56)
 - Build: `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release` + `cmake --build build-rel` (OpenMP not found)
 - Command:
-  - `./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
-- Result (build `a3329995`):
-  - `pp128`: `162.82 tok/s`
-  - `tg256`: `87.78 tok/s`
+  - `./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+- Result (build `f0fac4ca`):
+  - `pp128`: `151.50 ± 3.87 tok/s`
+  - `tg256`: `80.30 ± 2.92 tok/s`
 
-### merged64（GGML_IFAIRY_ARM_LUT=ON, CPU-only 配置）
+### lut16（GGML_IFAIRY_ARM_LUT=ON, GGML_IFAIRY_LUT=1）
 - Build:
   - `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
   - `cmake --build build-rel-lut`
 - Command:
-  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
-- Result (build `a3329995`):
-  - `pp128`: `32.43 tok/s`
-  - `tg256`: `25.56 tok/s`
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+- Result (build `f0fac4ca`):
+  - `pp128`: `94.69 ± 0.65 tok/s`
+  - `tg256`: `61.36 ± 1.81 tok/s`
 
 ### microbench（GGML_IFAIRY_ARM_LUT=ON）
 - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=623.10`
@@ -65,10 +65,20 @@ Status: Draft (2026-01-25)
 - Correctness:
   - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_ARM_LUT disabled)
   - `./build-rel-lut/bin/test-ifairy`: PASS
+- `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256, repetitions=3):
+  - `./build-rel/bin/llama-bench ...`: `pp128=151.50 ± 3.87 tok/s`, `tg256=80.30 ± 2.92 tok/s` (raw: `tmp/bench/bench_build-rel.txt`)
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=94.69 ± 0.65 tok/s`, `tg256=61.36 ± 1.81 tok/s` (raw: `tmp/bench/bench_build-rel-lut.txt`)
 - microbench（GGML_IFAIRY_ARM_LUT=ON）:
   - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=605.49`
   - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=44.38`
   - `./build-rel-lut/bin/ifairy-microbench` (lut16 N==1, m=256 k=4096): `ns/iter=42004.8`
+- xctrace CPU Counters（模板：`test.tracetemplate`；统计：仅计 `Running` 且 core 不迁移的相邻采样增量）：
+  - microbench (`tmp/xctrace/ifairy_lut_microbench_cpu_counters.trace`, ~10s):
+    - `ARM_STALL=18676194623`, `CORE_ACTIVE_CYCLE=39673256029`, `ARM_L1D_CACHE_LMISS_RD=128322948`, `ARM_L1D_CACHE_RD=26161839493`, `L1D_TLB_MISS=221092`
+    - `stall_ratio=0.470750`, `l1d_miss_rate=0.004905`, `tlb_miss_per_active=0.00000557`
+  - llama-bench (`tmp/xctrace/ifairy_lut_llama_bench_cpu_counters.trace`, ~4s):
+    - `ARM_STALL=4436605053`, `CORE_ACTIVE_CYCLE=12980115906`, `ARM_L1D_CACHE_LMISS_RD=29846840`, `ARM_L1D_CACHE_RD=8020881750`, `L1D_TLB_MISS=30783799`
+    - `stall_ratio=0.341800`, `l1d_miss_rate=0.003721`, `tlb_miss_per_active=0.00237161`
 
 ---
 

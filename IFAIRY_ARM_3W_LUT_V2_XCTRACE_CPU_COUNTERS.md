@@ -59,7 +59,7 @@ GGML_IFAIRY_LUT=1 xcrun xctrace record --template test.tracetemplate \
   --time-limit 30s --no-prompt \
   --launch -- ./build-rel-lut/bin/llama-bench \
     -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
-    --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup \
+    --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3 \
   > /dev/null
 ```
 
@@ -85,4 +85,3 @@ xcrun xctrace export \
 - 完整命令（含 env）
 - 关键比值与原始计数
 追加记录到：`IFAIRY_ARM_3W_LUT_V2_STATUS.md`
-
