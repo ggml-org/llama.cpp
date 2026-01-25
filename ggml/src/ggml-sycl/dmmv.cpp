@@ -3672,7 +3672,11 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const block_q8_0 * src1_q8 = nullptr;
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool());
     std::vector<sycl::event>   dmmv_deps;
-    if (src0->type == GGML_TYPE_Q4_0) {
+    // Q8_0 input quantization disabled by default: adds overhead making TG ~15x slower.
+    // Non-Q8 path uses direct F32 input like master branch.
+    // Enable with GGML_SYCL_DMMV_USE_Q8=1 for integer math testing.
+    static const bool use_q8_input = (std::getenv("GGML_SYCL_DMMV_USE_Q8") != nullptr);
+    if (use_q8_input && src0->type == GGML_TYPE_Q4_0) {
         const int64_t blocks = ne00 / QK8_0;
         if (blocks > 0) {
             src1_q8 = reinterpret_cast<block_q8_0 *>(src1_q8_alloc.alloc(static_cast<size_t>(blocks) * sizeof(block_q8_0)));
