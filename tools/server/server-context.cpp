@@ -164,6 +164,21 @@ struct server_slot {
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
+    // Audio output state
+    std::vector<float> audio_embd;  // embedding buffer for audio decode
+    llama_pos audio_pos = 0;  // position counter for audio mode (since we can't push tokens)
+    llama_pos audio_pos_offset = 0;  // offset to add to pos_next() after audio mode (to account for audio decodes)
+
+    // Check if audio output was requested for this slot
+    bool has_audio_output() const {
+        return task && task->params.has_out_audio && mctx && mtmd_support_audio_output(mctx);
+    }
+
+    // Check if slot is currently in audio output mode
+    bool is_audio_out_mode() const {
+        return has_audio_output() && mtmd_get_output_modality(mctx) == MTMD_OUTPUT_MODALITY_AUDIO;
+    }
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -186,6 +201,11 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+
+        // clear audio output state
+        audio_embd.clear();
+        audio_pos = 0;
+        audio_pos_offset = 0;
 
         task_prev = std::move(task);
         task.reset();
@@ -702,12 +722,25 @@ private:
             mparams.warmup           = params_base.warmup;
             mparams.image_min_tokens = params_base.image_min_tokens;
             mparams.image_max_tokens = params_base.image_max_tokens;
+
+            // Audio output support (vocoder and tokenizer)
+            if (!params_base.vocoder.model.path.empty()) {
+                mparams.vocoder_path = params_base.vocoder.model.path.c_str();
+            }
+            if (!params_base.vocoder.speaker_file.empty()) {
+                mparams.tokenizer_path = params_base.vocoder.speaker_file.c_str();
+            }
+
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
                 return false;
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+
+            if (mtmd_support_audio_output(mctx)) {
+                SRV_INF("audio output supported, sample_rate = %d\n", mtmd_audio_output_get_sample_rate(mctx));
+            }
 
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;
@@ -1073,6 +1106,18 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // continue mode: prepend existing slot tokens to task tokens
+        if (task.params.continue_slot) {
+            if (slot.prompt.tokens.empty()) {
+                send_error(task, "continue mode requires existing slot state, but slot is empty", ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+            // create combined tokens: existing + new
+            server_tokens combined = slot.prompt.tokens.clone();
+            combined.push_back(task.tokens);
+            task.tokens = std::move(combined);
+        }
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -1188,6 +1233,29 @@ private:
         }
 
         slot.task = std::make_unique<const server_task>(std::move(task));
+
+        // Initialize audio output if enabled and supported
+        if (slot.has_audio_output()) {
+            // Set output modalities based on requested modalities
+            std::vector<mtmd_output_modality> modalities;
+            if (slot.task->params.has_out_audio) {
+                modalities.push_back(MTMD_OUTPUT_MODALITY_AUDIO);
+            }
+            if (slot.task->params.has_out_text) {
+                modalities.push_back(MTMD_OUTPUT_MODALITY_TEXT);
+            }
+
+            if (!modalities.empty()) {
+                mtmd_set_output_modalities(slot.mctx, modalities.data(), modalities.size());
+                mtmd_audio_output_start_new_turn(slot.mctx);
+
+                // Reserve embedding buffer (don't resize - empty() check is used for first decode detection)
+                slot.audio_embd.clear();
+                slot.audio_embd.reserve(llama_model_n_embd(model));
+            }
+        } else if (slot.task->params.has_out_audio) {
+            SLT_WRN(slot, "%s", "audio output requested but not supported by model\n");
+        }
 
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
@@ -1448,6 +1516,12 @@ private:
         // populate timings if this is final response or timings_per_token is enabled
         if (slot.stop != STOP_TYPE_NONE || slot.task->params.timings_per_token) {
             res->timings = slot.get_timings();
+        }
+
+        // populate audio output if present
+        if (!tkn.audio_samples.empty()) {
+            res->audio_out             = tkn.audio_samples;
+            res->audio_out_sample_rate = tkn.audio_sample_rate;
         }
 
         queue_results.send(std::move(res));
@@ -2097,15 +2171,23 @@ private:
                     slot.drafted = std::move(draft);
                 }
             } else {
-                // no speculative decoding
+                // check if this slot is in audio output mode and needs embeddings
+                if (slot.is_audio_out_mode() && !slot.audio_embd.empty()) {
+                    SLT_DBG(slot, "slot in audio mode, will process with embeddings separately (n_embd=%zu)\n",
+                            slot.audio_embd.size());
+                    // don't add to batch - will be handled in audio processing loop
+                    continue;
+                }
+
                 slot.i_batch = batch.n_tokens;
 
-                common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
-
+                // Use offset to account for positions consumed by audio mode
+                llama_pos pos = slot.prompt.tokens.pos_next() + slot.audio_pos_offset;
+                common_batch_add(batch, slot.sampled, pos, { slot.id }, true);
                 slot.prompt.tokens.push_back(slot.sampled);
 
-                SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, truncated = %d\n",
-                        slot.n_ctx, slot.prompt.n_tokens(), slot.truncated);
+                SLT_DBG(slot, "slot decode token, n_ctx = %d, n_tokens = %d, pos = %d, truncated = %d\n",
+                        slot.n_ctx, slot.prompt.n_tokens(), pos, slot.truncated);
             }
         }
 
@@ -2605,7 +2687,20 @@ private:
                 slot_batched->lora[alora_disabled_id].scale = alora_scale;
             }
 
-            llama_set_embeddings(ctx, slot_batched->task->need_embd());
+            // check if embeddings are needed for this batch
+            bool need_embd = slot_batched->task->need_embd();
+
+            // enable embeddings if any slot has audio output enabled
+            if (!need_embd) {
+                for (auto & slot : slots) {
+                    if (slot.is_processing() && slot.is_audio_out_mode()) {
+                        need_embd = true;
+                        break;
+                    }
+                }
+            }
+
+            llama_set_embeddings(ctx, need_embd);
         }
 
         if (batch.n_tokens == 0) {
@@ -2746,6 +2841,11 @@ private:
                     continue; // continue loop of slots
                 }
 
+                // slot is in audio mode is handled by audio loop
+                if (slot.is_audio_out_mode()) {
+                    continue;
+                }
+
                 if (slot.i_batch_dft.size() > 0) {
                     continue; // sample using speculative decoding
                 }
@@ -2778,6 +2878,11 @@ private:
 
                 if (slot.task->params.sampling.n_probs > 0) {
                     populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx);
+                }
+
+                // notify decoder of text token
+                if (slot.has_audio_output()) {
+                    mtmd_audio_output_accept_token(slot.mctx, id);
                 }
 
                 if (!process_token(result, slot)) {
@@ -2842,6 +2947,360 @@ private:
                 }
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
+            }
+
+            // Audio mode processing - handle slots in audio mode
+            // Two cases:
+            // 1. First audio decode (audio_need_embeddings_from_main): get embeddings from main batch
+            // 2. Subsequent decodes: use audio_embd embedding feedback loop
+            bool has_audio_slots = true;
+            while (has_audio_slots) {
+                has_audio_slots = false;
+
+                for (auto & slot : slots) {
+                    if (slot.state != SLOT_STATE_GENERATING) {
+                        continue;
+                    }
+
+                    // Check if this slot needs audio processing
+                    if (!slot.is_audio_out_mode()) {
+                        continue;
+                    }
+
+                    // First audio decode case: get embeddings from main batch decode
+                    // Condition: slot.i_batch >= 0 means the audio_start token was decoded in THIS batch
+                    // and audio_embd is empty means we haven't done the first audio decode yet
+                    if (slot.i_batch >= 0 && slot.audio_embd.empty()) {
+                        // Resize audio_embd for output (was reserved at setup, now actually allocate)
+                        const int n_embd = llama_model_n_embd(model);
+                        slot.audio_embd.resize(n_embd);
+
+                        // Get embeddings from the main batch decode (audio_start token)
+                        const float * embd = llama_get_embeddings_ith(ctx, slot.i_batch);
+                        if (!embd) {
+                            // Fallback to last position (single slot case)
+                            embd = llama_get_embeddings(ctx);
+                        }
+                        if (!embd) {
+                            slot.audio_embd.clear();
+                            continue;
+                        }
+
+                        // Do first audio decode
+                        int res = mtmd_audio_output_decode(
+                            slot.mctx, embd, n_embd,
+                            slot.audio_embd.data());
+
+                        if (res != 0) {
+                            slot.audio_embd.clear();
+                            continue;
+                        }
+
+                        // Initialize audio position for subsequent decodes
+                        // Must include offset since audio_start was added with offset (line 2207)
+                        slot.audio_pos = slot.prompt.tokens.pos_next() + slot.audio_pos_offset;
+                        SLT_DBG(slot, "first audio decode complete, audio_pos = %d (offset=%d)\n",
+                            slot.audio_pos, slot.audio_pos_offset);
+
+                        // Get first audio samples
+                        int n_samples = mtmd_get_n_audio_samples(slot.mctx);
+                        if (n_samples > 0) {
+                            completion_token_output result;
+                            result.tok = 0;
+                            result.text_to_send = "";
+                            result.prob = 1.0f;
+                            result.audio_samples.resize(n_samples);
+                            mtmd_get_audio_samples(slot.mctx, result.audio_samples.data());
+                            result.audio_sample_rate = mtmd_audio_output_get_sample_rate(slot.mctx);
+
+                            send_partial_response(slot, result, false);
+
+                            // Update stats (same as subsequent decodes)
+                            const int64_t t_current = ggml_time_us();
+                            slot.n_decoded += 1;
+                            slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                            // Check budget
+                            if (slot.n_remaining > 0) {
+                                --slot.n_remaining;
+                            }
+                            if (slot.n_remaining == 0) {
+                                SLT_INF(slot, "%s", "audio generation reached budget limit\n");
+                                slot.stop = STOP_TYPE_LIMIT;
+                                slot.print_timings();
+                                send_final_response(slot);
+                                metrics.on_prediction(slot);
+                                slot.release();
+                                continue;
+                            }
+                        }
+
+                        // Check if still in audio mode
+                        const bool still_audio = slot.is_audio_out_mode();
+                        if (still_audio) {
+                            has_audio_slots = true;
+                        } else if (!slot.task->params.has_out_text) {
+                            // TTS mode: audio complete, finish generation
+                            SLT_INF(slot, "%s", "TTS mode: audio complete after first decode\n");
+                            slot.audio_embd.clear();
+                            slot.stop = STOP_TYPE_EOS;
+                            slot.print_timings();
+                            send_final_response(slot);
+                            metrics.on_prediction(slot);
+                            slot.release();
+                        } else {
+                            // Interleaved mode: audio ended after first decode
+                            // Need to decode the audio embeddings through backbone to get logits for text
+
+                            // Decode audio_embd through backbone
+                            llama_set_embeddings(ctx, true);
+
+                            llama_batch audio_batch = {};
+                            audio_batch.n_tokens = 1;
+                            audio_batch.token = nullptr;
+                            audio_batch.embd = slot.audio_embd.data();
+
+                            llama_pos pos = slot.audio_pos;
+                            llama_pos pos_arr[] = { pos };
+                            int32_t n_seq_id_arr[] = { 1 };
+                            llama_seq_id seq_id = slot.id;
+                            llama_seq_id * seq_ids_arr[] = { &seq_id };
+                            int8_t logits_arr[] = { 1 };
+
+                            audio_batch.pos = pos_arr;
+                            audio_batch.n_seq_id = n_seq_id_arr;
+                            audio_batch.seq_id = seq_ids_arr;
+                            audio_batch.logits = logits_arr;
+
+                            if (llama_decode(ctx, audio_batch) != 0) {
+                                SLT_ERR(slot, "%s", "failed to decode audio embeddings for text transition\n");
+                                slot.audio_embd.clear();
+                                continue;
+                            }
+                            slot.audio_pos++;
+
+                            // Update position offset
+                            slot.audio_pos_offset = slot.audio_pos - slot.prompt.tokens.pos_next();
+
+                            // Clear audio_embd for next audio segment
+                            slot.audio_embd.clear();
+
+                            // Sample next text token
+                            llama_token next_token = common_sampler_sample(slot.smpl.get(), ctx, -1);
+                            common_sampler_accept(slot.smpl.get(), next_token, true);
+
+                            // Accept into audio decoder state
+                            mtmd_audio_output_accept_token(slot.mctx, next_token);
+
+                            // Create result and process through normal flow
+                            completion_token_output result;
+                            result.tok = next_token;
+                            const bool render_special = slot.has_audio_output() || accept_special_token(slot, result.tok);
+                            result.text_to_send = common_token_to_piece(ctx, result.tok, render_special);
+                            result.prob = 1.0f;
+
+
+                            // Update stats
+                            slot.n_decoded += 1;
+                            const int64_t t_current = ggml_time_us();
+                            slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                            if (!process_token(result, slot)) {
+                                slot.print_timings();
+                                send_final_response(slot);
+                                metrics.on_prediction(slot);
+                                slot.release();
+                                continue;
+                            }
+
+                            // Check if immediately switching back to audio
+                            if (slot.is_audio_out_mode()) {
+                                SLT_INF(slot, "%s", "immediately switching back to audio mode\n");
+                                has_audio_slots = true;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Subsequent audio decodes: embedding feedback loop
+                    if (slot.audio_embd.empty()) {
+                        continue;
+                    }
+
+                    has_audio_slots = true;
+
+                    SLT_DBG(slot, "%s", "processing audio mode slot with embeddings\n");
+
+                    // Enable embeddings for audio decode
+                    llama_set_embeddings(ctx, true);
+
+                    // Create embedding-based batch for this slot
+                    const int n_embd = llama_model_n_embd(model);
+                    llama_pos pos = slot.audio_pos;
+
+                    llama_batch audio_batch = {};
+                    audio_batch.n_tokens = 1;
+                    audio_batch.token = nullptr;
+                    audio_batch.embd = slot.audio_embd.data();
+
+                    // Set up position and sequence info
+                    llama_pos pos_arr[] = { pos };
+                    int32_t n_seq_id_arr[] = { 1 };
+                    llama_seq_id seq_id = slot.id;
+                    llama_seq_id * seq_ids_arr[] = { &seq_id };
+                    int8_t logits_arr[] = { 1 };
+
+                    audio_batch.pos = pos_arr;
+                    audio_batch.n_seq_id = n_seq_id_arr;
+                    audio_batch.seq_id = seq_ids_arr;
+                    audio_batch.logits = logits_arr;
+
+                    // Decode with embeddings
+                    const int ret = llama_decode(ctx, audio_batch);
+
+                    if (ret != 0) {
+                        SLT_ERR(slot, "audio embedding decode failed with code %d\n", ret);
+                        slot.audio_embd.clear();
+                        continue;
+                    }
+
+                    // Increment position for next decode
+                    slot.audio_pos++;
+
+                    // Get embeddings from decode output
+                    const float * embd = llama_get_embeddings(ctx);
+                    if (!embd) {
+                        SLT_WRN(slot, "%s", "no embeddings available after audio decode\n");
+                        slot.audio_embd.clear();
+                        continue;
+                    }
+
+                    // Decode embeddings to audio
+                    int res = mtmd_audio_output_decode(
+                        slot.mctx, embd, n_embd,
+                        slot.audio_embd.data());
+
+                    if (res != 0) {
+                        SLT_WRN(slot, "mtmd_audio_output_decode failed with code %d\n", res);
+                        slot.audio_embd.clear();
+                        continue;
+                    }
+
+                    // Get audio samples
+                    int n_samples = mtmd_get_n_audio_samples(slot.mctx);
+                    if (n_samples > 0) {
+                        completion_token_output result;
+                        result.tok = 0;
+                        result.text_to_send = "";
+                        result.prob = 1.0f;
+                        result.audio_samples.resize(n_samples);
+                        mtmd_get_audio_samples(slot.mctx, result.audio_samples.data());
+                        result.audio_sample_rate = mtmd_audio_output_get_sample_rate(slot.mctx);
+
+                        // Update stats
+                        const int64_t t_current = ggml_time_us();
+                        slot.n_decoded += 1;
+                        slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                        // Send audio directly
+                        send_partial_response(slot, result, false);
+
+                        // Check budget
+                        if (slot.n_remaining > 0) {
+                            --slot.n_remaining;
+                        }
+                        if (slot.n_remaining == 0) {
+                            slot.stop = STOP_TYPE_LIMIT;
+                            slot.print_timings();
+                            send_final_response(slot);
+                            metrics.on_prediction(slot);
+                            slot.release();
+                            continue;
+                        }
+                    }
+
+                    // Check if we're still in audio mode for next iteration
+                    if (!slot.is_audio_out_mode()) {
+
+                        // For audio-only mode (TTS), end generation when audio completes
+                        // For interleaved mode, continue to text generation
+                        if (!slot.task->params.has_out_text) {
+                            slot.audio_embd.clear();
+                            slot.audio_pos_offset = slot.audio_pos - slot.prompt.tokens.pos_next();
+                            slot.stop = STOP_TYPE_EOS;
+                            slot.print_timings();
+                            send_final_response(slot);
+                            metrics.on_prediction(slot);
+                            slot.release();
+                        } else {
+                            // Interleaved mode: decode current audio_embd through backbone to get logits
+                            // The current logits are from the PREVIOUS embedding decode, we need the CURRENT one
+                            llama_set_embeddings(ctx, true);
+
+                            llama_batch audio_batch = {};
+                            audio_batch.n_tokens = 1;
+                            audio_batch.token = nullptr;
+                            audio_batch.embd = slot.audio_embd.data();
+
+                            llama_pos pos = slot.audio_pos;
+                            llama_pos pos_arr[] = { pos };
+                            int32_t n_seq_id_arr[] = { 1 };
+                            llama_seq_id seq_id = slot.id;
+                            llama_seq_id * seq_ids_arr[] = { &seq_id };
+                            int8_t logits_arr[] = { 1 };
+
+                            audio_batch.pos = pos_arr;
+                            audio_batch.n_seq_id = n_seq_id_arr;
+                            audio_batch.seq_id = seq_ids_arr;
+                            audio_batch.logits = logits_arr;
+
+                            if (llama_decode(ctx, audio_batch) != 0) {
+                                SLT_ERR(slot, "%s", "failed to decode final audio embeddings for text transition\n");
+                                slot.audio_embd.clear();
+                                slot.audio_pos_offset = slot.audio_pos - slot.prompt.tokens.pos_next();
+                                continue;
+                            }
+                            slot.audio_pos++;
+
+                            // Update offset and clear audio state
+                            slot.audio_pos_offset = slot.audio_pos - slot.prompt.tokens.pos_next();
+                            slot.audio_embd.clear();
+
+                            // Now sample from the correct logits
+                            llama_token next_token = common_sampler_sample(slot.smpl.get(), ctx, -1);
+                            common_sampler_accept(slot.smpl.get(), next_token, true);
+
+                            // Accept into audio decoder state
+                            mtmd_audio_output_accept_token(slot.mctx, next_token);
+
+                            // Create result and process through normal flow
+                            completion_token_output result;
+                            result.tok = next_token;
+                            const bool render_special = slot.has_audio_output() || accept_special_token(slot, result.tok);
+                            result.text_to_send = common_token_to_piece(ctx, result.tok, render_special);
+                            result.prob = 1.0f;
+
+                            // Update stats
+                            slot.n_decoded += 1;
+                            const int64_t t_current = ggml_time_us();
+                            slot.t_token_generation = std::max<int64_t>(1, t_current - slot.t_start_generation) / 1e3;
+
+                            if (!process_token(result, slot)) {
+                                slot.print_timings();
+                                send_final_response(slot);
+                                metrics.on_prediction(slot);
+                                slot.release();
+                                continue;
+                            }
+
+                            // Check if this token switches back to audio mode
+                            if (slot.is_audio_out_mode()) {
+                                SLT_INF(slot, "%s", "immediately switching back to audio mode\n");
+                                has_audio_slots = true;
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2969,15 +3428,19 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
+        // continue mode: append tokens to existing slot state instead of replacing
+        const bool continue_slot = json_value(data, "continue", false);
+        const bool add_special = !continue_slot; // no BOS for continuation
+
         // process prompt
         std::vector<server_tokens> inputs;
 
         if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
             // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
-            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files, add_special));
         } else {
             // Everything else, including multimodal completions.
-            inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+            inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, add_special, true);
         }
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
@@ -2999,6 +3462,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.res_type          = res_type;
             task.params.oaicompat_cmpl_id = completion_id;
             task.params.oaicompat_model   = meta->model_name;
+
+            // continue mode: append tokens to existing slot
+            task.params.continue_slot = continue_slot;
 
             // prepare child tasks
             if (task.params.n_cmpl > 1) {

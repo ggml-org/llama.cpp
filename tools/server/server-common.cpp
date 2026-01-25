@@ -633,7 +633,7 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
     return std::to_string(hash);
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files, bool add_special) {
     mtmd::bitmaps bitmaps;
     for (auto & file : files) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
@@ -650,7 +650,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::
     // multimodal
     mtmd_input_text inp_txt = {
         prompt.c_str(),
-        /* add_special */   true,
+        /* add_special */   add_special,
         /* parse_special */ true,
     };
     mtmd::input_chunks chunks(mtmd_input_chunks_init());
@@ -699,7 +699,7 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
                 files.push_back(base64_decode(entry));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY).get<std::string>(), files, add_special);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
@@ -1063,6 +1063,19 @@ json oaicompat_chat_params_parse(
         // Exception: if "n_predict" is present, we overwrite the value specified earlier by "max_tokens"
         if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
             llama_params[item.key()] = item.value();
+        }
+    }
+
+    // handle "modalities" parameter for audio output
+    if (body.contains("modalities") && body.at("modalities").is_array()) {
+        for (const auto & modality : body.at("modalities")) {
+            if (modality.is_string()) {
+                if (auto const & m = modality.get<std::string>(); m == "audio") {
+                    llama_params["has_out_audio"] = true;
+                } else if (m == "text") {
+                    llama_params["has_out_text"] = true;
+                }
+            }
         }
     }
 
