@@ -27,41 +27,41 @@
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
-	let isIdle = $derived(healthState.status === HealthCheckStatus.Idle);
-	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.Connecting);
-	let isConnected = $derived(healthState.status === HealthCheckStatus.Success);
-	let isError = $derived(healthState.status === HealthCheckStatus.Error);
+	let isIdle = $derived(healthState.status === HealthCheckStatus.IDLE);
+	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
+	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
+	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
 	let showSkeleton = $derived(isIdle || isHealthChecking);
 	let errorMessage = $derived(
-		healthState.status === HealthCheckStatus.Error ? healthState.message : undefined
+		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
 	);
-	let tools = $derived(healthState.status === HealthCheckStatus.Success ? healthState.tools : []);
+	let tools = $derived(healthState.status === HealthCheckStatus.SUCCESS ? healthState.tools : []);
 
 	let connectionLogs = $derived(
-		healthState.status === HealthCheckStatus.Connecting ||
-			healthState.status === HealthCheckStatus.Success ||
-			healthState.status === HealthCheckStatus.Error
+		healthState.status === HealthCheckStatus.CONNECTING ||
+			healthState.status === HealthCheckStatus.SUCCESS ||
+			healthState.status === HealthCheckStatus.ERROR
 			? healthState.logs
 			: []
 	);
 
 	let serverInfo = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.serverInfo : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.serverInfo : undefined
 	);
 	let capabilities = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.capabilities : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.capabilities : undefined
 	);
 	let transportType = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.transportType : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.transportType : undefined
 	);
 	let protocolVersion = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.protocolVersion : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.protocolVersion : undefined
 	);
 	let connectionTimeMs = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.connectionTimeMs : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.connectionTimeMs : undefined
 	);
 	let instructions = $derived(
-		healthState.status === HealthCheckStatus.Success ? healthState.instructions : undefined
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState.instructions : undefined
 	);
 
 	let isEditing = $state(!server.url.trim());

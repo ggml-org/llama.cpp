@@ -14,13 +14,3 @@ export enum SyncableParameterType {
 	STRING = 'string',
 	BOOLEAN = 'boolean'
 }
-
-/**
- * Settings field type - defines the input type for settings fields
- */
-export enum SettingsFieldType {
-	INPUT = 'input',
-	TEXTAREA = 'textarea',
-	CHECKBOX = 'checkbox',
-	SELECT = 'select'
-}

@@ -2,32 +2,32 @@
  * Connection lifecycle phases for MCP protocol
  */
 export enum MCPConnectionPhase {
-	Idle = 'idle',
-	TransportCreating = 'transport_creating',
-	TransportReady = 'transport_ready',
-	Initializing = 'initializing',
-	CapabilitiesExchanged = 'capabilities_exchanged',
-	ListingTools = 'listing_tools',
-	Connected = 'connected',
-	Error = 'error',
-	Disconnected = 'disconnected'
+	IDLE = 'idle',
+	TRANSPORT_CREATING = 'transport_creating',
+	TRANSPORT_READY = 'transport_ready',
+	INITIALIZING = 'initializing',
+	CAPABILITIES_EXCHANGED = 'capabilities_exchanged',
+	LISTING_TOOLS = 'listing_tools',
+	CONNECTED = 'connected',
+	ERROR = 'error',
+	DISCONNECTED = 'disconnected'
 }
 
 /**
  * Log level for connection events
  */
 export enum MCPLogLevel {
-	Info = 'info',
-	Warn = 'warn',
-	Error = 'error'
+	INFO = 'info',
+	WARN = 'warn',
+	ERROR = 'error'
 }
 
 /**
  * Transport types for MCP connections
  */
 export enum MCPTransportType {
-	Websocket = 'websocket',
-	StreamableHttp = 'streamable_http',
+	WEBSOCKET = 'websocket',
+	STREAMABLE_HTTP = 'streamable_http',
 	SSE = 'sse'
 }
 
@@ -35,8 +35,8 @@ export enum MCPTransportType {
  * Health check status for MCP servers
  */
 export enum HealthCheckStatus {
-	Idle = 'idle',
-	Connecting = 'connecting',
-	Success = 'success',
-	Error = 'error'
+	IDLE = 'idle',
+	CONNECTING = 'connecting',
+	SUCCESS = 'success',
+	ERROR = 'error'
 }

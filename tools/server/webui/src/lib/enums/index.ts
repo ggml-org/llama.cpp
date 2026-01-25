@@ -30,8 +30,6 @@ export { ModelModality } from './model';
 
 export { ServerRole, ServerModelStatus } from './server';
 
-export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
+export { ParameterSource, SyncableParameterType } from './settings';
 
-export { ColorMode, UrlPrefix } from './ui';
-
-export { KeyboardKey } from './keyboard';
+export { ColorMode, McpPromptVariant, UrlPrefix } from './ui';

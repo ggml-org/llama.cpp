@@ -75,7 +75,10 @@
 	}
 
 	type ReasoningSegment = {
-		type: 'text' | 'reasoning' | 'reasoning_pending';
+		type:
+			| AgenticSectionType.TEXT
+			| AgenticSectionType.REASONING
+			| AgenticSectionType.REASONING_PENDING;
 		content: string;
 	};
 
@@ -98,7 +101,7 @@
 			if (startIndex === -1) {
 				const remainingText = rawContent.slice(cursor);
 				if (remainingText) {
-					segments.push({ type: 'text', content: remainingText });
+					segments.push({ type: AgenticSectionType.TEXT, content: remainingText });
 				}
 				break;
 			}
@@ -106,7 +109,7 @@
 			if (startIndex > cursor) {
 				const textBefore = rawContent.slice(cursor, startIndex);
 				if (textBefore) {
-					segments.push({ type: 'text', content: textBefore });
+					segments.push({ type: AgenticSectionType.TEXT, content: textBefore });
 				}
 			}
 
@@ -116,14 +119,14 @@
 			if (endIndex === -1) {
 				const pendingContent = rawContent.slice(contentStart);
 				segments.push({
-					type: 'reasoning_pending',
+					type: AgenticSectionType.REASONING_PENDING,
 					content: stripPartialMarker(pendingContent)
 				});
 				break;
 			}
 
 			const reasoningContent = rawContent.slice(contentStart, endIndex);
-			segments.push({ type: 'reasoning', content: reasoningContent });
+			segments.push({ type: AgenticSectionType.REASONING, content: reasoningContent });
 			cursor = endIndex + REASONING_TAGS.END.length;
 		}
 

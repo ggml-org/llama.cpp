@@ -919,11 +919,11 @@ export class MCPClient {
 	async runHealthCheck(server: HealthCheckParams): Promise<void> {
 		const trimmedUrl = server.url.trim();
 		const logs: MCPConnectionLog[] = [];
-		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.Idle;
+		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.IDLE;
 
 		if (!trimmedUrl) {
 			mcpStore.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.Error,
+				status: HealthCheckStatus.ERROR,
 				message: 'Please enter a server URL first.',
 				logs: []
 			});
@@ -932,8 +932,8 @@ export class MCPClient {
 
 		// Initial connecting state
 		mcpStore.updateHealthCheck(server.id, {
-			status: HealthCheckStatus.Connecting,
-			phase: MCPConnectionPhase.TransportCreating,
+			status: HealthCheckStatus.CONNECTING,
+			phase: MCPConnectionPhase.TRANSPORT_CREATING,
 			logs: []
 		});
 
@@ -957,7 +957,7 @@ export class MCPClient {
 					currentPhase = phase;
 					logs.push(log);
 					mcpStore.updateHealthCheck(server.id, {
-						status: HealthCheckStatus.Connecting,
+						status: HealthCheckStatus.CONNECTING,
 						phase,
 						logs: [...logs]
 					});
@@ -976,7 +976,7 @@ export class MCPClient {
 			);
 
 			mcpStore.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.Success,
+				status: HealthCheckStatus.SUCCESS,
 				tools,
 				serverInfo: connection.serverInfo,
 				capabilities,
@@ -992,12 +992,12 @@ export class MCPClient {
 			const message = error instanceof Error ? error.message : 'Unknown error occurred';
 			logs.push({
 				timestamp: new Date(),
-				phase: MCPConnectionPhase.Error,
+				phase: MCPConnectionPhase.ERROR,
 				message: `Connection failed: ${message}`,
-				level: MCPLogLevel.Error
+				level: MCPLogLevel.ERROR
 			});
 			mcpStore.updateHealthCheck(server.id, {
-				status: HealthCheckStatus.Error,
+				status: HealthCheckStatus.ERROR,
 				message,
 				phase: currentPhase,
 				logs

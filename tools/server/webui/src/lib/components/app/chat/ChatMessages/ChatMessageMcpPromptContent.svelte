@@ -4,6 +4,7 @@
 	import { getFaviconUrl } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
+	import { McpPromptVariant } from '$lib/enums';
 
 	interface ContentPart {
 		text: string;
@@ -13,7 +14,7 @@
 	interface Props {
 		class?: string;
 		prompt: DatabaseMessageExtraMcpPrompt;
-		variant?: 'message' | 'attachment';
+		variant?: McpPromptVariant;
 		isLoading?: boolean;
 		loadError?: string;
 	}
@@ -21,7 +22,7 @@
 	let {
 		class: className = '',
 		prompt,
-		variant = 'message',
+		variant = McpPromptVariant.MESSAGE,
 		isLoading = false,
 		loadError
 	}: Props = $props();
@@ -99,7 +100,7 @@
 	});
 
 	let showArgBadges = $derived(hasArguments && !isLoading && !loadError);
-	let isAttachment = $derived(variant === 'attachment');
+	let isAttachment = $derived(variant === McpPromptVariant.ATTACHMENT);
 	let textSizeClass = $derived(isAttachment ? 'text-sm' : 'text-md');
 	let maxHeightStyle = $derived(
 		isAttachment

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChatMessageMcpPromptContent, RemoveButton } from '$lib/components/app';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { McpPromptVariant } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -22,7 +23,12 @@
 </script>
 
 <div class="group relative {className}">
-	<ChatMessageMcpPromptContent {prompt} variant="attachment" {isLoading} {loadError} />
+	<ChatMessageMcpPromptContent
+		{prompt}
+		variant={McpPromptVariant.ATTACHMENT}
+		{isLoading}
+		{loadError}
+	/>
 
 	{#if !readonly && onRemove}
 		<div

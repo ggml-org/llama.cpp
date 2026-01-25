@@ -59,7 +59,7 @@ export class MCPService {
 	private static createLog(
 		phase: MCPConnectionPhase,
 		message: string,
-		level: MCPLogLevel = MCPLogLevel.Info,
+		level: MCPLogLevel = MCPLogLevel.INFO,
 		details?: unknown
 	): MCPConnectionLog {
 		return {
@@ -100,7 +100,7 @@ export class MCPService {
 
 			return {
 				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.Websocket
+				type: MCPTransportType.WEBSOCKET
 			};
 		}
 
@@ -112,7 +112,7 @@ export class MCPService {
 					requestInit,
 					sessionId: config.sessionId
 				}),
-				type: MCPTransportType.StreamableHttp
+				type: MCPTransportType.STREAMABLE_HTTP
 			};
 		} catch (httpError) {
 			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
@@ -169,9 +169,9 @@ export class MCPService {
 
 		// Phase: Creating transport
 		onPhase?.(
-			MCPConnectionPhase.TransportCreating,
+			MCPConnectionPhase.TRANSPORT_CREATING,
 			this.createLog(
-				MCPConnectionPhase.TransportCreating,
+				MCPConnectionPhase.TRANSPORT_CREATING,
 				`Creating transport for ${serverConfig.url}`
 			)
 		);
@@ -181,8 +181,8 @@ export class MCPService {
 
 		// Phase: Transport ready
 		onPhase?.(
-			MCPConnectionPhase.TransportReady,
-			this.createLog(MCPConnectionPhase.TransportReady, `Transport ready (${transportType})`),
+			MCPConnectionPhase.TRANSPORT_READY,
+			this.createLog(MCPConnectionPhase.TRANSPORT_READY, `Transport ready (${transportType})`),
 			{ transportType }
 		);
 
@@ -199,8 +199,8 @@ export class MCPService {
 
 		// Phase: Initializing
 		onPhase?.(
-			MCPConnectionPhase.Initializing,
-			this.createLog(MCPConnectionPhase.Initializing, 'Sending initialize request...')
+			MCPConnectionPhase.INITIALIZING,
+			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
 		console.log(`[MCPService][${serverName}] Connecting to server...`);
@@ -213,11 +213,11 @@ export class MCPService {
 
 		// Phase: Capabilities exchanged
 		onPhase?.(
-			MCPConnectionPhase.CapabilitiesExchanged,
+			MCPConnectionPhase.CAPABILITIES_EXCHANGED,
 			this.createLog(
-				MCPConnectionPhase.CapabilitiesExchanged,
+				MCPConnectionPhase.CAPABILITIES_EXCHANGED,
 				'Capabilities exchanged successfully',
-				MCPLogLevel.Info,
+				MCPLogLevel.INFO,
 				{
 					serverCapabilities,
 					serverInfo
@@ -233,8 +233,8 @@ export class MCPService {
 
 		// Phase: Listing tools
 		onPhase?.(
-			MCPConnectionPhase.ListingTools,
-			this.createLog(MCPConnectionPhase.ListingTools, 'Listing available tools...')
+			MCPConnectionPhase.LISTING_TOOLS,
+			this.createLog(MCPConnectionPhase.LISTING_TOOLS, 'Listing available tools...')
 		);
 
 		console.log(`[MCPService][${serverName}] Connected, listing tools...`);
@@ -251,9 +251,9 @@ export class MCPService {
 
 		// Phase: Connected
 		onPhase?.(
-			MCPConnectionPhase.Connected,
+			MCPConnectionPhase.CONNECTED,
 			this.createLog(
-				MCPConnectionPhase.Connected,
+				MCPConnectionPhase.CONNECTED,
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
 		);
