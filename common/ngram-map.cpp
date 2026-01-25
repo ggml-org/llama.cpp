@@ -5,6 +5,97 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
+#include <sstream>
+
+// n-gram simple
+//
+
+/**
+ * Perform speculative generation using the model's own token history.
+ * Searches for a matching pattern in the token history and returns draft tokens.
+ *
+ * @param state     Current state of this implementation
+ * @param tokens    Token history to search in
+ * @param sampled   Last sampled token
+ * @return Vector of draft tokens, empty if no matching pattern is found
+ */
+llama_tokens common_ngram_simple_draft(
+        common_ngram_simple_state & state,
+        const llama_tokens & tokens, llama_token sampled) {
+
+    // Simple implementation of self-speculative decoding without draft model, without ngram-map.
+    //
+    const size_t cur_len = tokens.size();
+    // Only check every check_rate tokens to save compute
+    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
+    if (state.idx_last_check + state.config.check_rate > cur_len) {
+        llama_tokens draft_tokens;
+        return draft_tokens;
+    }
+
+    size_t n_draft_min = state.config.size_ngram; // size of n-gram to lookup in token history
+    size_t n_draft_max = state.config.size_mgram; // the m-gram following the found n-gram is used for draft
+
+    // vector for tokens we want to verify.
+    // return empty vector if there is no match.
+    llama_tokens draft_tokens;
+
+    // We need at least n_draft_min + n_draft_max + 1 tokens.
+    if (cur_len <= static_cast<size_t>(n_draft_min + n_draft_max + 1)) {
+        return draft_tokens;
+    }
+
+    // pattern search
+    llama_tokens pattern;
+    pattern.reserve(n_draft_min);
+    for (size_t j = cur_len - n_draft_min + 1; j < cur_len; ++j) {
+        pattern.push_back(tokens[j]);
+    }
+    pattern.push_back(sampled); // add the last token to the pattern
+
+    // We do a search in the token history.
+    state.idx_last_check = tokens.size();
+
+    size_t match_pos = 0; // we ignore position 0, position 0 == no match
+                          // search backwards, but skip the current match (we are currently there)
+    for (size_t j = cur_len - n_draft_min - 1; j > 0; --j) {
+        bool match = true;
+        for (size_t k = 0; k < pattern.size(); ++k) {
+            if (tokens[j + k] != pattern[k]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            match_pos = j;
+            break;
+        }
+    }
+    if (match_pos == 0) {
+        return draft_tokens;
+    }
+
+    const size_t copy_max = std::min(
+            n_draft_max,
+            cur_len - (match_pos + n_draft_min)
+            );
+    if (copy_max < n_draft_min) {
+        return draft_tokens;
+    }
+    LOG_DBG("%s: #tokens = %zu: found matching pattern at pos %zu, length %zu, draft length %zu\n",
+            __func__, cur_len,
+            match_pos, pattern.size(), copy_max);
+
+    draft_tokens.reserve(copy_max);
+    for (size_t j = 0; j < copy_max; ++j) {
+        draft_tokens.push_back(tokens[match_pos + n_draft_min + j]);
+    }
+    return draft_tokens;
+}
+
+
+// n-gram map
+//
 
 // maximum number of counted values of a ngram map value.
 #define COMMON_NGRAM_MAX_VALUE_COUNT 16380
@@ -262,14 +353,15 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
 
 // Print the values of a sublist of `llama_tokens & inp` to a string in the form [v0, v1, v2, ...].
 std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length) {
-    std::string result = "[";
+    std::ostringstream oss;
+    oss << '[';
     for (size_t i = 0; i < length; ++i) {
         if (i > 0) {
-            result += ", ";
+            oss << ", ";
         }
-        result += std::to_string(inp[start + i]);
+        oss << inp[start + i];
     }
-    result += "]";
-    return result;
+    oss << ']';
+    return oss.str();
 }
 

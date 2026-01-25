@@ -3,11 +3,50 @@
 // common/ngram-map.h: structures used to manage a map from n-grams to a list of m-grams
 //
 // These structures are used to do a lookup of n-grams followed by m-grams in token history.
+//
+// There are two algorithms implemented:
+// 1. ngram_simple: lookup of n-grams followed by m-grams in token history.
+// 2. ngram_map: lookup of n-grams followed by m-grams in token history using a map.
+//    The map is a vector of key n-grams, and for each key n-gram there is a list of value m-grams.
+//
 
 #include "llama.h"
 
 #include <string>
 #include <vector>
+
+// n-gram simple
+//
+
+// config of n-gram simple.
+struct common_ngram_simple_config {
+    uint16_t   size_ngram;      // size of n-grams to lookup in self-mode
+    uint16_t   size_mgram;      // size of m-grams to draft in self-mode
+    uint16_t   check_rate;      // check for speculative decoding without draft model for each check_rate token
+};
+
+// current state (and config) of n-gram simple.
+struct common_ngram_simple_state {
+    common_ngram_simple_config config;
+
+    size_t           idx_last_check  =  0; // index of last check in context history (mutable)
+
+    common_ngram_simple_state(const common_ngram_simple_config & config)
+        : config(config) {}
+};
+
+// Searches for a n-gram in the history and checks whether a draft sequence should be generated.
+// state:              the ngram simple state to search in.
+// inp:                the tokens generated so far.
+// sampled:            the token that was just sampled.
+// draft:              vector to store the draft tokens, initially empty.
+llama_tokens common_ngram_simple_draft(
+        common_ngram_simple_state & state,
+        const llama_tokens & tokens, llama_token sampled);
+
+
+// n-gram map
+//
 
 // maximum number of m-gram values stored for each key n-gram.
 #define COMMON_NGRAM_MAX_VALUES 4
@@ -51,6 +90,7 @@ struct common_ngram_map {
 
     size_t   idx_last_check       = 0; // index of last check in context history
 };
+
 
 // Searches for the n-gram in the history and checks whether a draft sequence should be generated.
 // map:                the ngram map to search in.
