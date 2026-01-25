@@ -2,9 +2,9 @@
 
 #include "ggml-ifairy-lut.h"
 
-// V2 core path uses a single LUT layout:
-// - merged64: 64 patterns × 4 channels × int8 = 256 bytes per group
-static const int    k_ifairy_lut_patterns = 64;
-static const int    k_ifairy_lut_channels = 4;
-static const size_t k_ifairy_lut_merged64_group_bytes =
-    (size_t) k_ifairy_lut_channels * (size_t) k_ifairy_lut_patterns;  // 256
+// V2 core path (lut_c-style):
+// - 16-entry LUT × 4 channels × int8 = 64 bytes per group
+// - Weight codes are packed per 16 output rows (see `struct ifairy_lut_wtile_16`)
+static const int    k_ifairy_lut_entries     = 16;
+static const int    k_ifairy_lut_channels    = 4;
+static const size_t k_ifairy_lut_group_bytes = (size_t) k_ifairy_lut_channels * (size_t) k_ifairy_lut_entries;  // 64

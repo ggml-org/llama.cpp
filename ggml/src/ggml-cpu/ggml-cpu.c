@@ -1312,8 +1312,8 @@ void ggml_compute_forward_mul_mat(
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
         src0->ne[0] % QK_K == 0 && src1->ne[0] == src0->ne[0]) {
-        // NOTE: indexes are prepared up-front in ggml_graph_compute(); this is a cheap cache check.
-        const bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
+        // NOTE: packed weights are prepared up-front in ggml_graph_compute(); this is a cheap cache check.
+        const bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->packed_w;
 
         const int64_t M = ne01;
         const int64_t K = ne00;
@@ -1339,8 +1339,8 @@ void ggml_compute_forward_mul_mat(
         const size_t groups_sz = (size_t) groups;
         GGML_ASSERT(groups_sz == 0 || (size_t) N <= SIZE_MAX / groups_sz);
         const size_t lut_groups = (size_t) N * groups_sz;
-        GGML_ASSERT(lut_groups == 0 || (size_t) k_ifairy_lut_merged64_group_bytes <= SIZE_MAX / lut_groups);
-        const size_t lut_bytes = lut_groups * (size_t) k_ifairy_lut_merged64_group_bytes;
+        GGML_ASSERT(lut_groups == 0 || (size_t) k_ifairy_lut_group_bytes <= SIZE_MAX / lut_groups);
+        const size_t lut_bytes = lut_groups * (size_t) k_ifairy_lut_group_bytes;
 
         // activation scales are per-block (shared by all groups in the block)
         const size_t blocks_per_col_sz = (size_t) blocks_per_col;
@@ -1357,8 +1357,8 @@ void ggml_compute_forward_mul_mat(
         GGML_ASSERT(need == ggml_ifairy_lut_get_wsize(src0, src1, dst, nth));
 
         if (have_index && params->wdata && params->wsize >= need && shared_bytes > 0) {
-            const struct ifairy_lut_extra * extra   = (const struct ifairy_lut_extra *) src0->extra;
-            const uint8_t *                 indexes = extra->indexes;
+            const struct ifairy_lut_extra *    extra    = (const struct ifairy_lut_extra *) src0->extra;
+            const struct ifairy_lut_wtile_16 * packed_w = (const struct ifairy_lut_wtile_16 *) extra->packed_w;
 
             uint8_t *          work  = (uint8_t *) params->wdata;
             block_ifairy_q16 * act_q = src1->type == GGML_TYPE_F32 ? (block_ifairy_q16 *) work : NULL;
@@ -1368,7 +1368,6 @@ void ggml_compute_forward_mul_mat(
             float *      scales = (float *) (shared + lut_bytes);
             const size_t act_stride =
                 src1->type == GGML_TYPE_F32 ? (size_t) blocks_per_col * sizeof(block_ifairy_q16) : nb11;
-            const size_t index_stride = (size_t) groups;
 
             // quantize activations once if needed (parallelize across columns to reduce thread idle)
             if (src1->type == GGML_TYPE_F32) {
@@ -1400,19 +1399,23 @@ void ggml_compute_forward_mul_mat(
 
             uint8_t * dst_base = (uint8_t *) dst->data;
             // V2 core path: build LUT once, shared across all threads (parallelize preprocess across threads)
-            ggml_ifairy_lut_preprocess_ex_merged64((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith,
-                                                   nth);
+            ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith, nth);
             ggml_barrier(params->threadpool);
 
-            const int64_t row0  = (M * ith) / nth;
-            const int64_t row1  = (M * (ith + 1)) / nth;
+            const int64_t tiles_total = (M + 15) / 16;
+            const int64_t tile0       = (tiles_total * ith) / nth;
+            const int64_t tile1       = (tiles_total * (ith + 1)) / nth;
+
+            const int64_t row0  = tile0 * 16;
+            const int64_t row1  = tile1 * 16 > M ? M : tile1 * 16;
             const int64_t nrows = row1 - row0;
+
             if (nrows > 0) {
-                const uint8_t *      row_indexes = indexes + (size_t) row0 * index_stride;
-                const block_ifairy * w_row       = (const block_ifairy *) src0->data + row0 * blocks_per_col;
-                float *              dst_f       = (float *) (dst_base + (size_t) row0 * nb0);
-                ggml_ifairy_lut_qgemm_merged64((int) nrows, (int) K, (int) N, w_row, row_indexes, lut, scales, dst_f,
-                                               nb1, nb0, true, false);
+                const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
+                float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
+
+                ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
+                                            /*pack_bf16*/ true, /*add*/ false);
             }
             return;
         }

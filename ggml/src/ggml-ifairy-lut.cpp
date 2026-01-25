@@ -94,7 +94,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     }
 
     const size_t lut_groups  = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups);
-    const size_t lut_bytes   = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    const size_t lut_bytes   = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
     const size_t scale_bytes = ggml_ifairy_checked_mul_size(
         ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col), 2u),
         sizeof(float));

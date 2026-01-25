@@ -71,8 +71,10 @@ struct ifairy_lut_wtile_16 {
 // Current state:
 // - CPU-only iFairy LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_ARM_LUT + GGML_IFAIRY_LUT env).
 // - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
-// - Index encoding is direct 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
-// - V2 core path keeps a single production layout/kernel: merged64 (64 patterns × 4 channels × int8 per group).
+// - Index encoding is 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
+// - V2 core path keeps a single production layout/kernel:
+//   - LUT: 16 entries × 4 channels × int8 per group (64B/group), lut_c-style
+//   - Weights: packed 16-row tiles (`struct ifairy_lut_wtile_16`), lut_c-style
 // - Runtime env:
 //   - `GGML_IFAIRY_LUT=0/1` (enable/disable)
 //   - `GGML_IFAIRY_LUT_DEBUG=0/1` (debug logging)
@@ -87,27 +89,26 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
                                  const struct ggml_tensor * dst,
                                  int                        n_threads);
 bool   ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out);
-void   ggml_ifairy_lut_preprocess_ex_merged64(int          m,
-                                              int          k,
-                                              int          n,
-                                              const void * act,
-                                              size_t       act_stride,
-                                              void *       lut_scales,
-                                              void *       lut_buf,
-                                              int          ith,
-                                              int          nth);
-void   ggml_ifairy_lut_qgemm_merged64(int             m,
-                                      int             k,
-                                      int             n,
-                                      const void *    qweights,
-                                      const uint8_t * indexes,
-                                      const void *    lut,
-                                      const void *    lut_scales,
-                                      float *         dst,
-                                      size_t          dst_col_stride,
-                                      size_t          dst_row_stride,
-                                      bool            pack_bf16,
-                                      bool            add);
+void   ggml_ifairy_lut_preprocess_ex_lut16(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_scales,
+                                           void *       lut_buf,
+                                           int          ith,
+                                           int          nth);
+void   ggml_ifairy_lut_qgemm_lut16(int          m,
+                                   int          k,
+                                   int          n,
+                                   const void * packed_wtiles,
+                                   const void * lut,
+                                   const void * lut_scales,
+                                   float *      dst,
+                                   size_t       dst_col_stride,
+                                   size_t       dst_row_stride,
+                                   bool         pack_bf16,
+                                   bool         add);
 void   ggml_ifairy_lut_mul_mat_scalar(int          m,
                                       int          k,
                                       int          n,
