@@ -1,5 +1,10 @@
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
+import type {
+	AttachmentDisplayItemsOptions,
+	ChatUploadedFile,
+	DatabaseMessageExtra
+} from '$lib/types';
 
 /**
  * Formats attachment content for API requests with consistent header style.
@@ -19,11 +24,6 @@ export function formatAttachmentText(
 ): string {
 	const header = extra ? `${name} (${extra})` : name;
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
-}
-
-export interface AttachmentDisplayItemsOptions {
-	uploadedFiles?: ChatUploadedFile[];
-	attachments?: DatabaseMessageExtra[];
 }
 
 /**

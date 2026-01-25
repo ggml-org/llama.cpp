@@ -26,20 +26,17 @@
  */
 
 import { browser } from '$app/environment';
-import type { AgenticFlowParams, AgenticFlowResult } from '$lib/clients';
-import type { AgenticSession, AgenticConfig } from '$lib/types/agentic';
-import type { SettingsConfigType } from '$lib/types/settings';
-import type { McpServerOverride } from '$lib/types/database';
+import type {
+	AgenticFlowParams,
+	AgenticFlowResult,
+	AgenticSession,
+	AgenticConfig,
+	SettingsConfigType,
+	McpServerOverride
+} from '$lib/types';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { agenticClient } from '$lib/clients/agentic.client';
-
-export type {
-	AgenticFlowCallbacks,
-	AgenticFlowOptions,
-	AgenticFlowParams,
-	AgenticFlowResult
-} from '$lib/clients';
 
 /**
  * Creates a fresh agentic session with default values.

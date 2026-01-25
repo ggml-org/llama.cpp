@@ -13,24 +13,13 @@
  */
 
 import { normalizeFloatingPoint } from '$lib/utils';
-
-export type ParameterSource = 'default' | 'custom';
-export type ParameterValue = string | number | boolean;
-export type ParameterRecord = Record<string, ParameterValue>;
-
-export interface ParameterInfo {
-	value: string | number | boolean;
-	source: ParameterSource;
-	serverDefault?: string | number | boolean;
-	userOverride?: string | number | boolean;
-}
-
-export interface SyncableParameter {
-	key: string;
-	serverKey: string;
-	type: 'number' | 'string' | 'boolean';
-	canSync: boolean;
-}
+import type {
+	SyncableParameter,
+	ParameterRecord,
+	ParameterInfo,
+	ParameterValue,
+	ParameterSource
+} from '$lib/types';
 
 /**
  * Mapping of webui setting keys to server parameter keys

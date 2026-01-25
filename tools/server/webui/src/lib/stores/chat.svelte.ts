@@ -21,11 +21,14 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { browser } from '$app/environment';
-import { chatClient, type ApiProcessingState, type ErrorDialogState } from '$lib/clients';
-import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
+import { chatClient } from '$lib/clients';
+import type {
+	ApiProcessingState,
+	ErrorDialogState,
+	DatabaseMessage,
+	DatabaseMessageExtra
+} from '$lib/types';
 import { MessageRole, MessageType } from '$lib/enums';
-
-export type { ApiProcessingState, ErrorDialogState };
 
 class ChatStore {
 	activeProcessingState = $state<ApiProcessingState | null>(null);

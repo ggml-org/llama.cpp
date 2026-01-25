@@ -12,10 +12,7 @@ export { getAuthHeaders, getJsonHeaders } from './api-headers';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export {
-	getAttachmentDisplayItems,
-	type AttachmentDisplayItemsOptions
-} from './attachment-display';
+export { getAttachmentDisplayItems } from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -45,9 +42,7 @@ export {
 	copyCodeToClipboard,
 	formatMessageForClipboard,
 	parseClipboardContent,
-	hasClipboardAttachments,
-	type ClipboardTextAttachment,
-	type ParsedClipboardContent
+	hasClipboardAttachments
 } from './clipboard';
 
 // File preview utilities
@@ -82,8 +77,7 @@ export { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
 export {
 	isFileTypeSupportedByModel,
 	filterFilesByModalities,
-	generateModalityErrorMessage,
-	type ModalityCapabilities
+	generateModalityErrorMessage
 } from './modality-file-validation';
 
 // Model name utilities

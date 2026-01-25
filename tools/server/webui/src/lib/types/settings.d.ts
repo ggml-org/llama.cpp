@@ -69,3 +69,24 @@ export interface SettingsChatServiceOptions {
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 	[key: string]: SettingsConfigValue;
 };
+
+/**
+ * Parameter synchronization types for server defaults and user overrides
+ */
+export type ParameterSource = 'default' | 'custom';
+export type ParameterValue = string | number | boolean;
+export type ParameterRecord = Record<string, ParameterValue>;
+
+export interface ParameterInfo {
+	value: string | number | boolean;
+	source: ParameterSource;
+	serverDefault?: string | number | boolean;
+	userOverride?: string | number | boolean;
+}
+
+export interface SyncableParameter {
+	key: string;
+	serverKey: string;
+	type: 'number' | 'string' | 'boolean';
+	canSync: boolean;
+}

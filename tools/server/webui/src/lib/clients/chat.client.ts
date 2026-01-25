@@ -18,56 +18,15 @@ import { agenticStore } from '$lib/stores/agentic.svelte';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
+import type {
+	ChatMessageTimings,
+	ChatMessagePromptProgress,
+	ChatStreamCallbacks,
+	ErrorDialogState
+} from '$lib/types/chat';
 import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
+import type { ApiProcessingState } from '$lib/types/api';
 import { MessageRole, MessageType } from '$lib/enums';
-
-export interface ApiProcessingState {
-	status: 'idle' | 'preparing' | 'generating';
-	tokensDecoded: number;
-	tokensRemaining: number;
-	contextUsed: number;
-	contextTotal: number;
-	outputTokensUsed: number;
-	outputTokensMax: number;
-	hasNextToken: boolean;
-	tokensPerSecond: number;
-	temperature: number;
-	topP: number;
-	speculative: boolean;
-	progressPercent?: number;
-	promptProgress?: {
-		total: number;
-		cache: number;
-		processed: number;
-		time_ms: number;
-	};
-	promptTokens: number;
-	promptMs?: number;
-	cacheTokens: number;
-}
-
-export interface ErrorDialogState {
-	type: 'timeout' | 'server';
-	message: string;
-	contextInfo?: { n_prompt_tokens: number; n_ctx: number };
-}
-
-export interface ChatStreamCallbacks {
-	onChunk?: (chunk: string) => void;
-	onReasoningChunk?: (chunk: string) => void;
-	onToolCallChunk?: (chunk: string) => void;
-	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
-	onModel?: (model: string) => void;
-	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
-	onComplete?: (
-		content?: string,
-		reasoningContent?: string,
-		timings?: ChatMessageTimings,
-		toolCallContent?: string
-	) => void;
-	onError?: (error: Error) => void;
-}
 
 interface ChatStoreStateCallbacks {
 	setChatLoading: (convId: string, loading: boolean) => void;

@@ -15,3 +15,11 @@ export interface ModelOption {
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
 }
+
+/**
+ * Modality capabilities for file validation
+ */
+export interface ModalityCapabilities {
+	hasVision: boolean;
+	hasAudio: boolean;
+}

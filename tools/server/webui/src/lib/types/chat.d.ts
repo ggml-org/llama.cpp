@@ -1,3 +1,5 @@
+import type { DatabaseMessageExtra } from './database';
+
 export interface ChatUploadedFile {
 	id: string;
 	name: string;
@@ -92,4 +94,68 @@ export interface ChatMessageToolCallTiming {
 	name: string;
 	duration_ms: number;
 	success: boolean;
+}
+
+/**
+ * Callbacks for streaming chat responses
+ */
+export interface ChatStreamCallbacks {
+	onChunk?: (chunk: string) => void;
+	onReasoningChunk?: (chunk: string) => void;
+	onToolCallChunk?: (chunk: string) => void;
+	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
+	onModel?: (model: string) => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onComplete?: (
+		content?: string,
+		reasoningContent?: string,
+		timings?: ChatMessageTimings,
+		toolCallContent?: string
+	) => void;
+	onError?: (error: Error) => void;
+}
+
+/**
+ * Error dialog state for displaying server/timeout errors
+ */
+export interface ErrorDialogState {
+	type: 'timeout' | 'server';
+	message: string;
+	contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+}
+
+/**
+ * Live processing stats during prompt evaluation
+ */
+export interface LiveProcessingStats {
+	tokensProcessed: number;
+	totalTokens: number;
+	timeMs: number;
+	tokensPerSecond: number;
+	etaSecs?: number;
+}
+
+/**
+ * Live generation stats during token generation
+ */
+export interface LiveGenerationStats {
+	tokensGenerated: number;
+	timeMs: number;
+	tokensPerSecond: number;
+}
+
+/**
+ * Options for getting attachment display items
+ */
+export interface AttachmentDisplayItemsOptions {
+	uploadedFiles?: ChatUploadedFile[];
+	attachments?: DatabaseMessageExtra[];
+}
+
+/**
+ * Result of file processing operation
+ */
+export interface FileProcessingResult {
+	extras: DatabaseMessageExtra[];
+	emptyFiles: string[];
 }
