@@ -124,6 +124,15 @@ static __dpct_inline__ T op_log(T x) {
 }
 
 template<typename T>
+static __dpct_inline__ T op_softplus(T x) {
+    const T threshold = static_cast<T>(20);
+    if (x > threshold) {
+        return x;
+    }
+    return sycl::log(static_cast<T>(1) + sycl::exp(x));
+}
+
+template<typename T>
 static __dpct_inline__ T op_neg(T x) {
     return -x;
 }
@@ -695,6 +704,12 @@ static inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor
         });
 }
 
+static inline void ggml_sycl_op_softplus(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
+        return op_softplus(x);
+    });
+}
+
 static inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
         return op_neg(x);
@@ -1099,6 +1114,11 @@ void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_log(ctx, dst);
+}
+
+void ggml_sycl_softplus(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_softplus(ctx, dst);
 }
 
 void ggml_sycl_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
