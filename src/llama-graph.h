@@ -317,6 +317,8 @@ public:
     const llama_kv_cache_context * mctx;
 };
 
+// V-less input for the KV cache
+// ref: https://github.com/ggml-org/llama.cpp/pull/19067
 class llm_graph_input_attn_k : public llm_graph_input_i {
 public:
     llm_graph_input_attn_k(
@@ -868,7 +870,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    llm_graph_input_attn_k  * build_attn_inp_k () const;
+    llm_graph_input_attn_k  * build_attn_inp_k() const;
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_k * inp,
