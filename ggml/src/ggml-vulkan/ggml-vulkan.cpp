@@ -8363,7 +8363,6 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
     const uint32_t MatBr = 16, MatBc = 16;
 
     const uint32_t row_split = Bc / MatBc;
-    const uint32_t wg_size = row_split * device->subgroup_size;
 
     const uint32_t hsk_pad = ROUNDUP_POW2(hsk, 16);
 
