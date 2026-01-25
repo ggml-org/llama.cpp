@@ -32,7 +32,7 @@ export type {
 	ApiRouterModelsUnloadResponse
 } from './api';
 
-// Chat types - interfaces only (enums are in $lib/enums)
+// Chat types
 export type {
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,

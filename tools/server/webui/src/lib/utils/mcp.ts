@@ -26,6 +26,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 	if (!rawServers) return [];
 
 	let parsed: unknown;
+
 	if (typeof rawServers === 'string') {
 		const trimmed = rawServers.trim();
 		if (!trimmed) return [];
@@ -34,6 +35,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			parsed = JSON.parse(trimmed);
 		} catch (error) {
 			console.warn('[MCP] Failed to parse mcpServers JSON, ignoring value:', error);
+
 			return [];
 		}
 	} else {
