@@ -2559,6 +2559,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
         }
     }
 
+    // [TAG_CONTEXT_STATE_LOGITS]
     // write logits
     {
         LLAMA_LOG_DEBUG("%s: - writing logits\n", __func__);
