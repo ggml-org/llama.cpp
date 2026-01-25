@@ -31,6 +31,7 @@ static void test_string_methods(testing & t);
 static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_fuzzing(testing & t);
+static void test_recursion(testing & t);
 
 static bool g_python_mode = false;
 
@@ -68,6 +69,7 @@ int main(int argc, char *argv[]) {
     t.test("object methods", test_object_methods);
     if (!g_python_mode) {
         t.test("fuzzing", test_fuzzing);
+        t.test("recursion", test_recursion);
     }
 
     return t.summary();
@@ -1846,6 +1848,84 @@ static void test_fuzzing(testing & t) {
             };
 
             t.assert_true("builtin " + type_name + "." + fn_name + " #" + std::to_string(i), fuzz_test_template(tmpl, vars));
+        }
+    });
+}
+
+static void test_recursion(testing & t) {
+    t.test("recursion limit", [](testing & t) {
+        const std::string tmpl = "{% macro recursive() %}{{ recursive() }}{% endmacro %}{{ recursive() }}";
+        try {
+            jinja::lexer lexer;
+            auto lexer_res = lexer.tokenize(tmpl);
+            jinja::program prog = jinja::parse_from_tokens(lexer_res);
+            jinja::context ctx(tmpl);
+            jinja::runtime runtime(ctx);
+            runtime.execute(prog);
+            t.assert_true("should have thrown", false);
+        } catch (const std::exception & e) {
+            std::string what = e.what();
+            t.assert_true("caught recursion error", what.find("Max recursion depth exceeded") != std::string::npos);
+        }
+    });
+
+    t.test("nested if statements", [](testing & t) {
+        std::string tmpl = "";
+        for (int i = 0; i < 110; ++i) tmpl += "{% if true %}";
+        tmpl += "deep";
+        for (int i = 0; i < 110; ++i) tmpl += "{% endif %}";
+        try {
+            jinja::lexer lexer;
+            auto lexer_res = lexer.tokenize(tmpl);
+            jinja::program prog = jinja::parse_from_tokens(lexer_res);
+            jinja::context ctx(tmpl);
+            jinja::runtime runtime(ctx);
+            runtime.execute(prog);
+            t.assert_true("should have thrown (nested if)", false);
+        } catch (const std::exception & e) {
+            std::string what = e.what();
+            bool is_depth_error = what.find("Max recursion depth exceeded") != std::string::npos ||
+                                  what.find("Max parse depth exceeded") != std::string::npos;
+            t.assert_true("caught depth error (nested if)", is_depth_error);
+        }
+    });
+
+    t.test("nested binary expressions", [](testing & t) {
+        std::string tmpl = "{{ ";
+        for (int i = 0; i < 110; ++i) tmpl += "1 + (";
+        tmpl += "1";
+        for (int i = 0; i < 110; ++i) tmpl += ")";
+        tmpl += " }}";
+        try {
+            jinja::lexer lexer;
+            auto lexer_res = lexer.tokenize(tmpl);
+            jinja::program prog = jinja::parse_from_tokens(lexer_res);
+            jinja::context ctx(tmpl);
+            jinja::runtime runtime(ctx);
+            runtime.execute(prog);
+            t.assert_true("should have thrown (nested binary)", false);
+        } catch (const std::exception & e) {
+            std::string what = e.what();
+            bool is_depth_error = what.find("Max recursion depth exceeded") != std::string::npos ||
+                                  what.find("Max parse depth exceeded") != std::string::npos;
+            t.assert_true("caught depth error (nested binary)", is_depth_error);
+        }
+    });
+
+    t.test("nested array literals", [](testing & t) {
+        std::string tmpl = "{{ ";
+        for (int i = 0; i < 200; ++i) tmpl += "[";
+        tmpl += "1";
+        for (int i = 0; i < 200; ++i) tmpl += "]";
+        tmpl += " }}";
+        try {
+            jinja::lexer lexer;
+            auto lexer_res = lexer.tokenize(tmpl);
+            jinja::program prog = jinja::parse_from_tokens(lexer_res);
+            t.assert_true("should have thrown (nested array)", false);
+        } catch (const std::exception & e) {
+            std::string what = e.what();
+            t.assert_true("caught parse depth error (nested array)", what.find("Max parse depth exceeded") != std::string::npos);
         }
     });
 }

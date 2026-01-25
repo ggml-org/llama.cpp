@@ -21,6 +21,8 @@ static bool is_type(const statement_ptr & ptr) {
 class parser {
     const std::vector<token> & tokens;
     size_t current = 0;
+    int parse_depth = 0;
+    static constexpr int MAX_PARSE_DEPTH = 100;
 
     std::string source; // for error reporting
 
@@ -318,8 +320,12 @@ private:
     }
 
     statement_ptr parse_expression() {
-        // Choose parse function with lowest precedence
-        return parse_if_expression();
+        if (++parse_depth > MAX_PARSE_DEPTH) {
+            throw parser_exception("Max parse depth exceeded", source, peek().pos);
+        }
+        auto result = parse_if_expression();
+        --parse_depth;
+        return result;
     }
 
     statement_ptr parse_if_expression() {
