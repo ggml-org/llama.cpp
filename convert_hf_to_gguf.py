@@ -9106,7 +9106,7 @@ class NemotronHModel(GraniteHybridModel):
                 else:
                     return
 
-        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
