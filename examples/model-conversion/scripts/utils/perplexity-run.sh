@@ -3,7 +3,8 @@
 set -e
 
 QUANTIZED_MODEL="${1:-"$QUANTIZED_MODEL"}"
-LOGITS_FILE="${1:-"$LOGITS_FILE"}"
+LOGITS_FILE="${2:-"$LOGITS_FILE"}"
+BUILD_DIR="${3:-"$BUILD_DIR"}"
 
 if [ -z "$QUANTIZED_MODEL" ]; then
     echo "Error: Model path must be provided either as:" >&2
@@ -18,11 +19,15 @@ if [ ! -f ${LOGITS_FILE} ]; then
     exit 1
 fi
 
+if [ -z "$BUILD_DIR" ]; then
+    BUILD_DIR="../../build"
+fi
+
 echo "Model: $QUANTIZED_MODEL"
 echo "Data file: $LOGITS_FILE"
 
-cmake --build ../../build --target llama-perplexity -j8
+cmake --build $BUILD_DIR --target llama-perplexity -j8
 
-../.././build/bin/llama-perplexity -m $QUANTIZED_MODEL \
+${BUILD_DIR}/bin/llama-perplexity -m $QUANTIZED_MODEL \
     --kl-divergence-base $LOGITS_FILE \
     --kl-divergence

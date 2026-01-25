@@ -372,7 +372,8 @@ static size_t ggml_backend_zdnn_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return true;
+    /* while it resides in host memory, additional transformation is needed */
+    return false;
 
     GGML_UNUSED(buft);
 }

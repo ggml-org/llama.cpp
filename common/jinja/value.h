@@ -598,7 +598,6 @@ protected:
 };
 using value_none = std::shared_ptr<value_none_t>;
 
-
 struct value_undefined_t : public value_t {
     std::string hint; // for debugging, to indicate where undefined came from
     value_undefined_t(const std::string & h = "") : hint(h) {}

@@ -57,6 +57,8 @@ extern const char * LLAMA_COMMIT;
 extern const char * LLAMA_COMPILER;
 extern const char * LLAMA_BUILD_TARGET;
 
+const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
+
 struct common_control_vector_load_info;
 
 //
@@ -284,6 +286,7 @@ struct common_params_diffusion {
 };
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
+// only used by server
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_AUTO,            // Same as deepseek, using `message.reasoning_content`

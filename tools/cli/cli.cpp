@@ -66,21 +66,28 @@ struct cli_context {
         defaults.stream = true; // make sure we always use streaming mode
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
-        defaults.oaicompat_chat_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     }
 
     std::string generate_completion(result_timings & out_timings) {
         server_response_reader rd = ctx_server.get_response_reader();
-        auto formatted = format_chat();
+        auto chat_params = format_chat();
         {
             // TODO: reduce some copies here in the future
             server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
             task.id         = rd.get_new_id();
             task.index      = 0;
-            task.params     = defaults;         // copy
-            task.cli_prompt = formatted.prompt; // copy
-            task.cli_files  = input_files;      // copy
+            task.params     = defaults;           // copy
+            task.cli_prompt = chat_params.prompt; // copy
+            task.cli_files  = input_files;        // copy
             task.cli        = true;
+
+            // chat template settings
+            task.params.chat_parser_params = common_chat_parser_params(chat_params);
+            task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            if (!chat_params.parser.empty()) {
+                task.params.chat_parser_params.parser.load(chat_params.parser);
+            }
+
             rd.post_task({std::move(task)});
         }
 
@@ -172,7 +179,6 @@ struct cli_context {
         inputs.use_jinja             = chat_params.use_jinja;
         inputs.parallel_tool_calls   = false;
         inputs.add_generation_prompt = true;
-        inputs.reasoning_format      = chat_params.reasoning_format;
         inputs.enable_thinking       = chat_params.enable_thinking;
 
         // Apply chat template to the list of messages

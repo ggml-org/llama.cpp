@@ -33,6 +33,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_NONE, // llama.cpp native format
     TASK_RESPONSE_TYPE_OAI_CHAT,
     TASK_RESPONSE_TYPE_OAI_CMPL,
+    TASK_RESPONSE_TYPE_OAI_RESP,
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
 };
@@ -78,7 +79,9 @@ struct task_params {
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
-    common_chat_syntax oaicompat_chat_syntax;
+
+    // per-request parameters for chat parsing
+    common_chat_parser_params chat_parser_params;
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
@@ -91,17 +94,27 @@ struct task_params {
 struct task_result_state {
     // tracking diffs for partial tool calls
     std::vector<common_chat_msg_diff> diffs;
-    common_chat_syntax oaicompat_chat_syntax;
+    common_chat_parser_params chat_parser_params;
     common_chat_msg chat_msg;
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
 
-    // for Anthropic API streaming: track content block state across chunks
-    bool anthropic_thinking_block_started = false;
-    bool anthropic_text_block_started = false;
+    // for OpenAI Responses and Anthropic streaming API:
+    // track output item / content block state across chunks
+    bool thinking_block_started = false;
+    bool text_block_started = false;
 
-    task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
-        : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
+    // for OpenAI Responses streaming API
+    const std::string oai_resp_id;
+    const std::string oai_resp_reasoning_id;
+    const std::string oai_resp_message_id;
+    std::string oai_resp_fc_id; // function call ID for current args delta
+
+    task_result_state(const common_chat_parser_params & chat_parser_params)
+        : chat_parser_params(chat_parser_params)
+        , oai_resp_id("resp_" + random_string())
+        , oai_resp_reasoning_id("rs_" + random_string())
+        , oai_resp_message_id("msg_" + random_string()) {}
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -230,7 +243,7 @@ struct server_task {
     // the task will be moved into queue, then onto slots
     // however, the state must be kept by caller (e.g., HTTP thread)
     task_result_state create_state() const {
-        return task_result_state(params.oaicompat_chat_syntax);
+        return task_result_state(params.chat_parser_params);
     }
 
     bool is_parent() const {
@@ -350,6 +363,11 @@ struct server_task_result_cmpl_final : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
+    // for OpenAI Responses API
+    std::string oai_resp_id;
+    std::string oai_resp_reasoning_id;
+    std::string oai_resp_message_id;
+
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
     }
@@ -359,6 +377,10 @@ struct server_task_result_cmpl_final : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+
+        oai_resp_id = state.oai_resp_id;
+        oai_resp_reasoning_id = state.oai_resp_reasoning_id;
+        oai_resp_message_id = state.oai_resp_message_id;
     }
 
     json to_json_non_oaicompat();
@@ -368,6 +390,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_oaicompat_chat();
 
     json to_json_oaicompat_chat_stream();
+
+    json to_json_oaicompat_resp();
+
+    json to_json_oaicompat_resp_stream();
 
     json to_json_anthropic();
 
@@ -395,44 +421,34 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
+    // Streaming state copied from task_result_state for this chunk
+    bool thinking_block_started = false;
+    bool text_block_started     = false;
+
+    // for OpenAI Responses API
+    std::string oai_resp_id;
+    std::string oai_resp_reasoning_id;
+    std::string oai_resp_message_id;
+    std::string oai_resp_fc_id;
+
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
-    // Streaming state copied from task_result_state for this chunk
-    bool anthropic_thinking_block_started = false;
-    bool anthropic_text_block_started = false;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
 
+    virtual void update(task_result_state & state) override;
+
     virtual json to_json() override;
-
-    virtual void update(task_result_state & state) override {
-        is_updated = true;
-        state.update_chat_msg(content, true, oaicompat_msg_diffs);
-        // track if the accumulated message has any reasoning content
-        anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
-
-        // Copy current state for use in to_json_anthropic() (reflects state BEFORE this chunk)
-        anthropic_thinking_block_started = state.anthropic_thinking_block_started;
-        anthropic_text_block_started = state.anthropic_text_block_started;
-
-        // Pre-compute state updates based on diffs (for next chunk)
-        for (const auto & diff : oaicompat_msg_diffs) {
-            if (!diff.reasoning_content_delta.empty() && !state.anthropic_thinking_block_started) {
-                state.anthropic_thinking_block_started = true;
-            }
-            if (!diff.content_delta.empty() && !state.anthropic_text_block_started) {
-                state.anthropic_text_block_started = true;
-            }
-        }
-    }
 
     json to_json_non_oaicompat();
 
     json to_json_oaicompat();
 
     json to_json_oaicompat_chat();
+
+    json to_json_oaicompat_resp();
 
     json to_json_anthropic();
 };

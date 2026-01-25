@@ -13,8 +13,6 @@
 #include <vector>
 #include <cinttypes>
 
-const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
-
 using json = nlohmann::ordered_json;
 
 #define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
@@ -274,6 +272,7 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
+// global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
     bool prefill_assistant;
@@ -294,6 +293,9 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
+
+// convert OpenAI Responses API format to OpenAI Chat Completions API format
+json convert_responses_to_chatcmpl(const json & body);
 
 // convert Anthropic Messages API format to OpenAI Chat Completions API format
 json convert_anthropic_to_oai(const json & body);
@@ -331,6 +333,8 @@ std::string tokens_to_output_formatted_string(const llama_context * ctx, const l
 // format server-sent event (SSE), return the formatted string to send
 // note: if data is a json array, it will be sent as multiple events, one per item
 std::string format_oai_sse(const json & data);
+
+std::string format_oai_resp_sse(const json & data);
 
 // format Anthropic-style SSE with event types
 std::string format_anthropic_sse(const json & data);
