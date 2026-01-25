@@ -2,14 +2,11 @@
 
 llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
-    // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
-    bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
-
-    const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
+    const bool is_mla = hparams.is_mla();
 
     // note: these are the actual head sizes you get when treating as MHA or after "decompression" using wv_b for MLA
-    const int64_t n_embd_head_k = is_mla ? hparams.n_embd_head_k_mla : hparams.n_embd_head_k;
-    const int64_t n_embd_head_v = is_mla ? hparams.n_embd_head_v_mla : hparams.n_embd_head_v;
+    const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
+    const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
 
     const int64_t n_embd_head_qk_rope = hparams.n_rot;
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
@@ -58,6 +55,9 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
         // self_attention
         {
             ggml_tensor * q = NULL;
+
+            const bool is_lite = model.layers[il].wq;
+
             if (!is_lite) {
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
                 cb(q, "q", il);
