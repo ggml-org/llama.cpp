@@ -1,4 +1,5 @@
 import { getJsonHeaders } from '$lib/utils';
+import { formatAttachmentText } from '$lib/utils/attachment-display';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
@@ -677,7 +678,7 @@ export class ChatService {
 
 		for (const textFile of textFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
+				type: 'text',
 				text: formatAttachmentText('File', textFile.name, textFile.content)
 			});
 		}
@@ -690,7 +691,7 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
+				type: 'text',
 				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
 			});
 		}
@@ -725,8 +726,8 @@ export class ChatService {
 				}
 			} else {
 				contentParts.push({
-					type: ContentPartType.TEXT,
-					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
+					type: 'text',
+					text: formatAttachmentText('PDF File', pdfFile.name, pdfFile.content)
 				});
 			}
 		}
@@ -739,7 +740,12 @@ export class ChatService {
 		for (const mcpPrompt of mcpPrompts) {
 			contentParts.push({
 				type: 'text',
-				text: `\n\n--- MCP Prompt: ${mcpPrompt.name} (${mcpPrompt.serverName}) ---\n${mcpPrompt.content}`
+				text: formatAttachmentText(
+					'MCP Prompt',
+					mcpPrompt.name,
+					mcpPrompt.content,
+					mcpPrompt.serverName
+				)
 			});
 		}
 
