@@ -953,9 +953,7 @@ const func_builtins & value_object_t::get_builtins() const {
             const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
-                auto item = mk_val<value_array>();
-                item->push_back(pair.first);
-                item->push_back(pair.second);
+                auto item = mk_val<value_tuple>(pair);
                 result->push_back(std::move(item));
             }
             return result;

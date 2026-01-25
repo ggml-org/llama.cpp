@@ -454,10 +454,8 @@ value for_statement::execute_impl(context & ctx) {
         JJ_DEBUG("%s", "For loop over object keys");
         auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
-            auto tuple = mk_val<value_array>();
-            tuple->push_back(p.first);
-            tuple->push_back(p.second);
-            items.push_back(tuple);
+            auto tuple = mk_val<value_tuple>(p);
+            items.push_back(std::move(tuple));
         }
         if (ctx.is_get_stats) {
             iterable_val->stats.used = true;

@@ -455,6 +455,10 @@ struct value_tuple_t : public value_array_t {
     value_tuple_t(const std::vector<value> & arr) {
         val_arr = arr;
     }
+    value_tuple_t(const std::pair<value, value> & pair) {
+        val_arr.push_back(pair.first);
+        val_arr.push_back(pair.second);
+    }
     virtual std::string type() const override { return "Tuple"; }
     virtual bool is_immutable() const override { return true; }
 };
