@@ -3185,7 +3185,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t D_lsb = D ^ (D & (D-1));
         uint32_t D_split = std::min(std::min(device->subgroup_size, 8u), D_lsb / 4);
 
-        return {wg_size, rows_cols[0], rows_cols[1], hsk, hsv, clamp, D_split, device->subgroup_size};
+        // Nvidia prefers shared memory use to load large tiles of K
+        // AMD prefers loading K directly from global memory
+        const uint32_t k_load_shmem = device->vendor_id == VK_VENDOR_ID_NVIDIA ? 1 : 0;
+
+        return {wg_size, rows_cols[0], rows_cols[1], hsk, hsv, clamp, D_split, device->subgroup_size, k_load_shmem};
     };
 
 #define CREATE_FA(TYPE, NAMELC, FAPATH, SUFFIX) \
