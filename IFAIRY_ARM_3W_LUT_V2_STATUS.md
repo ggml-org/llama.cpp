@@ -94,6 +94,13 @@ Status: Draft (2026-01-25)
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=108.95 ± 1.10 tok/s`, `tg256=65.89 ± 2.05 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut16_2fb48487.txt`)
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-bench ...`: `pp128=101.21 ± 1.19 tok/s`, `tg256=68.98 ± 2.18 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut_c_2fb48487.txt`)
 
+### 2026-01-25 (lut16 qgemm decode simplification; working tree)
+- Correctness:
+  - `./build-rel/bin/test-ifairy`: PASS
+  - `./build-rel-lut/bin/test-ifairy`: PASS
+- `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256, repetitions=3):
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut16 ./build-rel-lut/bin/llama-bench ...`: `pp128=114.50 ± 0.87 tok/s`, `tg256=70.14 ± 0.17 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut16_opt1.txt`)
+
 ### 2026-01-25 (xctrace: llama-bench, lut16 vs lut_c; build `2fb48487`)
 - Commands: 见 `IFAIRY_ARM_3W_LUT_V2_XCTRACE_CPU_COUNTERS.md`
 - Traces:

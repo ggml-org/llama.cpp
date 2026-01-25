@@ -39,39 +39,43 @@ static inline size_t ggml_ifairy_checked_add_size(size_t a, size_t b) {
 }
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
-static inline int8x16x4_t ggml_ifairy_lut_mul_mat_block_16x3_3x1_with_lut(uint8x16_t iweight_16x3, int8x16x4_t ilut) {
-    const uint8x16_t mask_idx = vdupq_n_u8(0x3f);
-    const uint8x16_t mask_b6  = vdupq_n_u8(0x40);
-    const uint8x16_t mask_b7  = vdupq_n_u8(0x80);
+static inline int8x16_t ggml_ifairy_vbsl_s8(uint8x16_t mask, int8x16_t t, int8x16_t f) {
+    return vreinterpretq_s8_u8(vbslq_u8(mask, vreinterpretq_u8_s8(t), vreinterpretq_u8_s8(f)));
+}
 
+static inline int8x16_t ggml_ifairy_neg_if(uint8x16_t mask, int8x16_t v) {
+    return ggml_ifairy_vbsl_s8(mask, vnegq_s8(v), v);
+}
+
+// Decode per-lane 2-flag code (idx16+flags) into 4 int8 vectors using a 16-entry LUT (4x16B).
+// This is a branchless formulation of the scalar decode in ggml_ifairy_lut_decode_lane_scalar().
+static inline int8x16x4_t ggml_ifairy_lut_decode_16x3_3x1_with_lut(uint8x16_t   iweight_16x3,
+                                                                   int8x16x4_t  ilut,
+                                                                   uint8x16_t   mask_idx,
+                                                                   uint8x16_t   mask_b6,
+                                                                   uint8x16_t   mask_b7) {
     const uint8x16_t index = vandq_u8(iweight_16x3, mask_idx);
     const uint8x16_t fl0   = vtstq_u8(iweight_16x3, mask_b6);
     const uint8x16_t fl1   = vtstq_u8(iweight_16x3, mask_b7);
+
+    const uint8x16_t fl0_xor_fl1 = veorq_u8(fl0, fl1);
+    const uint8x16_t not_fl0     = vmvnq_u8(fl0);
 
     const int8x16_t ac_00 = vqtbl1q_s8(ilut.val[0], index);
     const int8x16_t bd_01 = vqtbl1q_s8(ilut.val[1], index);
     const int8x16_t ac_11 = vqtbl1q_s8(ilut.val[2], index);
     const int8x16_t bd_11 = vqtbl1q_s8(ilut.val[3], index);
 
-    const int8x16_t ac_01 = vnegq_s8(ac_00);
-    const int8x16_t ac_10 = vnegq_s8(ac_11);
-    const int8x16_t bd_00 = vnegq_s8(bd_01);
-    const int8x16_t bd_10 = vnegq_s8(bd_11);
-
-    const int8x16_t ac_l = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(ac_01), vreinterpretq_u8_s8(ac_00)));
-    const int8x16_t ad_l = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(ac_10), vreinterpretq_u8_s8(ac_11)));
-    const int8x16_t bc_l = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(bd_10), vreinterpretq_u8_s8(bd_11)));
-
-    const int8x16_t ac_h = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(ac_11), vreinterpretq_u8_s8(ac_10)));
-    const int8x16_t bc_h = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(bd_01), vreinterpretq_u8_s8(bd_00)));
-    const int8x16_t bd_h = vreinterpretq_s8_u8(vbslq_u8(fl0, vreinterpretq_u8_s8(bd_11), vreinterpretq_u8_s8(bd_10)));
-
     int8x16x4_t out;
-    out.val[0] = vreinterpretq_s8_u8(vbslq_u8(fl1, vreinterpretq_u8_s8(ac_h), vreinterpretq_u8_s8(ac_l)));  // ac
-    out.val[1] = vreinterpretq_s8_u8(vbslq_u8(fl1, vreinterpretq_u8_s8(ac_l), vreinterpretq_u8_s8(ad_l)));  // bc
-    out.val[2] =
-        vreinterpretq_s8_u8(vbslq_u8(fl1, vreinterpretq_u8_s8(bc_h), vreinterpretq_u8_s8(bc_l)));  // ad (conj-folded)
-    out.val[3] = vreinterpretq_s8_u8(vbslq_u8(fl1, vreinterpretq_u8_s8(bd_h), vreinterpretq_u8_s8(bc_h)));  // bd
+    // out0 (ac): (fl1 ? ac_11 : ac_00) * sign(fl0 xor fl1)
+    out.val[0] = ggml_ifairy_neg_if(fl0_xor_fl1, ggml_ifairy_vbsl_s8(fl1, ac_11, ac_00));
+    // out1 (bc): (fl1 ? ac_00 : ac_11) * sign(fl0)
+    out.val[1] = ggml_ifairy_neg_if(fl0, ggml_ifairy_vbsl_s8(fl1, ac_00, ac_11));
+    // out2 (ad, conj-folded): (fl1 ? bd_01 : bd_11) * sign(fl0 xor fl1)
+    out.val[2] = ggml_ifairy_neg_if(fl0_xor_fl1, ggml_ifairy_vbsl_s8(fl1, bd_01, bd_11));
+    // out3 (bd): (fl1 ? bd_11 : bd_01) * sign(!fl0)
+    out.val[3] = ggml_ifairy_neg_if(not_fl0, ggml_ifairy_vbsl_s8(fl1, bd_11, bd_01));
+
     return out;
 }
 
@@ -220,6 +224,10 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
             (const int8_t *) lut + (size_t) col * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
         const float * scales = (const float *) lut_scales + (size_t) col * (size_t) blocks * 2u;
 
+        const uint8x16_t mask_idx = vdupq_n_u8(0x3f);
+        const uint8x16_t mask_b6  = vdupq_n_u8(0x40);
+        const uint8x16_t mask_b7  = vdupq_n_u8(0x80);
+
         for (int t = 0; t < tiles; ++t) {
             const int rows_left = m - (t << 4);
             if (rows_left <= 0) {
@@ -256,13 +264,11 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
                     const uint8x16_t code = vld1q_u8(wt->qs[gi]);
                     const int8_t *   tbl  = lut_blk + (size_t) gi * (size_t) k_ifairy_lut_group_bytes;
 
-                    int8x16x4_t ilut;
-                    ilut.val[0] = vld1q_s8(tbl + 0 * 16);
-                    ilut.val[1] = vld1q_s8(tbl + 1 * 16);
-                    ilut.val[2] = vld1q_s8(tbl + 2 * 16);
-                    ilut.val[3] = vld1q_s8(tbl + 3 * 16);
+                    // One 64B load for the 4x16B LUT vectors (AArch64: ld1 {v0-v3.16b}, [x]).
+                    const int8x16x4_t ilut = vld1q_s8_x4(tbl);
 
-                    const int8x16x4_t r = ggml_ifairy_lut_mul_mat_block_16x3_3x1_with_lut(code, ilut);
+                    const int8x16x4_t r =
+                        ggml_ifairy_lut_decode_16x3_3x1_with_lut(code, ilut, mask_idx, mask_b6, mask_b7);
 
                     sum_ac_0 = vaddw_s8(sum_ac_0, vget_low_s8(r.val[0]));
                     sum_ac_1 = vaddw_s8(sum_ac_1, vget_high_s8(r.val[0]));
