@@ -3734,9 +3734,21 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         src_alloc = sycl::get_pointer_type(src_ptr, q.get_context());
     }
     const bool src_is_device = (src_alloc == sycl::usm::alloc::device);
-    const layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
+    layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
 
-    ggml_sycl_assert_layout_choice(cache_key, device, resolved, tensor->name, "ggml_sycl_get_weight_layout_ptr");
+    // If a higher-priority layout was already registered for this tensor, use it instead.
+    // This can happen when llama-bench runs multiple batch sizes (PP then TG) without
+    // reloading the model - the PP test might register COALESCED while TG requests SOA.
+    // Since COALESCED is a superset of SOA for most kernels, using it is safe.
+    if (ggml_sycl_layout_choices_finalized_for_device(device)) {
+        layout_mode chosen = GGML_LAYOUT_AOS;
+        if (ggml_sycl_get_layout_choice(cache_key, device, &chosen)) {
+            if (ggml_sycl_layout_priority(chosen) > ggml_sycl_layout_priority(resolved)) {
+                // Use the higher-priority registered layout instead
+                resolved = chosen;
+            }
+        }
+    }
     const size_t                     src_size = ggml_nbytes(tensor);
     size_t                           dst_size = 0;
     ggml_sycl::cache_layout_xmx_info xmx_info{};
@@ -15890,17 +15902,20 @@ static bool graph_fa_ptrs_match(ggml_backend_sycl_context & ctx, ggml_cgraph * c
 }
 
 static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+    // When dst is nullptr (called for eligibility checks), assume F32 output
+    const ggml_type dst_type = dst ? dst->type : GGML_TYPE_F32;
+    return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32 &&
            src0->ne[0] % GGML_SYCL_DMMV_X == 0 && src1->ne[1] == 1;
 }
 static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     // Q6_K MMQ kernel now works on Intel GPUs (WARP_SIZE=16) after fixing:
     // - Main loop stride (blocks_per_iter instead of blocks_per_warp)
-
     // - Y-tile allocation (QI6_K instead of WARP_SIZE)
     // - Y-tile indexing (no modulo wraparound)
     // - vec_dot Y-tile stride (QI6_K instead of WARP_SIZE)
-    return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+    // When dst is nullptr (called for eligibility checks), assume F32 output
+    const ggml_type dst_type = dst ? dst->type : GGML_TYPE_F32;
+    return ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32 &&
            src1->ne[1] > 0;
 }
 // ggml_sycl_mul_mat_kernel enum is now defined in kernel-selection.hpp
@@ -16729,6 +16744,53 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
             if (layout_ok) {
                 if (ggml_sycl_dispatch_mul_mat_kernel(ctx, src0, src1, dst, kernel)) {
+                    return;
+                }
+            }
+        }
+
+        // If preferred kernel's layout didn't match, try to force-select a kernel with the chosen layout
+        const bool layout_mismatch = preferred.has_value() &&
+            enforce_layout_choice &&
+            ggml_sycl_mul_mat_kernel_layout(preferred.value()) != chosen_layout;
+
+        if (layout_mismatch) {
+            // Map layout to kernel for the current batch size
+            std::optional<ggml_sycl_mul_mat_kernel> layout_kernel;
+            int64_t batch = src1->ne[1];
+
+            switch (chosen_layout) {
+                case GGML_LAYOUT_COALESCED:
+                    if (batch == 1) {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::DMMV_COALESCED;
+                    } else if (batch <= MMVQ_MAX_BATCH_SIZE) {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::MMVQ_COALESCED;
+                    } else {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::MMQ_COALESCED;
+                    }
+                    break;
+                case GGML_LAYOUT_SOA:
+                    if (batch == 1) {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::DMMV_SOA;
+                    } else if (batch <= MMVQ_MAX_BATCH_SIZE) {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::MMVQ_SOA;
+                    } else {
+                        layout_kernel = ggml_sycl_mul_mat_kernel::MMQ_SOA;
+                    }
+                    break;
+                default:
+                    break;
+            }
+
+            if (layout_kernel.has_value()) {
+                auto forced = ggml_sycl_select_preferred_kernel(src0, src1, ctx.device, layout_kernel.value());
+                if (g_ggml_sycl_debug) {
+                    fprintf(stderr, "[MUL_MAT-FALLBACK] batch=%lld chosen=%s target_kernel=%d forced=%s\n",
+                            (long long)batch, ggml_sycl_layout_mode_name(chosen_layout),
+                            (int)layout_kernel.value(),
+                            forced.has_value() ? ggml_sycl_mul_mat_kernel_name(forced.value()) : "none");
+                }
+                if (forced.has_value() && ggml_sycl_dispatch_mul_mat_kernel(ctx, src0, src1, dst, forced.value())) {
                     return;
                 }
             }
