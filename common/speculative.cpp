@@ -36,6 +36,10 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
+// state of an implementation of speculative decoding
+//
+// each implementation has a unique type and a state that is implementation-specific
+// in a subclass of common_speculative_state
 struct common_speculative_state {
     const enum common_speculative_type type;
 
@@ -51,7 +55,66 @@ struct common_speculative_state {
 };
 
 struct common_speculative_state_draft : public common_speculative_state {
-    common_speculative_state_draft(enum common_speculative_type type) : common_speculative_state(type) {}
+    struct llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
+    struct llama_context * ctx_dft;
+    struct common_sampler * smpl;
+    llama_batch batch;
+    bool vocab_dft_compatible; // whether retokenization is needed
+    std::map<std::string, std::string> tgt_dft_replacements = {};
+
+    llama_tokens prompt_dft = {};
+
+    common_speculative_state_draft(
+            enum common_speculative_type type,
+            struct llama_context * ctx_tgt,
+            struct llama_context * ctx_dft,
+            std::map<std::string, std::string> tgt_dft_replacements)
+        : common_speculative_state(type)
+        , ctx_tgt(ctx_tgt)
+        , ctx_dft(ctx_dft)
+        , tgt_dft_replacements(std::move(tgt_dft_replacements))
+    {
+        batch = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
+        smpl = nullptr;
+
+        // TODO: optimize or pass from outside?
+        // {
+        //     common_params_sampling params;
+        //     params.no_perf = false;
+        //
+        //     params.top_k = 40;
+        //     params.top_p = 0.9;
+        //
+        //     params.samplers = {
+        //         COMMON_SAMPLER_TYPE_TOP_K,
+        //         COMMON_SAMPLER_TYPE_TOP_P,
+        //         COMMON_SAMPLER_TYPE_INFILL,
+        //     };
+        //
+        //     result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+        // }
+        {
+            common_params_sampling params;
+            params.no_perf = false;
+            params.top_k = 10;
+            params.samplers = {
+                COMMON_SAMPLER_TYPE_TOP_K,
+            };
+
+            smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+        }
+
+        vocab_dft_compatible = common_speculative_are_compatible(ctx_tgt, ctx_dft);
+        LOG_DBG("vocab_dft_compatible = %d\n", vocab_dft_compatible);
+    }
+
+    ~common_speculative_state_draft() override {
+        if (smpl != nullptr) {
+            common_sampler_free(smpl);
+            smpl = nullptr;
+        }
+        llama_batch_free(batch);
+    }
 };
 struct common_speculative_state_eagle3 : public common_speculative_state {
     common_speculative_state_eagle3(enum common_speculative_type type) : common_speculative_state(type) {}
@@ -128,15 +191,6 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
 };
 
 struct common_speculative {
-    struct llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
-    struct llama_context * ctx_dft;
-    struct common_sampler * smpl;
-
-    llama_batch batch;
-    llama_tokens prompt_dft;
-    bool vocab_dft_compatible = true; // whether retokenization is needed
-    std::map<std::string, std::string> tgt_dft_replacements = {};
-
     std::vector<std::unique_ptr<common_speculative_state>> impls; // list of implementations to use and their states
     common_speculative_state *                             curr_impl = nullptr; // current implementation in use (for stats)
 };
@@ -240,7 +294,8 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
     return it->second;
 }
 
-
+// initialization of the speculative decoding system
+//
 
 struct common_speculative * common_speculative_init(
         struct common_params_speculative & params,
@@ -249,12 +304,16 @@ struct common_speculative * common_speculative_init(
     ) {
     std::vector<std::unique_ptr<common_speculative_state>> implementations = {};
     for (const common_speculative_config & config : params.configs) {
-        LOG_INF("common_speculative_init: adding implementation %s\n", common_speculative_type_to_str(config.type).c_str());
+        LOG_DBG("%s: adding implementation %s\n", __func__, common_speculative_type_to_str(config.type).c_str());
         switch (config.type) {
             case COMMON_SPECULATIVE_TYPE_NONE:
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT: {
-                implementations.push_back(std::make_unique<common_speculative_state_draft>(config.type));
+                implementations.push_back(std::make_unique<common_speculative_state_draft>(config.type,
+                    /* .ctx_tgt              = */ ctx_tgt,
+                    /* .ctx_dft              = */ ctx_dft,
+                    /* .tgt_dft_replacements = */ std::map<std::string, std::string>{}
+                ));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
@@ -305,52 +364,8 @@ struct common_speculative * common_speculative_init(
         }
     }
     auto * result = new common_speculative {
-        /* .ctx_tgt    = */ ctx_tgt,
-        /* .ctx_dft    = */ ctx_dft,
-        /* .smpl       = */ nullptr,
-        /* .batch      = */ llama_batch_init(ctx_dft ? llama_n_batch(ctx_dft) : 64, 0, 1),
-        /* .prompt_dft = */ {},
-        /* .vocab_dft_compatible = */ false,
-        /* .tgt_dft_replacements = */ {},
         /* .impls          = */ std::move(implementations)
     };
-
-    // TODO: optimize or pass from outside?
-#if 0
-    {
-        common_params_sampling params;
-        params.no_perf = false;
-
-        params.top_k = 40;
-        params.top_p = 0.9;
-
-        params.samplers = {
-            COMMON_SAMPLER_TYPE_TOP_K,
-            COMMON_SAMPLER_TYPE_TOP_P,
-            COMMON_SAMPLER_TYPE_INFILL,
-        };
-
-        result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
-    }
-#else
-    {
-        common_params_sampling params;
-        params.no_perf = false;
-
-        params.top_k = 10;
-
-        params.samplers = {
-            COMMON_SAMPLER_TYPE_TOP_K,
-        };
-
-        if (ctx_dft) {
-            result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
-        }
-    }
-#endif
-
-    result->vocab_dft_compatible = common_speculative_are_compatible(ctx_tgt, ctx_dft);
-    LOG_DBG("vocab_dft_compatible = %d\n", result->vocab_dft_compatible);
 
     return result;
 }
@@ -359,10 +374,6 @@ void common_speculative_free(struct common_speculative * spec) {
     if (spec == nullptr) {
         return;
     }
-
-    common_sampler_free(spec->smpl);
-
-    llama_batch_free(spec->batch);
 
     delete spec;
 }
@@ -434,11 +445,22 @@ bool common_speculative_are_compatible(
 void common_speculative_add_replacement_tgt_dft(
         struct common_speculative * spec,
         const char *source, const char *dest) {
-    spec->tgt_dft_replacements[source] = dest;
+    // Iterate through all implementations and add the replacement in the draft model implementation
+    for (auto & impl : spec->impls) {
+        if (impl->type == COMMON_SPECULATIVE_TYPE_DRAFT) {
+            auto * draft_impl = dynamic_cast<struct common_speculative_state_draft *>(impl.get());
+            if (draft_impl) {
+                draft_impl->tgt_dft_replacements[source] = dest;
+                break;
+            } else {
+                GGML_ABORT("%s: unexpected implementation in type %d", __func__, impl.get()->type);
+            }
+        }
+    }
 }
 
 static std::string replace_to_dft(
-        struct common_speculative * spec,
+        struct common_speculative_state_draft * spec,
         const std::string& input) {
     std::string result = input;
     for (const auto & pair : spec->tgt_dft_replacements) {
@@ -452,7 +474,7 @@ static std::string replace_to_dft(
 }
 
 static std::string replace_to_tgt(
-        struct common_speculative * spec,
+        struct common_speculative_state_draft * spec,
         const std::string& input) {
     std::string result = input;
     for (const auto& pair : spec->tgt_dft_replacements) {
@@ -466,7 +488,7 @@ static std::string replace_to_tgt(
 }
 
 llama_tokens common_speculative_use_draft_model(
-        struct common_speculative * spec,
+        struct common_speculative_state_draft * spec,
         struct common_speculative_params params,
         const llama_tokens & prompt_tgt_main_model, // specified in target model vocab
         llama_token id_last);
@@ -494,7 +516,12 @@ llama_tokens common_speculative_gen_draft(
             case COMMON_SPECULATIVE_TYPE_DRAFT:
             {
                 // Create a draft using a draft model.
-                result = common_speculative_use_draft_model(spec, params, prompt_tgt_main_model, id_last);
+                auto * draft_impl = dynamic_cast<struct common_speculative_state_draft *>(impl.get());
+                if (draft_impl) {
+                    result = common_speculative_use_draft_model(draft_impl, params, prompt_tgt_main_model, id_last);
+                } else {
+                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
+                }
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3:
@@ -568,7 +595,7 @@ llama_tokens common_speculative_gen_draft(
 }
 
 llama_tokens common_speculative_use_draft_model(
-        struct common_speculative * spec,
+        struct common_speculative_state_draft * spec,
         struct common_speculative_params params,
         const llama_tokens & prompt_tgt_main_model, // specified in target model vocab
         llama_token id_last) {
