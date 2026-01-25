@@ -77,6 +77,9 @@ export interface DatabaseMessage {
 	role: ChatRole;
 	content: string;
 	parent: string | null;
+	/**
+	 * @deprecated - left for backward compatibility
+	 */
 	thinking?: string;
 	toolCalls?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */
