@@ -4517,13 +4517,12 @@ class Qwen3VLTextModel(Qwen3Model):
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
-class Qwen3OmniMoeModel(Qwen2MoeModel):
+class Qwen3OmniMoeModel(Qwen3MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3OMNIMOE
 
     def set_vocab(self):
         super().set_vocab()
-        self.gguf_writer.add_eos_token_id(151645)  # from Qwen3-VL, because null in config.json
-        self.gguf_writer.add_bos_token_id(151643)  # from Qwen3-VL, because null in config.json
+        self.gguf_writer.add_eos_token_id(151645)  # from Qwen3-VL, because null in config.json, doesn't work correctly without this
         # same as in Qwen3VLForConditionalGeneration
         vision_config = self.hparams.get("vision_config", {})
         deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
