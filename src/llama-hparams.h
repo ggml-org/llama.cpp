@@ -53,8 +53,8 @@ struct llama_hparams {
     uint32_t n_rel_attn_bkts = 0;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
-    uint32_t n_embd_head_k_mla = 0;
-    uint32_t n_embd_head_v_mla = 0;
+    uint32_t n_embd_head_k_mla_impl = 0;
+    uint32_t n_embd_head_v_mla_impl = 0;
 
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
@@ -164,7 +164,7 @@ struct llama_hparams {
     uint32_t n_cls_out = 1;
 
     // output embedding dimension (0 = use n_embd)
-    uint32_t n_embd_out = 0;
+    uint32_t n_embd_out_impl = 0;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
@@ -239,7 +239,7 @@ struct llama_hparams {
     uint32_t n_embd_inp() const;
 
     // dimension of output embeddings
-    uint32_t get_n_embd_out() const;
+    uint32_t n_embd_out() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
@@ -268,6 +268,12 @@ struct llama_hparams {
     uint32_t n_pos_per_embd() const;
 
     bool is_swa(uint32_t il) const;
+
+    // note: currently only support if either all or none of the layers are MLA
+    bool is_mla() const;
+
+    uint32_t n_embd_head_k_mla() const;
+    uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
 
