@@ -23,6 +23,7 @@ Primary integration points:
 
 - `GGML_IFAIRY_LUT=0/1` (enable unless explicitly set to `0`)
 - `GGML_IFAIRY_LUT_DEBUG=0/1`
+- `GGML_IFAIRY_LUT_IMPL=auto|lut16|lut_c` (optional; `lut_c` uses 42.6-scaled Q8 activations)
 
 V2 keeps a single production LUT path and removes layout/kernel/tiling knobs to reduce surface area. Do not add new knobs unless strictly necessary.
 
@@ -44,7 +45,7 @@ Follow repo-root `AGENTS.md` for `git clang-format` / `clang-tidy` (diff-only, a
 
 3) CLI sanity (quick smoke) + bench tok/s baseline:
 - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
-- `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+- `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
 
 Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics, transform concurrency).
 

@@ -78,6 +78,7 @@ struct ifairy_lut_wtile_16 {
 // - Runtime env:
 //   - `GGML_IFAIRY_LUT=0/1` (enable/disable)
 //   - `GGML_IFAIRY_LUT_DEBUG=0/1` (debug logging)
+//   - `GGML_IFAIRY_LUT_IMPL=auto|lut16|lut_c` (optional impl selection; `lut_c` uses 42.6-scaled Q8 activations)
 
 void   ggml_ifairy_lut_init(void);
 void   ggml_ifairy_lut_free(void);

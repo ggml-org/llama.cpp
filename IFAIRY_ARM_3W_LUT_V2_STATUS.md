@@ -27,9 +27,16 @@ Status: Draft (2026-01-25)
   - `cmake --build build-rel-lut`
 - Command:
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
-- Result (build `f0fac4ca`):
-  - `pp128`: `94.69 ± 0.65 tok/s`
-  - `tg256`: `61.36 ± 1.81 tok/s`
+- Result (build `2fb48487`):
+  - `pp128`: `108.95 ± 1.10 tok/s`
+  - `tg256`: `65.89 ± 2.05 tok/s`
+
+### lut_c（GGML_IFAIRY_LUT_IMPL=lut_c）
+- Command:
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
+- Result (build `2fb48487`):
+  - `pp128`: `101.21 ± 1.19 tok/s`
+  - `tg256`: `68.98 ± 2.18 tok/s`
 
 ### microbench（GGML_IFAIRY_ARM_LUT=ON）
 - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=623.10`
@@ -79,6 +86,13 @@ Status: Draft (2026-01-25)
   - llama-bench (`tmp/xctrace/ifairy_lut_llama_bench_cpu_counters.trace`, ~4s):
     - `ARM_STALL=4436605053`, `CORE_ACTIVE_CYCLE=12980115906`, `ARM_L1D_CACHE_LMISS_RD=29846840`, `ARM_L1D_CACHE_RD=8020881750`, `L1D_TLB_MISS=30783799`
     - `stall_ratio=0.341800`, `l1d_miss_rate=0.003721`, `tlb_miss_per_active=0.00237161`
+
+### 2026-01-25 (build `2fb48487`)
+- Correctness:
+  - `./build-rel-lut/bin/test-ifairy`: PASS
+- `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256, repetitions=3):
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=108.95 ± 1.10 tok/s`, `tg256=65.89 ± 2.05 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut16_2fb48487.txt`)
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-bench ...`: `pp128=101.21 ± 1.19 tok/s`, `tg256=68.98 ± 2.18 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut_c_2fb48487.txt`)
 
 ---
 
