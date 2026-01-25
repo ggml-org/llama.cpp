@@ -36,7 +36,6 @@ import type {
 	MCPServerInfo
 } from '$lib/types';
 import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
-import { MCPError } from '$lib/errors';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
 interface ToolResultContentItem {
@@ -365,7 +364,7 @@ export class MCPService {
 
 			const message = error instanceof Error ? error.message : String(error);
 
-			throw new MCPError(`Tool execution failed: ${message}`, -32603);
+			throw new Error(`Tool execution failed: ${message}`);
 		}
 	}
 
