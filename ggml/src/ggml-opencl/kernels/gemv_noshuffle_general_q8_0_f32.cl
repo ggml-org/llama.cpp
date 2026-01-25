@@ -1,6 +1,12 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
 
+#ifdef cl_qcom_reqd_sub_group_size
+#pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
+#define ADRENO_GPU 1
+#define REQD_SUBGROUP_SIZE_64 __attribute__((qcom_reqd_sub_group_size("half")))
+#endif
+
 #define QK8_0 32
 #define N_SIMDGROUP 4
 
@@ -112,7 +118,9 @@
     elem = (char)((bits8.s7 & 0xFF000000) >> 24); \
     total_sums += convert_int(elem) * scale * shared_y; \
 
-
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
 __kernel void kernel_gemv_noshuffle(
         __read_only  image1d_buffer_t src0_q,  // quantized A
         global half  * src0_d,  // A scales
