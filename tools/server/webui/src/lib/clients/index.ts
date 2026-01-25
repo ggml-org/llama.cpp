@@ -21,16 +21,9 @@ export { MCPClient, mcpClient } from './mcp.client';
 
 // Chat Client
 export { ChatClient, chatClient } from './chat.client';
-export type { ChatStreamCallbacks, ApiProcessingState, ErrorDialogState } from './chat.client';
 
 // Agentic Client
 export { AgenticClient, agenticClient } from './agentic.client';
-export type {
-	AgenticFlowCallbacks,
-	AgenticFlowOptions,
-	AgenticFlowParams,
-	AgenticFlowResult
-} from './agentic.client';
 
 // Conversations Client
 export { ConversationsClient, conversationsClient } from './conversations.client';

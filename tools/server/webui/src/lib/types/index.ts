@@ -39,11 +39,21 @@ export type {
 	ChatAttachmentPreviewItem,
 	ChatMessageSiblingInfo,
 	ChatMessagePromptProgress,
-	ChatMessageTimings
+	ChatMessageTimings,
+	ChatMessageAgenticTimings,
+	ChatMessageAgenticTurnStats,
+	ChatMessageToolCallTiming,
+	ChatStreamCallbacks,
+	ErrorDialogState,
+	LiveProcessingStats,
+	LiveGenerationStats,
+	AttachmentDisplayItemsOptions,
+	FileProcessingResult
 } from './chat.d';
 
 // Database types
 export type {
+	McpServerOverride,
 	DatabaseConversation,
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile,
@@ -66,6 +76,7 @@ export type {
 	SettingsFieldConfig,
 	SettingsChatServiceOptions,
 	SettingsConfigType,
+	ParameterSource,
 	ParameterValue,
 	ParameterRecord,
 	ParameterInfo,
@@ -73,7 +84,12 @@ export type {
 } from './settings';
 
 // Common types
-export type { KeyValuePair } from './common';
+export type {
+	KeyValuePair,
+	BinaryDetectionOptions,
+	ClipboardTextAttachment,
+	ParsedClipboardContent
+} from './common';
 
 // MCP types
 export type {
@@ -103,3 +119,18 @@ export type {
 	GetPromptResult,
 	PromptMessage
 } from './mcp';
+
+// Agentic types
+export type {
+	AgenticConfig,
+	AgenticToolCallPayload,
+	AgenticMessage,
+	AgenticAssistantMessage,
+	AgenticToolCallList,
+	AgenticChatCompletionRequest,
+	AgenticSession,
+	AgenticFlowCallbacks,
+	AgenticFlowOptions,
+	AgenticFlowParams,
+	AgenticFlowResult
+} from './agentic';

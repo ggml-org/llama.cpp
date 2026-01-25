@@ -72,8 +72,8 @@ export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 
 /**
  * Parameter synchronization types for server defaults and user overrides
- * Note: ParameterSource and SyncableParameterType enums are imported from '$lib/enums'
  */
+export type ParameterSource = 'default' | 'custom';
 export type ParameterValue = string | number | boolean;
 export type ParameterRecord = Record<string, ParameterValue>;
 
@@ -87,6 +87,6 @@ export interface ParameterInfo {
 export interface SyncableParameter {
 	key: string;
 	serverKey: string;
-	type: SyncableParameterType;
+	type: 'number' | 'string' | 'boolean';
 	canSync: boolean;
 }

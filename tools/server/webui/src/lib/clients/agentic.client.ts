@@ -27,7 +27,15 @@ import { mcpClient } from '$lib/clients';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
-import type { AgenticMessage, AgenticToolCallList, AgenticConfig } from '$lib/types/agentic';
+import type {
+	AgenticMessage,
+	AgenticToolCallList,
+	AgenticConfig,
+	AgenticFlowCallbacks,
+	AgenticFlowOptions,
+	AgenticFlowParams,
+	AgenticFlowResult
+} from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
 	ApiChatMessageData,
@@ -44,8 +52,7 @@ import type { MCPToolCall } from '$lib/types';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile,
-	McpServerOverride
+	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
 import { AttachmentType, MessageRole } from '$lib/enums';
 
@@ -86,46 +93,6 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 			content: message.content
 		} satisfies AgenticMessage;
 	});
-}
-
-export interface AgenticFlowCallbacks {
-	onChunk?: (chunk: string) => void;
-	onReasoningChunk?: (chunk: string) => void;
-	onToolCallChunk?: (serializedToolCalls: string) => void;
-	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
-	onModel?: (model: string) => void;
-	onComplete?: (
-		content: string,
-		reasoningContent?: string,
-		timings?: ChatMessageTimings,
-		toolCalls?: string
-	) => void;
-	onError?: (error: Error) => void;
-	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
-}
-
-export interface AgenticFlowOptions {
-	stream?: boolean;
-	model?: string;
-	temperature?: number;
-	max_tokens?: number;
-	[key: string]: unknown;
-}
-
-export interface AgenticFlowParams {
-	/** Conversation ID for per-conversation state tracking */
-	conversationId: string;
-	messages: (ApiChatMessageData | (DatabaseMessage & { extra?: DatabaseMessageExtra[] }))[];
-	options?: AgenticFlowOptions;
-	callbacks: AgenticFlowCallbacks;
-	signal?: AbortSignal;
-	/** Per-chat MCP server overrides */
-	perChatOverrides?: McpServerOverride[];
-}
-
-export interface AgenticFlowResult {
-	handled: boolean;
-	error?: Error;
 }
 
 interface AgenticStoreStateCallbacks {

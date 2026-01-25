@@ -1,3 +1,5 @@
+import type { DatabaseMessageExtra } from './database';
+
 export interface ChatUploadedFile {
 	id: string;
 	name: string;
@@ -117,7 +119,7 @@ export interface ChatStreamCallbacks {
  * Error dialog state for displaying server/timeout errors
  */
 export interface ErrorDialogState {
-	type: ErrorDialogType;
+	type: 'timeout' | 'server';
 	message: string;
 	contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 }
