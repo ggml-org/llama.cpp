@@ -425,7 +425,7 @@ struct value_array_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
         if (std::all_of(val_arr.begin(), val_arr.end(), [&](auto & val) -> bool {
-            return !val->is_undefined() && val->is_immutable();
+            return val->is_immutable() && val->is_hashable();
         })) {
             return true;
         }
@@ -555,7 +555,7 @@ struct value_object_t : public value_t {
     virtual bool is_hashable() const override {
             if (std::all_of(val_obj.begin(), val_obj.end(), [&](auto & pair) -> bool {
                 const auto & val = pair.second;
-                return !val->is_undefined() && val->is_immutable();
+                return val->is_immutable() && val->is_hashable();
             })) {
                 return true;
             }
