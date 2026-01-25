@@ -6145,7 +6145,8 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
 
         if name.startswith("model.vision_tower.timm_model.blocks."):
             # Double-indexed block tensors through custom logic
-            new_name = self.custom_map(name)
+            yield (self.custom_map(name), data_torch)
+            return
         else:
             # Route non-repeating (conv_stem, msfa, embedding, etc.) and un-catched through tensor_mapping.py
             new_name = self.map_tensor_name(name)
