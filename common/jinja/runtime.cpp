@@ -44,8 +44,22 @@ static std::string get_line_col(const std::string & source, size_t pos) {
     return "line " + std::to_string(line) + ", column " + std::to_string(col);
 }
 
+struct recursion_guard {
+    context & ctx;
+    recursion_guard(context & c) : ctx(c) {
+        ctx.recursion_depth++;
+        if (ctx.recursion_depth > context::max_recursion_depth) {
+            throw std::runtime_error("Max recursion depth exceeded");
+        }
+    }
+    ~recursion_guard() {
+        ctx.recursion_depth--;
+    }
+};
+
 // execute with error handling
 value statement::execute(context & ctx) {
+    recursion_guard guard(ctx);
     try {
         return execute_impl(ctx);
     } catch (const continue_statement::signal & /* ex */) {
@@ -659,7 +673,8 @@ value macro_statement::execute_impl(context & ctx) {
         size_t input_count = args.count();
 
         JJ_DEBUG("Invoking macro '%s' with %zu input arguments (expected %zu)", name.c_str(), input_count, expected_count);
-        context macro_ctx(ctx); // new scope for macro execution
+        
+        context macro_ctx(args.ctx); // new scope for macro execution
 
         // bind parameters
         for (size_t i = 0; i < expected_count; ++i) {
