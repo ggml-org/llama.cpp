@@ -17,6 +17,22 @@ static __forceinline__ int64_t get_max_block_size(int cc) {
     }
 }
 
+static __forceinline__ int get_padded_size(int cc) {
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        return 2;
+    } else {
+        return 4;
+    }
+}
+
+static constexpr __device__ int get_padded_size() {
+#if defined(AMD_MFMA_AVAILABLE)
+    return 2;
+#else
+    return 4;
+#endif // defined(AMD_MFMA_AVAILABLE)
+}
+
 struct mmf_ids_data {
     const int32_t * ids_src_compact = nullptr;
     const int32_t * ids_dst_compact = nullptr;
@@ -68,7 +84,7 @@ static __global__ void mul_mat_f(
     }
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    constexpr int tile_k_padded = warp_size + 4;
+    constexpr int tile_k_padded = warp_size + get_padded_size();
     constexpr int ntA = rows_per_block / tile_A::I;
     constexpr int ntB = (cols_per_block + tile_B::I - 1) / tile_B::I;
 
@@ -209,7 +225,7 @@ static __global__ void mul_mat_f(
     }
 
     float * buf_iw = (float *) compute_base;
-    constexpr int kiw = nwarps*rows_per_block + 4;
+    constexpr int kiw = nwarps*rows_per_block + get_padded_size();
 
     if (nwarps > 1) {
         __syncthreads();
@@ -320,7 +336,7 @@ static __global__ void mul_mat_f_ids(
 
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    constexpr int tile_k_padded = warp_size + 4;
+    constexpr int tile_k_padded = warp_size + get_padded_size();
     constexpr int ntA = rows_per_block / tile_A::I;
     constexpr int ntB = (cols_per_block + tile_B::I - 1) / tile_B::I;
 
@@ -487,7 +503,7 @@ static __global__ void mul_mat_f_ids(
     }
 
     float * buf_iw = (float *) compute_base;
-    constexpr int kiw = nwarps*rows_per_block + 4;
+    constexpr int kiw = nwarps*rows_per_block + get_padded_size();
 
     if (nwarps > 1) {
         __syncthreads();
@@ -638,9 +654,9 @@ void mul_mat_f_cuda(
         }
     }
 
-    const int nbytes_shared_iter = nwarps_best * (volta_mma_available(cc) ? tile_A_32::I : tile_A_16::I) * (warp_size + 4) * 4;
-    const int nbytes_cols_per_block_pad = amd_wmma_available(cc) || amd_mfma_available(cc) ? tile_B_16::I : tile_B_8::I;
-    const int nbytes_shared_combine = GGML_PAD(cols_per_block, nbytes_cols_per_block_pad) * (nwarps_best*rows_per_block + 4) * 4;
+    const int nbytes_shared_iter = nwarps_best * (volta_mma_available(cc) ? tile_A_32::I : tile_A_16::I) * (warp_size + get_padded_size(cc)) * 4;
+    const int nbytes_cols_per_block_pad = (amd_wmma_available(cc) || amd_mfma_available(cc)) ? tile_B_16::I : tile_B_8::I;
+    const int nbytes_shared_combine = GGML_PAD(cols_per_block, nbytes_cols_per_block_pad) * (nwarps_best*rows_per_block + get_padded_size(cc)) * 4;
     const int nbytes_shared = std::max(nbytes_shared_iter, nbytes_shared_combine);
     const int nbytes_slotmap = ids ? GGML_PAD(cols_per_block, 16) * sizeof(int) : 0;
     const int nbytes_shared_total = nbytes_shared + nbytes_slotmap;
