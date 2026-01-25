@@ -13,77 +13,157 @@
  */
 
 import { normalizeFloatingPoint } from '$lib/utils';
-import type {
-	SyncableParameter,
-	ParameterRecord,
-	ParameterInfo,
-	ParameterValue,
-	ParameterSource
-} from '$lib/types';
+import type { SyncableParameter, ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
+import { SyncableParameterType, ParameterSource } from '$lib/enums';
 
 /**
  * Mapping of webui setting keys to server parameter keys
  * Only parameters that should be synced from server are included
  */
 export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
-	{ key: 'temperature', serverKey: 'temperature', type: 'number', canSync: true },
-	{ key: 'top_k', serverKey: 'top_k', type: 'number', canSync: true },
-	{ key: 'top_p', serverKey: 'top_p', type: 'number', canSync: true },
-	{ key: 'min_p', serverKey: 'min_p', type: 'number', canSync: true },
-	{ key: 'dynatemp_range', serverKey: 'dynatemp_range', type: 'number', canSync: true },
-	{ key: 'dynatemp_exponent', serverKey: 'dynatemp_exponent', type: 'number', canSync: true },
-	{ key: 'xtc_probability', serverKey: 'xtc_probability', type: 'number', canSync: true },
-	{ key: 'xtc_threshold', serverKey: 'xtc_threshold', type: 'number', canSync: true },
-	{ key: 'typ_p', serverKey: 'typ_p', type: 'number', canSync: true },
-	{ key: 'repeat_last_n', serverKey: 'repeat_last_n', type: 'number', canSync: true },
-	{ key: 'repeat_penalty', serverKey: 'repeat_penalty', type: 'number', canSync: true },
-	{ key: 'presence_penalty', serverKey: 'presence_penalty', type: 'number', canSync: true },
-	{ key: 'frequency_penalty', serverKey: 'frequency_penalty', type: 'number', canSync: true },
-	{ key: 'dry_multiplier', serverKey: 'dry_multiplier', type: 'number', canSync: true },
-	{ key: 'dry_base', serverKey: 'dry_base', type: 'number', canSync: true },
-	{ key: 'dry_allowed_length', serverKey: 'dry_allowed_length', type: 'number', canSync: true },
-	{ key: 'dry_penalty_last_n', serverKey: 'dry_penalty_last_n', type: 'number', canSync: true },
-	{ key: 'max_tokens', serverKey: 'max_tokens', type: 'number', canSync: true },
-	{ key: 'samplers', serverKey: 'samplers', type: 'string', canSync: true },
+	{
+		key: 'temperature',
+		serverKey: 'temperature',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{ key: 'top_k', serverKey: 'top_k', type: SyncableParameterType.NUMBER, canSync: true },
+	{ key: 'top_p', serverKey: 'top_p', type: SyncableParameterType.NUMBER, canSync: true },
+	{ key: 'min_p', serverKey: 'min_p', type: SyncableParameterType.NUMBER, canSync: true },
+	{
+		key: 'dynatemp_range',
+		serverKey: 'dynatemp_range',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'dynatemp_exponent',
+		serverKey: 'dynatemp_exponent',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'xtc_probability',
+		serverKey: 'xtc_probability',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'xtc_threshold',
+		serverKey: 'xtc_threshold',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{ key: 'typ_p', serverKey: 'typ_p', type: SyncableParameterType.NUMBER, canSync: true },
+	{
+		key: 'repeat_last_n',
+		serverKey: 'repeat_last_n',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'repeat_penalty',
+		serverKey: 'repeat_penalty',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'presence_penalty',
+		serverKey: 'presence_penalty',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'frequency_penalty',
+		serverKey: 'frequency_penalty',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'dry_multiplier',
+		serverKey: 'dry_multiplier',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{ key: 'dry_base', serverKey: 'dry_base', type: SyncableParameterType.NUMBER, canSync: true },
+	{
+		key: 'dry_allowed_length',
+		serverKey: 'dry_allowed_length',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{
+		key: 'dry_penalty_last_n',
+		serverKey: 'dry_penalty_last_n',
+		type: SyncableParameterType.NUMBER,
+		canSync: true
+	},
+	{ key: 'max_tokens', serverKey: 'max_tokens', type: SyncableParameterType.NUMBER, canSync: true },
+	{ key: 'samplers', serverKey: 'samplers', type: SyncableParameterType.STRING, canSync: true },
 	{
 		key: 'pasteLongTextToFileLen',
 		serverKey: 'pasteLongTextToFileLen',
-		type: 'number',
+		type: SyncableParameterType.NUMBER,
 		canSync: true
 	},
-	{ key: 'pdfAsImage', serverKey: 'pdfAsImage', type: 'boolean', canSync: true },
+	{
+		key: 'pdfAsImage',
+		serverKey: 'pdfAsImage',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
 	{
 		key: 'showThoughtInProgress',
 		serverKey: 'showThoughtInProgress',
-		type: 'boolean',
+		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
-	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
-	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
+	{
+		key: 'keepStatsVisible',
+		serverKey: 'keepStatsVisible',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
+	{
+		key: 'showMessageStats',
+		serverKey: 'showMessageStats',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
 	{
 		key: 'askForTitleConfirmation',
 		serverKey: 'askForTitleConfirmation',
-		type: 'boolean',
+		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
-	{ key: 'disableAutoScroll', serverKey: 'disableAutoScroll', type: 'boolean', canSync: true },
+	{
+		key: 'disableAutoScroll',
+		serverKey: 'disableAutoScroll',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
 	{
 		key: 'renderUserContentAsMarkdown',
 		serverKey: 'renderUserContentAsMarkdown',
-		type: 'boolean',
+		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
-	{ key: 'autoMicOnEmpty', serverKey: 'autoMicOnEmpty', type: 'boolean', canSync: true },
+	{
+		key: 'autoMicOnEmpty',
+		serverKey: 'autoMicOnEmpty',
+		type: SyncableParameterType.BOOLEAN,
+		canSync: true
+	},
 	{
 		key: 'pyInterpreterEnabled',
 		serverKey: 'pyInterpreterEnabled',
-		type: 'boolean',
+		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	},
 	{
 		key: 'enableContinueGeneration',
 		serverKey: 'enableContinueGeneration',
-		type: 'boolean',
+		type: SyncableParameterType.BOOLEAN,
 		canSync: true
 	}
 ];
@@ -196,7 +276,7 @@ export class ParameterSyncService {
 		const isUserOverride = userOverrides.has(key);
 
 		// Simple logic: either using default (from props) or custom (user override)
-		const source: ParameterSource = isUserOverride ? 'custom' : 'default';
+		const source = isUserOverride ? ParameterSource.CUSTOM : ParameterSource.DEFAULT;
 
 		return {
 			value: currentValue,
@@ -228,11 +308,11 @@ export class ParameterSyncService {
 		if (!param) return false;
 
 		switch (param.type) {
-			case 'number':
+			case SyncableParameterType.NUMBER:
 				return typeof value === 'number' && !isNaN(value);
-			case 'string':
+			case SyncableParameterType.STRING:
 				return typeof value === 'string';
-			case 'boolean':
+			case SyncableParameterType.BOOLEAN:
 				return typeof value === 'boolean';
 			default:
 				return false;

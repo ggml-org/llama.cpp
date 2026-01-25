@@ -158,7 +158,7 @@ class MCPStore {
 	 */
 	getServerLabel(server: MCPServerSettingsEntry): string {
 		const healthState = this.getHealthCheckState(server.id);
-		if (healthState?.status === HealthCheckStatus.Success) {
+		if (healthState?.status === HealthCheckStatus.SUCCESS) {
 			return (
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
@@ -175,7 +175,7 @@ class MCPStore {
 		return servers.some((s) => {
 			const state = this.getHealthCheckState(s.id);
 			return (
-				state.status === HealthCheckStatus.Idle || state.status === HealthCheckStatus.Connecting
+				state.status === HealthCheckStatus.IDLE || state.status === HealthCheckStatus.CONNECTING
 			);
 		});
 	}

@@ -1,5 +1,5 @@
 import type { MCPServerSettingsEntry } from '$lib/types';
-import { MCPTransportType, MCPLogLevel } from '$lib/enums';
+import { MCPTransportType, MCPLogLevel, UrlPrefix } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -11,9 +11,10 @@ import type { Component } from 'svelte';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith('ws://') || normalized.startsWith('wss://')
-		? MCPTransportType.Websocket
-		: MCPTransportType.StreamableHttp;
+	return normalized.startsWith(UrlPrefix.WEBSOCKET) ||
+		normalized.startsWith(UrlPrefix.WEBSOCKET_SECURE)
+		? MCPTransportType.WEBSOCKET
+		: MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**
@@ -70,9 +71,9 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
  */
 export function getMcpLogLevelIcon(level: MCPLogLevel): Component {
 	switch (level) {
-		case MCPLogLevel.Error:
+		case MCPLogLevel.ERROR:
 			return XCircle;
-		case MCPLogLevel.Warn:
+		case MCPLogLevel.WARN:
 			return AlertTriangle;
 		default:
 			return Info;
@@ -87,9 +88,9 @@ export function getMcpLogLevelIcon(level: MCPLogLevel): Component {
  */
 export function getMcpLogLevelClass(level: MCPLogLevel): string {
 	switch (level) {
-		case MCPLogLevel.Error:
+		case MCPLogLevel.ERROR:
 			return 'text-destructive';
-		case MCPLogLevel.Warn:
+		case MCPLogLevel.WARN:
 			return 'text-yellow-600 dark:text-yellow-500';
 		default:
 			return 'text-muted-foreground';

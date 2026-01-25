@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChatMessageActions, ChatMessageMcpPromptContent } from '$lib/components/app';
-	import { MessageRole } from '$lib/enums';
+	import { MessageRole, McpPromptVariant } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 	interface Props {
@@ -44,7 +44,11 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	<ChatMessageMcpPromptContent prompt={mcpPrompt} variant="message" class="w-full max-w-[80%]" />
+	<ChatMessageMcpPromptContent
+		prompt={mcpPrompt}
+		variant={McpPromptVariant.MESSAGE}
+		class="w-full max-w-[80%]"
+	/>
 
 	{#if message.timestamp}
 		<div class="max-w-[80%]">

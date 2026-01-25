@@ -136,20 +136,20 @@ export interface MCPConnection {
  * Extended health check state with detailed connection info
  */
 export type HealthCheckState =
-	| { status: import('$lib/enums/mcp').HealthCheckStatus.Idle }
+	| { status: import('$lib/enums/mcp').HealthCheckStatus.IDLE }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.Connecting;
+			status: import('$lib/enums/mcp').HealthCheckStatus.CONNECTING;
 			phase: MCPConnectionPhase;
 			logs: MCPConnectionLog[];
 	  }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.Error;
+			status: import('$lib/enums/mcp').HealthCheckStatus.ERROR;
 			message: string;
 			phase?: MCPConnectionPhase;
 			logs: MCPConnectionLog[];
 	  }
 	| {
-			status: import('$lib/enums/mcp').HealthCheckStatus.Success;
+			status: import('$lib/enums/mcp').HealthCheckStatus.SUCCESS;
 			tools: MCPToolInfo[];
 			serverInfo?: MCPServerInfo;
 			capabilities?: MCPCapabilitiesInfo;

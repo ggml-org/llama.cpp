@@ -27,14 +27,14 @@
 	}: Props = $props();
 
 	const transportLabels: Record<MCPTransportType, string> = {
-		[MCPTransportType.Websocket]: 'WebSocket',
-		[MCPTransportType.StreamableHttp]: 'HTTP',
+		[MCPTransportType.WEBSOCKET]: 'WebSocket',
+		[MCPTransportType.STREAMABLE_HTTP]: 'HTTP',
 		[MCPTransportType.SSE]: 'SSE'
 	};
 
 	const transportIcons: Record<MCPTransportType, typeof Cable> = {
-		[MCPTransportType.Websocket]: Zap,
-		[MCPTransportType.StreamableHttp]: Globe,
+		[MCPTransportType.WEBSOCKET]: Zap,
+		[MCPTransportType.STREAMABLE_HTTP]: Globe,
 		[MCPTransportType.SSE]: Radio
 	};
 </script>

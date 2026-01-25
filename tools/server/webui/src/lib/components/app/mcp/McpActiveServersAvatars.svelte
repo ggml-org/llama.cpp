@@ -20,7 +20,7 @@
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
-			return healthState.status !== HealthCheckStatus.Error;
+			return healthState.status !== HealthCheckStatus.ERROR;
 		})
 	);
 	let hasEnabledMcpServers = $derived(enabledMcpServersForChat.length > 0);
