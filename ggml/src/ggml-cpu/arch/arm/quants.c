@@ -173,8 +173,8 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
         const float max_r = vmaxvq_f32(max_real);
         const float max_i = vmaxvq_f32(max_imag);
 
-        const float iscale_r = 127.f / max_r;
-        const float iscale_i = 127.f / max_i;
+        const float iscale_r = 42.6f / max_r;
+        const float iscale_i = 42.6f / max_i;
 
         y[ib].d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
         y[ib].d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
