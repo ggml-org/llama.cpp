@@ -34,10 +34,9 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     llama_model * model_tgt = NULL;
-    //llama_model * model_dft = NULL;
+    llama_model * model_dft = NULL;
 
     llama_context * ctx_tgt = NULL;
-    llama_context * ctx_dft = NULL;
 
     // load the target model
     auto llama_init_tgt = common_init_from_params(params);
@@ -63,12 +62,7 @@ int main(int argc, char ** argv) {
 
     auto llama_init_dft = common_init_from_params(params);
 
-    //model_dft = llama_init_dft->model();
-    ctx_dft   = llama_init_dft->context();
-
-    if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
-        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
-    }
+    model_dft = llama_init_dft->model();
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -129,13 +123,9 @@ int main(int argc, char ** argv) {
     // init the speculator
     struct common_speculative_params params_spec;
     params_spec.n_draft = n_draft;
-    params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
     params_spec.p_min   = p_min;
 
-    struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt, ctx_dft);
-    for (auto &pair : params.speculative.replacements) {
-        common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
-    }
+    struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt, common_context_params_to_llama(params), model_dft);
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
@@ -248,8 +238,6 @@ int main(int argc, char ** argv) {
 
     LOG_INF("\n");
     LOG_INF("draft:\n\n");
-
-    llama_perf_context_print(ctx_dft);
 
     LOG_INF("\n");
     LOG_INF("target:\n\n");

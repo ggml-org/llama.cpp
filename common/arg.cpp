@@ -3438,6 +3438,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value == "none") {
                 params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NONE;
             } else if (value == "ngram-cache") {
+                // TODO: this does nothing atm
                 params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
             } else if (value == "ngram-simple") {
                 params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;

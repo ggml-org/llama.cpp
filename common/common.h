@@ -291,6 +291,10 @@ struct common_params_speculative {
 
     std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
+
+    bool has_dft() const {
+        return !model.path.empty() || !model.hf_repo.empty();
+    }
 };
 
 struct common_params_vocoder {
@@ -603,10 +607,6 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
-
-    bool has_speculative() const {
-        return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
-    }
 };
 
 // call once at the start of a program if it uses libcommon
@@ -741,8 +741,6 @@ struct common_init_result {
     void reset_samplers();
 
     std::vector<llama_adapter_lora_ptr> & lora();
-
-    void free_context();
 
 private:
     struct impl;
