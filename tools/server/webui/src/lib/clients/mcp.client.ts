@@ -48,7 +48,6 @@ import type {
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
-import { MCPError } from '$lib/errors';
 import { detectMcpTransportFromUrl } from '$lib/utils';
 import { config } from '$lib/stores/settings.svelte';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
@@ -754,12 +753,12 @@ export class MCPClient {
 
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) {
-			throw new MCPError(`Unknown tool: ${toolName}`, -32601);
+			throw new Error(`Unknown tool: ${toolName}`);
 		}
 
 		const connection = this.connections.get(serverName);
 		if (!connection) {
-			throw new MCPError(`Server "${serverName}" is not connected`, -32000);
+			throw new Error(`Server "${serverName}" is not connected`);
 		}
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
@@ -781,12 +780,12 @@ export class MCPClient {
 	): Promise<ToolExecutionResult> {
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) {
-			throw new MCPError(`Unknown tool: ${toolName}`, -32601);
+			throw new Error(`Unknown tool: ${toolName}`);
 		}
 
 		const connection = this.connections.get(serverName);
 		if (!connection) {
-			throw new MCPError(`Server "${serverName}" is not connected`, -32000);
+			throw new Error(`Server "${serverName}" is not connected`);
 		}
 
 		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
@@ -802,20 +801,13 @@ export class MCPClient {
 			try {
 				const parsed = JSON.parse(trimmed);
 				if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-					throw new MCPError(
-						`Tool arguments must be an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`,
-						-32602
+					throw new Error(
+						`Tool arguments must be an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`
 					);
 				}
 				return parsed as Record<string, unknown>;
 			} catch (error) {
-				if (error instanceof MCPError) {
-					throw error;
-				}
-				throw new MCPError(
-					`Failed to parse tool arguments as JSON: ${(error as Error).message}`,
-					-32700
-				);
+				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
 			}
 		}
 
@@ -823,7 +815,7 @@ export class MCPClient {
 			return args;
 		}
 
-		throw new MCPError(`Invalid tool arguments type: ${typeof args}`, -32602);
+		throw new Error(`Invalid tool arguments type: ${typeof args}`);
 	}
 
 	/**
