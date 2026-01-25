@@ -10719,7 +10719,7 @@ class CogVLMVisionModel(MmprojModel):
         if not name.startswith("model.vision."):
             return
 
-        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("CogVLMForCausalLM")
