@@ -3799,7 +3799,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
                     merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
                     yield from super().modify_tensors(data_torch, merged_name, bid)
         else:
-            yield from super().modify_tensors(data_torch, name, bid)
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -6153,7 +6153,7 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
         if new_name.endswith("conv_stem.conv.bias") or new_name.endswith("layer_scale.gamma"):
             data_torch = data_torch.unsqueeze(0).unsqueeze(-1).unsqueeze(-1) # [1, C, 1, 1]
 
-        yield from super().modify_tensors(data_torch, new_name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
 
 
 @ModelBase.register("Gemma3nForCausalLM", "Gemma3nForConditionalGeneration")
@@ -6253,7 +6253,7 @@ class Gemma3NModel(Gemma3Model):
 
             # Continue with normal processing
             name = name.replace("language_model.", "")
-            yield from super().modify_tensors(data_torch, name, bid)
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
 
         if "altup_unembed_projections" in name:
@@ -6270,7 +6270,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_unembd)
             if out is not None:
-                yield from super().modify_tensors(out, "model.altup_unembed_projections.weight", bid)
+                yield from ModelBase.modify_tensors(self, out, "model.altup_unembed_projections.weight", bid)
                 return
             else:
                 return
@@ -6287,7 +6287,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_proj)
             if out is not None:
-                yield from super().modify_tensors(out, "model.altup_projections.weight", bid)
+                yield from ModelBase.modify_tensors(self, out, "model.altup_projections.weight", bid)
                 return
             else:
                 return
