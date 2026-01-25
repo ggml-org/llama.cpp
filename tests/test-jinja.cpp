@@ -156,6 +156,18 @@ static void test_conditionals(testing & t) {
         "big"
     );
 
+    test_template(t, "object comparison",
+        "{% if {0: 1, none: 2, 1.0: 3, '0': 4, true: 5} == {false: 1, none: 2, 1: 5, '0': 4} %}equal{% endif %}",
+        json::object(),
+        "equal"
+    );
+
+    test_template(t, "array comparison",
+        "{% if [0, 1.0, false] == [false, 1, 0.0] %}equal{% endif %}",
+        json::object(),
+        "equal"
+    );
+
     test_template(t, "logical and",
         "{% if a and b %}both{% endif %}",
         {{"a", true}, {"b", true}},
@@ -358,6 +370,30 @@ static void test_expressions(testing & t) {
         "b"
     );
 
+    test_template(t, "array negative access",
+        "{{ items[-1] }}",
+        {{"items", json::array({"a", "b", "c"})}},
+        "c"
+    );
+
+    test_template(t, "array slice",
+        "{{ items[1:-1]|string }}",
+        {{"items", json::array({"a", "b", "c"})}},
+        "['b']"
+    );
+
+    test_template(t, "array slice step",
+        "{{ items[::2]|string }}",
+        {{"items", json::array({"a", "b", "c"})}},
+        "['a', 'c']"
+    );
+
+    test_template(t, "tuple slice",
+        "{{ ('a', 'b', 'c')[::-1]|string }}",
+        json::object(),
+        "('c', 'b', 'a')"
+    );
+
     test_template(t, "arithmetic",
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
@@ -408,18 +444,16 @@ static void test_set_statement(testing & t) {
         "37"
     );
 
-    // TODO: Print tuples correctly
     test_template(t, "print dict with mixed type keys",
-        "{% set d = {0: 1, none: 2, 1.0: 3, '0': 4, true: 5} %}{{ d|string }}",
+        "{% set d = {0: 1, none: 2, 1.0: 3, '0': 4, (0, 0): 5, true: 6} %}{{ d|string }}",
         json::object(),
-        "{0: 1, None: 2, 1.0: 5, '0': 4}"
+        "{0: 1, None: 2, 1.0: 6, '0': 4, (0, 0): 5}"
     );
 
-    // TODO: Print tuples correctly
     test_template(t, "print array with mixed types",
-        "{% set d = [0, none, 1.0, '0', true] %}{{ d|string }}",
+        "{% set d = [0, none, 1.0, '0', true, (0, 0)] %}{{ d|string }}",
         json::object(),
-        "[0, None, 1.0, '0', True]"
+        "[0, None, 1.0, '0', True, (0, 0)]"
     );
 }
 
