@@ -23,7 +23,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
 void                      apir_backend_deinit(uint32_t virgl_ctx_id);
 uint32_t                  apir_backend_dispatcher(uint32_t               virgl_ctx_id,
                                                   virgl_apir_callbacks * virgl_cbs,
-						  uint32_t               cmd_type,
+                                                  uint32_t               cmd_type,
                                                   char *                 dec_cur,
                                                   const char *           dec_end,
                                                   char *                 enc_cur,

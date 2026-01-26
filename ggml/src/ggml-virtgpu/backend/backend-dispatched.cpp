@@ -29,7 +29,7 @@ uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p) {
     }
 
     if (!reg->iface.get_device_count(reg)) {
-	GGML_LOG_ERROR("%s: backend initialization failed: no device found\n", __func__);
+        GGML_LOG_ERROR("%s: backend initialization failed: no device found\n", __func__);
         return APIR_BACKEND_INITIALIZE_NO_DEVICE;
     }
 

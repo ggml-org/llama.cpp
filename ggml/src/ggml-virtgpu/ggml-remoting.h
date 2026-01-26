@@ -62,7 +62,7 @@ static inline apir_buffer_type_host_handle_t ggml_buffer_type_to_apir_handle(ggm
 
 static inline apir_buffer_host_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
     if (!buffer->context) {
-	GGML_ABORT("%s: no context available :/", __func__);
+        GGML_ABORT("%s: no context available :/", __func__);
     }
     return BUFFER_TO_HOST_HANDLE(buffer);
 }

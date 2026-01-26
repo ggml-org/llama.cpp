@@ -129,8 +129,8 @@ uint32_t apir_backend_dispatcher(uint32_t               virgl_ctx_id,
     };
 
     virgl_apir_context ctx = {
-	.ctx_id = virgl_ctx_id,
-	.iface = virgl_cbs,
+        .ctx_id = virgl_ctx_id,
+        .iface = virgl_cbs,
     };
 
     if (cmd_type >= APIR_BACKEND_DISPATCH_TABLE_COUNT) {
