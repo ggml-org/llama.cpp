@@ -99,7 +99,13 @@ class unified_matmul_xmx_kernel_name;
 /**
  * XMX-accelerated matmul kernel using joint_matrix.
  *
- * Computes: output[M,N] = dequant(weights[M,K]) @ activations[K,N]
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * Where:
+ * - weights (src0) has shape [N, K] - indexed by output column n
+ * - activations (src1) has shape [M, K] - indexed by output row m
+ * - output (dst) has shape [M, N]
  *
  * This kernel dequantizes Q4_0 weights to half precision and uses
  * Intel XMX (joint_matrix) for dpas acceleration.
@@ -122,8 +128,8 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
     auto sg = item.get_sub_group();
 
     // Tile coordinates
-    const int tile_row = item.get_group(0);  // M dimension
-    const int tile_col = item.get_group(1);  // N dimension
+    const int tile_row = item.get_group(0);  // M dimension (output rows)
+    const int tile_col = item.get_group(1);  // N dimension (output columns)
 
     // Thread coordinates within work-group
     const int local_row = item.get_local_id(0);
@@ -134,8 +140,8 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
     const int local_total = local_size_row * local_size_col;
 
     // Global output coordinates for this work-group
-    const int64_t m_start = tile_row * TILE_M;
-    const int64_t n_start = tile_col * TILE_N;
+    const int64_t m_start = tile_row * TILE_M;  // Starting output row
+    const int64_t n_start = tile_col * TILE_N;  // Starting output column
 
     // Number of K tiles
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
@@ -165,37 +171,39 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
         item.barrier(sycl::access::fence_space::local_space);
 
         // ==== Load and dequantize weights to SLM (as half) ====
-        // Layout: row-major [TILE_M x TILE_K]
-        for (int idx = local_linear; idx < TILE_M * k_len; idx += local_total) {
-            const int m_off = idx / k_len;
+        // GGML: weights[N, K] - indexed by output column n
+        // Layout: row-major [TILE_N x TILE_K] indexed as [n_off * TILE_K + k_off]
+        for (int idx = local_linear; idx < TILE_N * k_len; idx += local_total) {
+            const int n_off = idx / k_len;
             const int k_off = idx % k_len;
-            const int64_t m_global = m_start + m_off;
+            const int64_t n_global = n_start + n_off;  // Output column = weight row
             const int64_t k_global = k_start + k_off;
 
             sycl::half w = sycl::half(0.0f);
-            if (m_global < args.M) {
-                // Determine which Q4_0 block and index within block
-                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+            if (n_global < args.N) {
+                // GGML: weights[n_global, k_global]
+                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
                 w = dequant_q4_0_half(&weights[block_idx], idx_in_block);
             }
-            slm_weights[m_off * TILE_K + k_off] = w;
+            slm_weights[n_off * TILE_K + k_off] = w;
         }
 
-        // ==== Load activations to SLM (convert to half, col-major for dpas) ====
-        // Layout: col-major [TILE_N x TILE_K] for optimal B matrix access
-        for (int idx = local_linear; idx < k_len * TILE_N; idx += local_total) {
-            const int k_off = idx / TILE_N;
-            const int n_off = idx % TILE_N;
+        // ==== Load activations to SLM (convert to half) ====
+        // GGML: activations[M, K] - indexed by output row m
+        // Layout: row-major [TILE_M x TILE_K] indexed as [m_off * TILE_K + k_off]
+        for (int idx = local_linear; idx < TILE_M * k_len; idx += local_total) {
+            const int m_off = idx / k_len;
+            const int k_off = idx % k_len;
+            const int64_t m_global = m_start + m_off;  // Output row
             const int64_t k_global = k_start + k_off;
-            const int64_t n_global = n_start + n_off;
 
             sycl::half a = sycl::half(0.0f);
-            if (n_global < args.N) {
-                a = static_cast<sycl::half>(args.activations[k_global * args.N + n_global]);
+            if (m_global < args.M) {
+                // GGML: activations[m_global, k_global]
+                a = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
             }
-            // Store in col-major: [n_off][k_off] for B matrix
-            slm_activations[n_off * TILE_K + k_off] = a;
+            slm_activations[m_off * TILE_K + k_off] = a;
         }
 
         // Barrier after loading
@@ -206,10 +214,12 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
         // for this simple implementation
         if (local_row == 0 && local_col < XMX_SUBGROUP_SIZE) {
             // Call the XMX compute function from header
+            // Note: weights and activations order swapped to match GGML convention
+            // compute_tile_xmx expects (weights[N,K], activations[M,K])
             compute_tile_xmx<TILE_M, TILE_N, TILE_K>(
                 sg,
-                &slm_weights[0],
-                &slm_activations[0],
+                &slm_weights[0],      // Weights [TILE_N x TILE_K]
+                &slm_activations[0],  // Activations [TILE_M x TILE_K]
                 acc_regs,
                 slm_acc,
                 item
@@ -250,19 +260,25 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
 /**
  * Unified matmul kernel template.
  *
- * Computes: output[M,N] = dequant(weights[M,K]) @ activations[K,N]
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * Where:
+ * - weights (src0) has shape [N, K] - indexed by output column n
+ * - activations (src1) has shape [M, K] - indexed by output row m
+ * - output (dst) has shape [M, N]
  *
  * Template parameters control tile sizes and compute path.
  * Implements scalar path; XMX path is in unified_matmul_xmx_kernel_impl.
  *
  * Work distribution:
- * - 2D grid: [ceil(N/TILE_N), ceil(M/TILE_M)]
+ * - 2D grid: [ceil(M/TILE_M), ceil(N/TILE_N)]
  * - Each work-group computes one output tile of size TILE_M x TILE_N
  * - K dimension is iterated within each work-group
  *
  * Memory access pattern:
- * - Weights: load tile_m rows of K weights, dequantize on-the-fly
- * - Activations: load tile_k x tile_n from global memory
+ * - Weights: load tile_n rows of K weights (one per output column), dequantize on-the-fly
+ * - Activations: load tile_m rows of K activations (one per output row)
  * - Output: write tile_m x tile_n results
  */
 template <int TILE_M, int TILE_N, int TILE_K, bool USE_XMX>
@@ -271,8 +287,8 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
                                 sycl::local_accessor<float, 1>     slm_weights,
                                 sycl::local_accessor<float, 1>     slm_activations) {
     // Tile coordinates
-    const int tile_row = item.get_group(0);  // M dimension
-    const int tile_col = item.get_group(1);  // N dimension
+    const int tile_row = item.get_group(0);  // M dimension (output rows)
+    const int tile_col = item.get_group(1);  // N dimension (output columns)
 
     // Thread coordinates within work-group
     const int local_row = item.get_local_id(0);
@@ -281,8 +297,8 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
     const int local_size_col = item.get_local_range(1);
 
     // Global output coordinates for this work-group
-    const int64_t m_start = tile_row * TILE_M;
-    const int64_t n_start = tile_col * TILE_N;
+    const int64_t m_start = tile_row * TILE_M;  // Starting output row
+    const int64_t n_start = tile_col * TILE_N;  // Starting output column
 
     // Number of K tiles
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
@@ -309,35 +325,39 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
         item.barrier(sycl::access::fence_space::local_space);
 
         // ==== Load weights to SLM ====
+        // GGML: weights[N, K] - indexed by output column n
         // Each thread loads multiple weight elements
+        // SLM layout: [TILE_N x TILE_K] indexed as [n_off * TILE_K + k_off]
+        for (int n_off = local_row; n_off < TILE_N; n_off += local_size_row) {
+            const int64_t n_global = n_start + n_off;  // Output column = weight row
+            if (n_global >= args.N) continue;
+
+            for (int k_off = local_col; k_off < k_len; k_off += local_size_col) {
+                const int64_t k_global = k_start + k_off;
+
+                // GGML: weights[n_global, k_global]
+                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+
+                // Dequantize and store to SLM
+                float w = dequant_q4_0(&weights[block_idx], idx_in_block);
+                slm_weights[n_off * TILE_K + k_off] = w;
+            }
+        }
+
+        // ==== Load activations to SLM ====
+        // GGML: activations[M, K] - indexed by output row m
+        // SLM layout: [TILE_M x TILE_K] indexed as [m_off * TILE_K + k_off]
         for (int m_off = local_row; m_off < TILE_M; m_off += local_size_row) {
-            const int64_t m_global = m_start + m_off;
+            const int64_t m_global = m_start + m_off;  // Output row
             if (m_global >= args.M) continue;
 
             for (int k_off = local_col; k_off < k_len; k_off += local_size_col) {
                 const int64_t k_global = k_start + k_off;
 
-                // Determine which Q4_0 block and index within block
-                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
-
-                // Dequantize and store to SLM
-                float w = dequant_q4_0(&weights[block_idx], idx_in_block);
-                slm_weights[m_off * TILE_K + k_off] = w;
-            }
-        }
-
-        // ==== Load activations to SLM ====
-        // Activations layout: [K, N] row-major
-        for (int k_off = local_row; k_off < k_len; k_off += local_size_row) {
-            const int64_t k_global = k_start + k_off;
-
-            for (int n_off = local_col; n_off < TILE_N; n_off += local_size_col) {
-                const int64_t n_global = n_start + n_off;
-                if (n_global >= args.N) continue;
-
-                float a = args.activations[k_global * args.N + n_global];
-                slm_activations[k_off * TILE_N + n_off] = a;
+                // GGML: activations[m_global, k_global]
+                float a = args.activations[m_global * args.K + k_global];
+                slm_activations[m_off * TILE_K + k_off] = a;
             }
         }
 
@@ -345,6 +365,7 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
         item.barrier(sycl::access::fence_space::local_space);
 
         // ==== Compute: accumulate partial products ====
+        // GGML: dst[m,n] = sum_k(weights[n,k] * activations[m,k])
         // Each thread computes its assigned outputs
         for (int mo = 0; mo < outputs_per_thread_m; mo++) {
             const int m_off = local_row + mo * local_size_row;
@@ -357,10 +378,11 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
                 if (n_start + n_off >= args.N) continue;
 
                 // Dot product over K tile
+                // dst[m,n] = sum_k(weights[n,k] * activations[m,k])
                 float sum = 0.0f;
                 for (int k = 0; k < k_len; k++) {
-                    float w = slm_weights[m_off * TILE_K + k];
-                    float a = slm_activations[k * TILE_N + n_off];
+                    float w = slm_weights[n_off * TILE_K + k];     // weights[n, k]
+                    float a = slm_activations[m_off * TILE_K + k]; // activations[m, k]
                     sum += w * a;
                 }
 
@@ -450,8 +472,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
 
         q.submit([&](sycl::handler & cgh) {
             // Allocate SLM for half-precision data
-            sycl::local_accessor<sycl::half, 1> slm_w(XMX_TM * XMX_TK, cgh);
-            sycl::local_accessor<sycl::half, 1> slm_a(XMX_TK * XMX_TN, cgh);
+            // GGML: weights[N,K] -> slm_w[XMX_TN * XMX_TK]
+            // GGML: activations[M,K] -> slm_a[XMX_TM * XMX_TK]
+            sycl::local_accessor<sycl::half, 1> slm_w(XMX_TN * XMX_TK, cgh);  // Weights [TN x TK]
+            sycl::local_accessor<sycl::half, 1> slm_a(XMX_TM * XMX_TK, cgh);  // Activations [TM x TK]
             sycl::local_accessor<float, 1> slm_acc(XMX_TILE_M * XMX_TILE_N, cgh);
 
             sycl::nd_range<2> range(
@@ -487,8 +511,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
 
         q.submit([&](sycl::handler & cgh) {
             // Allocate SLM
-            sycl::local_accessor<float, 1> slm_w(TM * TK, cgh);
-            sycl::local_accessor<float, 1> slm_a(TK * TN, cgh);
+            // GGML: weights[N,K] -> slm_w[TN * TK]
+            // GGML: activations[M,K] -> slm_a[TM * TK]
+            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
+            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
             sycl::nd_range<2> range(
                 sycl::range<2>(grid_m * wg_size_m, grid_n * wg_size_n),
@@ -512,8 +538,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         const int wg_n = std::min(TN, 16);
 
         q.submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<float, 1> slm_w(TM * TK, cgh);
-            sycl::local_accessor<float, 1> slm_a(TK * TN, cgh);
+            // GGML: weights[N,K] -> slm_w[TN * TK]
+            // GGML: activations[M,K] -> slm_a[TM * TK]
+            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
+            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
             sycl::nd_range<2> range(
                 sycl::range<2>(grid_m * wg_m, grid_n * wg_n),
@@ -538,8 +566,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         const int wg_n = std::min(TN, 16);
 
         q.submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<float, 1> slm_w(TM * TK, cgh);
-            sycl::local_accessor<float, 1> slm_a(TK * TN, cgh);
+            // GGML: weights[N,K] -> slm_w[TN * TK]
+            // GGML: activations[M,K] -> slm_a[TM * TK]
+            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
+            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
             sycl::nd_range<2> range(
                 sycl::range<2>(grid_m * wg_m, grid_n * wg_n),

@@ -149,16 +149,28 @@ static_assert(sizeof(block_q4_0_unified) == sizeof(sycl::half) + UNIFIED_QK4_0 /
 // =============================================================================
 // Contains all information needed to launch the unified matmul kernel.
 // Designed to be POD for efficient device-side access.
+//
+// GGML Tensor Layout Convention:
+// ==============================
+// In GGML, mul_mat computes: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+//
+// This is equivalent to: C = B @ A^T where:
+// - A = src0 (weights) with shape [N, K]
+// - B = src1 (activations) with shape [M, K]
+// - C = dst (output) with shape [M, N]
+//
+// Key insight: weights are indexed by output column (n), NOT output row (m)!
+// Each weight row corresponds to an output column.
 
 struct UnifiedKernelArgs {
-    // Matrix dimensions
-    int64_t M;  // Output rows (batch * tokens)
-    int64_t N;  // Output columns (hidden dim / output features)
-    int64_t K;  // Inner dimension (reduction dim, must be multiple of block size)
+    // Matrix dimensions (GGML convention)
+    int64_t M;  // Output rows (batch * tokens) - from src1->ne[1]
+    int64_t N;  // Output columns (hidden dim / output features) - from src0->ne[1]
+    int64_t K;  // Reduction dimension (must be multiple of block size) - from src0->ne[0]
 
     // Tile configuration (from auto-tuning or heuristics)
-    int tile_m;  // M dimension tile size
-    int tile_n;  // N dimension tile size
+    int tile_m;  // M dimension tile size (output rows per tile)
+    int tile_n;  // N dimension tile size (output columns per tile)
     int tile_k;  // K dimension tile size (typically 32 for Q4_0)
 
     // Compute path selection
@@ -177,9 +189,10 @@ struct UnifiedKernelArgs {
     int prefetch_depth;  // 0 = none, 1-4 typical
 
     // Data pointers (device memory)
-    const void *  weights;      // Quantized weight matrix [M, K/block_size blocks]
-    const float * activations;  // Activation matrix [K, N] (row-major F32)
-    float *       output;       // Output matrix [M, N] (row-major F32)
+    // GGML Convention: weights indexed by (n, k), activations indexed by (m, k)
+    const void *  weights;      // Quantized weight matrix [N, K/block_size blocks] - src0
+    const float * activations;  // Activation matrix [M, K] (row-major F32) - src1
+    float *       output;       // Output matrix [M, N] (row-major F32) - dst
 };
 
 // =============================================================================
@@ -189,7 +202,12 @@ struct UnifiedKernelArgs {
 /**
  * Launch the unified matmul kernel.
  *
- * Computes: output[M,N] = dequant(weights[M,K]) @ activations[K,N]
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * - weights (src0) has shape [N, K] - indexed by output column n
+ * - activations (src1) has shape [M, K] - indexed by output row m
+ * - output (dst) has shape [M, N]
  *
  * The kernel automatically handles:
  * - Q4_0 dequantization during computation
@@ -208,18 +226,20 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args);
 /**
  * Calculate required SLM size for unified kernel.
  *
- * @param tile_m  M tile size
- * @param tile_n  N tile size
- * @param tile_k  K tile size
+ * @param tile_m  M tile size (output rows)
+ * @param tile_n  N tile size (output columns)
+ * @param tile_k  K tile size (reduction dimension)
  * @return Size in bytes needed for SLM
  */
 inline size_t calculate_slm_size(int tile_m, int tile_n, int tile_k) {
-    // SLM usage:
-    // - Weight tile: tile_m * tile_k weights (dequantized to float)
-    // - Activation tile: tile_k * tile_n floats
+    // SLM usage (GGML convention):
+    // - Weight tile: tile_n * tile_k weights (dequantized to float)
+    //   Weights are indexed by output column (n), so we load tile_n rows of weights
+    // - Activation tile: tile_m * tile_k floats
+    //   Activations are indexed by output row (m), so we load tile_m rows of activations
     // For Q4_0 with scalar path, we dequantize to float in SLM
-    size_t weight_slm     = static_cast<size_t>(tile_m) * tile_k * sizeof(float);
-    size_t activation_slm = static_cast<size_t>(tile_k) * tile_n * sizeof(float);
+    size_t weight_slm     = static_cast<size_t>(tile_n) * tile_k * sizeof(float);
+    size_t activation_slm = static_cast<size_t>(tile_m) * tile_k * sizeof(float);
     return weight_slm + activation_slm;
 }
 
@@ -317,20 +337,24 @@ inline bool is_partial_tile(int64_t m_start, int64_t n_start, int64_t k_start,
  * dimensions may not align with tile sizes. Each work-item processes
  * one or more output elements using a simple nested loop.
  *
- * @tparam TILE_M   M tile size
- * @tparam TILE_N   N tile size
- * @tparam TILE_K   K tile size
- * @param activations   Activation matrix [M x K] (row-major)
- * @param weights_slm   Dequantized weights in SLM [TILE_M x TILE_K]
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * - weights (src0) indexed by (n, k)
+ * - activations (src1) indexed by (m, k)
+ *
+ * @tparam TILE_M   M tile size (output rows)
+ * @tparam TILE_N   N tile size (output columns)
+ * @tparam TILE_K   K tile size (reduction)
+ * @param activations   Activation matrix (not used - data loaded to SLM)
+ * @param slm_weights   Dequantized weights in SLM [TILE_N x TILE_K] indexed as [n * TILE_K + k]
+ * @param slm_activations Activations in SLM [TILE_M x TILE_K] indexed as [m * TILE_K + k]
  * @param output        Output matrix [M x N] (row-major)
  * @param M_actual      Actual M elements in this tile (may be < TILE_M)
  * @param N_actual      Actual N elements in this tile (may be < TILE_N)
  * @param K_actual      Actual K elements in this tile (may be < TILE_K)
  * @param m_offset      Starting M index in global matrix
  * @param n_offset      Starting N index in global matrix
- * @param K             Full K dimension
- * @param N             Full N dimension
- * @param slm_activations SLM accessor for activations [TILE_K x TILE_N]
+ * @param K             Full K dimension (not used - tile size TILE_K used for indexing)
+ * @param N             Full N dimension (for output indexing)
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -360,11 +384,12 @@ inline void compute_tile_scalar_bounded(
             float sum = 0.0f;
 
             // Dot product over K dimension using SLM data
+            // GGML: dst[m,n] = sum_k(weights[n,k] * activations[m,k])
             for (int k = 0; k < K_actual; k++) {
-                // slm_weights layout: [TILE_M * TILE_K] indexed as [m * TILE_K + k]
-                // slm_activations layout: [TILE_K * TILE_N] indexed as [k * TILE_N + n]
-                float w = slm_weights[m * TILE_K + k];
-                float a = slm_activations[k * TILE_N + n];
+                // slm_weights layout: [TILE_N x TILE_K] indexed as [n * TILE_K + k]
+                // slm_activations layout: [TILE_M x TILE_K] indexed as [m * TILE_K + k]
+                float w = slm_weights[n * TILE_K + k];
+                float a = slm_activations[m * TILE_K + k];
                 sum += w * a;
             }
 
@@ -382,20 +407,24 @@ inline void compute_tile_scalar_bounded(
  * Each sub-group processes rows cooperatively, with lanes distributing
  * the K-dimension work and reducing results.
  *
- * @tparam TILE_M   M tile size
- * @tparam TILE_N   N tile size
- * @tparam TILE_K   K tile size
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * - weights (src0) indexed by (n, k)
+ * - activations (src1) indexed by (m, k)
+ *
+ * @tparam TILE_M   M tile size (output rows)
+ * @tparam TILE_N   N tile size (output columns)
+ * @tparam TILE_K   K tile size (reduction)
  * @param activations   Activation matrix (not used, data in SLM)
- * @param slm_weights   Dequantized weights in SLM [TILE_M x TILE_K]
- * @param slm_activations SLM accessor for activations [TILE_K x TILE_N]
+ * @param slm_weights   Dequantized weights in SLM [TILE_N x TILE_K] indexed as [n * TILE_K + k]
+ * @param slm_activations Activations in SLM [TILE_M x TILE_K] indexed as [m * TILE_K + k]
  * @param output        Output matrix [M x N] (row-major)
  * @param M_actual      Actual M elements in this tile
  * @param N_actual      Actual N elements in this tile
  * @param K_actual      Actual K elements in this tile
  * @param m_offset      Starting M index in global matrix
  * @param n_offset      Starting N index in global matrix
- * @param K             Full K dimension
- * @param N             Full N dimension
+ * @param K             Full K dimension (not used)
+ * @param N             Full N dimension (for output indexing)
  * @param sg            Sub-group handle
  * @param item          ND-item for work distribution
  */
@@ -429,9 +458,10 @@ inline void compute_tile_scalar_subgroup(
             float partial = 0.0f;
 
             // Distribute K across sub-group lanes
+            // GGML: dst[m,n] = sum_k(weights[n,k] * activations[m,k])
             for (int k = sg_id; k < K_actual; k += sg_size) {
-                float w = slm_weights[m * TILE_K + k];
-                float a = slm_activations[k * TILE_N + n];
+                float w = slm_weights[n * TILE_K + k];
+                float a = slm_activations[m * TILE_K + k];
                 partial += w * a;
             }
 
@@ -452,18 +482,22 @@ inline void compute_tile_scalar_subgroup(
  * Uses SYCL vec<float, 4> for better memory throughput when
  * dimensions are aligned to vector width.
  *
- * @tparam TILE_M   M tile size
- * @tparam TILE_N   N tile size (must be multiple of 4)
- * @tparam TILE_K   K tile size
- * @param slm_weights      Dequantized weights in SLM [TILE_M x TILE_K]
- * @param slm_activations  Activations in SLM [TILE_K x TILE_N]
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * - weights (src0) indexed by (n, k)
+ * - activations (src1) indexed by (m, k)
+ *
+ * @tparam TILE_M   M tile size (output rows)
+ * @tparam TILE_N   N tile size (output columns, must be multiple of 4 for vectorization)
+ * @tparam TILE_K   K tile size (reduction)
+ * @param slm_weights      Dequantized weights in SLM [TILE_N x TILE_K] indexed as [n * TILE_K + k]
+ * @param slm_activations  Activations in SLM [TILE_M x TILE_K] indexed as [m * TILE_K + k]
  * @param output           Output matrix [M x N]
  * @param M_actual         Actual M elements
  * @param N_actual         Actual N elements (should be multiple of 4)
  * @param K_actual         Actual K elements
  * @param m_offset         Starting M index
  * @param n_offset         Starting N index
- * @param N                Full N dimension
+ * @param N                Full N dimension (for output indexing)
  * @param item             ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -484,43 +518,43 @@ inline void compute_tile_scalar_vectorized(
     const int local_size_row = item.get_local_range(0);
     const int local_size_col = item.get_local_range(1);
 
-    // Process 4 N elements at a time when aligned
-    const int N_vec = (N_actual / 4) * 4;
-
+    // Process 4 K elements at a time when aligned (vectorize over K for better weight reuse)
+    // Note: We iterate over output (m, n) and reduce over k
     for (int m = local_row; m < M_actual; m += local_size_row) {
-        // Vectorized path for aligned portion
-        for (int n = local_col * 4; n < N_vec; n += local_size_col * 4) {
-            sycl::vec<float, 4> sum(0.0f);
-
-            for (int k = 0; k < K_actual; k++) {
-                float w = slm_weights[m * TILE_K + k];
-
-                // Load 4 activation values
-                sycl::vec<float, 4> a;
-                a[0] = slm_activations[k * TILE_N + n + 0];
-                a[1] = slm_activations[k * TILE_N + n + 1];
-                a[2] = slm_activations[k * TILE_N + n + 2];
-                a[3] = slm_activations[k * TILE_N + n + 3];
-
-                sum += w * a;
-            }
-
-            // Write 4 output values
-            int64_t out_base = (m_offset + m) * N + (n_offset + n);
-            output[out_base + 0] += sum[0];
-            output[out_base + 1] += sum[1];
-            output[out_base + 2] += sum[2];
-            output[out_base + 3] += sum[3];
-        }
-
-        // Scalar cleanup for remaining elements
-        for (int n = N_vec + local_col; n < N_actual; n += local_size_col) {
+        for (int n = local_col; n < N_actual; n += local_size_col) {
             float sum = 0.0f;
-            for (int k = 0; k < K_actual; k++) {
-                float w = slm_weights[m * TILE_K + k];
-                float a = slm_activations[k * TILE_N + n];
+
+            // Vectorized K reduction when K_actual is multiple of 4
+            const int K_vec = (K_actual / 4) * 4;
+
+            for (int k = 0; k < K_vec; k += 4) {
+                // Load 4 weight values for this n
+                // GGML: weights[n,k] for consecutive k values
+                sycl::vec<float, 4> w;
+                w[0] = slm_weights[n * TILE_K + k + 0];
+                w[1] = slm_weights[n * TILE_K + k + 1];
+                w[2] = slm_weights[n * TILE_K + k + 2];
+                w[3] = slm_weights[n * TILE_K + k + 3];
+
+                // Load 4 activation values for this m
+                // GGML: activations[m,k] for consecutive k values
+                sycl::vec<float, 4> a;
+                a[0] = slm_activations[m * TILE_K + k + 0];
+                a[1] = slm_activations[m * TILE_K + k + 1];
+                a[2] = slm_activations[m * TILE_K + k + 2];
+                a[3] = slm_activations[m * TILE_K + k + 3];
+
+                // Dot product contribution
+                sum += w[0] * a[0] + w[1] * a[1] + w[2] * a[2] + w[3] * a[3];
+            }
+
+            // Scalar cleanup for remaining K elements
+            for (int k = K_vec; k < K_actual; k++) {
+                float w = slm_weights[n * TILE_K + k];
+                float a = slm_activations[m * TILE_K + k];
                 sum += w * a;
             }
+
             output[(m_offset + m) * N + (n_offset + n)] += sum;
         }
     }
@@ -566,23 +600,26 @@ SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block,
  * AOS layout: Contiguous blocks, each 18 bytes [d: fp16][qs: 16 bytes]
  * Indexed as: blocks[row * blocks_per_row + col]
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size (not used for weights)
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size (should be multiple of UNIFIED_QK4_0)
- * @param slm           SLM accessor for dequantized weights [TILE_M * TILE_K]
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer to Q4_0 blocks
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
                              const void *                          weights,
-                             int64_t                               m_start,
+                             int64_t                               n_start,
                              int64_t                               k_start,
-                             int64_t                               M,
+                             int64_t                               N,
                              int64_t                               K,
                              const sycl::nd_item<3> &              item) {
     const block_q4_0_unified * blocks       = static_cast<const block_q4_0_unified *>(weights);
@@ -591,34 +628,35 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
 
-    // Total elements to load: TILE_M rows x TILE_K weights
+    // Total elements to load: TILE_N rows x TILE_K weights
     // Each thread handles a subset of blocks
     const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
-    const int total_blocks  = TILE_M * tile_k_blocks;
+    const int total_blocks  = TILE_N * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
-        const int m_off     = idx / tile_k_blocks;
+        const int n_off     = idx / tile_k_blocks;
         const int k_block   = idx % tile_k_blocks;
-        const int64_t m_global = m_start + m_off;
+        const int64_t n_global = n_start + n_off;
         const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
         // Bounds check
-        if (m_global >= M || k_block_global >= blocks_per_row) {
+        if (n_global >= N || k_block_global >= blocks_per_row) {
             // Zero-fill for out-of-bounds
             for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
+                slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
             }
             continue;
         }
 
         // Load and dequantize block
-        const block_q4_0_unified * block = &blocks[m_global * blocks_per_row + k_block_global];
+        // GGML: weights[n_global, k] - row n_global
+        const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
         sycl::half        temp[UNIFIED_QK4_0];
         dequant_q4_0_to_half(block, temp);
 
-        // Store to SLM
+        // Store to SLM: [n_off * TILE_K + k]
         for (int i = 0; i < UNIFIED_QK4_0; i++) {
-            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
+            slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
         }
     }
 }
@@ -630,14 +668,17 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
  * qs: [nrows * K/2 bytes]
  * d:  [nrows * K/32 half values]
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size (not used for weights)
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size (should be multiple of UNIFIED_QK4_0)
- * @param slm           SLM accessor for dequantized weights [TILE_M * TILE_K]
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer (SOA layout)
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows in tensor (for scale offset calculation)
  * @param item          ND-item for work distribution
@@ -645,9 +686,9 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
 template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
                              const void *                          weights,
-                             int64_t                               m_start,
+                             int64_t                               n_start,
                              int64_t                               k_start,
-                             int64_t                               M,
+                             int64_t                               N,
                              int64_t                               K,
                              int64_t                               nrows_full,
                              const sycl::nd_item<3> &              item) {
@@ -661,37 +702,38 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
 
     // Each thread loads a subset of blocks
     const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
-    const int total_blocks  = TILE_M * tile_k_blocks;
+    const int total_blocks  = TILE_N * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
-        const int     m_off       = idx / tile_k_blocks;
+        const int     n_off       = idx / tile_k_blocks;
         const int     k_block     = idx % tile_k_blocks;
-        const int64_t m_global    = m_start + m_off;
+        const int64_t n_global    = n_start + n_off;
         const int64_t k_start_idx = k_start + k_block * UNIFIED_QK4_0;
 
         // Bounds check
-        if (m_global >= M || k_start_idx >= K) {
+        if (n_global >= N || k_start_idx >= K) {
             for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
+                slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
             }
             continue;
         }
 
         // Get scale for this block
-        const int64_t    block_idx = m_global * blocks_per_row + k_start_idx / UNIFIED_QK4_0;
+        // GGML: weights[n_global, k] - row n_global
+        const int64_t    block_idx = n_global * blocks_per_row + k_start_idx / UNIFIED_QK4_0;
         const sycl::half d         = d_base[block_idx];
 
         // Get qs pointer for this block
-        const uint8_t * qs = qs_base + m_global * row_qs_bytes + k_start_idx / 2;
+        const uint8_t * qs = qs_base + n_global * row_qs_bytes + k_start_idx / 2;
 
-        // Dequantize and store
+        // Dequantize and store to SLM: [n_off * TILE_K + k]
         for (int i = 0; i < 16; i++) {
             const uint8_t qs_byte = qs[i];
             const int     lo      = (qs_byte & 0x0F) - 8;
             const int     hi      = (qs_byte >> 4) - 8;
 
-            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i]      = static_cast<sycl::half>(lo) * d;
-            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i + 16] = static_cast<sycl::half>(hi) * d;
+            slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i]      = static_cast<sycl::half>(lo) * d;
+            slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i + 16] = static_cast<sycl::half>(hi) * d;
         }
     }
 }
@@ -708,14 +750,17 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
  * - ...
  * - Word 3: bytes 12-15 from all 32 blocks (128 bytes)
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size (not used)
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size
- * @param slm           SLM accessor for dequantized weights
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer (COALESCED layout)
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows in tensor
  * @param item          ND-item for work distribution
@@ -723,9 +768,9 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
 template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
                                    const void *                          weights,
-                                   int64_t                               m_start,
+                                   int64_t                               n_start,
                                    int64_t                               k_start,
-                                   int64_t                               M,
+                                   int64_t                               N,
                                    int64_t                               K,
                                    int64_t                               nrows_full,
                                    const sycl::nd_item<3> &              item) {
@@ -740,16 +785,16 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
     constexpr int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;  // 128 bytes
 
     // Each thread loads a subset of weights
-    const int total_weights = TILE_M * TILE_K;
+    const int total_weights = TILE_N * TILE_K;
 
     for (int idx = local_id; idx < total_weights; idx += local_size) {
-        const int     m_off   = idx / TILE_K;
+        const int     n_off   = idx / TILE_K;
         const int     k_off   = idx % TILE_K;
-        const int64_t m_global = m_start + m_off;
+        const int64_t n_global = n_start + n_off;
         const int64_t k_global = k_start + k_off;
 
         // Bounds check
-        if (m_global >= M || k_global >= K) {
+        if (n_global >= N || k_global >= K) {
             slm[idx] = sycl::half(0.0f);
             continue;
         }
@@ -768,16 +813,17 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
         const int byte_in_word = qs_byte_idx % 4;
 
         // Compute coalesced offset
-        const int64_t tile_base = m_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+        // GGML: weights[n_global, k] - row n_global
+        const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
         const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
         // Load qs byte
         const uint8_t qs_byte = qs_base[word_offset];
 
         // Get scale
-        const sycl::half d = d_base[m_global * blocks_per_row + block_idx];
+        const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
 
-        // Dequantize
+        // Dequantize and store to SLM: [n_off * TILE_K + k_off]
         const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
         slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
     }
@@ -789,14 +835,17 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
  * XMX_COALESCED layout: Optimized for dpas with K_TILE=32 alignment.
  * Similar to COALESCED but with additional padding/alignment for XMX.
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size (not used)
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size (should be 32 for dpas)
- * @param slm           SLM accessor for dequantized weights
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer (XMX_COALESCED layout)
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows in tensor
  * @param item          ND-item for work distribution
@@ -804,9 +853,9 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
 template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
                                        const void *                          weights,
-                                       int64_t                               m_start,
+                                       int64_t                               n_start,
                                        int64_t                               k_start,
-                                       int64_t                               M,
+                                       int64_t                               N,
                                        int64_t                               K,
                                        int64_t                               nrows_full,
                                        const sycl::nd_item<3> &              item) {
@@ -823,17 +872,17 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
 
-    // Each thread handles a subset of M x TILE_K weights
-    const int total_weights = TILE_M * TILE_K;
+    // Each thread handles a subset of N x TILE_K weights
+    const int total_weights = TILE_N * TILE_K;
 
     for (int idx = local_id; idx < total_weights; idx += local_size) {
-        const int     m_off    = idx / TILE_K;
+        const int     n_off    = idx / TILE_K;
         const int     k_off    = idx % TILE_K;
-        const int64_t m_global = m_start + m_off;
+        const int64_t n_global = n_start + n_off;
         const int64_t k_global = k_start + k_off;
 
         // Bounds check
-        if (m_global >= M || k_global >= K) {
+        if (n_global >= N || k_global >= K) {
             slm[idx] = sycl::half(0.0f);
             continue;
         }
@@ -854,16 +903,17 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
         constexpr int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;
 
         // Compute coalesced offset
-        const int64_t tile_base = m_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+        // GGML: weights[n_global, k] - row n_global
+        const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
         const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
         // Load qs byte
         const uint8_t qs_byte = qs_base[word_offset];
 
         // Get scale
-        const sycl::half d = d_base[m_global * blocks_per_row + block_idx];
+        const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
 
-        // Dequantize
+        // Dequantize and store to SLM: [n_off * TILE_K + k_off]
         const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
         slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
     }
@@ -875,15 +925,18 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
  * Dispatches to the appropriate weight loading function based on LayoutMode.
  * All functions dequantize Q4_0 weights to sycl::half in SLM.
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size
- * @param slm           SLM accessor for dequantized weights
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer to weights
  * @param layout        Memory layout mode
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows (for SOA/COALESCED scale offset)
  * @param item          ND-item for work distribution
@@ -892,27 +945,27 @@ template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                                 const void *                          weights,
                                 LayoutMode                            layout,
-                                int64_t                               m_start,
+                                int64_t                               n_start,
                                 int64_t                               k_start,
-                                int64_t                               M,
+                                int64_t                               N,
                                 int64_t                               K,
                                 int64_t                               nrows_full,
                                 const sycl::nd_item<3> &              item) {
     switch (layout) {
         case LayoutMode::AOS:
-            load_weights_aos<TILE_M, TILE_N, TILE_K>(slm, weights, m_start, k_start, M, K, item);
+            load_weights_aos<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, item);
             break;
 
         case LayoutMode::SOA:
-            load_weights_soa<TILE_M, TILE_N, TILE_K>(slm, weights, m_start, k_start, M, K, nrows_full, item);
+            load_weights_soa<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
 
         case LayoutMode::COALESCED:
-            load_weights_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, m_start, k_start, M, K, nrows_full, item);
+            load_weights_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
 
         case LayoutMode::XMX_COALESCED:
-            load_weights_xmx_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, m_start, k_start, M, K, nrows_full, item);
+            load_weights_xmx_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
     }
 }
@@ -923,15 +976,18 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
  * Uses flat linear indexing to distribute work across work-items.
  * This overload is used by the existing kernel implementation.
  *
- * @tparam TILE_M       M dimension tile size
- * @tparam TILE_N       N dimension tile size
+ * GGML Convention: weights[N, K] - indexed by output column n, then k
+ * We load TILE_N rows of weights (one row per output column n)
+ *
+ * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
+ * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
  * @tparam TILE_K       K dimension tile size
- * @param slm           SLM accessor for dequantized weights
+ * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
  * @param weights       Global memory pointer to weights
  * @param layout        Memory layout mode
- * @param m_start       Starting M (row) index
+ * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
- * @param M             Total M dimension
+ * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows (for SOA/COALESCED scale offset)
  * @param item2d        2D ND-item for work distribution
@@ -940,9 +996,9 @@ template <int TILE_M, int TILE_N, int TILE_K>
 inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                                 const void *                          weights,
                                 LayoutMode                            layout,
-                                int64_t                               m_start,
+                                int64_t                               n_start,
                                 int64_t                               k_start,
-                                int64_t                               M,
+                                int64_t                               N,
                                 int64_t                               K,
                                 int64_t                               nrows_full,
                                 const sycl::nd_item<2> &              item2d) {
@@ -957,27 +1013,29 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
     if (layout == LayoutMode::AOS) {
         // AOS: Direct block access
         const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
-        const int total_blocks  = TILE_M * tile_k_blocks;
+        const int total_blocks  = TILE_N * tile_k_blocks;
 
         for (int idx = local_id; idx < total_blocks; idx += local_size) {
-            const int     m_off       = idx / tile_k_blocks;
+            const int     n_off       = idx / tile_k_blocks;
             const int     k_block     = idx % tile_k_blocks;
-            const int64_t m_global    = m_start + m_off;
+            const int64_t n_global    = n_start + n_off;
             const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
-            if (m_global >= M || k_block_global >= blocks_per_row) {
+            if (n_global >= N || k_block_global >= blocks_per_row) {
                 for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                    slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
+                    slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
                 }
                 continue;
             }
 
-            const block_q4_0_unified * block = &blocks[m_global * blocks_per_row + k_block_global];
+            // GGML: weights[n_global, k] - row n_global
+            const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
             sycl::half         temp[UNIFIED_QK4_0];
             dequant_q4_0_to_half(block, temp);
 
+            // Store to SLM: [n_off * TILE_K + k]
             for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
+                slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
             }
         }
     } else {
@@ -986,15 +1044,15 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
         const int          row_qs_bytes = static_cast<int>(K / 2);
         const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
 
-        const int total_weights = TILE_M * TILE_K;
+        const int total_weights = TILE_N * TILE_K;
 
         for (int idx = local_id; idx < total_weights; idx += local_size) {
-            const int     m_off    = idx / TILE_K;
+            const int     n_off    = idx / TILE_K;
             const int     k_off    = idx % TILE_K;
-            const int64_t m_global = m_start + m_off;
+            const int64_t n_global = n_start + n_off;
             const int64_t k_global = k_start + k_off;
 
-            if (m_global >= M || k_global >= K) {
+            if (n_global >= N || k_global >= K) {
                 slm[idx] = sycl::half(0.0f);
                 continue;
             }
@@ -1004,12 +1062,14 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
 
             if (layout == LayoutMode::SOA) {
                 // SOA: qs bytes contiguous, then scales
-                const uint8_t qs_byte = qs_base[m_global * row_qs_bytes + k_global / 2];
-                const sycl::half d = d_base[m_global * blocks_per_row + block_idx];
+                // GGML: weights[n_global, k] - row n_global
+                const uint8_t qs_byte = qs_base[n_global * row_qs_bytes + k_global / 2];
+                const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
                 const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
                 slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
             } else {
                 // COALESCED / XMX_COALESCED: Word-interleaved
+                // GGML: weights[n_global, k] - row n_global
                 const int tile_idx       = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
                 const int block_in_tile  = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
                 const int qs_byte_idx    = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
@@ -1017,11 +1077,11 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                 const int byte_in_word   = qs_byte_idx % 4;
                 constexpr int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;
 
-                const int64_t tile_base = m_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+                const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
                 const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
                 const uint8_t qs_byte = qs_base[word_offset];
-                const sycl::half d = d_base[m_global * blocks_per_row + block_idx];
+                const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
                 const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
                 slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
             }
@@ -1043,19 +1103,22 @@ namespace sycl_matrix = sycl::ext::oneapi::experimental::matrix;
 /**
  * XMX tile compute using joint_matrix.
  *
- * Computes: C[M,N] += A[M,K] @ B[K,N] using dpas instructions.
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
  *
- * Data layout expectations:
- * - A (weights): row-major in SLM, dequantized to half [TILE_M x TILE_K]
- * - B (activations): col-major in SLM, converted to half [TILE_K x TILE_N]
- * - C (accumulator): float registers [TILE_M x TILE_N]
+ * For XMX, we compute: C[M,N] = B[M,K] @ A[N,K]^T
+ * Where:
+ * - A (weights) in SLM: [TILE_N x TILE_K] row-major, indexed as [n * TILE_K + k]
+ * - B (activations) in SLM: [TILE_M x TILE_K] row-major, indexed as [m * TILE_K + k]
+ * - C (output): [TILE_M x TILE_N]
+ *
+ * For each output tile (m, n), we need weights[n, :] and activations[m, :]
  *
  * @tparam TILE_M   M tile size (must be multiple of XMX_TILE_M=8)
  * @tparam TILE_N   N tile size (must be multiple of XMX_TILE_N=16)
  * @tparam TILE_K   K tile size (must be multiple of XMX_TILE_K=8)
  * @param sg            Sub-group handle
- * @param a_slm         Pointer to A matrix in SLM [TILE_M x TILE_K] half
- * @param b_slm         Pointer to B matrix in SLM [TILE_K x TILE_N] half
+ * @param weights_slm   Pointer to weights in SLM [TILE_N x TILE_K] half, indexed as [n * TILE_K + k]
+ * @param act_slm       Pointer to activations in SLM [TILE_M x TILE_K] half, indexed as [m * TILE_K + k]
  * @param c_regs        Pointer to C accumulator in registers [TILE_M x TILE_N] float
  * @param slm_acc       SLM for accumulator extraction
  * @param item          ND-item for work distribution
@@ -1064,9 +1127,9 @@ template<int TILE_M, int TILE_N, int TILE_K>
 [[sycl::reqd_sub_group_size(XMX_SUBGROUP_SIZE)]]
 inline void compute_tile_xmx(
     sycl::sub_group sg,
-    const sycl::half* a_slm,    // Weights in SLM [TILE_M x TILE_K] row-major
-    const sycl::half* b_slm,    // Activations in SLM [TILE_K x TILE_N] col-major
-    float* c_regs,              // Accumulator in registers [TILE_M x TILE_N]
+    const sycl::half* weights_slm,  // Weights in SLM [TILE_N x TILE_K] row-major
+    const sycl::half* act_slm,      // Activations in SLM [TILE_M x TILE_K] row-major
+    float* c_regs,                  // Accumulator in registers [TILE_M x TILE_N]
     sycl::local_accessor<float, 1>& slm_acc,  // SLM for accumulator extraction
     const sycl::nd_item<2>& /* item */)       // Unused, kept for API consistency
 {
@@ -1081,12 +1144,15 @@ inline void compute_tile_xmx(
     const int lane = sg.get_local_linear_id();
 
     // Declare joint matrices
+    // For C = B @ A^T, we load:
+    // - mat_a from activations B[m, k] (row-major)
+    // - mat_b from weights A[n, k]^T (col-major view of row-major data)
     sycl_matrix::joint_matrix<sycl::sub_group, sycl::half,
                               sycl_matrix::use::a, XMX_TILE_M, XMX_TILE_K,
-                              sycl_matrix::layout::row_major> mat_a;
+                              sycl_matrix::layout::row_major> mat_a;  // Activations
     sycl_matrix::joint_matrix<sycl::sub_group, sycl::half,
                               sycl_matrix::use::b, XMX_TILE_K, XMX_TILE_N,
-                              sycl_matrix::layout::col_major> mat_b;
+                              sycl_matrix::layout::col_major> mat_b;  // Weights transposed
     sycl_matrix::joint_matrix<sycl::sub_group, float,
                               sycl_matrix::use::accumulator, XMX_TILE_M, XMX_TILE_N> acc;
 
@@ -1109,20 +1175,23 @@ inline void compute_tile_xmx(
             for (int tk = 0; tk < NUM_K_STEPS; tk++) {
                 const int k_base = tk * XMX_TILE_K;
 
-                // Load A tile from SLM (row-major: [m_base + row, k_base + col])
+                // Load activations tile (row-major: activations[m, k])
+                // Index: act_slm[m_base * TILE_K + k_base]
                 auto a_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
                                                        sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(a_slm + m_base * TILE_K + k_base));
+                    const_cast<sycl::half*>(act_slm + m_base * TILE_K + k_base));
                 sycl_matrix::joint_matrix_load(sg, mat_a, a_ptr, TILE_K);
 
-                // Load B tile from SLM (col-major for dpas: [k_base + row, n_base + col])
-                // Note: B is stored in column-major for optimal dpas access pattern
+                // Load weights tile (transposed view: weights[n, k] loaded as col-major)
+                // Weights are stored row-major as [n * TILE_K + k]
+                // For col-major load of transposed matrix, we read from weights[n_base, k_base]
+                // The col-major load will read columns of weights (which are rows after transpose)
                 auto b_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
                                                        sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(b_slm + n_base * TILE_K + k_base));
+                    const_cast<sycl::half*>(weights_slm + n_base * TILE_K + k_base));
                 sycl_matrix::joint_matrix_load(sg, mat_b, b_ptr, TILE_K);
 
-                // Compute: acc += A * B
+                // Compute: acc += A * B (where B is transposed weights)
                 sycl_matrix::joint_matrix_mad(sg, acc, mat_a, mat_b, acc);
             }
 

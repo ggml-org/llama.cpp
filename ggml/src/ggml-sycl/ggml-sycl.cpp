@@ -16719,25 +16719,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         // =====================================================================
         // Unified dispatch path (GGML_SYCL_UNIFIED_DISPATCH=1)
         // =====================================================================
-        // DISABLED: The unified kernel has a tensor layout mismatch bug.
+        // GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+        // - src0 (weights) has shape [N, K] - indexed by output column n
+        // - src1 (activations) has shape [M, K] - indexed by output row m
+        // - dst (output) has shape [M, N]
         //
-        // The kernel assumes: weights[M,K] @ activations[K,N] -> output[M,N]
-        // But GGML uses:      src0[N,K] (weights), src1[M,K] (activations)
-        // The computation is: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
-        //
-        // This causes the kernel to index weights with m_global instead of n_global,
-        // resulting in out-of-bounds memory access and GPU crashes (DEVICE_LOST).
-        //
-        // TODO: Fix unified kernel to match GGML's tensor layout convention
-        // See task: llama.cpp-??? (unified kernel layout fix)
-        //
-        // When fixed, re-enable this block:
-#if 0  // DISABLED - tensor layout mismatch
+        // Fixed in task llama.cpp-61p: unified kernel now correctly indexes
+        // weights by n (output column) instead of m (output row).
+#if 0  // DISABLED - tensor layout fix incomplete, still crashes during kernel execution
         if (ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(src0->type)) {
-            // Extract dimensions for unified kernel
-            const int64_t M = src1->ne[1];  // batch size (output rows)
-            const int64_t K = src0->ne[0];  // reduction dimension
-            const int64_t N = src0->ne[1];  // output columns
+            // Extract dimensions for unified kernel (GGML convention)
+            const int64_t M = src1->ne[1];  // batch size (output rows) - from src1
+            const int64_t K = src0->ne[0];  // reduction dimension - from src0
+            const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
 
             // Get data pointers
             const void * src0_data = src0->data;
