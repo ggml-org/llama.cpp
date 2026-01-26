@@ -24,84 +24,64 @@ type ReasoningSegment = {
 };
 
 /**
- * Strips partial marker from text content
- * 
- * Removes incomplete agentic markers (e.g., "<<<", "<<<AGENTIC") that may appear
- * at the end of streaming content.
- * 
- * @param text - The text content to process
- * @returns Text with partial markers removed
- */
-function stripPartialMarker(text: string): string {
-	const partialMarkerMatch = text.match(AGENTIC_REGEX.PARTIAL_MARKER);
-	if (partialMarkerMatch) {
-		return text.slice(0, partialMarkerMatch.index).trim();
-	}
-	return text;
-}
-
-/**
- * Splits raw content into segments based on reasoning blocks
- * 
- * Identifies and extracts reasoning content wrapped in REASONING_TAGS.START/END markers,
- * separating it from regular text content. Handles both complete and incomplete
- * (streaming) reasoning blocks.
- * 
+ * Parses agentic content into structured sections
+ *
+ * Main parsing function that processes content containing:
+ * - Tool calls (completed, pending, or streaming)
+ * - Reasoning blocks (completed or streaming)
+ * - Regular text content
+ *
+ * The parser handles chronological display of agentic flow output, maintaining
+ * the order of operations and properly identifying different states of tool calls
+ * and reasoning blocks during streaming.
+ *
  * @param rawContent - The raw content string to parse
- * @returns Array of reasoning segments with their types and content
+ * @returns Array of structured agentic sections ready for display
+ *
+ * @example
+ * ```typescript
+ * const content = "Some text <<<AGENTIC_TOOL_CALL>>>tool_name...";
+ * const sections = parseAgenticContent(content);
+ * // Returns: [{ type: 'text', content: 'Some text' }, { type: 'tool_call_streaming', ... }]
+ * ```
  */
-function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
+export function parseAgenticContent(rawContent: string): AgenticSection[] {
 	if (!rawContent) return [];
 
-	const segments: ReasoningSegment[] = [];
-	let cursor = 0;
+	const segments = splitReasoningSegments(rawContent);
+	const sections: AgenticSection[] = [];
 
-	while (cursor < rawContent.length) {
-		const startIndex = rawContent.indexOf(REASONING_TAGS.START, cursor);
-		if (startIndex === -1) {
-			const remainingText = rawContent.slice(cursor);
-			if (remainingText) {
-				segments.push({ type: AgenticSectionType.TEXT, content: remainingText });
+	for (const segment of segments) {
+		if (segment.type === 'text') {
+			sections.push(...parseToolCallContent(segment.content));
+			continue;
+		}
+
+		if (segment.type === 'reasoning') {
+			if (segment.content.trim()) {
+				sections.push({ type: AgenticSectionType.REASONING, content: segment.content });
 			}
-			break;
+			continue;
 		}
 
-		if (startIndex > cursor) {
-			const textBefore = rawContent.slice(cursor, startIndex);
-			if (textBefore) {
-				segments.push({ type: AgenticSectionType.TEXT, content: textBefore });
-			}
-		}
-
-		const contentStart = startIndex + REASONING_TAGS.START.length;
-		const endIndex = rawContent.indexOf(REASONING_TAGS.END, contentStart);
-
-		if (endIndex === -1) {
-			const pendingContent = rawContent.slice(contentStart);
-			segments.push({
-				type: AgenticSectionType.REASONING_PENDING,
-				content: stripPartialMarker(pendingContent)
-			});
-			break;
-		}
-
-		const reasoningContent = rawContent.slice(contentStart, endIndex);
-		segments.push({ type: AgenticSectionType.REASONING, content: reasoningContent });
-		cursor = endIndex + REASONING_TAGS.END.length;
+		sections.push({
+			type: AgenticSectionType.REASONING_PENDING,
+			content: segment.content
+		});
 	}
 
-	return segments;
+	return sections;
 }
 
 /**
  * Parses content containing tool call markers
- * 
+ *
  * Identifies and extracts tool calls from content, handling:
  * - Completed tool calls with name, arguments, and results
  * - Pending tool calls (execution in progress)
  * - Streaming tool calls (arguments being received)
  * - Early-stage tool calls (just started)
- * 
+ *
  * @param rawContent - The raw content string to parse
  * @returns Array of agentic sections representing tool calls and text
  */
@@ -221,51 +201,71 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 }
 
 /**
- * Parses agentic content into structured sections
- * 
- * Main parsing function that processes content containing:
- * - Tool calls (completed, pending, or streaming)
- * - Reasoning blocks (completed or streaming)
- * - Regular text content
- * 
- * The parser handles chronological display of agentic flow output, maintaining
- * the order of operations and properly identifying different states of tool calls
- * and reasoning blocks during streaming.
- * 
- * @param rawContent - The raw content string to parse
- * @returns Array of structured agentic sections ready for display
- * 
- * @example
- * ```typescript
- * const content = "Some text <<<AGENTIC_TOOL_CALL>>>tool_name...";
- * const sections = parseAgenticContent(content);
- * // Returns: [{ type: 'text', content: 'Some text' }, { type: 'tool_call_streaming', ... }]
- * ```
+ * Strips partial marker from text content
+ *
+ * Removes incomplete agentic markers (e.g., "<<<", "<<<AGENTIC") that may appear
+ * at the end of streaming content.
+ *
+ * @param text - The text content to process
+ * @returns Text with partial markers removed
  */
-export function parseAgenticContent(rawContent: string): AgenticSection[] {
+function stripPartialMarker(text: string): string {
+	const partialMarkerMatch = text.match(AGENTIC_REGEX.PARTIAL_MARKER);
+	if (partialMarkerMatch) {
+		return text.slice(0, partialMarkerMatch.index).trim();
+	}
+	return text;
+}
+
+/**
+ * Splits raw content into segments based on reasoning blocks
+ *
+ * Identifies and extracts reasoning content wrapped in REASONING_TAGS.START/END markers,
+ * separating it from regular text content. Handles both complete and incomplete
+ * (streaming) reasoning blocks.
+ *
+ * @param rawContent - The raw content string to parse
+ * @returns Array of reasoning segments with their types and content
+ */
+function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
 	if (!rawContent) return [];
 
-	const segments = splitReasoningSegments(rawContent);
-	const sections: AgenticSection[] = [];
+	const segments: ReasoningSegment[] = [];
+	let cursor = 0;
 
-	for (const segment of segments) {
-		if (segment.type === 'text') {
-			sections.push(...parseToolCallContent(segment.content));
-			continue;
-		}
-
-		if (segment.type === 'reasoning') {
-			if (segment.content.trim()) {
-				sections.push({ type: AgenticSectionType.REASONING, content: segment.content });
+	while (cursor < rawContent.length) {
+		const startIndex = rawContent.indexOf(REASONING_TAGS.START, cursor);
+		if (startIndex === -1) {
+			const remainingText = rawContent.slice(cursor);
+			if (remainingText) {
+				segments.push({ type: AgenticSectionType.TEXT, content: remainingText });
 			}
-			continue;
+			break;
 		}
 
-		sections.push({
-			type: AgenticSectionType.REASONING_PENDING,
-			content: segment.content
-		});
+		if (startIndex > cursor) {
+			const textBefore = rawContent.slice(cursor, startIndex);
+			if (textBefore) {
+				segments.push({ type: AgenticSectionType.TEXT, content: textBefore });
+			}
+		}
+
+		const contentStart = startIndex + REASONING_TAGS.START.length;
+		const endIndex = rawContent.indexOf(REASONING_TAGS.END, contentStart);
+
+		if (endIndex === -1) {
+			const pendingContent = rawContent.slice(contentStart);
+			segments.push({
+				type: AgenticSectionType.REASONING_PENDING,
+				content: stripPartialMarker(pendingContent)
+			});
+			break;
+		}
+
+		const reasoningContent = rawContent.slice(contentStart, endIndex);
+		segments.push({ type: AgenticSectionType.REASONING, content: reasoningContent });
+		cursor = endIndex + REASONING_TAGS.END.length;
 	}
 
-	return sections;
+	return segments;
 }

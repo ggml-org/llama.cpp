@@ -16,7 +16,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
-		SearchableDropdownMenu,
+		DropdownMenuSearchable,
 		TruncatedText
 	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -261,7 +261,7 @@
 		{@const selectedOption = getDisplayOption()}
 
 		{#if isRouter}
-			<SearchableDropdownMenu
+			<DropdownMenuSearchable
 				bind:open={isOpen}
 				onOpenChange={handleOpenChange}
 				bind:searchValue={searchTerm}
@@ -392,7 +392,7 @@
 						</div>
 					{/each}
 				</div>
-			</SearchableDropdownMenu>
+			</DropdownMenuSearchable>
 		{:else}
 			<button
 				class={cn(

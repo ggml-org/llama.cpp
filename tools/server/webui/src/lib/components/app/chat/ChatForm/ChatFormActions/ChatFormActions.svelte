@@ -2,7 +2,7 @@
 	import { Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
-		ChatFormActionFileAttachments,
+		ChatFormActionAttachmentsDropdown,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		DialogMcpServersSettings,
@@ -169,7 +169,7 @@
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
 	<div class="mr-auto flex items-center gap-2">
-		<ChatFormActionFileAttachments
+		<ChatFormActionAttachmentsDropdown
 			{disabled}
 			{hasAudioModality}
 			{hasVisionModality}

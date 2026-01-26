@@ -4,7 +4,7 @@
 	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
 	import { MCPTransportType } from '$lib/enums';
 	import { Badge } from '$lib/components/ui/badge';
-	import McpCapabilitiesBadges from './McpCapabilitiesBadges.svelte';
+	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
 
 	interface Props {
 		displayName: string;

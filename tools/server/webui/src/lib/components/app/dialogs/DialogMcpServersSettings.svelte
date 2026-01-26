@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { McpLogo, McpSettingsSection } from '$lib/components/app';
+	import { McpLogo, McpServersSettings } from '$lib/components/app';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
 
@@ -41,7 +41,7 @@
 		</div>
 
 		<div class="flex-1 overflow-y-auto px-4 py-6">
-			<McpSettingsSection />
+			<McpServersSettings />
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

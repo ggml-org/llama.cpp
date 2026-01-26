@@ -1,28 +1,4 @@
 <script lang="ts">
-	/**
-	 * ChatMessageAgenticContent - Chronological display of agentic flow output
-	 *
-	 * This component renders assistant messages containing agentic workflow markers,
-	 * displaying tool calls and reasoning blocks as interactive collapsible sections.
-	 *
-	 * Features:
-	 * - Parses content with tool call markers (<<<AGENTIC_TOOL_CALL>>>, etc.)
-	 * - Displays reasoning blocks (<<<REASONING>>>, etc.)
-	 * - Shows tool execution states: streaming, pending, completed
-	 * - Collapsible blocks with user-configurable default states
-	 * - Real-time streaming support with loading indicators
-	 *
-	 * @component
-	 * @example
-	 * ```svelte
-	 * <ChatMessageAgenticContent
-	 *   content={message.content}
-	 *   message={message}
-	 *   isStreaming={true}
-	 * />
-	 * ```
-	 */
-
 	import {
 		CollapsibleContentBlock,
 		MarkdownContent,
