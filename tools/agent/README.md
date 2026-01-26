@@ -81,13 +81,21 @@ llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
 <details>
 <summary><strong>Optimized settings for GLM-4.7-Flash</strong></summary>
 
-Use these sampling parameters ([recommended by Unsloth](https://unsloth.ai/docs/models/glm-4.7-flash)):
+Use these parameters ([recommended by Unsloth](https://unsloth.ai/docs/models/glm-4.7-flash)):
 
 ```bash
 llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL \
-  --jinja --ctx-size 16384 \
-  --temp 0.7 --top-p 1.0 --min-p 0.01
+  --jinja --ctx-size 16384 --flash-attn --fit on \
+  --temp 0.7 --top-p 1.0 --min-p 0.01 --repeat-penalty 1.0
 ```
+
+| Flag | Purpose |
+|------|---------|
+| `--flash-attn` | Up to 1.48x speedup at batch size 1 ([PR #19092](https://github.com/ggml-org/llama.cpp/pull/19092)) |
+| `--fit on` | Auto-optimizes GPU/CPU memory allocation |
+| `--repeat-penalty 1.0` | Prevents output degradation (Unsloth recommendation) |
+
+> **Note:** Flash attention has a known issue with KV quantization on very long prompts (~79k+ tokens). On Pascal GPUs (GTX 10xx), flash attention may reduce performance.
 
 </details>
 
