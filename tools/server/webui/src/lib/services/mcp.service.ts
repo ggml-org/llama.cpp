@@ -110,7 +110,6 @@ export class MCPService {
 			return {
 				transport: new StreamableHTTPClientTransport(url, {
 					requestInit,
-					sessionId: config.sessionId
 				}),
 				type: MCPTransportType.STREAMABLE_HTTP
 			};
