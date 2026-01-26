@@ -63,7 +63,7 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
             "HTTPS is not supported. Please rebuild with one of:\n"
             "  -DLLAMA_BUILD_BORINGSSL=ON\n"
             "  -DLLAMA_BUILD_LIBRESSL=ON\n"
-            "  -DLLAMA_OPENSSL=ON (requires OpenSSL dev files installed)"
+            "  -DLLAMA_OPENSSL=ON (default, requires OpenSSL dev files installed)"
         );
     }
 #endif
