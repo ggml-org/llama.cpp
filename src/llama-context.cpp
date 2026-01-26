@@ -1814,6 +1814,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
 //
 
 uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & batch) {
+    GGML_UNUSED(batch);
+
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
 
@@ -1832,45 +1834,16 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
         has_embd   = true;
     }
 
-    // Check which sampling modes are needed for the current batch.
-    // TODO: avoid this branching by working with the worst-case
-    bool has_sampling = false;
-    bool cpu_logits   = false;
-
-    if (batch.logits) {
-        for (int32_t i = 0; i < batch.n_tokens; i++) {
-            if (!batch.logits[i]) {
-                continue;
-            }
-            for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
-                llama_seq_id seq_id = batch.seq_id[i][j];
-                if (sampling.samplers.find(seq_id) != sampling.samplers.end()) {
-                    has_sampling = true;
-                } else {
-                    cpu_logits = true;
-                }
-            }
-        }
-    } else {
-        // When batch.logits is nullptr (when loading state with a dummy batch),
-        // allocate CPU logits.
-        cpu_logits = true;
-    }
 
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
-    // Allocate CPU logits buffer only if needed by sequences in this batch
-    logits_size = (has_logits && cpu_logits) ? n_vocab*n_outputs_max : 0;
+    logits_size = has_logits ? n_vocab*n_outputs_max : 0;
     embd_size   = has_embd ? n_embd_out*n_outputs_max : 0;
 
-    // TODO: avoid this branching by working with the worst-case
-    if (!has_sampling) {
-        sampling.logits_size     = 0;
-        sampling.probs_size      = 0;
-        sampling.sampled_size    = 0;
-        sampling.candidates_size = 0;
-    } else {
+    // Allocate backend sampling output buffers if there are backend samplers configured.
+    const bool has_sampling = !sampling.samplers.empty();
+    if (has_sampling) {
         sampling.logits_size     = n_vocab*n_outputs_max;
         sampling.probs_size      = n_vocab*n_outputs_max;
         sampling.sampled_size    =         n_outputs_max;
@@ -1928,7 +1901,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     size_t offset = 0;
     uint8_t * base = (uint8_t *) output_base;
 
-    logits = (has_logits && cpu_logits) ? output_base : nullptr;
+    logits = has_logits ? output_base : nullptr;
     offset += logits_size * sizeof(float);
 
     embd = has_embd ? (float *) (base + offset) : nullptr;
