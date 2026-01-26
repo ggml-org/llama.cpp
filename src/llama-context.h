@@ -301,7 +301,6 @@ private:
     };
 
     sampling_info sampling;
-    bool has_sampled = false;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
