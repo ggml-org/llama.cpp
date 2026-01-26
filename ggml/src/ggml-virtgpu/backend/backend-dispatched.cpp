@@ -36,7 +36,7 @@ uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p) {
     dev = reg->iface.get_device(reg, 0);
 
     if (!dev) {
-	GGML_LOG_ERROR("%s: backend initialization failed: no device received\n", __func__);
+        GGML_LOG_ERROR("%s: backend initialization failed: no device received\n", __func__);
         return APIR_BACKEND_INITIALIZE_NO_DEVICE;
     }
 
