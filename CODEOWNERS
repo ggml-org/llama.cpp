@@ -18,6 +18,7 @@
 /common/jinja/                          @ngxson @CISC @aldehir
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
+/common/ngram-map.*                     @srogmann
 /common/peg-parser.*                    @aldehir
 /common/sampling.*                      @ggerganov
 /common/speculative.*                   @ggerganov
