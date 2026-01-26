@@ -489,7 +489,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
             if (!seen_args.insert(arg).second) {
-                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                if (arg == "-m" || arg == "--model") {
+                    LOG_WRN("DEPRECATED: multiple %s options are not supported (only last value will be used). "
+                            "Use router mode for llama-server (see --help)\n", arg.c_str());
+                } else {
+                    LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+                }
             }
             auto & tmp = arg_to_options[arg];
             auto opt = *tmp.first;
@@ -848,7 +853,12 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
         if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            if (arg == "-m" || arg == "--model") {
+                LOG_WRN("DEPRECATED: multiple %s options are not supported (only last value will be used). "
+                        "Use router mode for llama-server (see --help)\n", arg.c_str());
+            } else {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
         }
         auto opt = *arg_to_options[arg];
         std::string val;
