@@ -5,8 +5,7 @@
 	import { getFaviconUrl } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
-	import McpServerForm from './McpServerForm.svelte';
+	import { McpServerCard, McpServerForm } from '$lib/components/app/mcp';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	let servers = $derived(mcpStore.getServersSorted());
 

@@ -37,6 +37,35 @@
 export { default as DialogChatSettings } from './DialogChatSettings.svelte';
 
 /**
+ * **DialogMcpServersSettings** - MCP servers configuration dialog
+ *
+ * Full-screen dialog for managing MCP Server
+ * connections with add/edit/delete capabilities and health monitoring.
+ * Opened from McpActiveServerAvatars or ChatFormActionAttachentsDropdown.
+ *
+ * **Architecture:**
+ * - Uses ShadCN Dialog
+ * - Integrates with mcpStore for server CRUD operations
+ * - Manages connection state and health checks
+ *
+ * **Features:**
+ * - Add new MCP servers by URL with validation
+ * - Edit existing server configuration (URL, headers)
+ * - Delete servers with confirmation dialog
+ * - Health check status indicators (connected/disconnected/error)
+ * - Connection logs display for debugging
+ * - Tools list per server showing available capabilities
+ * - Enable/disable servers per conversation
+ * - Custom HTTP headers support
+ *
+ * @example
+ * ```svelte
+ * <DialogMcpServersSettings bind:open={showMcpSettings} />
+ * ```
+ */
+export { default as DialogMcpServersSettings } from './DialogMcpServersSettings.svelte';
+
+/**
  *
  * CONFIRMATION DIALOGS
  *
@@ -106,44 +135,6 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
  * ```
  */
 export { default as DialogConversationTitleUpdate } from './DialogConversationTitleUpdate.svelte';
-
-/**
- *
- * CONTENT PREVIEW DIALOGS
- *
- * Dialogs for previewing and displaying content in full-screen or modal views.
- *
- */
-
-/**
- * **DialogCodePreview** - Full-screen code/HTML preview
- *
- * Full-screen dialog for previewing HTML or code in an isolated iframe.
- * Used by MarkdownContent component for previewing rendered HTML blocks
- * from code blocks in chat messages.
- *
- * **Architecture:**
- * - Uses ShadCN Dialog with full viewport layout
- * - Sandboxed iframe execution (allow-scripts only)
- * - Clears content when closed for security
- *
- * **Features:**
- * - Full viewport iframe preview
- * - Sandboxed execution environment
- * - Close button with mix-blend-difference for visibility over any content
- * - Automatic content cleanup on close
- * - Supports HTML preview with proper isolation
- *
- * @example
- * ```svelte
- * <DialogCodePreview
- *   bind:open={showPreview}
- *   code={htmlContent}
- *   language="html"
- * />
- * ```
- */
-export { default as DialogCodePreview } from './DialogCodePreview.svelte';
 
 /**
  *

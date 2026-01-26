@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare } from '@lucide/svelte';
+	import { Plus, MessageSquare, Zap } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
+	import { McpLogo } from '$lib/components/app';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 
 	interface Props {
@@ -12,8 +13,11 @@
 		disabled?: boolean;
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
+		hasMcpPromptsSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
+		onMcpPromptClick?: () => void;
+		onMcpServersClick?: () => void;
 	}
 
 	let {
@@ -21,8 +25,11 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
+		hasMcpPromptsSupport = false,
 		onFileUpload,
-		onSystemPromptClick
+		onSystemPromptClick,
+		onMcpPromptClick,
+		onMcpServersClick
 	}: Props = $props();
 
 	let isNewChat = $derived(!page.params.id);
@@ -34,6 +41,16 @@
 	);
 
 	let dropdownOpen = $state(false);
+
+	function handleMcpPromptClick() {
+		dropdownOpen = false;
+		onMcpPromptClick?.();
+	}
+
+	function handleMcpServersClick() {
+		dropdownOpen = false;
+		onMcpServersClick?.();
+	}
 
 	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
 </script>
@@ -68,7 +85,6 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.image class="h-4 w-4" />
-
 					<span>Images</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -79,11 +95,9 @@
 							disabled
 						>
 							<FILE_TYPE_ICONS.image class="h-4 w-4" />
-
 							<span>Images</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
-
 					<Tooltip.Content side="right">
 						<p>Images require vision models to be processed</p>
 					</Tooltip.Content>
@@ -96,7 +110,6 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.audio class="h-4 w-4" />
-
 					<span>Audio Files</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -104,11 +117,9 @@
 					<Tooltip.Trigger class="w-full">
 						<DropdownMenu.Item class="audio-button flex cursor-pointer items-center gap-2" disabled>
 							<FILE_TYPE_ICONS.audio class="h-4 w-4" />
-
 							<span>Audio Files</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
-
 					<Tooltip.Content side="right">
 						<p>Audio files require audio models to be processed</p>
 					</Tooltip.Content>
@@ -120,7 +131,6 @@
 				onclick={() => onFileUpload?.()}
 			>
 				<FILE_TYPE_ICONS.text class="h-4 w-4" />
-
 				<span>Text Files</span>
 			</DropdownMenu.Item>
 
@@ -130,7 +140,6 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
-
 					<span>PDF Files</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -141,11 +150,9 @@
 							onclick={() => onFileUpload?.()}
 						>
 							<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
-
 							<span>PDF Files</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
-
 					<Tooltip.Content side="right">
 						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 					</Tooltip.Content>
@@ -159,15 +166,35 @@
 						onclick={() => onSystemPromptClick?.()}
 					>
 						<MessageSquare class="h-4 w-4" />
-
 						<span>System Message</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
-
 				<Tooltip.Content side="right">
 					<p>{systemMessageTooltip}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
+
+			<DropdownMenu.Separator />
+
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={handleMcpServersClick}
+			>
+				<McpLogo class="h-4 w-4" />
+
+				<span>MCP Servers</span>
+			</DropdownMenu.Item>
+
+			{#if hasMcpPromptsSupport}
+				<DropdownMenu.Item
+					class="flex cursor-pointer items-center gap-2"
+					onclick={handleMcpPromptClick}
+				>
+					<Zap class="h-4 w-4" />
+
+					<span>MCP Prompt</span>
+				</DropdownMenu.Item>
+			{/if}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
