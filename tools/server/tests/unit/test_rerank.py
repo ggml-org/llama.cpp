@@ -102,3 +102,45 @@ def test_rerank_usage(query, doc1, doc2, n_tokens):
     assert res.status_code == 200
     assert res.body['usage']['prompt_tokens'] == res.body['usage']['total_tokens']
     assert res.body['usage']['prompt_tokens'] == n_tokens
+
+
+@pytest.mark.parametrize("top_n,expected_len", [
+    (None, len(TEST_DOCUMENTS)),  # no top_n parameter
+    (2, 2),
+    (4, 4),
+    (99, len(TEST_DOCUMENTS)),    # higher than available docs
+])
+def test_rerank_top_n(top_n, expected_len):
+    global server
+    server.start()
+    data = {
+        "query": "Machine learning is",
+        "documents": TEST_DOCUMENTS,
+    }
+    if top_n is not None:
+        data["top_n"] = top_n
+
+    res = server.make_request("POST", "/rerank", data=data)
+    assert res.status_code == 200
+    assert len(res.body["results"]) == expected_len
+
+
+@pytest.mark.parametrize("top_n,expected_len", [
+    (None, len(TEST_DOCUMENTS)),  # no top_n parameter
+    (2, 2),
+    (4, 4),
+    (99, len(TEST_DOCUMENTS)),    # higher than available docs
+])
+def test_rerank_tei_top_n(top_n, expected_len):
+    global server
+    server.start()
+    data = {
+        "query": "Machine learning is",
+        "texts": TEST_DOCUMENTS,
+    }
+    if top_n is not None:
+        data["top_n"] = top_n
+
+    res = server.make_request("POST", "/rerank", data=data)
+    assert res.status_code == 200
+    assert len(res.body) == expected_len

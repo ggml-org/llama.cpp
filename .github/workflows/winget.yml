@@ -8,7 +8,8 @@ on:
 jobs:
   update:
     name: Update Winget Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    if: github.repository_owner == 'ggml-org'
 
     steps:
       - name: Install cargo binstall
@@ -20,7 +21,7 @@ jobs:
 
       - name: Find latest release
         id: find_latest_release
-        uses: actions/github-script@v6
+        uses: actions/github-script@v8
         with:
           script: |
             const { data: releases } = await github.rest.repos.listReleases({

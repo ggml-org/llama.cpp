@@ -20,9 +20,9 @@ concurrency:
 
 jobs:
   editorconfig:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: editorconfig-checker/action-editorconfig-checker@v2
         with:
           version: v3.0.3

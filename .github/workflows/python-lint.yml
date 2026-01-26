@@ -15,13 +15,13 @@ concurrency:
 
 jobs:
   flake8-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     name: Lint
     steps:
       - name: Check out source repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Set up Python environment
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
       - name: flake8 Lint

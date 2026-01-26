@@ -1,0 +1,13 @@
+// Override KaTeX SCSS variables to disable ttf and woff fonts
+// Only use woff2 format which is embedded in the bundle
+$use-woff2: true;
+$use-woff: false;
+$use-ttf: false;
+
+// Use Vite alias for font folder
+$font-folder: 'katex-fonts';
+
+// Import KaTeX SCSS with overridden variables
+// Note: @import is deprecated but required because KaTeX uses @import internally
+// The deprecation warnings are from KaTeX's code and cannot be avoided
+@import 'katex/src/styles/katex.scss';

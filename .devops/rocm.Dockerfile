@@ -1,10 +1,10 @@
 ARG UBUNTU_VERSION=24.04
 
 # This needs to generally match the container host's environment.
-ARG ROCM_VERSION=6.4
-ARG AMDGPU_VERSION=6.4
+ARG ROCM_VERSION=7.0
+ARG AMDGPU_VERSION=7.0
 
-# Target the CUDA build image
+# Target the ROCm build image
 ARG BASE_ROCM_DEV_CONTAINER=rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-complete
 
 ### Build image
@@ -13,25 +13,21 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 # Unless otherwise specified, we make a fat build.
 # List from https://github.com/ggml-org/llama.cpp/pull/1087#issuecomment-1682807878
 # This is mostly tied to rocBLAS supported archs.
-# gfx803, gfx900, gfx1032, gfx1101, gfx1102,not officialy supported
-# gfx906 is deprecated
-#check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-6.2.4/reference/system-requirements.html
+# gfx803, gfx900, gfx906, gfx1032, gfx1101, gfx1102,not officialy supported
+# check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-6.4.1/reference/system-requirements.html
 
-ARG ROCM_DOCKER_ARCH='gfx803,gfx900,gfx906,gfx908,gfx90a,gfx942,gfx1010,gfx1030,gfx1032,gfx1100,gfx1101,gfx1102'
-#ARG ROCM_DOCKER_ARCH=gfx1100
+ARG ROCM_DOCKER_ARCH='gfx803;gfx900;gfx906;gfx908;gfx90a;gfx942;gfx1010;gfx1030;gfx1032;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201;gfx1151'
+#ARG ROCM_DOCKER_ARCH='gfx1151'
 
-# Set nvcc architectured
+# Set ROCm architectures
 ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}
-# Enable ROCm
-# ENV CC=/opt/rocm/llvm/bin/clang
-# ENV CXX=/opt/rocm/llvm/bin/clang++
 
 RUN apt-get update \
     && apt-get install -y \
     build-essential \
     cmake \
     git \
-    libcurl4-openssl-dev \
+    libssl-dev \
     curl \
     libgomp1
 
@@ -40,11 +36,16 @@ WORKDIR /app
 COPY . .
 
 RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
-    cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=$ROCM_DOCKER_ARCH -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
+    cmake -S . -B build \
+        -DGGML_HIP=ON \
+        -DGGML_HIP_ROCWMMA_FATTN=ON \
+        -DAMDGPU_TARGETS="$ROCM_DOCKER_ARCH" \
+        -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
+        -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
     && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib \
-    && find build -name "*.so" -exec cp {} /app/lib \;
+    && find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
@@ -93,7 +94,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

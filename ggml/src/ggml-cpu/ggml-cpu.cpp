@@ -18,6 +18,10 @@
 #    include "kleidiai/kleidiai.h"
 #endif
 
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+#    include "spacemit/ime.h"
+#endif
+
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
@@ -42,6 +46,12 @@ std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_type
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
         if (ggml_backend_amx_buffer_type()) {
             bufts.push_back(ggml_backend_amx_buffer_type());
+        }
+#endif
+
+#ifdef GGML_USE_CPU_RISCV64_SPACEMIT
+        if (ggml_backend_cpu_riscv64_spacemit_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_riscv64_spacemit_buffer_type());
         }
 #endif
 
@@ -190,7 +200,7 @@ static const struct ggml_backend_i ggml_backend_cpu_i = {
     /* .graph_compute           = */ ggml_backend_cpu_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
-    /* .optimize_graph          = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_cpu_guid(void) {
@@ -572,6 +582,10 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         }
         if (ggml_cpu_has_riscv_v()) {
             features.push_back({ "RISCV_V", "1" });
+        }
+        if (ggml_cpu_get_rvv_vlen() > 0) {
+            static std::string rvv_vlen = std::to_string(ggml_cpu_get_rvv_vlen());
+            features.push_back({ "RVV_VLEN", rvv_vlen.c_str() });
         }
         if (ggml_cpu_has_vsx()) {
             features.push_back({ "VSX", "1" });

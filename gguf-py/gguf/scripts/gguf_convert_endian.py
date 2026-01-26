@@ -19,6 +19,11 @@ import gguf
 logger = logging.getLogger("gguf-convert-endian")
 
 
+def byteswap_noop(tensor, block_offs):
+    # this function is used when byteswapping is not needed
+    pass
+
+
 def byteswap_q4_0(tensor, block_offs):
     # Each block_q4_0 consists of an f16 delta (scaling factor) followed by 16 int8 quantizations.
 
@@ -55,22 +60,11 @@ def byteswap_q6_k(tensor, block_offs):
 
 
 byteswap_tensors = {
-    gguf.GGMLQuantizationType.Q4_0: {
-        "block_size": 18, # 18 bytes = <f16 delta scaling factor> + 16 * <int8 quant>
-        "byteswap_func": byteswap_q4_0,
-    },
-    gguf.GGMLQuantizationType.Q8_0: {
-        "block_size": 34, # 34 bytes = <f16 delta scaling factor> + 32 * <int8 quant>
-        "byteswap_func": byteswap_q8_0,
-    },
-    gguf.GGMLQuantizationType.Q4_K: {
-        "block_size": 144, # 144 bytes = 2 * <f16 delta scaling factor> + 140 * <int8 quant>
-        "byteswap_func": byteswap_q4_k,
-    },
-    gguf.GGMLQuantizationType.Q6_K: {
-        "block_size": 210, # 210 bytes = <f16 delta scaling factor> + 208 * <int8 quant>
-        "byteswap_func": byteswap_q6_k,
-    },
+    gguf.GGMLQuantizationType.Q4_0:  byteswap_q4_0,
+    gguf.GGMLQuantizationType.Q8_0:  byteswap_q8_0,
+    gguf.GGMLQuantizationType.Q4_K:  byteswap_q4_k,
+    gguf.GGMLQuantizationType.Q6_K:  byteswap_q6_k,
+    gguf.GGMLQuantizationType.MXFP4: byteswap_noop,
 }
 
 
@@ -91,6 +85,7 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
            tensor.tensor_type not in (
                 gguf.GGMLQuantizationType.F32,
                 gguf.GGMLQuantizationType.F16,
+                gguf.GGMLQuantizationType.BF16,
            ):
             raise ValueError(f"Cannot handle type {tensor.tensor_type.name} for tensor {repr(tensor.name)}")
     logger.info(f"* Preparing to convert from {file_endian} to {order}")
@@ -134,8 +129,8 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
 
             tensor.data.resize(newshape)
 
-            block_size    = byteswap_tensors[tensor.tensor_type]["block_size"]
-            byteswap_func = byteswap_tensors[tensor.tensor_type]["byteswap_func"]
+            block_size    = gguf.constants.GGML_QUANT_SIZES[tensor.tensor_type][1]
+            byteswap_func = byteswap_tensors[tensor.tensor_type]
 
             n_blocks = len(tensor.data) // block_size
             for block_num in (inner_pbar := tqdm(range(n_blocks), desc="Byte-swapping Blocks", leave=False)):
@@ -148,6 +143,11 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
 
             # restore old shape in case it's ever used
             tensor.data.resize(oldshape)
+        elif tensor.tensor_type == gguf.GGMLQuantizationType.BF16:
+            # Special case for BF16
+            # It is 2-bytes data, but by default view loads it as 1-byte data.
+            # Change to correct view before byteswapping.
+            tensor.data.view(dtype=np.uint16).byteswap(inplace=True)
         else:
             # Handle other tensor types
             tensor.data.byteswap(inplace=True)

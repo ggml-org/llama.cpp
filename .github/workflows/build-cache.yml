@@ -1,0 +1,89 @@
+name: Build Actions Cache
+
+on:
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    - cron: '0 * * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  ubuntu-24-vulkan-cache:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Get latest Vulkan SDK version
+        id: vulkan_sdk_version
+        run: |
+          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-sdk
+        with:
+          path: ./vulkan_sdk
+          key: vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
+
+      - name: Setup Vulkan SDK
+        if: steps.cache-sdk.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-vulkan
+        with:
+          path: ./vulkan_sdk
+          version: ${{ env.VULKAN_SDK_VERSION }}
+
+  ubuntu-24-spacemit-cache:
+    runs-on: ubuntu-24.04
+
+    env:
+      # Make sure this is in sync with build-linux-cross.yml
+      SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-toolchain
+        with:
+          path: ./spacemit_toolchain
+          key: spacemit-ime-toolchain-v${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}-${{ runner.os }}
+
+      - name: Setup SpacemiT Toolchain
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        uses: ./.github/actions/linux-setup-spacemit
+        with:
+          path: ./spacemit_toolchain
+          version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
+
+  windows-2022-rocm-cache:
+    runs-on: windows-2022
+
+    env:
+      # Make sure this is in sync with build.yml
+      HIPSDK_INSTALLER_VERSION: "25.Q3"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Cache
+        uses: actions/cache@v5
+        id: cache-rocm
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Setup ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.HIPSDK_INSTALLER_VERSION }}

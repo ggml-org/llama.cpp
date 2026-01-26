@@ -28,7 +28,7 @@ jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
 
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.config.runs_on }}
     env:
       COMMIT_SHA: ${{ github.sha }}
     strategy:
@@ -39,20 +39,22 @@ jobs:
           # Note: the arm64 images are failing, which prevents the amd64 images from being built
           # https://github.com/ggml-org/llama.cpp/issues/11888
           #- { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "cuda", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          - { tag: "musa", dockerfile: ".devops/musa.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          - { tag: "intel", dockerfile: ".devops/intel.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true }
-          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false }
-          # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
-          #- {tag: "rocm", dockerfile: ".devops/rocm.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: true }
+          - { tag: "cpu",    dockerfile: ".devops/cpu.Dockerfile",    platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
+          - { tag: "cuda cuda12", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04", cuda_version: "12.4.0", ubuntu_version: "22.04" }
+          - { tag: "cuda13", dockerfile: ".devops/cuda-new.Dockerfile",  platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04", cuda_version: "13.1.0", ubuntu_version: "24.04" }
+          - { tag: "musa",   dockerfile: ".devops/musa.Dockerfile",   platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
+          - { tag: "intel",  dockerfile: ".devops/intel.Dockerfile",  platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
+          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
+          - { tag: "s390x",  dockerfile: ".devops/s390x.Dockerfile",  platforms: "linux/s390x", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04-s390x" }
+          - { tag: "rocm",   dockerfile: ".devops/rocm.Dockerfile",   platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0 # preserve git history, so we can determine the build number
 
       - name: Set up QEMU
+        if: ${{ matrix.config.tag != 's390x' }}
         uses: docker/setup-qemu-action@v3
         with:
           image: tonistiigi/binfmt:qemu-v7.0.0-28
@@ -61,46 +63,48 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Determine tag name
+      - name: Determine source tag name
+        id: srctag
+        uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+      - name: Determine image tag name
         id: tag
         shell: bash
         run: |
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
           REPO_OWNER="${GITHUB_REPOSITORY_OWNER@L}"  # to lower case
           REPO_NAME="${{ github.event.repository.name }}"
-
-          # determine tag name postfix (build number, commit hash)
-          if [[ "${{ env.GITHUB_BRANCH_NAME }}" == "master" ]]; then
-            TAG_POSTFIX="-b${BUILD_NUMBER}"
-          else
-            SAFE_NAME=$(echo "${{ env.GITHUB_BRANCH_NAME }}" | tr '/' '-')
-            TAG_POSTFIX="-${SAFE_NAME}-${SHORT_HASH}"
-          fi
-          # list all tags possible
-          if [[ "${{ matrix.config.tag }}" == "cpu" ]]; then
-              TYPE=""
-          else
-              TYPE="-${{ matrix.config.tag }}"
-          fi
           PREFIX="ghcr.io/${REPO_OWNER}/${REPO_NAME}:"
-          FULLTAGS="${PREFIX}full${TYPE},${PREFIX}full${TYPE}${TAG_POSTFIX}"
-          LIGHTTAGS="${PREFIX}light${TYPE},${PREFIX}light${TYPE}${TAG_POSTFIX}"
-          SERVERTAGS="${PREFIX}server${TYPE},${PREFIX}server${TYPE}${TAG_POSTFIX}"
+
+          # list all tags possible
+          tags="${{ matrix.config.tag }}"
+          for tag in $tags; do
+              if [[ "$tag" == "cpu" ]]; then
+                  TYPE=""
+              else
+                  TYPE="-$tag"
+              fi
+              CACHETAGS="${PREFIX}buildcache${TYPE}"
+              FULLTAGS="${FULLTAGS:+$FULLTAGS,}${PREFIX}full${TYPE},${PREFIX}full${TYPE}-${{ steps.srctag.outputs.name }}"
+              LIGHTTAGS="${LIGHTTAGS:+$LIGHTTAGS,}${PREFIX}light${TYPE},${PREFIX}light${TYPE}-${{ steps.srctag.outputs.name }}"
+              SERVERTAGS="${SERVERTAGS:+$SERVERTAGS,}${PREFIX}server${TYPE},${PREFIX}server${TYPE}-${{ steps.srctag.outputs.name }}"
+          done
+          echo "cache_output_tags=$CACHETAGS" >> $GITHUB_OUTPUT
           echo "full_output_tags=$FULLTAGS" >> $GITHUB_OUTPUT
           echo "light_output_tags=$LIGHTTAGS" >> $GITHUB_OUTPUT
           echo "server_output_tags=$SERVERTAGS" >> $GITHUB_OUTPUT
+          echo "cache_output_tags=$CACHETAGS"  # print out for debugging
           echo "full_output_tags=$FULLTAGS"  # print out for debugging
           echo "light_output_tags=$LIGHTTAGS"  # print out for debugging
           echo "server_output_tags=$SERVERTAGS"  # print out for debugging
         env:
-          GITHUB_BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
       - name: Free Disk Space (Ubuntu)
@@ -132,12 +136,18 @@ jobs:
           file: ${{ matrix.config.dockerfile }}
           target: full
           provenance: false
+          build-args: |
+            ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
+            ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
 
       - name: Build and push Light Docker image (tagged + versioned)
         if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.light == true }}
@@ -151,12 +161,18 @@ jobs:
           file: ${{ matrix.config.dockerfile }}
           target: light
           provenance: false
+          build-args: |
+            ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
+            ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
 
       - name: Build and push Server Docker image (tagged + versioned)
         if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.server == true }}
@@ -170,9 +186,41 @@ jobs:
           file: ${{ matrix.config.dockerfile }}
           target: server
           provenance: false
+          build-args: |
+            ${{ matrix.config.ubuntu_version && format('UBUNTU_VERSION={0}', matrix.config.ubuntu_version) || '' }}
+            ${{ matrix.config.cuda_version && format('CUDA_VERSION={0}', matrix.config.cuda_version) || '' }}
           # using github experimental cache
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          #cache-from: type=gha
+          #cache-to: type=gha,mode=max
           # return to this if the experimental github cache is having issues
           #cache-to: type=local,dest=/tmp/.buildx-cache
           #cache-from: type=local,src=/tmp/.buildx-cache
+          # using registry cache (no storage limit)
+          cache-from: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }}
+          cache-to: type=registry,ref=${{ steps.tag.outputs.cache_output_tags }},mode=max
+
+  create_tag:
+    name: Create and push git tag
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Determine source tag name
+        id: srctag
+        uses: ./.github/actions/get-tag-name
+        env:
+          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+
+      - name: Create and push git tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git tag ${{ steps.srctag.outputs.name }} || exit 0
+          git push origin ${{ steps.srctag.outputs.name }} || exit 0

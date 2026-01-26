@@ -1,6 +1,8 @@
 import pytest
 import requests
 import time
+import random
+
 from openai import OpenAI
 from utils import *
 
@@ -16,7 +18,7 @@ def create_server():
 
 @pytest.mark.parametrize("prompt,n_predict,re_content,n_prompt,n_predicted,truncated,return_tokens", [
     ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False, False),
-    ("Write a joke about AI from a very long prompt which will not be truncated", 256, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False, True),
+    ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False, True),
 ])
 def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool, return_tokens: bool):
     global server
@@ -41,7 +43,7 @@ def test_completion(prompt: str, n_predict: int, re_content: str, n_prompt: int,
 
 @pytest.mark.parametrize("prompt,n_predict,re_content,n_prompt,n_predicted,truncated", [
     ("I believe the meaning of life is", 8, "(going|bed)+", 18, 8, False),
-    ("Write a joke about AI from a very long prompt which will not be truncated", 256, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False),
+    ("Write a joke about AI from a very long prompt which will not be truncated", 64, "(princesses|everyone|kids|Anna|forest)+", 46, 64, False),
 ])
 def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_prompt: int, n_predicted: int, truncated: bool):
     global server
@@ -369,6 +371,37 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
 
 
 @pytest.mark.parametrize(
+    "n_ctx,n_slots,n_predict_vals,expected_success",
+    [
+        (256, 4, [80, 40, 80, 80], [True,  True,  True,  True]),
+        (256, 4, [70, 70, 70, 70], [False, False, False, False]),
+        (256, 4, [90, 90, 40, 90], [False, False, True,  False]),
+        (256, 4, [90, 90, 40, 75], [True,  True,  True,  True]),
+    ],
+)
+def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
+    global server
+    server.n_slots = n_slots
+    server.kv_unified = True
+    server.n_ctx = n_ctx
+    server.start()
+    prompt = "A"
+    tasks = []
+    for n_predict in n_predict_vals:
+        tasks.append((server.make_request, ("POST", "/completion", {"prompt": prompt, "n_predict": n_predict})))
+    results = parallel_function_calls(tasks)
+    for res, n_predict, expect_ok in zip(results, n_predict_vals, expected_success):
+        if expect_ok:
+            assert res.status_code == 200
+
+        # note: https://github.com/ggml-org/llama.cpp/pull/18700#issuecomment-3728695581
+        if res.status_code == 200:
+            assert "content" in res.body
+            if "timings" in res.body:
+                assert res.body["timings"]["predicted_n"] == n_predict
+
+
+@pytest.mark.parametrize(
     "prompt,n_predict,response_fields",
     [
         ("I believe the meaning of life is", 8, []),
@@ -533,3 +566,43 @@ def test_cancel_request():
     time.sleep(1) # wait for HTTP_POLLING_SECONDS
     res = server.make_request("GET", "/slots")
     assert res.body[0]["is_processing"] == False
+
+
+# this test exercises the host-memory prompt cache
+# ref: https://github.com/ggml-org/llama.cpp/pull/16391
+# ref: https://github.com/ggml-org/llama.cpp/pull/17078
+def test_completion_prompt_cache():
+    global server
+    server.n_slots = 2
+    server.kv_unified = True
+    server.start()
+
+    for _ in range(16):
+        # generate alternating random prompts with variable lengths in order to get them in and out of the cache
+        r = random.randint(0, 4)
+        prompt = (" Hello " +  str(r)) * (40 + r)
+        n_prompt = (40 + r)*5 + 2
+        n_predict = random.randint(1, 8)
+
+        res = server.make_request(
+            "POST",
+            "/completion",
+            data={
+                "prompt": prompt,
+                "n_predict": n_predict,
+            },
+        )
+
+        assert res.status_code == 200
+        assert "content" in res.body
+        content = res.body["content"]
+        assert isinstance(content, str)
+        assert len(content) > 0
+
+        assert type(res.body["has_new_line"]) == bool
+        assert "timings" in res.body
+        timings = res.body["timings"]
+
+        assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
+        assert "predicted_n" in timings and timings["predicted_n"] == n_predict
+        assert "tokens" in res.body and isinstance(res.body["tokens"], list)

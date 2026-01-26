@@ -2,11 +2,43 @@
 
 set -e
 
-MODEL_PATH="${1:-"$EMBEDDING_MODEL_PATH"}"
-MODEL_NAME="${2:-$(basename "$MODEL_PATH")}"
+# Parse command line arguments
+MODEL_PATH=""
+MODEL_NAME=""
+PROMPTS_FILE=""
+
+# First argument is always model path
+if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+    MODEL_PATH="$1"
+    shift
+fi
+
+# Parse remaining arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --prompts-file|-pf)
+            PROMPTS_FILE="$2"
+            shift 2
+            ;;
+        *)
+            # If MODEL_NAME not set and this isn't a flag, use as model name
+            if [ -z "$MODEL_NAME" ] && [[ "$1" != --* ]]; then
+                MODEL_NAME="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+# Set defaults
+MODEL_PATH="${MODEL_PATH:-"$EMBEDDING_MODEL_PATH"}"
+MODEL_NAME="${MODEL_NAME:-$(basename "$MODEL_PATH")}"
+
+CONVERTED_MODEL_PATH="${CONVERTED_EMBEDDING_PATH:-"$CONVERTED_EMBEDDING_MODEL"}"
+CONVERTED_MODEL_NAME="${CONVERTED_MODEL_NAME:-$(basename "$CONVERTED_MODEL_PATH" .gguf)}"
 
 if [ -t 0 ]; then
-    CPP_EMBEDDINGS="data/llamacpp-${MODEL_NAME}-embeddings.bin"
+    CPP_EMBEDDINGS="data/llamacpp-${CONVERTED_MODEL_NAME}-embeddings.bin"
 else
     # Process piped JSON data and convert to binary (matching logits.cpp format)
     TEMP_FILE=$(mktemp /tmp/tmp.XXXXXX.binn)
@@ -35,8 +67,18 @@ with open('$TEMP_FILE', 'wb') as f:
     trap "rm -f $TEMP_FILE" EXIT
 fi
 
-python scripts/utils/semantic_check.py --model-path $MODEL_PATH \
+# Build the semantic_check.py command
+SEMANTIC_CMD="python scripts/utils/semantic_check.py --model-path $MODEL_PATH \
     --python-embeddings data/pytorch-${MODEL_NAME}-embeddings.bin \
-    --cpp-embeddings $CPP_EMBEDDINGS \
-    --prompt "Hello world today"
+    --cpp-embeddings $CPP_EMBEDDINGS"
+
+# Add prompts file if specified, otherwise use default prompt
+if [ -n "$PROMPTS_FILE" ]; then
+    SEMANTIC_CMD="$SEMANTIC_CMD --prompts-file \"$PROMPTS_FILE\""
+else
+    SEMANTIC_CMD="$SEMANTIC_CMD --prompt \"Hello world today\""
+fi
+
+# Execute the command
+eval $SEMANTIC_CMD
 

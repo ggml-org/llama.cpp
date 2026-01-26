@@ -41,6 +41,10 @@ jobs:
         include:
           - build_type: Release
             sanitizer: ""
+            extra_args: ""
+          - build_type: Release
+            sanitizer: ""
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
       fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
 
     steps:
@@ -56,18 +60,24 @@ jobs:
             curl \
             wget \
             language-pack-en \
-            libcurl4-openssl-dev
+            libssl-dev
 
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config ${{ matrix.build_type }} -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+
       - name: Python setup
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -76,108 +86,13 @@ jobs:
         run: |
           pip install -r tools/server/tests/requirements.txt
 
-      # Setup nodejs (to be used for verifying bundled index.html)
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.11.0'
-
-      - name: WebUI - Install dependencies
-        id: webui_lint
-        run: |
-          cd tools/server/webui
-          npm ci
-
-      - name: WebUI - Check code format
-        id: webui_format
-        run: |
-          git config --global --add safe.directory $(realpath .)
-          cd tools/server/webui
-          git status
-
-          npm run format
-          git status
-          modified_files="$(git status -s)"
-          echo "Modified files: ${modified_files}"
-          if [ -n "${modified_files}" ]; then
-            echo "Files do not follow coding style. To fix: npm run format"
-            echo "${modified_files}"
-            exit 1
-          fi
-
-      - name: Verify bundled index.html
-        id: verify_server_index_html
-        run: |
-          git config --global --add safe.directory $(realpath .)
-          cd tools/server/webui
-          git status
-
-          npm run build
-          git status
-          modified_files="$(git status -s)"
-          echo "Modified files: ${modified_files}"
-          if [ -n "${modified_files}" ]; then
-            echo "Repository is dirty or server/webui is not built as expected"
-            echo "Hint: You may need to follow Web UI build guide in server/README.md"
-            echo "${modified_files}"
-            exit 1
-          fi
-
-      - name: Build (no OpenMP)
-        id: cmake_build_no_openmp
-        if: ${{ matrix.sanitizer == 'THREAD' }}
-        run: |
-          cmake -B build \
-              -DGGML_NATIVE=OFF \
-              -DLLAMA_BUILD_SERVER=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-              -DGGML_OPENMP=OFF ;
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
-
-      - name: Build (sanitizers)
-        id: cmake_build_sanitizers
-        if: ${{ matrix.sanitizer != '' && matrix.sanitizer != 'THREAD' }}
-        run: |
-          cmake -B build \
-              -DGGML_NATIVE=OFF \
-              -DLLAMA_BUILD_SERVER=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
-
-      - name: Build (sanitizers)
-        id: cmake_build
-        if: ${{ matrix.sanitizer == '' }}
-        run: |
-          cmake -B build \
-              -DGGML_NATIVE=OFF \
-              -DLLAMA_BUILD_SERVER=ON \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
-
       - name: Tests
         id: server_integration_tests
-        if: ${{ matrix.sanitizer == '' }}
-        env:
-          GITHUB_ACTIONS: "true"
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) && matrix.build_type == 'Release' }}
         run: |
           cd tools/server/tests
-          ./tests.sh
-
-      - name: Tests (sanitizers)
-        id: server_integration_tests_sanitizers
-        if: ${{ matrix.sanitizer != '' }}
-        run: |
-          cd tools/server/tests
-          LLAMA_SANITIZE=1 ./tests.sh
-
-      - name: Slow tests
-        id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
-        run: |
-          cd tools/server/tests
-          SLOW_TESTS=1 ./tests.sh
-
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
 
   server-windows:
     runs-on: windows-2022
@@ -185,26 +100,20 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -B build -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
         id: setup_python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -212,13 +121,6 @@ jobs:
         id: test_dependencies
         run: |
           pip install -r tools/server/tests/requirements.txt
-
-      - name: Copy Libcurl
-        id: prepare_libcurl
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
-        run: |
-          cp $env:CURL_PATH/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
 
       - name: Tests
         id: server_integration_tests

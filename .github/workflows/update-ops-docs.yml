@@ -3,23 +3,25 @@ name: Update Operations Documentation
 on:
     push:
         paths:
+            - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
     pull_request:
         paths:
+            - 'docs/ops.md'
             - 'docs/ops/**'
             - 'scripts/create_ops_docs.py'
 
 jobs:
     update-ops-docs:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-slim
 
         steps:
         - name: Checkout repository
-          uses: actions/checkout@v4
+          uses: actions/checkout@v6
 
         - name: Set up Python
-          uses: actions/setup-python@v5
+          uses: actions/setup-python@v6
           with:
               python-version: '3.x'
 
