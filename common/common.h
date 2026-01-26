@@ -261,6 +261,7 @@ struct common_params_speculative {
     int32_t n_gpu_layers =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
     float   p_split      =  0.1f; // speculative decoding split probability
     float   p_min        = 0.75f; // minimum speculative decoding probability (greedy)
+
     std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
@@ -276,10 +277,10 @@ struct common_params_speculative {
 
     common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
 
-    uint16_t spec_ngram_size_n     = 12; // ngram size for lookup
-    uint16_t spec_ngram_size_m     = 48; // mgram size for speculative tokens
-    uint16_t spec_ngram_check_rate =  1; // check rate for ngram lookup
-    uint16_t spec_ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
+    uint16_t ngram_size_n     = 12; // ngram size for lookup
+    uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
+    uint16_t ngram_check_rate =  1; // check rate for ngram lookup
+    uint16_t ngram_min_hits   =  1; // minimum hits at ngram/mgram lookup for mgram to be proposed
 
     std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT

@@ -281,11 +281,12 @@ struct common_speculative {
 };
 
 static common_ngram_map get_common_ngram_map(const common_speculative_config & config) {
-    uint16_t size_key   = config.params.spec_ngram_size_n;
-    uint16_t size_value = config.params.spec_ngram_size_m;
+    uint16_t size_key   = config.params.ngram_size_n;
+    uint16_t size_value = config.params.ngram_size_m;
     bool     key_only   = (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-    uint16_t check_rate = config.params.spec_ngram_check_rate;
-    uint16_t min_hits   = config.params.spec_ngram_min_hits;
+    uint16_t check_rate = config.params.ngram_check_rate;
+    uint16_t min_hits   = config.params.ngram_min_hits;
+
     return common_ngram_map(size_key, size_value, key_only, check_rate, min_hits);
 }
 
@@ -302,7 +303,6 @@ static struct common_speculative_state_ngram_cache create_state_ngram_cache(
 
     return state;
 }
-
 
 std::string common_speculative_type_name_str() {
     std::string result;

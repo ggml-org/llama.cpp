@@ -3415,42 +3415,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-size-n"}, "N",
-        string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.spec_ngram_size_n),
+        string_format("ngram size N for ngram-simple/ngram-map speculative decoding, length of lookup n-gram (default: %d)", params.speculative.ngram_size_n),
         [](common_params & params, int value) {
             if (value < 1 || value > 1024) {
                 throw std::invalid_argument("ngram size N must be between 1 and 1024 inclusive");
             }
-            params.speculative.spec_ngram_size_n = value;
+            params.speculative.ngram_size_n = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-size-m"}, "N",
-        string_format("ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)", params.speculative.spec_ngram_size_m),
+        string_format("ngram size M for ngram-simple/ngram-map speculative decoding, length of draft m-gram (default: %d)", params.speculative.ngram_size_m),
         [](common_params & params, int value) {
             if (value < 1 || value > 1024) {
                 throw std::invalid_argument("ngram size M must be between 1 and 1024 inclusive");
             }
-            params.speculative.spec_ngram_size_m = value;
+            params.speculative.ngram_size_m = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-check-rate"}, "N",
-        string_format("ngram check rate for ngram-simple/ngram-map speculative decoding (default: %d)", params.speculative.spec_ngram_check_rate),
+        string_format("ngram check rate for ngram-simple/ngram-map speculative decoding (default: %d)", params.speculative.ngram_check_rate),
         [](common_params & params, int value) {
             if (value < 1) {
                 throw std::invalid_argument("ngram check rate must be at least 1");
             }
-            params.speculative.spec_ngram_check_rate = value;
+            params.speculative.ngram_check_rate = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--spec-ngram-min-hits"}, "N",
-        string_format("minimum hits for ngram-map speculative decoding (default: %d)", params.speculative.spec_ngram_min_hits),
+        string_format("minimum hits for ngram-map speculative decoding (default: %d)", params.speculative.ngram_min_hits),
         [](common_params & params, int value) {
             if (value < 1) {
                 throw std::invalid_argument("ngram min hits must be at least 1");
             }
-            params.speculative.spec_ngram_min_hits = value;
+            params.speculative.ngram_min_hits = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
