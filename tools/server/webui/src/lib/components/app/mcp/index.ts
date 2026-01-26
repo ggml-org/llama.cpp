@@ -70,6 +70,33 @@ export { default as McpServersSettings } from './McpServersSettings.svelte';
 export { default as McpActiveServersAvatars } from './McpActiveServersAvatars.svelte';
 
 /**
+ * **McpServerSelector** - Quick MCP server toggle dropdown
+ *
+ * Compact dropdown for quickly enabling/disabling MCP servers for the current chat.
+ * Uses McpActiveServersAvatars as trigger and shows searchable server list with switches.
+ *
+ * **Architecture:**
+ * - Uses DropdownMenuSearchable for searchable dropdown UI
+ * - McpActiveServersAvatars as the trigger element
+ * - Integrates with conversationsStore for per-chat toggle
+ * - Runs health checks on dropdown open
+ *
+ * **Features:**
+ * - Searchable server list by name/URL
+ * - Switch toggles matching McpServersSettings behavior
+ * - Error state display for unhealthy servers
+ * - Footer link to full MCP settings dialog
+ *
+ * @example
+ * ```svelte
+ * <McpServerSelector
+ *   onSettingsClick={() => showMcpSettings = true}
+ * />
+ * ```
+ */
+export { default as McpServerSelector } from './McpServerSelector.svelte';
+
+/**
  * **McpCapabilitiesBadges** - Server capabilities display
  *
  * Displays MCP server capabilities as colored badges.

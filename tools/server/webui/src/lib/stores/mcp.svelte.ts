@@ -240,7 +240,7 @@ class MCPStore {
 
 	/**
 	 * Check if there are any available MCP servers (enabled in settings).
-	 * Used to determine if McpSelector should be shown.
+	 * Used to determine if McpServerSelector should be shown.
 	 */
 	hasAvailableServers(): boolean {
 		const servers = parseMcpServerSettings(config().mcpServers);
