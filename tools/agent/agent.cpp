@@ -219,6 +219,9 @@ int main(int argc, char ** argv) {
 
     common_init();
 
+    // Apply verbosity setting immediately after init to suppress verbose logs
+    common_log_set_verbosity_thold(params.verbosity);
+
     llama_backend_init();
     llama_numa_init(params.numa);
 
