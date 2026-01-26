@@ -3436,7 +3436,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+#if 0 && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     constexpr int    q8_k_blocklen = 4;
     constexpr int    col_pairs     = ncols_interleaved / 2;
     const uint8x16_t m4b           = vdupq_n_u8(0x0f);
