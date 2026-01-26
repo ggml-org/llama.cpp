@@ -426,9 +426,17 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
 
     // Only Q4_0 supported currently
     if (args.quant_type != QUANT_TYPE_Q4_0) {
-        fprintf(stderr, "[unified-kernel] Only Q4_0 quantization supported currently\n");
+        fprintf(stderr, "[unified-kernel] Only Q4_0 quantization supported (got type=%d, expected=%d)\n",
+                args.quant_type, QUANT_TYPE_Q4_0);
         return;
     }
+
+    // Debug: Print launch parameters
+    fprintf(stderr, "[unified-kernel] LAUNCH: M=%lld N=%lld K=%lld type=%d tile=(%d,%d,%d) xmx=%d\n",
+            static_cast<long long>(args.M), static_cast<long long>(args.N),
+            static_cast<long long>(args.K), args.quant_type,
+            args.tile_m, args.tile_n, args.tile_k, args.use_xmx ? 1 : 0);
+    fflush(stderr);
 
     // Calculate grid dimensions
     const int tile_m = args.tile_m;
@@ -503,7 +511,12 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
     // For simplicity, dispatch to fixed tile sizes initially
     // A more sophisticated version would use template instantiation for common sizes
 
-    if (tile_m <= 8 && tile_n <= 16 && tile_k <= 32) {
+    if (tile_m == 1) {
+        // M=1 actual body
+        constexpr int TM = 1;
+        constexpr int TN = 64;
+        constexpr int TK = 32;
+    } else if (tile_m <= 8 && tile_n <= 16 && tile_k <= 32) {
         // Small tiles: 8x16x32
         constexpr int TM = 8;
         constexpr int TN = 16;
@@ -534,8 +547,16 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         constexpr int TN = 32;
         constexpr int TK = 32;
 
+        // Recalculate grid dimensions using ACTUAL template tile sizes
+        const int tm_grid_m = (static_cast<int>(args.M) + TM - 1) / TM;
+        const int tm_grid_n = (static_cast<int>(args.N) + TN - 1) / TN;
+
         const int wg_m = std::min(TM, 8);
         const int wg_n = std::min(TN, 16);
+
+        fprintf(stderr, "[unified-kernel] MEDIUM path: TM=%d TN=%d TK=%d grid=(%d,%d) wg=(%d,%d)\n",
+                TM, TN, TK, tm_grid_m, tm_grid_n, wg_m, wg_n);
+        fflush(stderr);
 
         q.submit([&](sycl::handler & cgh) {
             // GGML: weights[N,K] -> slm_w[TN * TK]
@@ -544,7 +565,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
             sycl::nd_range<2> range(
-                sycl::range<2>(grid_m * wg_m, grid_n * wg_n),
+                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
                 sycl::range<2>(wg_m, wg_n)
             );
 
@@ -555,6 +576,13 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
                 }
             );
         });
+        // Synchronous error check for debugging
+        try {
+            q.wait_and_throw();
+        } catch (sycl::exception const& e) {
+            fprintf(stderr, "[unified-kernel] ERROR in MEDIUM path: %s\n", e.what());
+            abort();
+        }
     } else {
         // Fallback: use 32x32x32 tiles with dynamic SLM allocation
         // This path handles larger tile sizes

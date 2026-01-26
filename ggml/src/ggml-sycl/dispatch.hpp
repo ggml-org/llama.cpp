@@ -45,12 +45,10 @@ namespace ggml_sycl {
 inline bool should_use_unified(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_Q4_K:
+            // TODO: Add Q8_0, Q6_K, Q4_K support to unified kernel
             return true;
         default:
-            return false;  // FP16, BF16, F32, etc. use oneDNN
+            return false;  // FP16, BF16, F32, Q6_K, etc. use legacy path for now
     }
 }
 

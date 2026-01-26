@@ -276,6 +276,16 @@ size_t test_layout_bytes(const ggml_tensor * tensor, ggml_layout_mode layout, in
 }  // namespace ggml_sycl
 
 bool ggml_sycl_reorder_enabled() {
+    // Check environment variable to disable reordering
+    static int disabled = -1;
+    if (disabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_DISABLE_REORDER");
+        disabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    if (disabled) {
+        return false;
+    }
+
     ggml_layout_mode override = GGML_LAYOUT_AOS;
     if (ggml_sycl::test_get_layout_override(&override) && override == GGML_LAYOUT_AOS) {
         return false;
@@ -16726,31 +16736,41 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         //
         // Fixed in task llama.cpp-61p: unified kernel now correctly indexes
         // weights by n (output column) instead of m (output row).
-#if 0  // DISABLED - tensor layout fix incomplete, still crashes during kernel execution
+#if 1  // ENABLED - with AOS layout check to prevent crash with reordered weights
         if (ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(src0->type)) {
-            // Extract dimensions for unified kernel (GGML convention)
-            const int64_t M = src1->ne[1];  // batch size (output rows) - from src1
-            const int64_t K = src0->ne[0];  // reduction dimension - from src0
-            const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
+            // Check if weight tensor is in AOS layout - unified kernel only supports AOS currently
+            auto * extra0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+            const layout_mode src0_layout = extra0 ? get_effective_layout_mode(extra0) : GGML_LAYOUT_AOS;
 
-            // Get data pointers
-            const void * src0_data = src0->data;
-            const float * src1_data = static_cast<const float *>(src1->data);
-            float * dst_data = static_cast<float *>(dst->data);
+            if (src0_layout != GGML_LAYOUT_AOS) {
+                // Weight tensor has been reordered to SOA/COALESCED - fall back to legacy path
+                GGML_SYCL_DEBUG("[UNIFIED] Skipping - weight layout is %d (not AOS)\n", static_cast<int>(src0_layout));
+                // Fall through to legacy dispatch below
+            } else {
+                // Extract dimensions for unified kernel (GGML convention)
+                const int64_t M = src1->ne[1];  // batch size (output rows) - from src1
+                const int64_t K = src0->ne[0];  // reduction dimension - from src0
+                const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
 
-            // Call unified dispatch
-            GGML_SYCL_DEBUG("[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d\n",
-                            (long long)M, (long long)K, (long long)N, src0->type);
+                // Get data pointers
+                const void * src0_data = src0->data;
+                const float * src1_data = static_cast<const float *>(src1->data);
+                float * dst_data = static_cast<float *>(dst->data);
 
-            ggml_sycl::ggml_sycl_mul_mat_unified_default(
-                *ctx.stream(),
-                src0_data,
-                src1_data,
-                dst_data,
-                M, N, K,
-                src0->type);
+                // Call unified dispatch
+                GGML_SYCL_DEBUG("[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d\n",
+                                (long long)M, (long long)K, (long long)N, src0->type, static_cast<int>(src0_layout));
 
-            return;
+                ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                    *ctx.stream(),
+                    src0_data,
+                    src1_data,
+                    dst_data,
+                    M, N, K,
+                    src0->type);
+
+                return;
+            }
         }
 #endif
 
