@@ -7,26 +7,6 @@ import type {
 } from '$lib/types';
 
 /**
- * Formats attachment content for API requests with consistent header style.
- * Used when converting message attachments to text content parts.
- *
- * @param label - Type label (e.g., 'File', 'PDF File', 'MCP Prompt')
- * @param name - File or attachment name
- * @param content - The actual content to include
- * @param extra - Optional extra info to append to name (e.g., server name for MCP)
- * @returns Formatted string with header and content
- */
-export function formatAttachmentText(
-	label: string,
-	name: string,
-	content: string,
-	extra?: string
-): string {
-	const header = extra ? `${name} (${extra})` : name;
-	return `\n\n--- ${label}: ${header} ---\n${content}`;
-}
-
-/**
  * Check if an uploaded file is an MCP prompt
  */
 function isMcpPromptUpload(file: ChatUploadedFile): boolean {

@@ -65,7 +65,8 @@ export {
 	formatNumber,
 	formatJsonPretty,
 	formatTime,
-	formatPerformanceTime
+	formatPerformanceTime,
+	formatAttachmentText
 } from './formatters';
 
 // IME utilities
