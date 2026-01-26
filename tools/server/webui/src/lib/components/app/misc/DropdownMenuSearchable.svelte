@@ -61,8 +61,8 @@
 		{@render trigger()}
 	</DropdownMenu.Trigger>
 
-	<DropdownMenu.Content {align} class={cn(contentClass)}>
-		<div class="mb-2 p-1">
+	<DropdownMenu.Content {align} class={cn(contentClass, 'pt-0')}>
+		<div class="sticky top-0 z-10 mb-2 bg-popover p-1 pt-2">
 			<SearchInput
 				{placeholder}
 				bind:value={searchValue}
@@ -71,7 +71,7 @@
 			/>
 		</div>
 
-		<div class={cn('overflow-y-auto', 'max-h-[16rem]')}>
+		<div class={cn('overflow-y-auto')}>
 			{@render children()}
 
 			{#if isEmpty}
