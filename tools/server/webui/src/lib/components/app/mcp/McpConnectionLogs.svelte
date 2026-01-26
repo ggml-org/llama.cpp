@@ -29,9 +29,11 @@
 					<ChevronRight class="h-3.5 w-3.5" />
 				{/if}
 				<span>Connection Log ({logs.length})</span>
+
 				{#if connectionTimeMs !== undefined}
 					<span class="ml-1">· Connected in {connectionTimeMs}ms</span>
 				{/if}
+
 			</Collapsible.Trigger>
 		</div>
 
@@ -41,11 +43,14 @@
 			>
 				{#each logs as log (log.timestamp.getTime() + log.message)}
 					{@const Icon = getMcpLogLevelIcon(log.level)}
+
 					<div class={cn('flex items-start gap-1.5', getMcpLogLevelClass(log.level))}>
 						<span class="shrink-0 text-muted-foreground">
 							{formatTime(log.timestamp)}
 						</span>
+
 						<Icon class="mt-0.5 h-3 w-3 shrink-0" />
+
 						<span class="break-all">{log.message}</span>
 					</div>
 				{/each}

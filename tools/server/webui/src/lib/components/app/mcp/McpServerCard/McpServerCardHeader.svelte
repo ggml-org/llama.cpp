@@ -87,6 +87,7 @@
 							{#if TransportIcon}
 								<TransportIcon class="h-3 w-3" />
 							{/if}
+
 							{transportLabels[transportType] || transportType}
 						</Badge>
 					{/if}
