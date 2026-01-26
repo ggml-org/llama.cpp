@@ -1,5 +1,6 @@
 import type { MCPConnectionPhase, MCPLogLevel } from '$lib/enums/mcp';
 import type {
+	Client,
 	ClientCapabilities as SDKClientCapabilities,
 	ServerCapabilities as SDKServerCapabilities,
 	Implementation as SDKImplementation,
@@ -7,8 +8,9 @@ import type {
 	CallToolResult,
 	Prompt,
 	GetPromptResult,
-	PromptMessage
-} from '@modelcontextprotocol/sdk/types.js';
+	PromptMessage,
+	Transport
+} from '@modelcontextprotocol/sdk';
 
 export type { Tool, CallToolResult, Prompt, GetPromptResult, PromptMessage };
 export type ClientCapabilities = SDKClientCapabilities;
@@ -119,9 +121,9 @@ export type MCPPhaseCallback = (
  * Returned by MCPService.connect() and used for subsequent operations.
  */
 export interface MCPConnection {
-	client: import('@modelcontextprotocol/sdk/client').Client;
-	transport: import('@modelcontextprotocol/sdk/shared/transport.js').Transport;
-	tools: import('@modelcontextprotocol/sdk/types.js').Tool[];
+	client: Client;
+	transport: Transport;
+	tools: Tool[];
 	serverName: string;
 	transportType: MCPTransportType;
 	serverInfo?: MCPServerInfo;

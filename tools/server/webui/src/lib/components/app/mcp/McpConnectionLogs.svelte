@@ -33,7 +33,6 @@
 				{#if connectionTimeMs !== undefined}
 					<span class="ml-1">· Connected in {connectionTimeMs}ms</span>
 				{/if}
-
 			</Collapsible.Trigger>
 		</div>
 
