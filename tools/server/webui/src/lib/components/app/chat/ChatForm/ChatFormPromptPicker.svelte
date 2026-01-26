@@ -56,19 +56,6 @@
 		return map;
 	});
 
-	function getServerFavicon(serverId: string): string | null {
-		const server = serverSettingsMap.get(serverId);
-
-		return server ? getFaviconUrl(server.url) : null;
-	}
-
-	function getServerLabel(serverId: string): string {
-		const server = serverSettingsMap.get(serverId);
-		if (!server) return serverId;
-
-		return mcpStore.getServerLabel(server);
-	}
-
 	$effect(() => {
 		if (isOpen) {
 			loadPrompts();
@@ -328,12 +315,14 @@
 	>
 		<div class="overflow-hidden rounded-xl border border-border/50 bg-popover shadow-xl">
 			{#if selectedPrompt}
+				{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
+				{@const faviconUrl = server ? getFaviconUrl(server.url) : null}
+
 				<div class="p-4">
-					<!-- Header matching list item style -->
 					<div class="flex items-start gap-3">
-						{#if getServerFavicon(selectedPrompt.serverName)}
+						{#if faviconUrl}
 							<img
-								src={getServerFavicon(selectedPrompt.serverName)}
+								src={faviconUrl}
 								alt=""
 								class="mt-0.5 h-5 w-5 shrink-0 rounded"
 								onerror={(e) => {
@@ -341,14 +330,17 @@
 								}}
 							/>
 						{/if}
+
 						<div class="min-w-0 flex-1">
 							<div class="text-xs text-muted-foreground">
-								{getServerLabel(selectedPrompt.serverName)}
+								{server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
 							</div>
+
 							<div class="flex items-center gap-2">
 								<span class="font-medium">
 									{selectedPrompt.title || selectedPrompt.name}
 								</span>
+
 								{#if selectedPrompt.arguments?.length}
 									<span class="rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
 										{selectedPrompt.arguments.length} arg{selectedPrompt.arguments.length > 1
@@ -472,6 +464,9 @@
 							</div>
 						{:else}
 							{#each filteredPrompts as prompt, index (prompt.serverName + ':' + prompt.name)}
+								{@const server = serverSettingsMap.get(prompt.serverName)}
+								{@const faviconUrl = server ? getFaviconUrl(server.url) : null}
+
 								<button
 									type="button"
 									onclick={() => handlePromptClick(prompt)}
@@ -482,9 +477,9 @@
 								>
 									<div class="min-w-0 flex-1">
 										<div class="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-											{#if getServerFavicon(prompt.serverName)}
+											{#if faviconUrl}
 												<img
-													src={getServerFavicon(prompt.serverName)}
+													src={faviconUrl}
 													alt=""
 													class="h-3 w-3 shrink-0 rounded-sm"
 													onerror={(e) => {
@@ -493,7 +488,7 @@
 												/>
 											{/if}
 
-											<span>{getServerLabel(prompt.serverName)}</span>
+											<span>{server ? mcpStore.getServerLabel(server) : prompt.serverName}</span>
 										</div>
 
 										<div class="flex items-center gap-2">
