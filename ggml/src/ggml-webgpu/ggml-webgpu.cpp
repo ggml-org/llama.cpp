@@ -295,7 +295,7 @@ struct webgpu_context_struct {
     wgpu::Queue     queue;
     webgpu_buf_pool param_buf_pool;
 
-    bool     supports_subgroup_matrix = false;
+    // bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m;
     uint32_t sg_mat_n;
     uint32_t sg_mat_k;
@@ -381,6 +381,9 @@ struct ggml_backend_webgpu_device_context {
 
 // Per-thread data required to actually run webgpu operations in a backend instance
 struct ggml_backend_webgpu_context {
+    webgpu_context webgpu_ctx;
+    // todo: device --> reg --> global_ctx?
+    ggml_backend_webgpu_device_context * dev_context;
     std::once_flag init_once;
     std::string    name;
 };
@@ -395,7 +398,7 @@ struct ggml_backend_webgpu_buffer_context {
         label(std::move(lbl)) {}
 };
 
-// Forward declaration
+// // Forward declaration
 static webgpu_context get_per_thread_webgpu_context(ggml_backend_dev_t dev);
 
 /* WebGPU object initializations */
@@ -1127,7 +1130,7 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
             uint32_t wg_m;
             uint32_t wg_n;
 #ifndef __EMSCRIPTEN__
-            if (ctx->supports_subgroup_matrix) {
+            if (ctx->global_ctx->capabilities.supports_subgroup_matrix) {
                 // The total number of subgroups/workgroups needed per matrix.
                 uint32_t wg_m_sg_tile = WEBGPU_MUL_MAT_SUBGROUP_M * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M * ctx->sg_mat_m;
                 wg_m                  = CEIL_DIV(dst->ne[0], wg_m_sg_tile);
@@ -2099,7 +2102,8 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
 static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_graph_compute(" << cgraph->n_nodes << " nodes)");
 
-    webgpu_context ctx = get_per_thread_webgpu_context(backend->device);
+    ggml_backend_webgpu_context * backend_ctx = (ggml_backend_webgpu_context *) backend->context; 
+    webgpu_context ctx = backend_ctx->webgpu_ctx;
 
     WEBGPU_CPU_PROFILE_TOTAL_START(graph_compute);
 
@@ -2178,6 +2182,7 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
 
     WEBGPU_CPU_PROFILE_TOTAL_START(memset_tensor);
 
+    // ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *) backend->context;
     webgpu_context                       webgpu_ctx = get_per_thread_webgpu_context(buffer->buft->device);
     ggml_backend_webgpu_buffer_context * buf_ctx    = (ggml_backend_webgpu_buffer_context *) buffer->context;
 
@@ -2514,7 +2519,7 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
 
     std::vector<wgpu::ConstantEntry> mul_mat_constants;
 #ifndef __EMSCRIPTEN__
-    if (webgpu_ctx->supports_subgroup_matrix) {
+    if (webgpu_ctx->global_ctx->capabilities.supports_subgroup_matrix) {
         std::map<std::string, std::string> sg_matrix_repls;
         sg_matrix_repls["WEBGPU_MAX_SUBGROUP_SIZE"] =
             std::to_string(webgpu_ctx->global_ctx->capabilities.max_subgroup_size);
@@ -3054,6 +3059,51 @@ static webgpu_context get_per_thread_webgpu_context(ggml_backend_dev_t dev) {
     return webgpu_ctx;
 }
 
+static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
+    ggml_backend_webgpu_device_context * dev_ctx = (ggml_backend_webgpu_device_context *) dev->context;
+    webgpu_context webgpu_ctx = std::make_shared<webgpu_context_struct>();
+    webgpu_ctx->global_ctx    = &(dev_ctx->reg_context->wgpu_global_ctx);
+    webgpu_ctx->queue         = webgpu_ctx->global_ctx->device.GetQueue();
+    webgpu_ctx->param_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_PARAM_BUFS, WEBGPU_PARAMS_BUF_SIZE_BYTES,
+                                    wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
+                                    wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
+#ifdef GGML_WEBGPU_GPU_PROFILE
+    // Initialize buffer pool for timestamp queries, used for profiling
+    webgpu_ctx->timestamp_query_buf_pool.init(webgpu_ctx->wgpu_global_ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS,
+                                              WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
+                                              wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
+                                              wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
+#endif
+    webgpu_ctx->set_rows_error_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_SET_ROWS_ERROR_BUFS,
+                                             WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
+                                             wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage,
+                                             wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
+
+    ggml_webgpu_init_memset_pipeline(webgpu_ctx);
+    ggml_webgpu_init_mul_mat_pipeline(webgpu_ctx);
+    ggml_webgpu_init_get_rows_pipeline(webgpu_ctx);
+    ggml_webgpu_init_cpy_pipeline(webgpu_ctx);
+    ggml_webgpu_init_add_pipeline(webgpu_ctx);
+    ggml_webgpu_init_sub_pipeline(webgpu_ctx);
+    ggml_webgpu_init_mul_pipeline(webgpu_ctx);
+    ggml_webgpu_init_div_pipeline(webgpu_ctx);
+    ggml_webgpu_init_rms_norm_pipeline(webgpu_ctx);
+    ggml_webgpu_init_rope_pipeline(webgpu_ctx);
+    ggml_webgpu_init_glu_pipeline(webgpu_ctx);
+    ggml_webgpu_init_scale_pipeline(webgpu_ctx);
+    ggml_webgpu_init_soft_max_pipeline(webgpu_ctx);
+#ifdef GGML_WEBGPU_DEBUG
+    // Initialize debug buffers
+    ggml_webgpu_create_buffer(webgpu_ctx->global_ctx->device, webgpu_ctx->debug_host_buf,
+                              WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
+                              wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead, "debug_host_buf");
+    ggml_webgpu_create_buffer(webgpu_ctx->global_ctx->device, webgpu_ctx->debug_dev_buf,
+                              WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
+                              wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc, "debug_dev_buf");
+#endif
+    return webgpu_ctx;
+}
+
 static ggml_backend_t ggml_backend_webgpu_backend_init(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
 
@@ -3063,6 +3113,7 @@ static ggml_backend_t ggml_backend_webgpu_backend_init(ggml_backend_dev_t dev, c
 
     auto * backend_ctx = new ggml_backend_webgpu_context();
     backend_ctx->name  = GGML_WEBGPU_NAME + std::string(": ") + dev_ctx->device_name;
+    backend_ctx->webgpu_ctx = initialize_webgpu_context(dev);
 
     // See GGML Backend Interface section
     auto * backend = new ggml_backend();
@@ -3129,18 +3180,20 @@ static bool ggml_webgpu_supported_qtype(ggml_type type) {
 }
 
 static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    webgpu_context webgpu_ctx = get_per_thread_webgpu_context(dev);
+    // ggml_backend_dev_context * ctx = (ggml_backend_dev_context *) dev->context;
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
+    // webgpu_context webgpu_ctx = get_per_thread_webgpu_context(dev);
 
     ggml_tensor * src0 = op->src[0];
     ggml_tensor * src1 = op->src[1];
     ggml_tensor * src2 = op->src[2];
 
     // on smaller devices (or CI), tensors may be larger than the max storage buffer size
-    if (ggml_nbytes(op) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize ||
+    if (ggml_nbytes(op) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize ||
         (src0 != nullptr &&
-         ggml_nbytes(src0) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize) ||
+         ggml_nbytes(src0) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize) ||
         (src1 != nullptr &&
-         ggml_nbytes(src1) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize)) {
+         ggml_nbytes(src1) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize)) {
         return false;
     }
 
@@ -3220,16 +3273,18 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                if (!webgpu_ctx->supports_subgroup_matrix) {
+                if (!ctx->reg_context->wgpu_global_ctx.capabilities.supports_subgroup_matrix) {
                     break;
                 }
                 // Head dimensions must fit in workgroup memory with minimum tile sizes
-                size_t     limit_bytes = webgpu_ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize;
+                size_t     limit_bytes = ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxComputeWorkgroupStorageSize;
                 const bool has_mask    = op->src[3] != nullptr;
-                const bool kv_direct   = src1->type == GGML_TYPE_F16 && (src0->ne[0] % webgpu_ctx->sg_mat_k) == 0 &&
+                const bool kv_direct   = src1->type == GGML_TYPE_F16 && (src0->ne[0] % ctx->reg_context->wgpu_global_ctx.capabilities.subgroup_matrix_config.K) == 0 &&
                                        (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
                 const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
-                    webgpu_ctx->sg_mat_m, webgpu_ctx->sg_mat_n, (uint32_t) src0->ne[0], (uint32_t) src2->ne[0],
+                    ctx->reg_context->wgpu_global_ctx.capabilities.subgroup_matrix_config.M,
+                    ctx->reg_context->wgpu_global_ctx.capabilities.subgroup_matrix_config.N,
+                    (uint32_t) src0->ne[0], (uint32_t) src2->ne[0],
                     has_mask, kv_direct);
                 if (min_bytes > limit_bytes) {
                     break;
@@ -3335,13 +3390,13 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         default:
             break;
     }
-    if (ggml_nbytes(op) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize ||
+    if (ggml_nbytes(op) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize ||
         (src0 != nullptr &&
-         ggml_nbytes(src0) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize) ||
+         ggml_nbytes(src0) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize) ||
         (src1 != nullptr &&
-         ggml_nbytes(src1) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize) ||
+         ggml_nbytes(src1) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize) ||
         (src2 != nullptr &&
-         ggml_nbytes(src2) > webgpu_ctx->global_ctx->capabilities.limits.maxStorageBufferBindingSize)) {
+         ggml_nbytes(src2) > ctx->reg_context->wgpu_global_ctx.capabilities.limits.maxStorageBufferBindingSize)) {
         supports_op = false;
         WEBGPU_LOG_DEBUG("ggml_webgpu op not supported due to size: ");
     }
