@@ -8,16 +8,21 @@ static virtgpu * apir_initialize() {
     static virtgpu * apir_gpu_instance = NULL;
     static bool      apir_initialized  = false;
 
-    if (apir_initialized) {
-        return apir_gpu_instance;
-    }
+    {
+	static std::mutex           mutex;
+        std::lock_guard<std::mutex> lock(mutex);
 
-    apir_gpu_instance = create_virtgpu();
-    if (!apir_gpu_instance) {
-        GGML_ABORT("failed to initialize the virtgpu");
-    }
+	if (apir_initialized) {
+	    return apir_gpu_instance;
+	}
 
-    apir_initialized = true;
+	apir_gpu_instance = create_virtgpu();
+	if (!apir_gpu_instance) {
+	    GGML_ABORT("failed to initialize the virtgpu");
+	}
+
+	apir_initialized = true;
+    }
 
     return apir_gpu_instance;
 }
