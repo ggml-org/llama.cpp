@@ -4864,14 +4864,7 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
                 _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
 #else
                 setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
-#endif
-
-                GGML_LOG_WARN("\n");
-                GGML_LOG_WARN("================================================================================\n");
-                GGML_LOG_WARN("  CUDA_SCALE_LAUNCH_QUEUES=4x has been enabled\n");
-                GGML_LOG_WARN("  This environment variable improves performance with multiple GPUs\n");
-                GGML_LOG_WARN("================================================================================\n");
-                GGML_LOG_WARN("\n");
+#endif // _WIN32
             }
 
             ggml_backend_cuda_reg_context * ctx = new ggml_backend_cuda_reg_context;
