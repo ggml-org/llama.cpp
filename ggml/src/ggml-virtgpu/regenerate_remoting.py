@@ -64,10 +64,10 @@ class RemotingCodebaseGenerator:
             )
             return True
         except subprocess.CalledProcessError as e:
-            logging.exception(f"   ⚠️  Warning: clang-format failed for {file_path}", e)
+            logging.exception(f"   ⚠️  Warning: clang-format failed for {file_path}")
             return False
         except Exception as e:
-            logging.exception(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}", e)
+            logging.exception(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}")
             return False
 
     def generate_enum_name(self, group_name: str, function_name: str) -> str:
@@ -314,7 +314,7 @@ def main():
         generator = RemotingCodebaseGenerator()
         generator.regenerate_codebase()
     except Exception as e:
-        logging.exception(f"❌ Error:", e)
+        logging.exception(f"❌ Error: {e}")
         exit(1)
 
 if __name__ == "__main__":
