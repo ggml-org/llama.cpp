@@ -130,6 +130,40 @@
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
 	}
+
+	/* Global scrollbar styling - visible only on hover */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: transparent transparent;
+		transition: scrollbar-color 0.2s ease;
+	}
+
+	*:hover {
+		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+	}
+
+	*::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		background: transparent;
+		border-radius: 3px;
+		transition: background 0.2s ease;
+	}
+
+	*:hover::-webkit-scrollbar-thumb {
+		background: hsl(var(--muted-foreground) / 0.3);
+	}
+
+	*::-webkit-scrollbar-thumb:hover {
+		background: hsl(var(--muted-foreground) / 0.5);
+	}
 }
 
 @layer utilities {
