@@ -141,7 +141,7 @@ export class MCPService {
 			title: impl.title,
 			description: impl.description,
 			websiteUrl: impl.websiteUrl,
-			icons: impl.icons?.map((icon) => ({
+			icons: impl.icons?.map((icon: { src: string; mimeType?: string; sizes?: string }) => ({
 				src: icon.src,
 				mimeType: icon.mimeType,
 				sizes: icon.sizes

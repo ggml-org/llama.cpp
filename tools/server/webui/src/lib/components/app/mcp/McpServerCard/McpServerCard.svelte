@@ -47,24 +47,15 @@
 			: []
 	);
 
-	let serverInfo = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.serverInfo : undefined
+	let successState = $derived(
+		healthState.status === HealthCheckStatus.SUCCESS ? healthState : null
 	);
-	let capabilities = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.capabilities : undefined
-	);
-	let transportType = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.transportType : undefined
-	);
-	let protocolVersion = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.protocolVersion : undefined
-	);
-	let connectionTimeMs = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.connectionTimeMs : undefined
-	);
-	let instructions = $derived(
-		healthState.status === HealthCheckStatus.SUCCESS ? healthState.instructions : undefined
-	);
+	let serverInfo = $derived(successState?.serverInfo);
+	let capabilities = $derived(successState?.capabilities);
+	let transportType = $derived(successState?.transportType);
+	let protocolVersion = $derived(successState?.protocolVersion);
+	let connectionTimeMs = $derived(successState?.connectionTimeMs);
+	let instructions = $derived(successState?.instructions);
 
 	let isEditing = $state(!server.url.trim());
 	let showDeleteDialog = $state(false);

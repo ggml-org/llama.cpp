@@ -15,7 +15,7 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-	import type { GetPromptResult, MCPPromptInfo } from '$lib/types';
+	import type { GetPromptResult, MCPPromptInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
 	import {
 		AudioRecorder,
@@ -336,7 +336,7 @@
 
 	function handlePromptLoadComplete(placeholderId: string, result: GetPromptResult) {
 		const promptText = result.messages
-			?.map((msg) => {
+			?.map((msg: PromptMessage) => {
 				if (typeof msg.content === 'string') {
 					return msg.content;
 				}
