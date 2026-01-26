@@ -45,10 +45,8 @@ static inline HVX_Vector hvx_vec_reduce_sum_qf32(HVX_Vector in) {
 }
 
 static inline HVX_Vector hvx_vec_reduce_sum_qf32x2(HVX_Vector in0, HVX_Vector in1) {
-    HVX_Vector     sum0     = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_vror_VR(in0, VLEN / 2), in0);
-    HVX_Vector     sum1     = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_vror_VR(in1, VLEN / 2), in1);
-    HVX_VectorPair sum_pair = Q6_W_vshuff_VVR(sum0, sum1, 4);
-    HVX_Vector     sum01    = Q6_V_lo_W(sum_pair);
+    HVX_VectorPair sum_pair = Q6_W_vshuff_VVR(in1, in0, 4);
+    HVX_Vector     sum01    = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(sum_pair), Q6_V_hi_W(sum_pair));
 
     sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 2));
     sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 4));
