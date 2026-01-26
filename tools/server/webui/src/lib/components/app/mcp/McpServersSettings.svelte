@@ -8,6 +8,13 @@
 	import { McpServerCard, McpServerForm } from '$lib/components/app/mcp';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	let servers = $derived(mcpStore.getServersSorted());
+	let allServersHealthChecked = $derived(
+		servers.length > 0 &&
+			servers.every((server) => {
+				const state = mcpStore.getHealthCheckState(server.id);
+				return state.status === 'success' || state.status === 'error';
+			})
+	);
 
 	let isAddingServer = $state(false);
 	let newServerUrl = $state('');
@@ -111,11 +118,7 @@
 	{#if servers.length > 0}
 		<div class="space-y-3">
 			{#each servers as server (server.id)}
-				{@const healthState = mcpStore.getHealthCheckState(server.id)}
-				{@const isServerLoading =
-					healthState.status === 'idle' || healthState.status === 'connecting'}
-
-				{#if isServerLoading}
+				{#if !allServersHealthChecked}
 					<Card.Root class="grid gap-3 p-4">
 						<div class="flex items-center justify-between gap-4">
 							<div class="flex items-center gap-2">
