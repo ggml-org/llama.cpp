@@ -144,6 +144,10 @@ int main(int argc, char ** argv) {
     ctx   = llama_init->context();
     model = llama_init->model();
     smpl  = llama_init->sampler(0);
+    if (smpl == NULL) {
+        LOG_ERR("%s: error: unable to create sampler\n", __func__);
+        return 1;
+    }
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: unable to create context\n", __func__);
