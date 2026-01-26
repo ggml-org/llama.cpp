@@ -49,6 +49,13 @@ bool mcp_client::connect(const std::string & command,
         dup2(stdout_pipe[1], STDOUT_FILENO);
         close(stdout_pipe[1]);
 
+        // Redirect stderr to /dev/null to suppress debug/info logs from MCP servers
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, STDERR_FILENO);
+            close(devnull);
+        }
+
         // Set environment variables
         for (const auto & [key, value] : env) {
             setenv(key.c_str(), value.c_str(), 1);
