@@ -1,0 +1,460 @@
+//
+// Test: Unified Matmul Kernel
+//
+// TDD tests for the unified kernel architecture supporting Q4_0 quantization.
+// Tests verify:
+// 1. Small matrix multiplication produces correct results
+// 2. Non-aligned boundary dimensions don't cause OOB access
+// 3. Scalar path computation correctness
+//
+// MIT license
+// Copyright (C) 2024-2026 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <random>
+#include <sycl/sycl.hpp>
+#include <vector>
+
+// Include the unified kernel header
+#include "../unified-kernel.hpp"
+
+// =============================================================================
+// Q4_0 Block Definition (match ggml-common.h)
+// =============================================================================
+#define QK4_0 32
+
+struct block_q4_0_test {
+    sycl::half d;              // scale factor
+    uint8_t    qs[QK4_0 / 2];  // quantized values: 16 bytes = 32 nibbles
+};
+
+static_assert(sizeof(block_q4_0_test) == sizeof(sycl::half) + QK4_0 / 2, "wrong q4_0 block size");
+
+// =============================================================================
+// Test Helpers
+// =============================================================================
+
+static int g_tests_run     = 0;
+static int g_tests_passed  = 0;
+static int g_tests_skipped = 0;
+
+#define TEST_BEGIN(name)                         \
+    do {                                         \
+        g_tests_run++;                           \
+        fprintf(stderr, "[TEST] %s ... ", name); \
+    } while (0)
+
+#define TEST_PASS()                  \
+    do {                             \
+        g_tests_passed++;            \
+        fprintf(stderr, "PASSED\n"); \
+    } while (0)
+
+#define TEST_SKIP(reason)                          \
+    do {                                           \
+        g_tests_skipped++;                         \
+        fprintf(stderr, "SKIPPED (%s)\n", reason); \
+    } while (0)
+
+#define TEST_FAIL(msg)                        \
+    do {                                      \
+        fprintf(stderr, "FAILED: %s\n", msg); \
+        return false;                         \
+    } while (0)
+
+#define TEST_ASSERT(cond, msg) \
+    do {                       \
+        if (!(cond)) {         \
+            TEST_FAIL(msg);    \
+        }                      \
+    } while (0)
+
+#define TEST_ASSERT_NEAR(actual, expected, tol, msg)                                                      \
+    do {                                                                                                  \
+        float diff = std::abs((float) (actual) - (float) (expected));                                     \
+        if (diff > (tol)) {                                                                               \
+            fprintf(stderr, "FAILED: %s (expected %.6f, got %.6f, diff=%.6f)\n", msg, (float) (expected), \
+                    (float) (actual), diff);                                                              \
+            return false;                                                                                 \
+        }                                                                                                 \
+    } while (0)
+
+// =============================================================================
+// CPU Reference Implementation: Q4_0 Matmul
+// =============================================================================
+
+// Dequantize a single Q4_0 block to float
+static void dequantize_q4_0_block_test(const block_q4_0_test & block, float * out) {
+    const float d = static_cast<float>(block.d);
+    for (int i = 0; i < 16; i++) {
+        uint8_t byte = block.qs[i];
+        // Low nibble: value[i] = (qs[i] & 0xF) - 8
+        out[i]      = (static_cast<float>(byte & 0x0F) - 8.0f) * d;
+        // High nibble: value[i+16] = (qs[i] >> 4) - 8
+        out[i + 16] = (static_cast<float>(byte >> 4) - 8.0f) * d;
+    }
+}
+
+// CPU reference matmul: C[M,N] = A_q4_0[M,K] * B_f32[K,N]
+// A: Q4_0 weights [M, K/32 blocks]
+// B: float activations [K, N] (row-major, each row is N floats)
+// C: float output [M, N]
+static void matmul_q4_0_f32_cpu_reference(const block_q4_0_test * A,
+                                          const float *           B,
+                                          float *                 C,
+                                          int                     M,
+                                          int                     N,
+                                          int                     K) {
+    const int k_blocks = K / QK4_0;
+
+    // Temporary storage for dequantized row
+    std::vector<float> a_row(K);
+
+    for (int m = 0; m < M; m++) {
+        // Dequantize entire row of A
+        for (int kb = 0; kb < k_blocks; kb++) {
+            dequantize_q4_0_block_test(A[m * k_blocks + kb], a_row.data() + kb * QK4_0);
+        }
+
+        for (int n = 0; n < N; n++) {
+            float acc = 0.0f;
+            for (int k = 0; k < K; k++) {
+                // B is row-major: B[k,n] = B[k*N + n]
+                acc += a_row[k] * B[k * N + n];
+            }
+            C[m * N + n] = acc;
+        }
+    }
+}
+
+// =============================================================================
+// Test 1: Small 4x4 Q4_0 Matmul
+// Verifies basic kernel correctness with minimal dimensions
+// =============================================================================
+static bool test_unified_kernel_q4_0_small(sycl::queue & q) {
+    TEST_BEGIN("test_unified_kernel_q4_0_small");
+
+    // Dimensions: 4x4 output from 4x32 @ 32x4
+    // M=4, N=4, K=32 (single Q4_0 block per row)
+    const int M        = 4;
+    const int N        = 4;
+    const int K        = 32;
+    const int k_blocks = K / QK4_0;  // = 1
+
+    // Allocate and initialize Q4_0 weights
+    std::vector<block_q4_0_test> A(M * k_blocks);
+    std::mt19937                 rng(42);
+    for (auto & block : A) {
+        block.d = sycl::half(0.1f);
+        for (int i = 0; i < 16; i++) {
+            // Use simple pattern for easier debugging
+            block.qs[i] = static_cast<uint8_t>((i % 16) | ((i % 16) << 4));
+        }
+    }
+
+    // Allocate and initialize F32 activations [K, N]
+    std::vector<float> B(K * N);
+    for (int k = 0; k < K; k++) {
+        for (int n = 0; n < N; n++) {
+            B[k * N + n] = 0.1f * (k + n);
+        }
+    }
+
+    // Compute CPU reference
+    std::vector<float> C_ref(M * N);
+    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+
+    // Allocate device memory
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * C_dev = sycl::malloc_device<float>(M * N, q);
+
+    TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
+
+    // Copy to device
+    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memset(C_dev, 0, M * N * sizeof(float)).wait();
+
+    // Setup kernel args
+    ggml_sycl_unified::UnifiedKernelArgs args;
+    args.M              = M;
+    args.N              = N;
+    args.K              = K;
+    args.tile_m         = 4;
+    args.tile_n         = 4;
+    args.tile_k         = 32;
+    args.use_xmx        = false;  // Scalar path for now
+    args.layout_mode    = 0;      // NONE (AoS)
+    args.quant_type     = 2;      // GGML_TYPE_Q4_0
+    args.prefetch_depth = 0;
+    args.weights        = A_dev;
+    args.activations    = B_dev;
+    args.output         = C_dev;
+
+    // Launch kernel
+    ggml_sycl_unified::launch_unified_matmul(q, args);
+    q.wait();
+
+    // Copy result back
+    std::vector<float> C_gpu(M * N);
+    q.memcpy(C_gpu.data(), C_dev, M * N * sizeof(float)).wait();
+
+    // Verify results
+    const float tolerance = 1e-3f;
+    for (int i = 0; i < M * N; i++) {
+        TEST_ASSERT_NEAR(C_gpu[i], C_ref[i], tolerance,
+                         (std::string("Mismatch at index ") + std::to_string(i)).c_str());
+    }
+
+    // Cleanup
+    sycl::free(A_dev, q);
+    sycl::free(B_dev, q);
+    sycl::free(C_dev, q);
+
+    TEST_PASS();
+    return true;
+}
+
+// =============================================================================
+// Test 2: Non-Aligned Boundary Dimensions
+// Verifies no OOB access for dimensions not aligned to tile size
+// =============================================================================
+static bool test_unified_kernel_boundary(sycl::queue & q) {
+    TEST_BEGIN("test_unified_kernel_boundary");
+
+    // Non-aligned dimensions: 33x65 (not multiples of common tile sizes)
+    // K must still be multiple of 32 for Q4_0
+    const int M        = 33;
+    const int N        = 65;
+    const int K        = 64;  // 2 Q4_0 blocks
+    const int k_blocks = K / QK4_0;
+
+    // Allocate and initialize Q4_0 weights
+    std::vector<block_q4_0_test> A(M * k_blocks);
+    std::mt19937                 rng(123);
+    for (auto & block : A) {
+        block.d = sycl::half(0.05f * (rng() % 10 + 1));
+        for (int i = 0; i < 16; i++) {
+            block.qs[i] = rng() % 256;
+        }
+    }
+
+    // Allocate F32 activations
+    std::vector<float> B(K * N);
+    for (int i = 0; i < K * N; i++) {
+        B[i] = 0.01f * (rng() % 100);
+    }
+
+    // Compute CPU reference
+    std::vector<float> C_ref(M * N);
+    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+
+    // Allocate device memory
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * C_dev = sycl::malloc_device<float>(M * N, q);
+
+    TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
+
+    // Copy to device
+    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memset(C_dev, 0, M * N * sizeof(float)).wait();
+
+    // Setup kernel args with tile sizes that don't evenly divide dimensions
+    ggml_sycl_unified::UnifiedKernelArgs args;
+    args.M              = M;
+    args.N              = N;
+    args.K              = K;
+    args.tile_m         = 8;   // 33 % 8 = 1 (boundary)
+    args.tile_n         = 16;  // 65 % 16 = 1 (boundary)
+    args.tile_k         = 32;
+    args.use_xmx        = false;
+    args.layout_mode    = 0;
+    args.quant_type     = 2;  // GGML_TYPE_Q4_0
+    args.prefetch_depth = 0;
+    args.weights        = A_dev;
+    args.activations    = B_dev;
+    args.output         = C_dev;
+
+    // Launch kernel - should not crash or produce OOB access
+    ggml_sycl_unified::launch_unified_matmul(q, args);
+    q.wait();
+
+    // Copy result back
+    std::vector<float> C_gpu(M * N);
+    q.memcpy(C_gpu.data(), C_dev, M * N * sizeof(float)).wait();
+
+    // Verify results
+    const float tolerance = 1e-2f;  // Slightly higher tolerance for accumulated errors
+    for (int m = 0; m < M; m++) {
+        for (int n = 0; n < N; n++) {
+            int idx = m * N + n;
+            TEST_ASSERT_NEAR(C_gpu[idx], C_ref[idx], tolerance,
+                             (std::string("Mismatch at [") + std::to_string(m) + "," + std::to_string(n) + "]").c_str());
+        }
+    }
+
+    // Cleanup
+    sycl::free(A_dev, q);
+    sycl::free(B_dev, q);
+    sycl::free(C_dev, q);
+
+    TEST_PASS();
+    return true;
+}
+
+// =============================================================================
+// Test 3: Scalar Path Correctness
+// Verifies the scalar (non-XMX) path produces correct results
+// =============================================================================
+static bool test_unified_kernel_scalar(sycl::queue & q) {
+    TEST_BEGIN("test_unified_kernel_scalar");
+
+    // Medium-sized matmul to test scalar path
+    const int M        = 16;
+    const int N        = 32;
+    const int K        = 128;  // 4 Q4_0 blocks
+    const int k_blocks = K / QK4_0;
+
+    // Allocate and initialize Q4_0 weights with random values
+    std::vector<block_q4_0_test> A(M * k_blocks);
+    std::mt19937                 rng(456);
+    for (auto & block : A) {
+        block.d = sycl::half(0.1f * (rng() % 10 + 1));
+        for (int i = 0; i < 16; i++) {
+            block.qs[i] = rng() % 256;
+        }
+    }
+
+    // Allocate F32 activations with random values
+    std::vector<float> B(K * N);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    for (int i = 0; i < K * N; i++) {
+        B[i] = dist(rng);
+    }
+
+    // Compute CPU reference
+    std::vector<float> C_ref(M * N);
+    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+
+    // Allocate device memory
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * C_dev = sycl::malloc_device<float>(M * N, q);
+
+    TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
+
+    // Copy to device
+    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memset(C_dev, 0, M * N * sizeof(float)).wait();
+
+    // Setup kernel args - explicitly request scalar path
+    ggml_sycl_unified::UnifiedKernelArgs args;
+    args.M              = M;
+    args.N              = N;
+    args.K              = K;
+    args.tile_m         = 8;
+    args.tile_n         = 16;
+    args.tile_k         = 32;
+    args.use_xmx        = false;  // Force scalar path
+    args.layout_mode    = 0;
+    args.quant_type     = 2;  // GGML_TYPE_Q4_0
+    args.prefetch_depth = 0;
+    args.weights        = A_dev;
+    args.activations    = B_dev;
+    args.output         = C_dev;
+
+    // Launch kernel
+    ggml_sycl_unified::launch_unified_matmul(q, args);
+    q.wait();
+
+    // Copy result back
+    std::vector<float> C_gpu(M * N);
+    q.memcpy(C_gpu.data(), C_dev, M * N * sizeof(float)).wait();
+
+    // Verify results with reasonable tolerance
+    const float tolerance = 1e-2f;
+    float       max_diff  = 0.0f;
+    int         max_idx   = 0;
+
+    for (int i = 0; i < M * N; i++) {
+        float diff = std::abs(C_gpu[i] - C_ref[i]);
+        if (diff > max_diff) {
+            max_diff = diff;
+            max_idx  = i;
+        }
+    }
+
+    if (max_diff > tolerance) {
+        fprintf(stderr, "FAILED: Max diff %.6f at index %d (expected %.6f, got %.6f)\n",
+                max_diff, max_idx, C_ref[max_idx], C_gpu[max_idx]);
+        sycl::free(A_dev, q);
+        sycl::free(B_dev, q);
+        sycl::free(C_dev, q);
+        return false;
+    }
+
+    // Cleanup
+    sycl::free(A_dev, q);
+    sycl::free(B_dev, q);
+    sycl::free(C_dev, q);
+
+    TEST_PASS();
+    return true;
+}
+
+// =============================================================================
+// Main
+// =============================================================================
+
+int main(int argc, char ** argv) {
+    (void) argc;
+    (void) argv;
+
+    fprintf(stderr, "===========================================\n");
+    fprintf(stderr, "Unified Kernel Tests\n");
+    fprintf(stderr, "===========================================\n");
+
+    // Select GPU device
+    sycl::device dev;
+    try {
+        dev = sycl::device(sycl::gpu_selector_v);
+    } catch (const sycl::exception & e) {
+        fprintf(stderr, "No GPU device found: %s\n", e.what());
+        return 1;
+    }
+
+    fprintf(stderr, "Device: %s\n", dev.get_info<sycl::info::device::name>().c_str());
+    fprintf(stderr, "-------------------------------------------\n");
+
+    sycl::queue q(dev, sycl::property::queue::in_order{});
+
+    // Run tests
+    bool all_passed = true;
+
+    all_passed &= test_unified_kernel_q4_0_small(q);
+    all_passed &= test_unified_kernel_boundary(q);
+    all_passed &= test_unified_kernel_scalar(q);
+
+    // Summary
+    fprintf(stderr, "-------------------------------------------\n");
+    fprintf(stderr, "Tests: %d run, %d passed, %d skipped\n",
+            g_tests_run, g_tests_passed, g_tests_skipped);
+
+    if (!all_passed) {
+        fprintf(stderr, "SOME TESTS FAILED\n");
+        return 1;
+    }
+
+    fprintf(stderr, "ALL TESTS PASSED\n");
+    return 0;
+}

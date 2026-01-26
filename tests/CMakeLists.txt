@@ -267,6 +267,125 @@ target_include_directories(test-kv-block PRIVATE ${PROJECT_SOURCE_DIR}/src)
 install(TARGETS test-kv-block RUNTIME)
 add_test(NAME test-kv-block COMMAND $<TARGET_FILE:test-kv-block>)
 
+# test-tuning-engine: unit tests for TuningCache and related data structures
+# Pure C++ test (no SYCL required), but needs access to tuning-engine.hpp
+add_executable(test-tuning-engine test-tuning-engine.cpp)
+target_include_directories(test-tuning-engine PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-tuning-engine RUNTIME)
+add_test(NAME test-tuning-engine COMMAND $<TARGET_FILE:test-tuning-engine>)
+
+# test-tuning-engine-impl: unit tests for TuningEngine implementation (progressive tuning)
+# Pure C++ test (no SYCL required), needs access to tuning-engine.hpp and tuning-engine-impl.hpp
+add_executable(test-tuning-engine-impl
+    test-tuning-engine-impl.cpp
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/tuning-engine.cpp)
+target_include_directories(test-tuning-engine-impl PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-tuning-engine-impl RUNTIME)
+add_test(NAME test-tuning-engine-impl COMMAND $<TARGET_FILE:test-tuning-engine-impl>)
+
+# test-observation-recording: unit tests for observation recording and statistics
+# Tests: TuningObservation, ObservationStats, ObservationQueue, confidence tracking
+# Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.9)
+add_executable(test-observation-recording
+    test-observation-recording.cpp
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/tuning-engine.cpp)
+target_include_directories(test-observation-recording PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-observation-recording RUNTIME)
+add_test(NAME test-observation-recording COMMAND $<TARGET_FILE:test-observation-recording>)
+
+# test-op-context: unit tests for OperationContext builder (extracts M,N,K from tensors)
+# Pure C++ test (no SYCL required), uses ggml for tensor creation
+add_executable(test-op-context test-op-context.cpp)
+target_link_libraries(test-op-context PRIVATE ggml)
+target_include_directories(test-op-context PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-op-context RUNTIME)
+add_test(NAME test-op-context COMMAND $<TARGET_FILE:test-op-context>)
+
+# test-dispatch: unit tests for simplified unified kernel dispatch
+# Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.17)
+# Pure C++ test (no SYCL runtime required), tests dispatch helper functions
+add_executable(test-dispatch test-dispatch.cpp)
+target_link_libraries(test-dispatch PRIVATE ggml)
+target_include_directories(test-dispatch PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-dispatch RUNTIME)
+add_test(NAME test-dispatch COMMAND $<TARGET_FILE:test-dispatch>)
+
+# test-heat-classifier: unit tests for tensor heat classification (HOT/WARM/COLD/FROZEN)
+# Part of unified memory system (epic llama.cpp-6hp, task llama.cpp-6hp.11)
+# Pure C++ test (no SYCL required), uses ggml for tensor structure
+add_executable(test-heat-classifier test-heat-classifier.cpp)
+target_link_libraries(test-heat-classifier PRIVATE ggml)
+target_include_directories(test-heat-classifier PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-heat-classifier RUNTIME)
+add_test(NAME test-heat-classifier COMMAND $<TARGET_FILE:test-heat-classifier>)
+
+# test-kv-cache-coordinator: unit tests for KV cache memory coordination
+# Part of unified memory system (epic llama.cpp-6hp, task llama.cpp-6hp.15)
+# Pure C++ test (no SYCL required), tests KV cache memory tracking and coordination
+add_executable(test-kv-cache-coordinator test-kv-cache-coordinator.cpp)
+target_include_directories(test-kv-cache-coordinator PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-kv-cache-coordinator RUNTIME)
+add_test(NAME test-kv-cache-coordinator COMMAND $<TARGET_FILE:test-kv-cache-coordinator>)
+
+# test-layout-scheduler: unit tests for layout conversion scheduling
+# Part of unified memory system (epic llama.cpp-6hp, task llama.cpp-6hp.16)
+# Pure C++ test (no SYCL required), tests idle detection, batching, and priority
+add_executable(test-layout-scheduler test-layout-scheduler.cpp)
+target_link_libraries(test-layout-scheduler PRIVATE ggml)
+target_include_directories(test-layout-scheduler PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-layout-scheduler RUNTIME)
+add_test(NAME test-layout-scheduler COMMAND $<TARGET_FILE:test-layout-scheduler>)
+
+# test-ab-validation: unit tests for A/B validation mode infrastructure
+# Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.21)
+# Pure C++ test (no SYCL required), tests validation utilities for comparing kernel outputs
+add_executable(test-ab-validation test-ab-validation.cpp)
+target_include_directories(test-ab-validation PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-ab-validation RUNTIME)
+add_test(NAME test-ab-validation COMMAND $<TARGET_FILE:test-ab-validation>)
+
+# test-crossover-discovery: unit tests for unified/oneDNN crossover discovery
+# Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.20)
+# Pure C++ test (no SYCL required), tests binary search for batch size crossover points
+add_executable(test-crossover-discovery test-crossover-discovery.cpp)
+target_include_directories(test-crossover-discovery PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-crossover-discovery RUNTIME)
+add_test(NAME test-crossover-discovery COMMAND $<TARGET_FILE:test-crossover-discovery>)
+
+# test-edge-cases: unit tests for EdgeCaseSelfTest dimension edge case coverage
+# Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.22)
+# Pure C++ test (no SYCL required), tests edge case configuration generation
+add_executable(test-edge-cases test-edge-cases.cpp)
+target_include_directories(test-edge-cases PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-edge-cases RUNTIME)
+add_test(NAME test-edge-cases COMMAND $<TARGET_FILE:test-edge-cases>)
+
+# test-scalar-fallback: unit tests for scalar fallback path in unified kernel
+# Tests should_use_scalar_fallback, is_partial_tile, reference matmul
+# Requires SYCL headers for unified-kernel.hpp types (sycl::half, etc.)
+if(GGML_SYCL)
+    add_executable(test-scalar-fallback test-scalar-fallback.cpp)
+    target_include_directories(test-scalar-fallback PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-scalar-fallback PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-scalar-fallback PRIVATE "-fsycl")
+    install(TARGETS test-scalar-fallback RUNTIME)
+    add_test(NAME test-scalar-fallback COMMAND $<TARGET_FILE:test-scalar-fallback>)
+endif()
+
 # test-fattn-mask: unit tests for Flash Attention mask slope calculation (SYCL unified KV fix)
 llama_build_and_test(test-fattn-mask.cpp)
 
@@ -536,6 +655,19 @@ if(GGML_SYCL)
     target_link_options(test-tiled-weight-loading PRIVATE "-fsycl")
     install(TARGETS test-tiled-weight-loading RUNTIME)
     add_test(NAME test-tiled-weight-loading COMMAND $<TARGET_FILE:test-tiled-weight-loading>)
+endif()
+
+# test-weight-loading: Unit tests for layout-aware weight loading in unified kernel
+if(GGML_SYCL)
+    add_executable(test-weight-loading test-weight-loading.cpp)
+    target_link_libraries(test-weight-loading PRIVATE ggml)
+    target_include_directories(test-weight-loading PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-weight-loading PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-weight-loading PRIVATE "-fsycl")
+    install(TARGETS test-weight-loading RUNTIME)
+    add_test(NAME test-weight-loading COMMAND $<TARGET_FILE:test-weight-loading>)
 endif()
 
 # test-mxfp4-xmx-tiled: MXFP4 XMX tiled conversion unit test
@@ -1466,6 +1598,26 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-eviction-policy RUNTIME)
     add_test(NAME test-sycl-eviction-policy COMMAND $<TARGET_FILE:test-sycl-eviction-policy>)
 
+    # test-heat-aware-eviction: Tests for heat-aware eviction with priority scoring
+    # Part of unified memory management system (epic llama.cpp-6hp, task llama.cpp-6hp.12)
+    # Note: Header-only implementation - no separate .cpp file needed
+    add_executable(test-heat-aware-eviction test-heat-aware-eviction.cpp)
+    target_include_directories(test-heat-aware-eviction PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-heat-aware-eviction PRIVATE "-Wno-narrowing")
+    install(TARGETS test-heat-aware-eviction RUNTIME)
+    add_test(NAME test-heat-aware-eviction COMMAND $<TARGET_FILE:test-heat-aware-eviction>)
+
+    # test-memory-budget: Unit tests for MemoryBudget class
+    # Part of unified memory management system (epic llama.cpp-6hp, task llama.cpp-6hp.13)
+    # Tests memory pressure detection, tier allocation, and allocation tracking
+    add_executable(test-memory-budget test-memory-budget.cpp)
+    target_include_directories(test-memory-budget PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-memory-budget PRIVATE "-Wno-narrowing")
+    install(TARGETS test-memory-budget RUNTIME)
+    add_test(NAME test-memory-budget COMMAND $<TARGET_FILE:test-memory-budget>)
+
     # test-sycl-expert-prefetch: Tests for hybrid expert prefetching with sorted caching
     # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-eqa)
     # Note: Standalone test - does not require SYCL runtime, tests pure C++ logic only
@@ -1612,4 +1764,62 @@ if(GGML_SYCL)
     target_compile_options(test-sycl-prestage-routed-experts PRIVATE "-Wno-narrowing")
     install(TARGETS test-sycl-prestage-routed-experts RUNTIME)
     add_test(NAME test-sycl-prestage-routed-experts COMMAND $<TARGET_FILE:test-sycl-prestage-routed-experts>)
+
+    # test-cold-start: Hardware heuristics for cold-start kernel configuration
+    # Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.2)
+    # Tests GPU capability detection and initial config derivation for Arc A770/A750/B580
+    add_executable(test-cold-start test-cold-start.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/cold-start.cpp)
+    target_include_directories(test-cold-start PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-cold-start PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-cold-start PRIVATE "-fsycl")
+    install(TARGETS test-cold-start RUNTIME)
+    add_test(NAME test-cold-start COMMAND $<TARGET_FILE:test-cold-start>)
+    set_property(TEST test-cold-start PROPERTY LABELS "sycl;auto-tune")
+
+    # test-tuning-cache-io: JSON serialization/deserialization for tuning cache
+    # Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.3)
+    # Pure C++ test - no SYCL runtime required
+    add_executable(test-tuning-cache-io test-tuning-cache-io.cpp)
+    target_include_directories(test-tuning-cache-io PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-tuning-cache-io PRIVATE "-Wno-narrowing")
+    install(TARGETS test-tuning-cache-io RUNTIME)
+    add_test(NAME test-tuning-cache-io COMMAND $<TARGET_FILE:test-tuning-cache-io>)
+    set_property(TEST test-tuning-cache-io PROPERTY LABELS "sycl;auto-tune")
+
+    # test-prefetch-scheduler: Predictive weight prefetching scheduler
+    # Part of heat-aware memory management (epic llama.cpp-6hp, task llama.cpp-6hp.14)
+    # Header-only implementation - no SYCL runtime needed
+    add_executable(test-prefetch-scheduler test-prefetch-scheduler.cpp)
+    target_include_directories(test-prefetch-scheduler PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-prefetch-scheduler PRIVATE "-Wno-narrowing")
+    install(TARGETS test-prefetch-scheduler RUNTIME)
+    add_test(NAME test-prefetch-scheduler COMMAND $<TARGET_FILE:test-prefetch-scheduler>)
+    set_property(TEST test-prefetch-scheduler PROPERTY LABELS "sycl;memory")
+
+    # test-onednn-fallback: Unit tests for OneDNN fallback wrapper (primitive caching, M bucketing)
+    # Header-only test - no SYCL device code, just tests the C++ interface
+    add_executable(test-onednn-fallback test-onednn-fallback.cpp)
+    target_include_directories(test-onednn-fallback PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    install(TARGETS test-onednn-fallback RUNTIME)
+    add_test(NAME test-onednn-fallback COMMAND $<TARGET_FILE:test-onednn-fallback>)
+    set_property(TEST test-onednn-fallback PROPERTY LABELS "sycl;onednn")
+
+    # test-transfer-learning: Transfer learning manager for bootstrapping tuning caches
+    # Part of unified kernel auto-tuning (epic llama.cpp-a3t, task llama.cpp-6hp.10)
+    # Pure C++ test - no SYCL runtime required
+    add_executable(test-transfer-learning test-transfer-learning.cpp)
+    target_include_directories(test-transfer-learning PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-transfer-learning PRIVATE "-Wno-narrowing")
+    install(TARGETS test-transfer-learning RUNTIME)
+    add_test(NAME test-transfer-learning COMMAND $<TARGET_FILE:test-transfer-learning>)
+    set_property(TEST test-transfer-learning PROPERTY LABELS "sycl;auto-tune")
 endif()

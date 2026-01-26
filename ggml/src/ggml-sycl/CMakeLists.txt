@@ -504,4 +504,56 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;dispatch"
         TIMEOUT 120
     )
+
+    # Test 8: Unified Kernel Tests
+    # Tests the unified matmul kernel architecture with Q4_0 support
+    add_executable(test-unified-kernel
+        tests/test-unified-kernel.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-unified-kernel PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-unified-kernel PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-unified-kernel PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-unified-kernel PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-unified-kernel PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME unified-kernel COMMAND test-unified-kernel)
+    set_tests_properties(unified-kernel PROPERTIES
+        LABELS "sycl;unified;matmul"
+        TIMEOUT 180
+    )
+
+    # Test 9: XMX Compute Path Tests
+    # Tests the XMX dpas compute path using joint_matrix extensions
+    add_executable(test-xmx-compute
+        tests/test-xmx-compute.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-xmx-compute PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-compute PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-compute PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-compute PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-compute PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME xmx-compute COMMAND test-xmx-compute)
+    set_tests_properties(xmx-compute PROPERTIES
+        LABELS "sycl;xmx;unified;matmul"
+        TIMEOUT 300
+    )
 endif()

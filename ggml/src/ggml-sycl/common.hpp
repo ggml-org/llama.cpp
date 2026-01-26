@@ -527,10 +527,10 @@ struct layout_policy {
             return GGML_LAYOUT_AOS;
         }
 
-        // Attention/FFN weights: COALESCED for decode (batch=1 MMVQ)
+        // Attention/FFN weights: SOA for better TG (batch>1) performance
         if (usage == tensor_usage::ATTENTION_WEIGHT || usage == tensor_usage::FFN_WEIGHT) {
             if (qtype == GGML_TYPE_Q4_0 || qtype == GGML_TYPE_Q8_0 || qtype == GGML_TYPE_Q6_K) {
-                return GGML_LAYOUT_COALESCED;
+                return GGML_LAYOUT_SOA;  // SOA for better TG performance
             }
         }
 

@@ -3561,7 +3561,12 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     int64_t layout_rows = src0->ne[1];
     int64_t layout_row_low = 0;
 
-    const bool allow_layout = (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K);
+    // COALESCED layout is optimized for MMVQ (multiple queries) not DMMV (batch=1).
+    // Default to AOS for better single-row performance (~5x faster).
+    // Enable with GGML_SYCL_DMMV_USE_COALESCED=1 to use cached layout.
+    static const bool allow_coalesced_dmmv = (std::getenv("GGML_SYCL_DMMV_USE_COALESCED") != nullptr);
+    const bool allow_layout = allow_coalesced_dmmv &&
+                              (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K);
     if (allow_layout && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
         layout = mode;
         storage = get_storage_tensor(src0);

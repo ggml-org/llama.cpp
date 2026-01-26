@@ -15,6 +15,7 @@
 #include "ccl-comm.hpp"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+#include "unified-cache.hpp"
 
 #include <cstdlib>
 #include <mutex>
@@ -145,7 +146,7 @@ static void ggml_sycl_init_tp_shared_context() {
 }
 
 // Get shared context for TP mode
-// Returns nullptr if not in TP mode
+// Returns nullptr if not 
 sycl::context * ggml_sycl_get_tp_context() {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return nullptr;
@@ -161,8 +162,8 @@ sycl::context * ggml_sycl_get_tp_context() {
     return g_tp_shared_context;
 }
 
-// Get shared-context queue for a device in TP mode
-// Returns nullptr if not in TP mode or device not part of TP
+// Get shared-context queue for a device 
+// Returns nullptr if not  or device not part of TP
 sycl::queue * ggml_sycl_get_tp_queue(int device) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return nullptr;
@@ -200,17 +201,42 @@ struct StagedBuffer {
 static std::unordered_map<const void *, StagedBuffer> g_tp_staging_cache;
 static std::mutex                                     g_tp_staging_mutex;
 
-// Get or create a staged copy of mmap'd data for a specific device in TP mode
-// Returns nullptr if not in TP mode or data is already USM
+// Runtime staging cache for single-GPU mode (non-weight data like positions, masks)
+struct RuntimeStagedData {
+    void * ptr;   // Pinned memory pointer
+    size_t size;
+};
+static std::unordered_map<const void *, RuntimeStagedData> g_runtime_staging_cache;
+static std::mutex                                          g_runtime_staging_mutex;
+
+// Get or create a staged copy of mmap'd data for a specific device 
+// Works in both TP mode and single-GPU mode (via host cache pinned memory)
 void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device) {
+    if (src == nullptr || size == 0) {
+        return nullptr;
+    }
+
+    // Single-GPU mode: Stage through host cache's pinned memory pool
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
+        if (ggml_sycl::unified_cache_enabled()) {
+            std::lock_guard<std::mutex> lock(g_runtime_staging_mutex);
+            auto it = g_runtime_staging_cache.find(src);
+            if (it != g_runtime_staging_cache.end() && it->second.size >= size) {
+                return it->second.ptr;
+            }
+            if (auto * host = ggml_sycl::get_host_cache_for_device(device)) {
+                void * pinned = host->allocate_pinned_runtime(size, 64);
+                if (pinned) {
+                    std::memcpy(pinned, src, size);
+                    g_runtime_staging_cache[src] = { pinned, size };
+                    return pinned;
+                }
+            }
+        }
         return nullptr;
     }
     // Multi-process mode: No cross-device staging needed (each process has its own data)
     if (g_sycl_tp_config.is_multiprocess) {
-        return nullptr;
-    }
-    if (src == nullptr || size == 0) {
         return nullptr;
     }
 
