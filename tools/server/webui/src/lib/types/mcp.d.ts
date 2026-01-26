@@ -181,7 +181,6 @@ export type MCPServerConfig = {
 	handshakeTimeoutMs?: number;
 	requestTimeoutMs?: number;
 	capabilities?: ClientCapabilities;
-	sessionId?: string;
 };
 
 export type MCPClientConfig = {
