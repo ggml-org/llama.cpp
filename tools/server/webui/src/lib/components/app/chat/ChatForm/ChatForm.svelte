@@ -26,14 +26,19 @@
 	import { onMount } from 'svelte';
 
 	interface Props {
+		// Data
 		attachments?: DatabaseMessageExtra[];
+		uploadedFiles?: ChatUploadedFile[];
+		value?: string;
+
+		// UI State
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
-		uploadedFiles?: ChatUploadedFile[];
-		value?: string;
+
+		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
 		onFilesAdd?: (files: File[]) => void;
 		onStop?: () => void;
@@ -63,23 +68,49 @@
 		onValueChange
 	}: Props = $props();
 
+	/**
+	 *
+	 *
+	 * STATE
+	 *
+	 *
+	 */
+
+	// Component References
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let currentConfig = $derived(config());
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
-	let isRecording = $state(false);
 	let promptPickerRef: ChatFormPromptPicker | undefined = $state(undefined);
-	let isPromptPickerOpen = $state(false);
-	let promptSearchQuery = $state('');
-	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
-	let isRouter = $derived(isRouterMode());
+	// Audio Recording State
+	let isRecording = $state(false);
+	let recordingSupported = $state(false);
 
+	// Prompt Picker State
+	let isPromptPickerOpen = $state(false);
+	let promptSearchQuery = $state('');
+
+	/**
+	 *
+	 *
+	 * DERIVED STATE
+	 *
+	 *
+	 */
+
+	// Configuration
+	let currentConfig = $derived(config());
+	let pasteLongTextToFileLength = $derived.by(() => {
+		const n = Number(currentConfig.pasteLongTextToFileLen);
+		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
+	});
+
+	// Model Selection Logic
+	let isRouter = $derived(isRouterMode());
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
 	);
-
 	let activeModelId = $derived.by(() => {
 		const options = modelOptions();
 
@@ -101,12 +132,7 @@
 		return null;
 	});
 
-	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
-
-		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
-	});
-
+	// Form Validation State
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
@@ -114,11 +140,19 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
+	/**
+	 *
+	 *
+	 * PUBLIC API
+	 *
+	 *
+	 */
+
 	export function focus() {
 		textareaRef?.focus();
 	}
 
-	export function resetHeight() {
+	export function resetTextareaHeight() {
 		textareaRef?.resetHeight();
 	}
 
@@ -126,6 +160,10 @@
 		chatFormActionsRef?.openModelSelector();
 	}
 
+	/**
+	 * Check if a model is selected, open selector if not
+	 * @returns true if model is selected, false otherwise
+	 */
 	export function checkModelSelected(): boolean {
 		if (!hasModelSelected) {
 			chatFormActionsRef?.openModelSelector();
@@ -134,6 +172,14 @@
 		return true;
 	}
 
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - File Management
+	 *
+	 *
+	 */
+
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
 	}
@@ -141,6 +187,25 @@
 	function handleFileUpload() {
 		fileInputRef?.click();
 	}
+
+	function handleFileRemove(fileId: string) {
+		if (fileId.startsWith('attachment-')) {
+			const index = parseInt(fileId.replace('attachment-', ''), 10);
+			if (!isNaN(index) && index >= 0 && index < attachments.length) {
+				onAttachmentRemove?.(index);
+			}
+		} else {
+			onUploadedFileRemove?.(fileId);
+		}
+	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Input & Keyboard
+	 *
+	 *
+	 */
 
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -174,6 +239,70 @@
 			onSubmit?.();
 		}
 	}
+
+	function handlePaste(event: ClipboardEvent) {
+		if (!event.clipboardData) return;
+
+		const files = Array.from(event.clipboardData.items)
+			.filter((item) => item.kind === 'file')
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+
+		if (files.length > 0) {
+			event.preventDefault();
+			onFilesAdd?.(files);
+			return;
+		}
+
+		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
+
+		if (text.startsWith('"')) {
+			const parsed = parseClipboardContent(text);
+
+			if (parsed.textAttachments.length > 0) {
+				event.preventDefault();
+				value = parsed.message;
+				onValueChange?.(parsed.message);
+
+				const attachmentFiles = parsed.textAttachments.map(
+					(att) =>
+						new File([att.content], att.name, {
+							type: MimeTypeText.PLAIN
+						})
+				);
+
+				onFilesAdd?.(attachmentFiles);
+
+				setTimeout(() => {
+					textareaRef?.focus();
+				}, 10);
+
+				return;
+			}
+		}
+
+		if (
+			text.length > 0 &&
+			pasteLongTextToFileLength > 0 &&
+			text.length > pasteLongTextToFileLength
+		) {
+			event.preventDefault();
+
+			const textFile = new File([text], 'Pasted', {
+				type: MimeTypeText.PLAIN
+			});
+
+			onFilesAdd?.([textFile]);
+		}
+	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Prompt Picker
+	 *
+	 *
+	 */
 
 	function handlePromptLoadStart(
 		placeholderId: string,
@@ -246,72 +375,13 @@
 		textareaRef?.focus();
 	}
 
-	function handleFileRemove(fileId: string) {
-		if (fileId.startsWith('attachment-')) {
-			const index = parseInt(fileId.replace('attachment-', ''), 10);
-			if (!isNaN(index) && index >= 0 && index < attachments.length) {
-				onAttachmentRemove?.(index);
-			}
-		} else {
-			onUploadedFileRemove?.(fileId);
-		}
-	}
-
-	function handlePaste(event: ClipboardEvent) {
-		if (!event.clipboardData) return;
-
-		const files = Array.from(event.clipboardData.items)
-			.filter((item) => item.kind === 'file')
-			.map((item) => item.getAsFile())
-			.filter((file): file is File => file !== null);
-
-		if (files.length > 0) {
-			event.preventDefault();
-			onFilesAdd?.(files);
-			return;
-		}
-
-		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
-
-		if (text.startsWith('"')) {
-			const parsed = parseClipboardContent(text);
-
-			if (parsed.textAttachments.length > 0) {
-				event.preventDefault();
-				value = parsed.message;
-				onValueChange?.(parsed.message);
-
-				const attachmentFiles = parsed.textAttachments.map(
-					(att) =>
-						new File([att.content], att.name, {
-							type: MimeTypeText.PLAIN
-						})
-				);
-
-				onFilesAdd?.(attachmentFiles);
-
-				setTimeout(() => {
-					textareaRef?.focus();
-				}, 10);
-
-				return;
-			}
-		}
-
-		if (
-			text.length > 0 &&
-			pasteLongTextToFileLength > 0 &&
-			text.length > pasteLongTextToFileLength
-		) {
-			event.preventDefault();
-
-			const textFile = new File([text], 'Pasted', {
-				type: MimeTypeText.PLAIN
-			});
-
-			onFilesAdd?.([textFile]);
-		}
-	}
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Audio Recording
+	 *
+	 *
+	 */
 
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
@@ -340,6 +410,14 @@
 			}
 		}
 	}
+
+	/**
+	 *
+	 *
+	 * LIFECYCLE
+	 *
+	 *
+	 */
 
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();

@@ -31,7 +31,7 @@
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
-	let inputAreaRef: ChatForm | undefined = $state(undefined);
+	let chatFormRef: ChatForm | undefined = $state(undefined);
 	let message = $state(initialMessage);
 	let previousIsLoading = $state(isLoading);
 	let previousInitialMessage = $state(initialMessage);
@@ -59,7 +59,7 @@
 		)
 			return;
 
-		if (!inputAreaRef?.checkModelSelected()) return;
+		if (!chatFormRef?.checkModelSelected()) return;
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
@@ -67,7 +67,7 @@
 		message = '';
 		uploadedFiles = [];
 
-		inputAreaRef?.resetHeight();
+		chatFormRef?.resetTextareaHeight();
 
 		const success = await onSend?.(messageToSend, filesToSend);
 
@@ -86,16 +86,16 @@
 	}
 
 	onMount(() => {
-		setTimeout(() => inputAreaRef?.focus(), 10);
+		setTimeout(() => chatFormRef?.focus(), 10);
 	});
 
 	afterNavigate(() => {
-		setTimeout(() => inputAreaRef?.focus(), 10);
+		setTimeout(() => chatFormRef?.focus(), 10);
 	});
 
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			setTimeout(() => inputAreaRef?.focus(), 10);
+			setTimeout(() => chatFormRef?.focus(), 10);
 		}
 
 		previousIsLoading = isLoading;
@@ -104,7 +104,7 @@
 
 <div class="relative mx-auto max-w-[48rem]">
 	<ChatForm
-		bind:this={inputAreaRef}
+		bind:this={chatFormRef}
 		bind:value={message}
 		bind:uploadedFiles
 		class={className}

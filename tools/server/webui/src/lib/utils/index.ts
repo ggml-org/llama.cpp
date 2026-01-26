@@ -116,3 +116,6 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 
 // Favicon utilities
 export { getFaviconUrl } from './favicon';
+
+// Agentic content parsing utilities
+export { parseAgenticContent, type AgenticSection } from './agentic';
