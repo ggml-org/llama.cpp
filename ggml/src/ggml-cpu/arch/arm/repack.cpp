@@ -805,7 +805,7 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+#if 0 && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
     const uint8x16_t mone      = vdupq_n_u8(1);
