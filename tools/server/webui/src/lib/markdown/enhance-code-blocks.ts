@@ -107,7 +107,7 @@ function createScrollContainer(preElement: Element): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: [CODE_BLOCK_SCROLL_CONTAINER_CLASS] },
+		properties: { className: ['code-block-scroll-container'] },
 		children: [preElement]
 	};
 }
@@ -116,7 +116,7 @@ function createWrapper(header: Element, preElement: Element): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: [CODE_BLOCK_WRAPPER_CLASS, RELATIVE_CLASS] },
+		properties: { className: ['code-block-wrapper', 'relative'] },
 		children: [header, createScrollContainer(preElement)]
 	};
 }
