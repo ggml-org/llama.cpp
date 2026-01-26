@@ -1443,6 +1443,27 @@ static void test_hasher(testing & t) {
         }
     });
 
+    t.test("property: update(a ~ b) == update(a).update(b) with more update passes", [](testing & t) {
+        static const std::vector<size_t> sizes = {3, 732, 131, 13, 17, 256, 436, 99, 4};
+
+        jinja::hasher hasher1;
+        jinja::hasher hasher2;
+
+        std::string combined_data;
+        for (size_t size : sizes) {
+            std::string data = random_bytes(size);
+            hasher1.update(data);
+            combined_data += data;
+        }
+
+        hasher2.update(combined_data);
+        size_t hash1 = hasher1.digest();
+        size_t hash2 = hasher2.digest();
+        t.assert_true(
+            "Hashing in multiple updates should match single update with many chunks",
+            hash1 == hash2);
+    });
+
     t.test("property: non associativity of update", [](testing & t) {
         for (const auto & [size1, size2] : chunk_sizes) {
             std::string data1 = random_bytes(size1);
