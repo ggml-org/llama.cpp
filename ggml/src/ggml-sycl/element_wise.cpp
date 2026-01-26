@@ -125,11 +125,11 @@ static __dpct_inline__ T op_log(T x) {
 
 template<typename T>
 static __dpct_inline__ T op_softplus(T x) {
-    const T threshold = static_cast<T>(20);
-    if (x > threshold) {
-        return x;
-    }
-    return sycl::log(static_cast<T>(1) + sycl::exp(x));
+    const float xf = (float) x;
+    const float ax = sycl::fabs(xf);
+    const float m  = sycl::fmax(xf, 0.0f);
+    const float y  = m + sycl::log1p(sycl::exp(-ax));
+    return (T) y;
 }
 
 template<typename T>
