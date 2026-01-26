@@ -17,23 +17,14 @@
 	import type { Component } from 'svelte';
 
 	interface Props {
-		/** Whether the card is expanded */
 		open?: boolean;
-		/** CSS class for the root element */
 		class?: string;
-		/** Icon component to display */
 		icon?: Component;
-		/** Custom icon class (for animations like spin) */
 		iconClass?: string;
-		/** Title text */
 		title: string;
-		/** Optional subtitle/status text */
 		subtitle?: string;
-		/** Whether content is currently streaming (enables auto-scroll) */
 		isStreaming?: boolean;
-		/** Optional click handler for the trigger */
 		onToggle?: () => void;
-		/** Content to display in the collapsible section */
 		children: Snippet;
 	}
 

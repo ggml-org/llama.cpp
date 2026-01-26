@@ -41,6 +41,7 @@
 				</span>
 			{/if}
 		</div>
+
 		{#if prompt.description}
 			<p class="mt-1 text-sm text-muted-foreground">
 				{prompt.description}
