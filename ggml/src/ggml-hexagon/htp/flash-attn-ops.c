@@ -71,6 +71,75 @@ static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict 
     hvx_vec_store_u(r, 4, rsum);
 }
 
+// Dot product of FP32 and FP16 vectors, accumulating to float
+static inline void hvx_dot_f32_f16_aa_rx2(float * restrict r,
+                                          const void * restrict y,
+                                          const void * restrict x0,
+                                          const void * restrict x1,
+                                          unsigned int n,
+                                          float        s) {
+    const HVX_Vector * restrict vy  = (const HVX_Vector * restrict) y;   // fp32
+    const HVX_Vector * restrict vx0 = (const HVX_Vector * restrict) x0;  // fp16
+    const HVX_Vector * restrict vx1 = (const HVX_Vector * restrict) x1;  // fp16
+
+    uint32_t nvec = n / VLEN_FP16;                                       // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16;                                       // leftover elements
+
+    const HVX_Vector zero  = Q6_V_vsplat_R(0);
+    HVX_Vector       rsum0 = Q6_V_vsplat_R(0);
+    HVX_Vector       rsum1 = Q6_V_vsplat_R(0);
+
+    uint32_t i = 0;
+
+#pragma unroll(2)
+    for (i = 0; i < nvec; i++) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 0], zero);  // 32 elements
+        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 1], zero);  // 32 elements
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+
+        // Load x (fp16)
+        HVX_Vector x0_hf = vx0[i];
+        HVX_Vector x1_hf = vx1[i];
+
+        HVX_VectorPair xy0_qf = Q6_Wqf32_vmpy_VhfVhf(x0_hf, y_hf);
+        HVX_VectorPair xy1_qf = Q6_Wqf32_vmpy_VhfVhf(x1_hf, y_hf);
+
+        rsum0 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum0, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy0_qf), Q6_V_hi_W(xy0_qf)));
+        rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
+    }
+
+    if (nloe) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 0], zero);  // 32 elements
+        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 1], zero);  // 32 elements
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+
+        // Load x (fp16)
+        HVX_Vector x0_hf = vx0[i];
+        HVX_Vector x1_hf = vx1[i];
+
+        // Zero-out unused elements
+        // Note that we need to clear both x and y because they may contain NANs
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
+        x0_hf                = Q6_V_vand_QV(bmask, x0_hf);
+        x1_hf                = Q6_V_vand_QV(bmask, x1_hf);
+        y_hf                 = Q6_V_vand_QV(bmask, y_hf);
+
+        HVX_VectorPair xy0_qf = Q6_Wqf32_vmpy_VhfVhf(x0_hf, y_hf);
+        HVX_VectorPair xy1_qf = Q6_Wqf32_vmpy_VhfVhf(x1_hf, y_hf);
+
+        rsum0 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum0, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy0_qf), Q6_V_hi_W(xy0_qf)));
+        rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
+    }
+
+    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(rsum0, rsum1);
+    rsum            = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_f32(s));
+    rsum            = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+
+    hvx_vec_store_u(r, 4, rsum);
+}
+
 // Dot product of two F16 vectors, accumulating to float
 static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict x, const void * restrict y, unsigned int n, float s) {
     const HVX_Vector * restrict vx = (const HVX_Vector * restrict) x; // fp16
