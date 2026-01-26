@@ -49,6 +49,7 @@ static std::string fmt_error_with_source(const std::string & tag, const std::str
 
 // FNV-1a hash function that takes initial seed hash
 // No need to worry about the whole hash_combine drama
+// NOTE: **Never** pass a seed that is not a hash value originating from this function
 static constexpr auto size_t_digits = std::numeric_limits<size_t>::digits;
 static_assert(size_t_digits == 64 || size_t_digits == 32);
 

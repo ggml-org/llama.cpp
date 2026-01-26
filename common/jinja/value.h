@@ -218,9 +218,11 @@ struct value_int_t : public value_t {
     virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
     virtual size_t unique_hash() const noexcept override {
+        const auto type_hash = typeid(*this).hash_code();
         return hash_bytes(
-            type().data(), type().size(),
-            as_repr().data(), as_repr().size()
+            &type_hash, sizeof(type_hash),
+            &val_int, sizeof(val_int),
+            &val_flt, sizeof(val_flt)
         );
     }
 protected:
@@ -228,7 +230,7 @@ protected:
         return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
     }
     virtual bool nonequal(const value_t & other) const override {
-        return !(type() == other.type() && val_int == other.val_int);
+        return !(typeid(*this) == typeid(other) && val_int == other.val_int);
     }
 };
 using value_int = std::shared_ptr<value_int_t>;
@@ -260,9 +262,11 @@ struct value_float_t : public value_t {
         if (static_cast<double>(val_int) == val_flt) {
             return val->unique_hash();
         } else {
+            const auto type_hash = typeid(*this).hash_code();
             return hash_bytes(
-                type().data(), type().size(),
-                as_repr().data(), as_repr().size()
+                &type_hash, sizeof(type_hash),
+                &val_int, sizeof(val_int),
+                &val_flt, sizeof(val_flt)
             );
         }
     }
@@ -271,7 +275,7 @@ protected:
         return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
     }
     virtual bool nonequal(const value_t & other) const override {
-        return !(type() == other.type() && val_flt == other.val_flt);
+        return !(typeid(*this) == typeid(other) && val_flt == other.val_flt);
     }
 };
 using value_float = std::shared_ptr<value_float_t>;
@@ -296,17 +300,17 @@ struct value_string_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
     virtual size_t unique_hash() const noexcept override {
-        return hash_bytes(
-            type().data(), type().size(),
-            as_string().str().data(), as_string().str().size()
-        );
+        const auto type_hash = typeid(*this).hash_code();
+        return val_str.hash(hash_bytes(
+            &type_hash, sizeof(type_hash)
+        ));
     }
     void mark_input() {
         val_str.mark_input();
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return type() == other.type() && val_str.str() == other.val_str.str();
+        return typeid(*this) == typeid(other) && val_str.str() == other.val_str.str();
     }
 };
 using value_string = std::shared_ptr<value_string_t>;
@@ -334,7 +338,7 @@ protected:
         return other.is_numeric() && val_int == other.val_int && val_flt == other.val_flt;
     }
     virtual bool nonequal(const value_t & other) const override {
-        return !(type() == other.type() && val_int == other.val_int);
+        return !(typeid(*this) == typeid(other) && val_int == other.val_int);
     }
 };
 using value_bool = std::shared_ptr<value_bool_t>;
@@ -432,14 +436,21 @@ struct value_array_t : public value_t {
         return false;
     }
     virtual size_t unique_hash() const noexcept override {
-        return hash_bytes(
-            type().data(), type().size(),
-            as_repr().data(), as_repr().size()
+        const auto type_hash = typeid(*this).hash_code();
+        size_t hash = hash_bytes(
+            &type_hash, sizeof(type_hash)
         );
+        for (const auto & val : val_arr) {
+            const size_t val_hash = val->unique_hash();
+            hash = hash_bytes(hash,
+                &val_hash, sizeof(val_hash)
+            );
+        }
+        return hash;
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return type() == other.type() && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.val_arr.begin(), value_equivalence());
+        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.val_arr.begin(), value_equivalence());
     }
 };
 using value_array = std::shared_ptr<value_array_t>;
@@ -562,14 +573,23 @@ struct value_object_t : public value_t {
             return false;
     }
     virtual size_t unique_hash() const noexcept override {
-        return hash_bytes(
-            type().data(), type().size(),
-            as_repr().data(), as_repr().size()
+        const auto type_hash = typeid(*this).hash_code();
+        size_t hash = hash_bytes(
+            &type_hash, sizeof(type_hash)
         );
+        for (const auto & [key, val] : val_obj) {
+            const size_t key_hash = key->unique_hash();
+            const size_t val_hash = val->unique_hash();
+            hash = hash_bytes(hash,
+                &key_hash, sizeof(key_hash),
+                &val_hash, sizeof(val_hash)
+            );
+        }
+        return hash;
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return type() == other.type() && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.val_obj.begin(), value_equivalence());
+        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.val_obj.begin(), value_equivalence());
     }
 };
 using value_object = std::shared_ptr<value_object_t>;
@@ -587,13 +607,14 @@ struct value_none_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
     virtual size_t unique_hash() const noexcept override {
+        const auto type_hash = typeid(*this).hash_code();
         return hash_bytes(
-            type().data(), type().size()
+            &type_hash, sizeof(type_hash)
         );
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return type() == other.type();
+        return typeid(*this) == typeid(other);
     }
 };
 using value_none = std::shared_ptr<value_none_t>;
@@ -607,8 +628,9 @@ struct value_undefined_t : public value_t {
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
     virtual size_t unique_hash() const noexcept override {
+        const auto type_hash = typeid(*this).hash_code();
         return hash_bytes(
-            type().data(), type().size()
+            &type_hash, sizeof(type_hash)
         );
     }
 protected:
@@ -698,14 +720,30 @@ struct value_func_t : public value_t {
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
     virtual bool is_hashable() const override { return true; }
     virtual size_t unique_hash() const noexcept override {
-        return hash_bytes(
-            as_repr().data(), as_repr().size()
-        );
+        const auto type_hash = typeid(*this).hash_code();
+        const auto target_type_hash = val_func.target_type().hash_code();
+        const auto target = val_func.target<value(const func_args &)>();
+        const auto target_hash = target ? typeid(*target).hash_code() : 0;
+        size_t hash;
+        if (arg0) {
+            hash = hash_bytes(arg0->unique_hash(),
+                &type_hash, sizeof(type_hash),
+                &target_type_hash, sizeof(target_type_hash),
+                &target_hash, sizeof(target_hash)
+            );
+        } else {
+            hash = hash_bytes(
+                &type_hash, sizeof(type_hash),
+                &target_type_hash, sizeof(target_type_hash),
+                &target_hash, sizeof(target_hash)
+            );
+        }
+        return hash;
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
         const value_func_t & other_val = static_cast<const value_func_t &>(other);
-        return type() == other.type() && val_func.target_type() == other.val_func.target_type() && val_func.target<value(const func_args &)>() == other.val_func.target<value(const func_args &)>() && typeid(*this) == typeid(other) && arg0 == other_val.arg0;
+        return typeid(*this) == typeid(other) && val_func.target_type() == other.val_func.target_type() && val_func.target<value(const func_args &)>() == other.val_func.target<value(const func_args &)>() && arg0 == other_val.arg0;
     }
 };
 using value_func = std::shared_ptr<value_func_t>;
@@ -719,16 +757,16 @@ struct value_kwarg_t : public value_t {
     virtual std::string as_repr() const override { return type(); }
     virtual bool is_hashable() const override { return true; }
     virtual size_t unique_hash() const noexcept override {
-        return hash_bytes(
-            type().data(), type().size(),
-            key.data(), key.size(),
-            val->as_repr().data(), val->as_repr().size()
+        const auto type_hash = typeid(*this).hash_code();
+        return hash_bytes(val->unique_hash(),
+            &type_hash, sizeof(type_hash),
+            key.data(), key.size()
         );
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
         const value_kwarg_t & other_val = static_cast<const value_kwarg_t &>(other);
-        return type() == other.type() && typeid(*this) == typeid(other) && key == other_val.key && val == other_val.val;
+        return typeid(*this) == typeid(other) && key == other_val.key && val == other_val.val;
     }
 };
 using value_kwarg = std::shared_ptr<value_kwarg_t>;
