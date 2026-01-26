@@ -705,7 +705,7 @@ void ggml_gemv_q5_K_8x8_q8_K_generic(int                        n,
 
 
 void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    constexpr int qk                = QK_K;
+    constexpr int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
     const int blocklen = 8;
@@ -2265,8 +2265,8 @@ static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q6_Kx8 * dst = (block_q6_Kx8*)t->data;
-    const block_q6_K * src = (const block_q6_K*) data;
+    block_q6_Kx8 * dst = (block_q6_Kx8 *)t->data;
+    const block_q6_K * src = (const block_q6_K *) data;
     block_q6_K dst_tmp[8];
     int nrow = ggml_nrows(t);
     int nblocks = t->ne[0] / QK_K;
