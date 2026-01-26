@@ -33,7 +33,7 @@ cmake -B build
 cmake --build build --target llama-agent
 
 # Run (downloads model automatically)
-./build/bin/llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
+./build/bin/llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
 
 # Or with a local model
 ./build/bin/llama-agent -m model.gguf
@@ -48,7 +48,7 @@ cmake -B build -DLLAMA_HTTPLIB=ON
 cmake --build build --target llama-agent-server
 
 # Run API server
-./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M --port 8081
+./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL --port 8081
 ```
 
 </details>
@@ -65,7 +65,7 @@ echo "export PATH=\"\$PATH:$(pwd)/build/bin\"" >> ~/.bashrc
 
 # Open a new terminal, then run from anywhere
 cd /path/to/your/project
-llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
+llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL
 ```
 
 </details>
@@ -76,7 +76,7 @@ llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M
 
 | Model | Command |
 |-------|---------|
-| GLM-4.7-Flash | `-hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M` |
+| GLM-4.7-Flash | `-hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL` |
 
 <details>
 <summary><strong>Optimized settings for GLM-4.7-Flash</strong></summary>
@@ -451,7 +451,7 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 # Build & run
 cmake -B build -DLLAMA_HTTPLIB=ON
 cmake --build build --target llama-agent-server
-./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:Q4_K_M --port 8081
+./build/bin/llama-agent-server -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL --port 8081
 ```
 
 ### Basic Usage
