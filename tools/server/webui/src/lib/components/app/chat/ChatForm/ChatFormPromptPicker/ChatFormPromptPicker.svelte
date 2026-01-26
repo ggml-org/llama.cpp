@@ -2,11 +2,13 @@
 	import { mcpClient } from '$lib/clients/mcp.client';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl, debounce } from '$lib/utils';
+	import { debounce } from '$lib/utils';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { fly } from 'svelte/transition';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { SearchInput } from '$lib/components/app';
+	import ChatFormPromptPickerList from './ChatFormPromptPickerList.svelte';
+	import ChatFormPromptPickerHeader from './ChatFormPromptPickerHeader.svelte';
+	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
 
 	interface Props {
 		class?: string;
@@ -237,6 +239,18 @@
 		}, 150);
 	}
 
+	function handleArgFocus(argName: string) {
+		if ((suggestions[argName]?.length ?? 0) > 0) {
+			activeAutocomplete = argName;
+		}
+	}
+
+	function handleCancelArgumentForm() {
+		selectedPrompt = null;
+		promptArgs = {};
+		promptError = null;
+	}
+
 	export function handleKeydown(event: KeyboardEvent): boolean {
 		if (!isOpen) return false;
 
@@ -316,202 +330,39 @@
 		<div class="overflow-hidden rounded-xl border border-border/50 bg-popover shadow-xl">
 			{#if selectedPrompt}
 				{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
-				{@const faviconUrl = server ? getFaviconUrl(server.url) : null}
+				{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
 
 				<div class="p-4">
-					<div class="flex items-start gap-3">
-						{#if faviconUrl}
-							<img
-								src={faviconUrl}
-								alt=""
-								class="mt-0.5 h-5 w-5 shrink-0 rounded"
-								onerror={(e) => {
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
-								}}
-							/>
-						{/if}
+					<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
 
-						<div class="min-w-0 flex-1">
-							<div class="text-xs text-muted-foreground">
-								{server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
-							</div>
-
-							<div class="flex items-center gap-2">
-								<span class="font-medium">
-									{selectedPrompt.title || selectedPrompt.name}
-								</span>
-
-								{#if selectedPrompt.arguments?.length}
-									<span class="rounded-full bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-										{selectedPrompt.arguments.length} arg{selectedPrompt.arguments.length > 1
-											? 's'
-											: ''}
-									</span>
-								{/if}
-							</div>
-							{#if selectedPrompt.description}
-								<p class="mt-1 text-sm text-muted-foreground">
-									{selectedPrompt.description}
-								</p>
-							{/if}
-						</div>
-					</div>
-
-					<form onsubmit={handleArgumentSubmit} class="space-y-3 pt-4">
-						{#each selectedPrompt.arguments ?? [] as arg (arg.name)}
-							<div class="relative grid gap-1">
-								<label
-									for="arg-{arg.name}"
-									class="mb-1 flex items-center gap-2 text-sm text-muted-foreground"
-								>
-									<span>
-										{arg.name}
-										{#if arg.required}<span class="text-destructive">*</span>{/if}
-									</span>
-									{#if loadingSuggestions[arg.name]}
-										<span class="text-xs text-muted-foreground/50">...</span>
-									{/if}
-								</label>
-
-								<input
-									id="arg-{arg.name}"
-									type="text"
-									value={promptArgs[arg.name] ?? ''}
-									oninput={(e) => handleArgInput(arg.name, e.currentTarget.value)}
-									onkeydown={(e) => handleArgKeydown(e, arg.name)}
-									onblur={() => handleArgBlur(arg.name)}
-									onfocus={() => {
-										if ((suggestions[arg.name]?.length ?? 0) > 0) {
-											activeAutocomplete = arg.name;
-										}
-									}}
-									placeholder={arg.description || arg.name}
-									required={arg.required}
-									autocomplete="off"
-									class="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm focus:border-primary focus:outline-none"
-								/>
-
-								{#if activeAutocomplete === arg.name && (suggestions[arg.name]?.length ?? 0) > 0}
-									<div
-										class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
-										transition:fly={{ y: -5, duration: 100 }}
-									>
-										{#each suggestions[arg.name] ?? [] as suggestion, i (suggestion)}
-											<button
-												type="button"
-												onmousedown={() => selectSuggestion(arg.name, suggestion)}
-												class="w-full px-3 py-1.5 text-left text-sm hover:bg-accent {i ===
-												autocompleteIndex
-													? 'bg-accent'
-													: ''}"
-											>
-												{suggestion}
-											</button>
-										{/each}
-									</div>
-								{/if}
-							</div>
-						{/each}
-
-						{#if promptError}
-							<div
-								class="flex items-start gap-2 rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-								role="alert"
-							>
-								<span class="shrink-0">⚠</span>
-								<span>{promptError}</span>
-							</div>
-						{/if}
-
-						<div class="flex justify-end gap-2">
-							<button
-								type="button"
-								onclick={() => {
-									selectedPrompt = null;
-									promptArgs = {};
-									promptError = null;
-								}}
-								class="rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent"
-							>
-								Cancel
-							</button>
-
-							<button
-								type="submit"
-								class="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
-							>
-								Use Prompt
-							</button>
-						</div>
-					</form>
+					<ChatFormPromptPickerArgumentForm
+						prompt={selectedPrompt}
+						{promptArgs}
+						{suggestions}
+						{loadingSuggestions}
+						{activeAutocomplete}
+						{autocompleteIndex}
+						{promptError}
+						onArgInput={handleArgInput}
+						onArgKeydown={handleArgKeydown}
+						onArgBlur={handleArgBlur}
+						onArgFocus={handleArgFocus}
+						onSelectSuggestion={selectSuggestion}
+						onSubmit={handleArgumentSubmit}
+						onCancel={handleCancelArgumentForm}
+					/>
 				</div>
 			{:else}
-				<div>
-					{#if showSearchInput}
-						<div class="p-2 pb-0">
-							<SearchInput placeholder="Search prompts..." bind:value={internalSearchQuery} />
-						</div>
-					{/if}
-
-					<div class="max-h-64 overflow-y-auto p-2">
-						{#if isLoading}
-							<div class="flex items-center justify-center py-6 text-sm text-muted-foreground">
-								Loading prompts...
-							</div>
-						{:else if filteredPrompts.length === 0}
-							<div class="py-6 text-center text-sm text-muted-foreground">
-								{prompts.length === 0 ? 'No MCP prompts available' : 'No prompts found'}
-							</div>
-						{:else}
-							{#each filteredPrompts as prompt, index (prompt.serverName + ':' + prompt.name)}
-								{@const server = serverSettingsMap.get(prompt.serverName)}
-								{@const faviconUrl = server ? getFaviconUrl(server.url) : null}
-
-								<button
-									type="button"
-									onclick={() => handlePromptClick(prompt)}
-									class="flex w-full cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-accent {index ===
-									selectedIndex
-										? 'bg-accent'
-										: ''}"
-								>
-									<div class="min-w-0 flex-1">
-										<div class="mb-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-											{#if faviconUrl}
-												<img
-													src={faviconUrl}
-													alt=""
-													class="h-3 w-3 shrink-0 rounded-sm"
-													onerror={(e) => {
-														(e.currentTarget as HTMLImageElement).style.display = 'none';
-													}}
-												/>
-											{/if}
-
-											<span>{server ? mcpStore.getServerLabel(server) : prompt.serverName}</span>
-										</div>
-
-										<div class="flex items-center gap-2">
-											<span class="font-medium">{prompt.title || prompt.name}</span>
-
-											{#if prompt.arguments && prompt.arguments.length > 0}
-												<span class="text-xs text-muted-foreground">
-													({prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''})
-												</span>
-											{/if}
-										</div>
-
-										{#if prompt.description}
-											<p class="truncate text-sm text-muted-foreground">
-												{prompt.description}
-											</p>
-										{/if}
-									</div>
-								</button>
-							{/each}
-						{/if}
-					</div>
-				</div>
+				<ChatFormPromptPickerList
+					prompts={filteredPrompts}
+					{isLoading}
+					{selectedIndex}
+					bind:searchQuery={internalSearchQuery}
+					{showSearchInput}
+					{serverSettingsMap}
+					getServerLabel={(server) => mcpStore.getServerLabel(server)}
+					onPromptClick={handlePromptClick}
+				/>
 			{/if}
 		</div>
 	</div>
