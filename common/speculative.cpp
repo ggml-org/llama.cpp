@@ -1,17 +1,17 @@
 #include "speculative.h"
 
+#include "common.h"
 #include "ggml.h"
 #include "llama.h"
 #include "log.h"
-#include "common.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "sampling.h"
 
-#include <cstring>
 #include <algorithm>
+#include <cstring>
+#include <iomanip>
 #include <map>
-#include <fstream>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -247,9 +247,9 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
             const enum common_speculative_type type,
             const std::string & path_static,
             const std::string & path_dynamic,
-            uint16_t      n_draft,
-            bool          save_dynamic,
-            bool          save_static)
+            uint16_t            n_draft,
+            bool                save_dynamic,
+            bool                save_static)
         : common_speculative_state(type)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
@@ -258,7 +258,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         if (!path_static.empty()) {
             try {
                 ngram_cache_static = common_ngram_cache_load(path_static);
-            } catch (std::ifstream::failure const &) {
+            } catch (...) {
                 LOG_ERR("failed to open static lookup cache: %s", path_static.c_str());
                 GGML_ABORT("Couldn't read static lookup cache");
             }
@@ -267,7 +267,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         if (!path_dynamic.empty()) {
             try {
                 ngram_cache_dynamic = common_ngram_cache_load(path_dynamic);
-            } catch (std::ifstream::failure const &) {
+            } catch (...) {
                 LOG_ERR("failed to open dynamic lookup cache: %s", path_dynamic.c_str());
                 GGML_ABORT("Couldn't read dynamic lookup cache");
             }
@@ -794,7 +794,7 @@ llama_tokens common_speculative_gen_draft(
             } break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
             {
-                auto * state= dynamic_cast<common_speculative_state_ngram_cache *>(impl.get());
+                auto * state = dynamic_cast<common_speculative_state_ngram_cache *>(impl.get());
                 if (state) {
                     result = common_speculative_gen_ngram_cache(*state, prompt_tgt, id_last);
                 } else {
