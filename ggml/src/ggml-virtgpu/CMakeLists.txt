@@ -19,7 +19,7 @@ ExternalProject_Add(
 )
 
 if (NOT GGML_VIRTGPU_BACKEND STREQUAL "ONLY")
-    message(STATUS "Enable the VirtGPU/Virglrenderer API Remoting frontend libraryf")
+    message(STATUS "Enable the VirtGPU/Virglrenderer API Remoting frontend library")
 
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(DRM REQUIRED libdrm)
