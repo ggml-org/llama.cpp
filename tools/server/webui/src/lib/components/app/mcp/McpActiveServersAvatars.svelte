@@ -7,11 +7,9 @@
 
 	interface Props {
 		class?: string;
-		disabled?: boolean;
-		onSettingsClick?: () => void;
 	}
 
-	let { class: className = '', disabled = false, onSettingsClick }: Props = $props();
+	let { class: className = '' }: Props = $props();
 
 	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
@@ -34,17 +32,7 @@
 </script>
 
 {#if hasEnabledMcpServers && mcpFavicons.length > 0}
-	<button
-		type="button"
-		class={cn(
-			'inline-flex items-center gap-1.5 rounded-sm py-1',
-			disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
-			className
-		)}
-		onclick={onSettingsClick}
-		{disabled}
-		aria-label="MCP Servers"
-	>
+	<div class={cn('inline-flex items-center gap-1.5', className)}>
 		<div class="flex -space-x-1">
 			{#each mcpFavicons as favicon (favicon.id)}
 				<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
@@ -63,5 +51,5 @@
 		{#if extraServersCount > 0}
 			<span class="text-xs text-muted-foreground">+{extraServersCount}</span>
 		{/if}
-	</button>
+	</div>
 {/if}
