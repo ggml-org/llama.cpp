@@ -1,5 +1,4 @@
-import { getJsonHeaders } from '$lib/utils';
-import { formatAttachmentText } from '$lib/utils/attachment-display';
+import { getJsonHeaders, formatAttachmentText } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
