@@ -91,7 +91,7 @@ static inline void hvx_dot_f32_f16_aa_rx2(float * restrict r,
 
     uint32_t i = 0;
 
-#pragma unroll(2)
+    #pragma unroll(2)
     for (i = 0; i < nvec; i++) {
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 0], zero);  // 32 elements
@@ -199,7 +199,7 @@ static inline void hvx_dot_f16_f16_aa_rx2(float * restrict r,
 
     uint32_t i = 0;
 
-#pragma unroll(2)
+    #pragma unroll(4)
     for (i = 0; i < nvec; i++) {
         HVX_Vector y_hf  = vy[i];
         HVX_Vector x0_hf = vx0[i];
