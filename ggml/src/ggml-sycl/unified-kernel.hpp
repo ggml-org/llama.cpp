@@ -133,14 +133,16 @@ constexpr int QUANT_TYPE_Q6_K = 14;  // GGML_TYPE_Q6_K
 // Block layout: [d: fp16] [qs: 16 bytes (32 nibbles)]
 // Total size: 18 bytes per block
 
-constexpr int QK4_0 = 32;  // Weights per Q4_0 block
+// Note: UNIFIED_QK4_0 may already be defined by ggml-common.h as a macro.
+// Use namespaced constant to avoid conflicts.
+constexpr int UNIFIED_QK4_0 = 32;  // Weights per Q4_0 block
 
-struct block_q4_0 {
-    sycl::half d;              // Scale factor
-    uint8_t    qs[QK4_0 / 2];  // Quantized values: 16 bytes = 32 nibbles
+struct block_q4_0_unified {
+    sycl::half d;                       // Scale factor
+    uint8_t    qs[UNIFIED_QK4_0 / 2];  // Quantized values: 16 bytes = 32 nibbles
 };
 
-static_assert(sizeof(block_q4_0) == sizeof(sycl::half) + QK4_0 / 2, "wrong q4_0 block size");
+static_assert(sizeof(block_q4_0_unified) == sizeof(sycl::half) + UNIFIED_QK4_0 / 2, "wrong q4_0 block size");
 
 // =============================================================================
 // UnifiedKernelArgs: Kernel launch parameters
@@ -229,7 +231,7 @@ inline size_t calculate_slm_size(int tile_m, int tile_n, int tile_k) {
  */
 inline bool validate_args(const UnifiedKernelArgs & args) {
     // K must be multiple of block size for Q4_0
-    if (args.quant_type == QUANT_TYPE_Q4_0 && (args.K % QK4_0) != 0) {
+    if (args.quant_type == QUANT_TYPE_Q4_0 && (args.K % UNIFIED_QK4_0) != 0) {
         return false;
     }
 
@@ -533,7 +535,7 @@ inline void compute_tile_scalar_vectorized(
 
 // COALESCED layout constants (matches dmmv.cpp)
 constexpr int MMVQ_COALESCED_TILE_BLOCKS = 32;  // Blocks per tile
-constexpr int MMVQ_COALESCED_TILE_BYTES  = MMVQ_COALESCED_TILE_BLOCKS * (QK4_0 / 2);  // 512 bytes
+constexpr int MMVQ_COALESCED_TILE_BYTES  = MMVQ_COALESCED_TILE_BLOCKS * (UNIFIED_QK4_0 / 2);  // 512 bytes
 
 // XMX constants for weight loading
 constexpr int XMX_K_TILE_LOADING = 32;  // K dimension alignment for dpas
@@ -542,9 +544,9 @@ constexpr int XMX_K_TILE_LOADING = 32;  // K dimension alignment for dpas
  * Dequantize a Q4_0 block to half precision.
  *
  * @param block  Pointer to Q4_0 block
- * @param output Output array of QK4_0 half values
+ * @param output Output array of UNIFIED_QK4_0 half values
  */
-SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0 * block, sycl::half * output) {
+SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block, sycl::half * output) {
     const sycl::half d = block->d;
 
     #pragma unroll
@@ -566,7 +568,7 @@ SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0 * block, sycl::h
  *
  * @tparam TILE_M       M dimension tile size
  * @tparam TILE_N       N dimension tile size (not used for weights)
- * @tparam TILE_K       K dimension tile size (should be multiple of QK4_0)
+ * @tparam TILE_K       K dimension tile size (should be multiple of UNIFIED_QK4_0)
  * @param slm           SLM accessor for dequantized weights [TILE_M * TILE_K]
  * @param weights       Global memory pointer to Q4_0 blocks
  * @param m_start       Starting M (row) index
@@ -583,40 +585,40 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
                              int64_t                               M,
                              int64_t                               K,
                              const sycl::nd_item<3> &              item) {
-    const block_q4_0 * blocks       = static_cast<const block_q4_0 *>(weights);
-    const int          blocks_per_row = static_cast<int>(K / QK4_0);
+    const block_q4_0_unified * blocks       = static_cast<const block_q4_0_unified *>(weights);
+    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
 
     // Total elements to load: TILE_M rows x TILE_K weights
     // Each thread handles a subset of blocks
-    const int tile_k_blocks = TILE_K / QK4_0;
+    const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
     const int total_blocks  = TILE_M * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
         const int m_off     = idx / tile_k_blocks;
         const int k_block   = idx % tile_k_blocks;
         const int64_t m_global = m_start + m_off;
-        const int64_t k_block_global = k_start / QK4_0 + k_block;
+        const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
         // Bounds check
         if (m_global >= M || k_block_global >= blocks_per_row) {
             // Zero-fill for out-of-bounds
-            for (int i = 0; i < QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * QK4_0 + i] = sycl::half(0.0f);
+            for (int i = 0; i < UNIFIED_QK4_0; i++) {
+                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
             }
             continue;
         }
 
         // Load and dequantize block
-        const block_q4_0 * block = &blocks[m_global * blocks_per_row + k_block_global];
-        sycl::half        temp[QK4_0];
+        const block_q4_0_unified * block = &blocks[m_global * blocks_per_row + k_block_global];
+        sycl::half        temp[UNIFIED_QK4_0];
         dequant_q4_0_to_half(block, temp);
 
         // Store to SLM
-        for (int i = 0; i < QK4_0; i++) {
-            slm[m_off * TILE_K + k_block * QK4_0 + i] = temp[i];
+        for (int i = 0; i < UNIFIED_QK4_0; i++) {
+            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
         }
     }
 }
@@ -630,7 +632,7 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
  *
  * @tparam TILE_M       M dimension tile size
  * @tparam TILE_N       N dimension tile size (not used for weights)
- * @tparam TILE_K       K dimension tile size (should be multiple of QK4_0)
+ * @tparam TILE_K       K dimension tile size (should be multiple of UNIFIED_QK4_0)
  * @param slm           SLM accessor for dequantized weights [TILE_M * TILE_K]
  * @param weights       Global memory pointer (SOA layout)
  * @param m_start       Starting M (row) index
@@ -652,31 +654,31 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
     const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
     const int          row_qs_bytes = static_cast<int>(K / 2);
     const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
-    const int          blocks_per_row = static_cast<int>(K / QK4_0);
+    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
 
     // Each thread loads a subset of blocks
-    const int tile_k_blocks = TILE_K / QK4_0;
+    const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
     const int total_blocks  = TILE_M * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
         const int     m_off       = idx / tile_k_blocks;
         const int     k_block     = idx % tile_k_blocks;
         const int64_t m_global    = m_start + m_off;
-        const int64_t k_start_idx = k_start + k_block * QK4_0;
+        const int64_t k_start_idx = k_start + k_block * UNIFIED_QK4_0;
 
         // Bounds check
         if (m_global >= M || k_start_idx >= K) {
-            for (int i = 0; i < QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * QK4_0 + i] = sycl::half(0.0f);
+            for (int i = 0; i < UNIFIED_QK4_0; i++) {
+                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
             }
             continue;
         }
 
         // Get scale for this block
-        const int64_t    block_idx = m_global * blocks_per_row + k_start_idx / QK4_0;
+        const int64_t    block_idx = m_global * blocks_per_row + k_start_idx / UNIFIED_QK4_0;
         const sycl::half d         = d_base[block_idx];
 
         // Get qs pointer for this block
@@ -688,8 +690,8 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
             const int     lo      = (qs_byte & 0x0F) - 8;
             const int     hi      = (qs_byte >> 4) - 8;
 
-            slm[m_off * TILE_K + k_block * QK4_0 + i]      = static_cast<sycl::half>(lo) * d;
-            slm[m_off * TILE_K + k_block * QK4_0 + i + 16] = static_cast<sycl::half>(hi) * d;
+            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i]      = static_cast<sycl::half>(lo) * d;
+            slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i + 16] = static_cast<sycl::half>(hi) * d;
         }
     }
 }
@@ -730,7 +732,7 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
     const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
     const int          row_qs_bytes = static_cast<int>(K / 2);
     const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
-    const int          blocks_per_row = static_cast<int>(K / QK4_0);
+    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
@@ -753,8 +755,8 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
         }
 
         // Compute block and position within block
-        const int block_idx      = static_cast<int>(k_global / QK4_0);
-        const int pos_in_block   = static_cast<int>(k_global % QK4_0);
+        const int block_idx      = static_cast<int>(k_global / UNIFIED_QK4_0);
+        const int pos_in_block   = static_cast<int>(k_global % UNIFIED_QK4_0);
 
         // Compute tile and position within tile
         const int tile_idx        = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
@@ -816,7 +818,7 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
     const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
     const int          row_qs_bytes = static_cast<int>(K / 2);
     const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
-    const int          blocks_per_row = static_cast<int>(K / QK4_0);
+    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
@@ -837,8 +839,8 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
         }
 
         // Compute block and position
-        const int block_idx    = static_cast<int>(k_global / QK4_0);
-        const int pos_in_block = static_cast<int>(k_global % QK4_0);
+        const int block_idx    = static_cast<int>(k_global / UNIFIED_QK4_0);
+        const int pos_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
         // Compute tile and position within tile (XMX tiles are K_TILE aligned)
         const int tile_idx       = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
@@ -948,34 +950,34 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
     const int local_id   = static_cast<int>(item2d.get_local_linear_id());
     const int local_size = static_cast<int>(item2d.get_local_range().size());
 
-    const block_q4_0 * blocks = static_cast<const block_q4_0 *>(weights);
-    const int          blocks_per_row = static_cast<int>(K / QK4_0);
+    const block_q4_0_unified * blocks = static_cast<const block_q4_0_unified *>(weights);
+    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     // Handle based on layout
     if (layout == LayoutMode::AOS) {
         // AOS: Direct block access
-        const int tile_k_blocks = TILE_K / QK4_0;
+        const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
         const int total_blocks  = TILE_M * tile_k_blocks;
 
         for (int idx = local_id; idx < total_blocks; idx += local_size) {
             const int     m_off       = idx / tile_k_blocks;
             const int     k_block     = idx % tile_k_blocks;
             const int64_t m_global    = m_start + m_off;
-            const int64_t k_block_global = k_start / QK4_0 + k_block;
+            const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
             if (m_global >= M || k_block_global >= blocks_per_row) {
-                for (int i = 0; i < QK4_0; i++) {
-                    slm[m_off * TILE_K + k_block * QK4_0 + i] = sycl::half(0.0f);
+                for (int i = 0; i < UNIFIED_QK4_0; i++) {
+                    slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
                 }
                 continue;
             }
 
-            const block_q4_0 * block = &blocks[m_global * blocks_per_row + k_block_global];
-            sycl::half         temp[QK4_0];
+            const block_q4_0_unified * block = &blocks[m_global * blocks_per_row + k_block_global];
+            sycl::half         temp[UNIFIED_QK4_0];
             dequant_q4_0_to_half(block, temp);
 
-            for (int i = 0; i < QK4_0; i++) {
-                slm[m_off * TILE_K + k_block * QK4_0 + i] = temp[i];
+            for (int i = 0; i < UNIFIED_QK4_0; i++) {
+                slm[m_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
             }
         }
     } else {
@@ -997,8 +999,8 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                 continue;
             }
 
-            const int block_idx    = static_cast<int>(k_global / QK4_0);
-            const int pos_in_block = static_cast<int>(k_global % QK4_0);
+            const int block_idx    = static_cast<int>(k_global / UNIFIED_QK4_0);
+            const int pos_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
             if (layout == LayoutMode::SOA) {
                 // SOA: qs bytes contiguous, then scales

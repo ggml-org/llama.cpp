@@ -1822,4 +1822,19 @@ if(GGML_SYCL)
     install(TARGETS test-transfer-learning RUNTIME)
     add_test(NAME test-transfer-learning COMMAND $<TARGET_FILE:test-transfer-learning>)
     set_property(TEST test-transfer-learning PROPERTY LABELS "sycl;auto-tune")
+
+    # test-unified-dispatch-integration: Integration test verifying unified dispatch is connected
+    # Part of task llama.cpp-uzv - ensuring ggml-sycl.cpp calls unified kernel dispatch
+    add_executable(test-unified-dispatch-integration test-unified-dispatch-integration.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/unified-kernel.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/cold-start.cpp)
+    target_link_libraries(test-unified-dispatch-integration PRIVATE ggml)
+    target_include_directories(test-unified-dispatch-integration PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-unified-dispatch-integration PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-unified-dispatch-integration PRIVATE "-fsycl")
+    install(TARGETS test-unified-dispatch-integration RUNTIME)
+    add_test(NAME test-unified-dispatch-integration COMMAND $<TARGET_FILE:test-unified-dispatch-integration>)
+    set_property(TEST test-unified-dispatch-integration PROPERTY LABELS "sycl;integration")
 endif()

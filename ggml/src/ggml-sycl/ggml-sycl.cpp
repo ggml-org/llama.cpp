@@ -87,6 +87,7 @@
 #include "ggml-sycl/tensor-types.hpp"
 #include "ggml-sycl/unified-cache.hpp"
 #include "ggml-sycl/unified-tensor-cache.hpp"
+#include "ggml-sycl/dispatch.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded                = false;
@@ -104,6 +105,8 @@ int         g_ggml_sycl_kqv_disable_fp16 = 0;
 int g_ggml_sycl_use_xmx_gemm  = 0;     // Enable XMX-accelerated GEMM (experimental, 5-11x slower)
 int g_ggml_sycl_xmx_threshold = 1024;  // Max batch size for XMX (XMX faster for N < threshold)
 #endif
+// Unified dispatch: Set GGML_SYCL_UNIFIED_DISPATCH=1 to use the unified kernel dispatch path
+static int g_ggml_sycl_unified_dispatch = -1;  // -1 = not initialized, 0 = disabled, 1 = enabled
 thread_local bool        g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 std::atomic<int>         g_ggml_sycl_graph_recording_depth{ 0 };
 static std::mutex        g_sycl_graph_compute_mutex;
@@ -132,6 +135,16 @@ static int ggml_sycl_layout_priority(layout_mode mode);
 
 static constexpr size_t  k_reorder_guard_bytes   = 64;
 static constexpr uint8_t k_reorder_guard_pattern = 0xA5;
+
+// Check if unified dispatch is enabled via environment variable
+// GGML_SYCL_UNIFIED_DISPATCH=1 enables the unified kernel dispatch path
+static bool ggml_sycl_unified_dispatch_enabled() {
+    if (g_ggml_sycl_unified_dispatch < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
+        g_ggml_sycl_unified_dispatch = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return g_ggml_sycl_unified_dispatch != 0;
+}
 
 static bool ggml_sycl_reorder_guard_enabled() {
     const char * env = std::getenv("GGML_SYCL_REORDER_GUARD");
@@ -16703,6 +16716,53 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             GGML_SYCL_DEBUG("[SYCL] KQV debug override: routing through non-batched mul_mat path\n");
         }
     } else {
+        // =====================================================================
+        // Unified dispatch path (GGML_SYCL_UNIFIED_DISPATCH=1)
+        // =====================================================================
+        // DISABLED: The unified kernel has a tensor layout mismatch bug.
+        //
+        // The kernel assumes: weights[M,K] @ activations[K,N] -> output[M,N]
+        // But GGML uses:      src0[N,K] (weights), src1[M,K] (activations)
+        // The computation is: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+        //
+        // This causes the kernel to index weights with m_global instead of n_global,
+        // resulting in out-of-bounds memory access and GPU crashes (DEVICE_LOST).
+        //
+        // TODO: Fix unified kernel to match GGML's tensor layout convention
+        // See task: llama.cpp-??? (unified kernel layout fix)
+        //
+        // When fixed, re-enable this block:
+#if 0  // DISABLED - tensor layout mismatch
+        if (ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(src0->type)) {
+            // Extract dimensions for unified kernel
+            const int64_t M = src1->ne[1];  // batch size (output rows)
+            const int64_t K = src0->ne[0];  // reduction dimension
+            const int64_t N = src0->ne[1];  // output columns
+
+            // Get data pointers
+            const void * src0_data = src0->data;
+            const float * src1_data = static_cast<const float *>(src1->data);
+            float * dst_data = static_cast<float *>(dst->data);
+
+            // Call unified dispatch
+            GGML_SYCL_DEBUG("[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d\n",
+                            (long long)M, (long long)K, (long long)N, src0->type);
+
+            ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                *ctx.stream(),
+                src0_data,
+                src1_data,
+                dst_data,
+                M, N, K,
+                src0->type);
+
+            return;
+        }
+#endif
+
+        // =====================================================================
+        // Legacy dispatch path (default)
+        // =====================================================================
         layout_mode override_layout = GGML_LAYOUT_AOS;
         bool        has_override    = ggml_sycl_layout_override_active(override_layout);
         if (!has_override && forced_layout) {

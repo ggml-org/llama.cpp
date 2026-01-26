@@ -52,7 +52,7 @@ class unified_matmul_kernel_fallback;
  * @param i     Index within block (0..31)
  * @return Dequantized float value
  */
-SYCL_EXTERNAL inline float dequant_q4_0(const block_q4_0 * block, int i) {
+SYCL_EXTERNAL inline float dequant_q4_0(const block_q4_0_unified * block, int i) {
     const float d = static_cast<float>(block->d);
     int         qs_val;
     if (i < 16) {
@@ -70,7 +70,7 @@ SYCL_EXTERNAL inline float dequant_q4_0(const block_q4_0 * block, int i) {
  * @param i     Index within block (0..31)
  * @return Dequantized half value
  */
-SYCL_EXTERNAL inline sycl::half dequant_q4_0_half(const block_q4_0 * block, int i) {
+SYCL_EXTERNAL inline sycl::half dequant_q4_0_half(const block_q4_0_unified * block, int i) {
     const sycl::half d = block->d;
     int              qs_val;
     if (i < 16) {
@@ -139,10 +139,10 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
 
     // Number of K tiles
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
-    const int k_blocks_per_row = args.K / QK4_0;
+    const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
 
     // Cast weight pointer
-    const block_q4_0 * weights = static_cast<const block_q4_0 *>(args.weights);
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
 
     // Initialize accumulator (in registers)
     // Each thread stores its portion of the output tile
@@ -175,8 +175,8 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
             sycl::half w = sycl::half(0.0f);
             if (m_global < args.M) {
                 // Determine which Q4_0 block and index within block
-                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % QK4_0);
+                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
                 w = dequant_q4_0_half(&weights[block_idx], idx_in_block);
             }
             slm_weights[m_off * TILE_K + k_off] = w;
@@ -286,10 +286,10 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
 
     // Number of K tiles
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
-    const int k_blocks_per_row = args.K / QK4_0;
+    const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
 
     // Cast weight pointer
-    const block_q4_0 * weights = static_cast<const block_q4_0 *>(args.weights);
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
 
     // Initialize accumulator for each thread's output elements
     // Each thread computes multiple output elements
@@ -318,8 +318,8 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
                 const int64_t k_global = k_start + k_off;
 
                 // Determine which Q4_0 block and index within block
-                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % QK4_0);
+                const int block_idx = static_cast<int>(m_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
                 // Dequantize and store to SLM
                 float w = dequant_q4_0(&weights[block_idx], idx_in_block);
