@@ -477,6 +477,12 @@ void server_models::load(const std::string & name) {
         inst.meta.update_args(ctx_preset, bin_path); // render args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
+
+        if (!base_params.models_dir.empty()) {
+            child_args.push_back("--models-dir");
+            child_args.push_back(base_params.models_dir);
+        }
+
         std::vector<std::string> child_env  = base_env; // copy
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
