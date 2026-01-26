@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   python-type-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     name: pyright type-check
     steps:
       - name: Check out source repository
