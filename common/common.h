@@ -175,7 +175,6 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
-
 // sampling parameters
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
@@ -276,6 +275,7 @@ struct common_params_speculative {
     // draftless:
 
     common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
+
     uint16_t spec_ngram_size_n     = 12; // ngram size for lookup
     uint16_t spec_ngram_size_m     = 48; // mgram size for speculative tokens
     uint16_t spec_ngram_check_rate =  1; // check rate for ngram lookup

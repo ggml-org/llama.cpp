@@ -28,10 +28,6 @@ struct common_speculative * common_speculative_init(
 
 void common_speculative_free(struct common_speculative * spec);
 
-bool common_speculative_are_compatible(
-        const struct llama_model * model_tgt,
-        const struct llama_model * model_dft);
-
 // sample up to n_draft tokens and add them to the batch using the draft model
 llama_tokens common_speculative_gen_draft(
                struct common_speculative * spec,

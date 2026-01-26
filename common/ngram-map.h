@@ -12,7 +12,6 @@
 
 #include "llama.h"
 
-#include <string>
 #include <vector>
 
 // n-gram simple
@@ -29,7 +28,7 @@ struct common_ngram_simple_config {
 struct common_ngram_simple_state {
     common_ngram_simple_config config;
 
-    size_t           idx_last_check  =  0; // index of last check in context history (mutable)
+    size_t idx_last_check = 0; // index of last check in context history (mutable)
 
     common_ngram_simple_state(const common_ngram_simple_config & config)
         : config(config) {}
