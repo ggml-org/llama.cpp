@@ -47,38 +47,92 @@ static std::string fmt_error_with_source(const std::string & tag, const std::str
     return oss.str();
 }
 
-// FNV-1a hash function that takes initial seed hash
-// No need to worry about the whole hash_combine drama
-// NOTE: **Never** pass a seed that is not a hash value originating from this function
-static constexpr auto size_t_digits = std::numeric_limits<size_t>::digits;
-static_assert(size_t_digits == 64 || size_t_digits == 32);
+// Note: this is a simple hasher, not cryptographically secure, just for hash table usage
+struct hasher {
+    static constexpr auto size_t_digits = std::numeric_limits<size_t>::digits;
+    static constexpr size_t prime = size_t_digits == 64 ? 0x100000001b3 : 0x01000193; // seed
+    static constexpr auto block_size = size_t_digits / 8; // in bytes; allowing the compiler to vectorize the computation
 
-template <typename... Args>
-static size_t hash_bytes(size_t seed, void const * bytes, size_t len, Args&&... args) noexcept
-{
-    static_assert(sizeof...(args) % 2 == 0);
-    static constexpr size_t prime = size_t_digits == 64 ? 0x100000001b3 : 0x01000193;
+    static_assert(size_t_digits == 64 || size_t_digits == 32);
 
-    unsigned char const * c = static_cast<unsigned char const *>(bytes);
-    unsigned char const * const e = c + len;
+    uint8_t buffer[block_size];
+    size_t idx = 0; // current index in buffer
+    size_t state = prime;
+    hasher() = default;
 
-    for (; c < e; ++c) {
-        seed = (seed ^ *c) * prime;
+    // Properties:
+    //   - update is not associative: update(a).update(b) != update(b).update(a)
+    //   - update(a ~ b) == update(a).update(b) with ~ as concatenation operator --> useful for streaming
+    //   - update("", 0) --> state unchanged with empty input
+    hasher& update(void const * bytes, size_t len) noexcept {
+        const uint8_t * c = static_cast<uint8_t const *>(bytes);
+        if (len == 0) {
+            return *this;
+        }
+        size_t processed = 0;
+
+        // first, fill the existing buffer if it's partial
+        if (idx > 0) {
+            size_t to_fill = block_size - idx;
+            if (to_fill > len) {
+                to_fill = len;
+            }
+            std::memcpy(buffer + idx, c, to_fill);
+            idx += to_fill;
+            processed += to_fill;
+            if (idx == block_size) {
+                update_block(buffer);
+                idx = 0;
+            }
+        }
+
+        // process full blocks from the remaining input
+        for (; processed + block_size <= len; processed += block_size) {
+            update_block(c + processed);
+        }
+
+        // buffer any remaining bytes
+        size_t remaining = len - processed;
+        if (remaining > 0) {
+            std::memcpy(buffer, c + processed, remaining);
+            idx = remaining;
+        }
+        return *this;
     }
 
-    if constexpr (sizeof...(args) > 0) {
-        seed = hash_bytes(seed, std::forward<Args>(args)...);
+    // convenience function for testing only
+    hasher& update(const std::string & s) noexcept {
+        return update(s.data(), s.size());
     }
 
-    return seed;
-}
+    size_t digest() noexcept {
+        // if there are remaining bytes in buffer, fill the rest with zeros and process
+        if (idx > 0) {
+            for (size_t i = idx; i < block_size; ++i) {
+                buffer[i] = 0;
+            }
+            update_block(buffer);
+            idx = 0;
+        }
 
-template <typename... Args>
-static size_t hash_bytes(void const * bytes, size_t len, Args&&... args) noexcept
-{
-    static constexpr size_t seed = size_t_digits == 64 ? 0xcbf29ce484222325 : 0x811c9dc5;
+        return state;
+    }
 
-    return hash_bytes(seed, bytes, len, std::forward<Args>(args)...);
-}
+private:
+    void update_block(const uint8_t * block) noexcept {
+        size_t blk = static_cast<uint32_t>(block[0])
+                    | (static_cast<uint32_t>(block[1]) << 8)
+                    | (static_cast<uint32_t>(block[2]) << 16)
+                    | (static_cast<uint32_t>(block[3]) << 24);
+        if constexpr (size_t_digits == 64) {
+            blk = blk | (static_cast<uint64_t>(block[4]) << 32)
+                      | (static_cast<uint64_t>(block[5]) << 40)
+                      | (static_cast<uint64_t>(block[6]) << 48)
+                      | (static_cast<uint64_t>(block[7]) << 56);
+        }
+        state ^= static_cast<size_t>(blk);
+        state *= prime;
+    }
+};
 
 } // namespace jinja

@@ -61,21 +61,10 @@ size_t string::length() const {
     return len;
 }
 
-size_t string::hash(std::optional<size_t> seed) const noexcept {
-    if (parts.empty()) {
-        return seed ? *seed : 0;
+void string::hash_update(hasher & hash) const noexcept {
+    for (const auto & part : parts) {
+        hash.update(part.val.data(), part.val.length());
     }
-    size_t hash;
-    if (seed) {
-        hash = *seed;
-    } else {
-        const auto & first = parts.at(0);
-        hash = hash_bytes(first.val.data(), first.val.length());
-    }
-    for (auto it = parts.begin() + 1; it != parts.end(); ++it) {
-        hash = hash_bytes(hash, it->val.data(), it->val.length());
-    }
-    return hash;
 }
 
 bool string::all_parts_are_input() const {

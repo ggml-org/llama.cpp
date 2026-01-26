@@ -9,6 +9,7 @@
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
 #include "jinja/lexer.h"
+#include "jinja/utils.h"
 
 #include "testing.h"
 
@@ -30,6 +31,7 @@ static void test_tests(testing & t);
 static void test_string_methods(testing & t);
 static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
+static void test_hasher(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -66,6 +68,7 @@ int main(int argc, char *argv[]) {
     t.test("string methods", test_string_methods);
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
+    t.test("hasher", test_hasher);
     if (!g_python_mode) {
         t.test("fuzzing", test_fuzzing);
     }
@@ -1366,6 +1369,119 @@ static void test_object_methods(testing & t) {
         {{"obj", {{"a", "b"}}}},
         "True True"
     );
+}
+
+static void test_hasher(testing & t) {
+    static const std::vector<std::pair<size_t, size_t>> chunk_sizes = {
+        {1, 1024},
+        {5, 512},
+        {16, 256},
+        {45, 122},
+        {70, 634},
+    };
+
+    static auto random_bytes = [](size_t length) -> std::string {
+        std::string data;
+        data.resize(length);
+        for (size_t i = 0; i < length; ++i) {
+            data[i] = static_cast<char>(rand() % 256);
+            data[i] = data[i] == 0 ? 1 : data[i];
+        }
+        return data;
+    };
+
+    t.test("state unchanged with empty input", [](testing & t) {
+        jinja::hasher hasher;
+        hasher.update("some data");
+        size_t initial_state = hasher.digest();
+        hasher.update("", 0);
+        size_t final_state = hasher.digest();
+        t.assert_true("Hasher state should remain unchanged", initial_state == final_state);
+    });
+
+    t.test("different inputs produce different hashes", [](testing & t) {
+        jinja::hasher hasher1;
+        hasher1.update("data one");
+        size_t hash1 = hasher1.digest();
+
+        jinja::hasher hasher2;
+        hasher2.update("data two");
+        size_t hash2 = hasher2.digest();
+
+        t.assert_true("Different inputs should produce different hashes", hash1 != hash2);
+    });
+
+    t.test("same inputs produce same hashes", [](testing & t) {
+        jinja::hasher hasher1;
+        hasher1.update("consistent data");
+        size_t hash1 = hasher1.digest();
+
+        jinja::hasher hasher2;
+        hasher2.update("consistent data");
+        size_t hash2 = hasher2.digest();
+
+        t.assert_true("Same inputs should produce same hashes", hash1 == hash2);
+    });
+
+    t.test("property: update(a ~ b) == update(a).update(b)", [](testing & t) {
+        for (const auto & [size1, size2] : chunk_sizes) {
+            std::string data1 = random_bytes(size1);
+            std::string data2 = random_bytes(size2);
+
+            jinja::hasher hasher1;
+            hasher1.update(data1);
+            hasher1.update(data2);
+            size_t hash1 = hasher1.digest();
+
+            jinja::hasher hasher2;
+            hasher2.update(data1 + data2);
+            size_t hash2 = hasher2.digest();
+
+            t.assert_true(
+                "Hashing in multiple updates should match single update (" + std::to_string(size1) + ", " + std::to_string(size2) + ")",
+                hash1 == hash2);
+        }
+    });
+
+    t.test("property: non associativity of update", [](testing & t) {
+        for (const auto & [size1, size2] : chunk_sizes) {
+            std::string data1 = random_bytes(size1);
+            std::string data2 = random_bytes(size2);
+
+            jinja::hasher hasher1;
+            hasher1.update(data1);
+            hasher1.update(data2);
+            size_t hash1 = hasher1.digest();
+
+            jinja::hasher hasher2;
+            hasher2.update(data2);
+            hasher2.update(data1);
+            size_t hash2 = hasher2.digest();
+
+            t.assert_true(
+                "Hashing order should matter (" + std::to_string(size1) + ", " + std::to_string(size2) + ")",
+                hash1 != hash2);
+        }
+    });
+
+    t.test("property: different lengths produce different hashes (padding block size)", [](testing & t) {
+        std::string random_data = random_bytes(64);
+
+        jinja::hasher hasher1;
+        hasher1.update(random_data);
+        size_t hash1 = hasher1.digest();
+
+        for (int i = 0; i < 16; ++i) {
+            random_data.push_back('A');  // change length
+            jinja::hasher hasher2;
+            hasher2.update(random_data);
+            size_t hash2 = hasher2.digest();
+
+            t.assert_true("Different lengths should produce different hashes (length " + std::to_string(random_data.size()) + ")", hash1 != hash2);
+
+            hash1 = hash2;
+        }
+    });
 }
 
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {

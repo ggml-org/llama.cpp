@@ -146,15 +146,18 @@ struct value_t {
     virtual value & at(int64_t, value &) { throw std::runtime_error(type() + " is not an array value"); }
     virtual value & at(int64_t) { throw std::runtime_error(type() + " is not an array value"); }
 
-    virtual std::string as_repr() const { return as_string().str(); }
     virtual bool is_numeric() const { return false; }
     virtual bool is_hashable() const { return false; }
     virtual bool is_immutable() const { return true; }
-    virtual size_t unique_hash() const noexcept = 0;
+    virtual hasher unique_hash() const noexcept = 0;
     // TODO: C++20 <=> operator
     // NOTE: We are treating == as equivalent (for normal comparisons) and != as strict nonequal (for strict (is) comparisons)
     virtual bool operator==(const value_t & other) const { return equivalent(other); }
     virtual bool operator!=(const value_t & other) const { return nonequal(other); }
+
+    // Note: only for debugging purposes
+    virtual std::string as_repr() const { return as_string().str(); }
+
 protected:
     virtual bool equivalent(const value_t &) const = 0;
     virtual bool nonequal(const value_t & other) const { return !equivalent(other); }
@@ -168,6 +171,7 @@ const func_builtins & global_builtins();
 
 std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
 
+// Note: only used for debugging purposes
 std::string value_to_string_repr(const value & val);
 
 struct not_implemented_exception : public std::runtime_error {
@@ -176,7 +180,7 @@ struct not_implemented_exception : public std::runtime_error {
 
 struct value_hasher {
     size_t operator()(const value & val) const noexcept {
-        return val->unique_hash();
+        return val->unique_hash().digest();
     }
 };
 
@@ -217,13 +221,12 @@ struct value_int_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        return hash_bytes(
-            &type_hash, sizeof(type_hash),
-            &val_int, sizeof(val_int),
-            &val_flt, sizeof(val_flt)
-        );
+        return hasher()
+            .update(&type_hash, sizeof(type_hash))
+            .update(&val_int, sizeof(val_int))
+            .update(&val_flt, sizeof(val_flt));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
@@ -258,16 +261,15 @@ struct value_float_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         if (static_cast<double>(val_int) == val_flt) {
             return val->unique_hash();
         } else {
             const auto type_hash = typeid(*this).hash_code();
-            return hash_bytes(
-                &type_hash, sizeof(type_hash),
-                &val_int, sizeof(val_int),
-                &val_flt, sizeof(val_flt)
-            );
+            return hasher()
+                .update(&type_hash, sizeof(type_hash))
+                .update(&val_int, sizeof(val_int))
+                .update(&val_flt, sizeof(val_flt));
         }
     }
 protected:
@@ -299,11 +301,12 @@ struct value_string_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        return val_str.hash(hash_bytes(
-            &type_hash, sizeof(type_hash)
-        ));
+        auto hash = hasher();
+        hash.update(&type_hash, sizeof(type_hash));
+        val_str.hash_update(hash);
+        return hash;
     }
     void mark_input() {
         val_str.mark_input();
@@ -330,7 +333,7 @@ struct value_bool_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         return val->unique_hash();
     }
 protected:
@@ -435,16 +438,12 @@ struct value_array_t : public value_t {
         }
         return false;
     }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        size_t hash = hash_bytes(
-            &type_hash, sizeof(type_hash)
-        );
+        auto hash = hasher().update(&type_hash, sizeof(type_hash));
         for (const auto & val : val_arr) {
-            const size_t val_hash = val->unique_hash();
-            hash = hash_bytes(hash,
-                &val_hash, sizeof(val_hash)
-            );
+            const size_t val_hash = val->unique_hash().digest();
+            hash.update(&val_hash, sizeof(size_t));
         }
         return hash;
     }
@@ -572,18 +571,14 @@ struct value_object_t : public value_t {
             }
             return false;
     }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        size_t hash = hash_bytes(
-            &type_hash, sizeof(type_hash)
-        );
+        auto hash = hasher().update(&type_hash, sizeof(type_hash));
         for (const auto & [key, val] : val_obj) {
-            const size_t key_hash = key->unique_hash();
-            const size_t val_hash = val->unique_hash();
-            hash = hash_bytes(hash,
-                &key_hash, sizeof(key_hash),
-                &val_hash, sizeof(val_hash)
-            );
+            const size_t key_hash = key->unique_hash().digest();
+            const size_t val_hash = val->unique_hash().digest();
+            hash.update(&key_hash, sizeof(key_hash));
+            hash.update(&val_hash, sizeof(val_hash));
         }
         return hash;
     }
@@ -606,11 +601,9 @@ struct value_none_t : public value_t {
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        return hash_bytes(
-            &type_hash, sizeof(type_hash)
-        );
+        return hasher().update(&type_hash, sizeof(type_hash));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
@@ -627,11 +620,9 @@ struct value_undefined_t : public value_t {
     virtual bool as_bool() const override { return false; }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        return hash_bytes(
-            &type_hash, sizeof(type_hash)
-        );
+        return hasher().update(&type_hash, sizeof(type_hash));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
@@ -719,25 +710,18 @@ struct value_func_t : public value_t {
     virtual std::string type() const override { return "Function"; }
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
         const auto target_type_hash = val_func.target_type().hash_code();
         const auto target = val_func.target<value(const func_args &)>();
         const auto target_hash = target ? typeid(*target).hash_code() : 0;
-        size_t hash;
+        hasher hash;
         if (arg0) {
-            hash = hash_bytes(arg0->unique_hash(),
-                &type_hash, sizeof(type_hash),
-                &target_type_hash, sizeof(target_type_hash),
-                &target_hash, sizeof(target_hash)
-            );
-        } else {
-            hash = hash_bytes(
-                &type_hash, sizeof(type_hash),
-                &target_type_hash, sizeof(target_type_hash),
-                &target_hash, sizeof(target_hash)
-            );
+            hash = arg0->unique_hash();
         }
+        hash.update(&type_hash, sizeof(type_hash))
+            .update(&target_type_hash, sizeof(target_type_hash))
+            .update(&target_hash, sizeof(target_hash));
         return hash;
     }
 protected:
@@ -756,12 +740,12 @@ struct value_kwarg_t : public value_t {
     virtual std::string type() const override { return "KwArg"; }
     virtual std::string as_repr() const override { return type(); }
     virtual bool is_hashable() const override { return true; }
-    virtual size_t unique_hash() const noexcept override {
+    virtual hasher unique_hash() const noexcept override {
         const auto type_hash = typeid(*this).hash_code();
-        return hash_bytes(val->unique_hash(),
-            &type_hash, sizeof(type_hash),
-            key.data(), key.size()
-        );
+        auto hash = val->unique_hash();
+        hash.update(&type_hash, sizeof(type_hash))
+            .update(key.data(), key.size());
+        return hash;
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
