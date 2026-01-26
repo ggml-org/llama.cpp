@@ -119,7 +119,7 @@ struct common_speculative_state {
     // TODO: track performance of most recent calls
     const bool gen_perf = true; // whether to generate performance stats.
 
-    int64_t gen_duration_us = 0; // total time spent in this implementation in milliseconds.
+    int64_t gen_duration_us = 0; // total time spent in this implementation in microseconds.
 
     virtual ~common_speculative_state() = default;
 

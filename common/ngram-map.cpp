@@ -23,7 +23,7 @@ llama_tokens common_ngram_simple_draft(
         common_ngram_simple_state & state,
         const llama_tokens & tokens, llama_token sampled) {
 
-    // Simple implementation of self-speculative decoding without draft model, without ngram-map.
+    // Simple implementation of self-speculative decoding without a draft model.
     //
     const size_t cur_len = tokens.size();
     // Only check every check_rate tokens to save compute
