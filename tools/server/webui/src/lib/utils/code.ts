@@ -1,13 +1,4 @@
 import hljs from 'highlight.js';
-import {
-	NEWLINE,
-	DEFAULT_LANGUAGE,
-	LANG_PATTERN,
-	AMPERSAND_REGEX,
-	LT_REGEX,
-	GT_REGEX,
-	FENCE_PATTERN
-} from '$lib/constants/code';
 
 export interface IncompleteCodeBlock {
 	language: string;
@@ -35,10 +26,7 @@ export function highlightCode(code: string, language: string): string {
 		}
 	} catch {
 		// Fallback to escaped plain text
-		return code
-			.replace(AMPERSAND_REGEX, '&amp;')
-			.replace(LT_REGEX, '&lt;')
-			.replace(GT_REGEX, '&gt;');
+		return code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 	}
 }
 
@@ -51,13 +39,13 @@ export function highlightCode(code: string, language: string): string {
 export function detectIncompleteCodeBlock(markdown: string): IncompleteCodeBlock | null {
 	// Count all code fences in the markdown
 	// A code block is incomplete if there's an odd number of ``` fences
-	const fencePattern = new RegExp(FENCE_PATTERN.source, FENCE_PATTERN.flags);
+	const fencePattern = /^```|\n```/g;
 	const fences: number[] = [];
 	let fenceMatch;
 
 	while ((fenceMatch = fencePattern.exec(markdown)) !== null) {
 		// Store the position after the ```
-		const pos = fenceMatch[0].startsWith(NEWLINE) ? fenceMatch.index + 1 : fenceMatch.index;
+		const pos = fenceMatch[0].startsWith('\n') ? fenceMatch.index + 1 : fenceMatch.index;
 		fences.push(pos);
 	}
 
@@ -72,8 +60,8 @@ export function detectIncompleteCodeBlock(markdown: string): IncompleteCodeBlock
 	const afterOpening = markdown.slice(openingIndex + 3);
 
 	// Extract language and code content
-	const langMatch = afterOpening.match(LANG_PATTERN);
-	const language = langMatch?.[1] || DEFAULT_LANGUAGE;
+	const langMatch = afterOpening.match(/^(\w*)\n?/);
+	const language = langMatch?.[1] || 'text';
 	const codeStartIndex = openingIndex + 3 + (langMatch?.[0]?.length ?? 0);
 	const code = markdown.slice(codeStartIndex);
 
