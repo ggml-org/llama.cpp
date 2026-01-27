@@ -52,9 +52,9 @@ llama_tokens common_ngram_simple_draft(
 
 // statistics of a m-gram after a known n-gram
 struct common_ngram_map_value {
-    size_t   value_idx;  // index of value m-gram in token-history (0 if unused)
-    uint16_t value_num;  // number of occurences of this value m-gram after the key n-gram (0 in an unused values-slot)
-    int16_t n_accepted;  // number of accepted tokens at last draft (-1 if unused)
+    size_t   value_idx = 0;  // index of value m-gram in token-history (0 if unused)
+    uint16_t value_num = 0;  // number of occurences of this value m-gram after the key n-gram (0 in an unused values-slot)
+    int16_t n_accepted = -1;  // number of accepted tokens at last draft (-1 if unused)
 };
 
 // statistics of a n-gram
