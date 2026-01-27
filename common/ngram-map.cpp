@@ -28,7 +28,7 @@ llama_tokens common_ngram_simple_draft(
     const size_t cur_len = tokens.size();
     // Only check every check_rate tokens to save compute
     // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (state.idx_last_check + state.config.check_rate > cur_len) {
+    if (state.idx_last_check + state.config.check_rate > cur_len && cur_len > state.idx_last_check) {
         llama_tokens draft_tokens;
         return draft_tokens;
     }
@@ -54,7 +54,7 @@ llama_tokens common_ngram_simple_draft(
     pattern.push_back(sampled); // add the last token to the pattern
 
     // We do a search in the token history.
-    state.idx_last_check = tokens.size();
+    state.idx_last_check = cur_len;
 
     size_t match_pos = 0; // we ignore position 0, position 0 == no match
                           // search backwards, but skip the current match (we are currently there)
@@ -100,15 +100,15 @@ llama_tokens common_ngram_simple_draft(
 // maximum number of counted values of a ngram map value.
 #define COMMON_NGRAM_MAX_VALUE_COUNT 16380
 
-std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length);
+static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length);
 
 void common_ngram_map_draft(common_ngram_map & map,
         const llama_tokens & inp, llama_token sampled,
         llama_tokens & draft) {
     // reset last key and value.
-    map.last_draft_created = false;
-    map.last_draft_key_idx     = 0;
-    map.last_draft_value_idx   = 0;
+    map.last_draft_created   = false;
+    map.last_draft_key_idx   = 0;
+    map.last_draft_value_idx = 0;
 
     const size_t cur_len = inp.size();
     const uint16_t n = map.size_key;
@@ -119,7 +119,7 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // Only check every check_rate tokens to save compute
     // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (map.idx_last_check + map.check_rate > cur_len) {
+    if (map.idx_last_check + map.check_rate > cur_len && cur_len > map.idx_last_check) {
         return;
     }
     map.idx_last_check = cur_len;
@@ -205,9 +205,9 @@ void common_ngram_map_draft(common_ngram_map & map,
         LOG_INF("%s: key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
                 key_offset, curr_key.key_num, draft.size());
 
-        map.last_draft_created = false;
-        map.last_draft_key_idx     = key_offset;
-        map.last_draft_value_idx   = 0; // value 0 is used for simple mode
+        map.last_draft_created   = false;
+        map.last_draft_key_idx   = key_offset;
+        map.last_draft_value_idx = 0; // value 0 is used for simple mode
         return;
     }
 
@@ -323,9 +323,9 @@ void common_ngram_map_draft(common_ngram_map & map,
             key_offset, slot_max,
             curr_key.key_num, draft.size());
 
-    map.last_draft_created       = true;
-    map.last_draft_key_idx       = key_offset;
-    map.last_draft_value_idx     = slot_max; // value used for draft generation.
+    map.last_draft_created   = true;
+    map.last_draft_key_idx   = key_offset;
+    map.last_draft_value_idx = slot_max; // value used for draft generation.
 }
 
 void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {

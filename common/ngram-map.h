@@ -80,7 +80,7 @@ struct common_ngram_map {
 
     common_ngram_map(uint16_t sz_key, uint16_t sz_value, bool only_keys,
                      uint16_t check_rate, uint16_t min_hits)
-        : size_key(sz_key), size_value(sz_value), key_only(only_keys), keys(std::vector<common_ngram_map_key>{}),
+        : size_key(sz_key), size_value(sz_value), key_only(only_keys),
           check_rate(check_rate), min_hits(min_hits) {}
 
     bool     last_draft_created   = false; // true if a draft was created at last call.
