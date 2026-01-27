@@ -81,7 +81,10 @@ export interface DatabaseMessage {
 	 * @deprecated - left for backward compatibility
 	 */
 	thinking?: string;
+	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
+	/** Tool call ID for tool result messages (role: 'tool') */
+	toolCallId?: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
