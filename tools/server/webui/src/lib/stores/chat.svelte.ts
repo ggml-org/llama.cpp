@@ -33,6 +33,7 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
 } from '$lib/constants/cache';
+import { isActiveConversation } from '$lib/stores/shared';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -55,6 +56,14 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
+
+	/**
+	 * Callback for updating message content in conversationsStore.
+	 * Registered by conversationsStore to avoid circular dependency.
+	 */
+	private messageUpdateCallback:
+		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
+		| null = null;
 
 	// Draft preservation for navigation (e.g., when adding system prompt from welcome page)
 	private _pendingDraftMessage = $state<string>('');
@@ -84,29 +93,23 @@ class ChatStore {
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
-		import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
-			if (loading) {
-				this.chatLoadingStates.set(convId, true);
-				if (conversationsStore.activeConversation?.id === convId) this.isLoading = true;
-			} else {
-				this.chatLoadingStates.delete(convId);
-				if (conversationsStore.activeConversation?.id === convId) this.isLoading = false;
-			}
-		});
+		if (loading) {
+			this.chatLoadingStates.set(convId, true);
+			if (isActiveConversation(convId)) this.isLoading = true;
+		} else {
+			this.chatLoadingStates.delete(convId);
+			if (isActiveConversation(convId)) this.isLoading = false;
+		}
 	}
 
 	private setChatStreaming(convId: string, response: string, messageId: string): void {
 		this.touchConversationState(convId);
 		this.chatStreamingStates.set(convId, { response, messageId });
-		import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
-			if (conversationsStore.activeConversation?.id === convId) this.currentResponse = response;
-		});
+		if (isActiveConversation(convId)) this.currentResponse = response;
 	}
 	private clearChatStreaming(convId: string): void {
 		this.chatStreamingStates.delete(convId);
-		import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
-			if (conversationsStore.activeConversation?.id === convId) this.currentResponse = '';
-		});
+		if (isActiveConversation(convId)) this.currentResponse = '';
 	}
 	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
 		return this.chatStreamingStates.get(convId);
@@ -118,14 +121,19 @@ class ChatStore {
 
 		// If there's an active stream for this conversation, update the message content
 		// This ensures streaming content is visible when switching back to a conversation
-		if (streamingState?.response && streamingState?.messageId) {
-			import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
-				const idx = conversationsStore.findMessageIndex(streamingState.messageId);
-				if (idx !== -1) {
-					conversationsStore.updateMessageAtIndex(idx, { content: streamingState.response });
-				}
-			});
+		if (streamingState?.response && streamingState?.messageId && this.messageUpdateCallback) {
+			this.messageUpdateCallback(streamingState.messageId, { content: streamingState.response });
 		}
+	}
+
+	/**
+	 * Register a callback for updating message content.
+	 * Called by conversationsStore during initialization to avoid circular dependency.
+	 */
+	registerMessageUpdateCallback(
+		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
+	): void {
+		this.messageUpdateCallback = callback;
 	}
 
 	clearUIState(): void {

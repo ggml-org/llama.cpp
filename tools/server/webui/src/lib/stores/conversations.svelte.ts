@@ -21,6 +21,8 @@
 
 import { browser } from '$app/environment';
 import type { McpServerOverride } from '$lib/types/database';
+import { setActiveConversationId } from '$lib/stores/shared';
+import { chatStore } from '$lib/stores/chat.svelte';
 
 class ConversationsStore {
 	/** List of all conversations */
@@ -65,11 +67,23 @@ class ConversationsStore {
 		const { conversationsClient } = await import('$lib/clients/conversations.client');
 		this._client = conversationsClient;
 
+		// Register message update callback with chatStore to avoid circular dependency
+		chatStore.registerMessageUpdateCallback((messageId, updates) => {
+			const idx = this.findMessageIndex(messageId);
+			if (idx !== -1) {
+				this.updateMessageAtIndex(idx, updates);
+			}
+		});
+
 		conversationsClient.setStoreCallbacks({
 			getConversations: () => this.conversations,
 			setConversations: (conversations) => (this.conversations = conversations),
 			getActiveConversation: () => this.activeConversation,
-			setActiveConversation: (conversation) => (this.activeConversation = conversation),
+			setActiveConversation: (conversation) => {
+				this.activeConversation = conversation;
+				// Update shared state for chatStore to use without circular dependency
+				setActiveConversationId(conversation?.id ?? null);
+			},
 			getActiveMessages: () => this.activeMessages,
 			setActiveMessages: (messages) => (this.activeMessages = messages),
 			updateActiveMessages: (updater) => (this.activeMessages = updater(this.activeMessages)),
