@@ -10,6 +10,9 @@
 #include <array>
 #include <atomic>
 #include <cinttypes>
+#include <cstdint>
+#include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <future>
 
@@ -940,6 +943,53 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     }
 }
 
+static uint64_t llama_fnv1a64(const uint8_t * data, size_t len) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= static_cast<uint64_t>(data[i]);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static void llama_maybe_log_canonical_checksum(const ggml_tensor * tensor) {
+    if (!tensor || !tensor->data) {
+        return;
+    }
+    const char * name = ggml_get_name(tensor);
+    if (!name || name[0] == '\0') {
+        return;
+    }
+    static int enabled = -1;
+    static std::string filter;
+    static size_t bytes_limit = 4096;
+    if (enabled < 0) {
+        const char * env = std::getenv("LLAMA_CANONICAL_CHECKSUM_TENSOR");
+        enabled           = (env && env[0] != '\0') ? 1 : 0;
+        if (enabled) {
+            filter = env;
+        }
+        if (const char * bytes_env = std::getenv("LLAMA_CANONICAL_CHECKSUM_BYTES")) {
+            const long long v = std::atoll(bytes_env);
+            if (v > 0) {
+                bytes_limit = static_cast<size_t>(v);
+            }
+        }
+    }
+    if (!enabled) {
+        return;
+    }
+    if (filter[0] != '\0' && std::strstr(name, filter.c_str()) == nullptr) {
+        return;
+    }
+    const size_t nbytes = ggml_nbytes(tensor);
+    const size_t bytes  = std::min(bytes_limit, nbytes);
+    const auto checksum = llama_fnv1a64(static_cast<const uint8_t *>(tensor->data), bytes);
+    std::fprintf(stderr,
+                 "[LLAMA-CANONICAL-CHECKSUM] tensor=%s bytes=%zu checksum=0x%016llx\n",
+                 name, bytes, (unsigned long long) checksum);
+}
+
 void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     const auto & w = require_weight(ggml_get_name(cur));
 
@@ -961,6 +1011,8 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
+
+    llama_maybe_log_canonical_checksum(cur);
 }
 
 #ifdef GGML_USE_SYCL

@@ -12,6 +12,7 @@
 #include "ggml-sycl.h"        // For GPU sampling API
 #endif
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -20,6 +21,74 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+static bool llama_debug_logits_enabled_cached() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("LLAMA_DEBUG_LOGITS");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+// Debug logits configuration - shared between SYCL and non-SYCL paths
+struct debug_logits_config {
+    int enabled = -1;
+    int topk = 5;
+    int row0 = -1;
+
+    void init() {
+        if (enabled < 0) {
+            const char * env = std::getenv("LLAMA_DEBUG_LOGITS");
+            enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+            if (enabled) {
+                if (const char * topk_env = std::getenv("LLAMA_DEBUG_LOGITS_TOPK")) {
+                    const int parsed_topk = std::atoi(topk_env);
+                    if (parsed_topk > 0) {
+                        topk = parsed_topk;
+                    }
+                }
+                const char * row0_env = std::getenv("LLAMA_DEBUG_LOGITS_ROW0");
+                row0 = (row0_env && std::atoi(row0_env) != 0) ? 1 : 0;
+            }
+        }
+    }
+};
+
+// Entry for top-k logits tracking
+struct logits_top_entry {
+    int id;
+    float logit;
+};
+
+// Compute top-k logits from a logits array
+static std::vector<logits_top_entry> compute_topk_logits(const float * logits_ptr, int n_vocab, int k) {
+    std::vector<logits_top_entry> top;
+    top.reserve(k);
+    for (int i = 0; i < n_vocab; ++i) {
+        const float v = logits_ptr[i];
+        if ((int) top.size() < k) {
+            top.push_back({ i, v });
+            std::sort(top.begin(), top.end(), [](const logits_top_entry & a, const logits_top_entry & b) {
+                return a.logit > b.logit;
+            });
+            continue;
+        }
+        int min_idx = 0;
+        for (int j = 1; j < k; ++j) {
+            if (top[j].logit < top[min_idx].logit) {
+                min_idx = j;
+            }
+        }
+        if (v > top[min_idx].logit) {
+            top[min_idx] = { i, v };
+            std::sort(top.begin(), top.end(), [](const logits_top_entry & a, const logits_top_entry & b) {
+                return a.logit > b.logit;
+            });
+        }
+    }
+    return top;
+}
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -587,6 +656,12 @@ int main(int argc, char ** argv) {
         embd_inp.push_back(decoder_start_token_id);
     }
 
+    auto log_sampled_token_dbg = [&](llama_token token) {
+        // Only emits when --log-verbosity is set high enough to include debug logs.
+        const std::string piece = common_token_to_piece(ctx, token, /* special = */ true);
+        LOG_DBG("sampled token: id=%d piece='%s'\n", token, piece.c_str());
+    };
+
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
         // predict
         if (!embd.empty()) {
@@ -698,7 +773,25 @@ int main(int argc, char ** argv) {
 
                     LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
 
-                    if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
+                    llama_batch batch = llama_batch_get_one(&embd[i], n_eval);
+                    if (llama_debug_logits_enabled_cached()) {
+                        static int dbg_left = 16;
+                        if (dbg_left > 0) {
+                            LOG_INF("[BATCH] n_past=%d n_eval=%d token_ptr=%p logits_ptr=%p\n",
+                                    n_past, n_eval, (void *) batch.token, (void *) batch.logits);
+                            if (batch.token && n_eval > 0) {
+                                const int last_idx = n_eval - 1;
+                                if (batch.logits) {
+                                    LOG_INF("[BATCH] last_token=%d last_logit=%d\n",
+                                            batch.token[last_idx], batch.logits[last_idx] ? 1 : 0);
+                                } else {
+                                    LOG_INF("[BATCH] last_token=%d last_logit=(null)\n", batch.token[last_idx]);
+                                }
+                            }
+                            dbg_left--;
+                        }
+                    }
+                    if (llama_decode(ctx, batch)) {
                         LOG_ERR("%s : failed to eval\n", __func__);
                         return 1;
                     }
@@ -750,6 +843,82 @@ int main(int argc, char ** argv) {
                     gpu_sampling_enabled = false;
                 }
             }
+            auto sync_logits_if_needed = [&]() {
+                ggml_backend_t logits_backend = llama_get_logits_backend(ctx);
+                if (logits_backend && ggml_backend_is_sycl(logits_backend)) {
+                    llama_synchronize(ctx);
+                }
+            };
+
+            static debug_logits_config dbg_cfg;
+            dbg_cfg.init();
+
+            auto maybe_debug_logits = [&]() {
+                if (!dbg_cfg.enabled) {
+                    return;
+                }
+
+                sync_logits_if_needed();
+
+                const float * logits = llama_get_logits(ctx);
+                if (!logits) {
+                    LOG_WRN("[LOGITS] logits pointer is null at n_past=%d\n", n_past);
+                    return;
+                }
+
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                const int k = std::min(dbg_cfg.topk, n_vocab);
+                if (k <= 0) {
+                    return;
+                }
+
+                const std::vector<logits_top_entry> host_top = compute_topk_logits(logits, n_vocab, k);
+
+                if (dbg_cfg.row0 > 0 && n_past > 1) {
+                    const float * logits_row0 = llama_get_logits_ith(ctx, 0);
+                    if (logits_row0) {
+                        const std::vector<logits_top_entry> host_top_row0 = compute_topk_logits(logits_row0, n_vocab, k);
+                        LOG_INF("[LOGITS] n_past=%d host row0 top%d:\n", n_past, k);
+                        for (const auto & e : host_top_row0) {
+                            const std::string piece = common_token_to_piece(ctx, e.id, true);
+                            LOG_INF("[LOGITS]   row0 id=%d logit=%g piece=%s\n", e.id, e.logit, piece.c_str());
+                        }
+                    } else {
+                        LOG_WRN("[LOGITS] logits_row0 pointer is null at n_past=%d\n", n_past);
+                    }
+                }
+
+                bool have_device_top = false;
+                std::vector<logits_top_entry> device_top;
+#ifdef GGML_USE_SYCL
+                ggml_backend_t logits_backend = llama_get_logits_backend(ctx);
+                ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
+                if (logits_backend && ggml_backend_is_sycl(logits_backend) && logits_tensor) {
+                    std::vector<float> device_logits(n_vocab, 0.0f);
+                    ggml_backend_tensor_get(logits_tensor, device_logits.data(), 0, n_vocab * sizeof(float));
+                    device_top = compute_topk_logits(device_logits.data(), n_vocab, k);
+                    have_device_top = true;
+                }
+#endif
+
+                LOG_INF("[LOGITS] n_past=%d host top%d:\n", n_past, k);
+                for (const auto & e : host_top) {
+                    const std::string piece = common_token_to_piece(ctx, e.id, true);
+                    LOG_INF("[LOGITS]   host id=%d logit=%g piece=%s\n", e.id, e.logit, piece.c_str());
+                }
+                if (have_device_top) {
+                    LOG_INF("[LOGITS] n_past=%d device top%d:\n", n_past, k);
+                    for (const auto & e : device_top) {
+                        const std::string piece = common_token_to_piece(ctx, e.id, true);
+                        LOG_INF("[LOGITS]   dev  id=%d logit=%g piece=%s\n", e.id, e.logit, piece.c_str());
+                    }
+                    if (!host_top.empty() && !device_top.empty() && host_top[0].id != device_top[0].id) {
+                        LOG_WRN("[LOGITS] top-1 mismatch at n_past=%d: host=%d dev=%d\n",
+                                n_past, host_top[0].id, device_top[0].id);
+                    }
+                }
+            };
+            maybe_debug_logits();
 
             if (gpu_sampler && gpu_multistep > 1 && n_remain >= gpu_multistep) {
                 // Multi-step GPU decode path - generate multiple tokens without CPU sync
@@ -816,6 +985,7 @@ int main(int argc, char ** argv) {
                             hit_eos = true;
                         }
 
+                        log_sampled_token_dbg(id);
                         common_sampler_accept(smpl, id, /* accept_grammar= */ true);
                         embd.push_back(id);
 
@@ -832,7 +1002,9 @@ int main(int argc, char ** argv) {
                     LOG_DBG("n_remain: %d (multi-step generated %d tokens)\n", n_remain, n_generated);
                 } else {
                     // Fall back to single-step CPU sampling
+                    sync_logits_if_needed();
                     id = common_sampler_sample(smpl, ctx, -1);
+                    log_sampled_token_dbg(id);
                     common_sampler_accept(smpl, id, /* accept_grammar= */ true);
                     embd.push_back(id);
                     if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
@@ -852,8 +1024,10 @@ int main(int argc, char ** argv) {
                     id = ggml_backend_sycl_sample_token_full(gpu_sampler, logits_tensor, 0,
                         sparams.temp, sparams.top_k, sparams.top_p, sparams.min_p);
                 } else {
+                    sync_logits_if_needed();
                     id = common_sampler_sample(smpl, ctx, -1);
                 }
+                log_sampled_token_dbg(id);
                 common_sampler_accept(smpl, id, /* accept_grammar= */ true);
                 embd.push_back(id);
                 if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
@@ -863,7 +1037,9 @@ int main(int argc, char ** argv) {
                 --n_remain;
                 LOG_DBG("n_remain: %d\n", n_remain);
             } else {
+                sync_logits_if_needed();
                 id = common_sampler_sample(smpl, ctx, -1);
+                log_sampled_token_dbg(id);
                 common_sampler_accept(smpl, id, /* accept_grammar= */ true);
                 embd.push_back(id);
                 if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {
@@ -874,7 +1050,44 @@ int main(int argc, char ** argv) {
                 LOG_DBG("n_remain: %d\n", n_remain);
             }
 #else
+            // Use shared debug logits infrastructure
+            static debug_logits_config dbg_cfg;
+            dbg_cfg.init();
+
+            if (dbg_cfg.enabled > 0) {
+                const float * logits = llama_get_logits(ctx);
+                if (!logits) {
+                    LOG_WRN("[LOGITS] logits pointer is null at n_past=%d\n", n_past);
+                } else {
+                    const int n_vocab = llama_vocab_n_tokens(vocab);
+                    const int k = std::min(dbg_cfg.topk, n_vocab);
+                    if (k > 0) {
+                        if (dbg_cfg.row0 > 0 && n_past > 1) {
+                            const float * logits_row0 = llama_get_logits_ith(ctx, 0);
+                            if (logits_row0) {
+                                const std::vector<logits_top_entry> host_top_row0 = compute_topk_logits(logits_row0, n_vocab, k);
+                                LOG_INF("[LOGITS] n_past=%d host row0 top%d:\n", n_past, k);
+                                for (const auto & e : host_top_row0) {
+                                    const std::string piece = common_token_to_piece(ctx, e.id, true);
+                                    LOG_INF("[LOGITS]   row0 id=%d logit=%g piece=%s\n", e.id, e.logit, piece.c_str());
+                                }
+                            } else {
+                                LOG_WRN("[LOGITS] logits_row0 pointer is null at n_past=%d\n", n_past);
+                            }
+                        }
+
+                        const std::vector<logits_top_entry> host_top = compute_topk_logits(logits, n_vocab, k);
+                        LOG_INF("[LOGITS] n_past=%d host top%d:\n", n_past, k);
+                        for (const auto & e : host_top) {
+                            const std::string piece = common_token_to_piece(ctx, e.id, true);
+                            LOG_INF("[LOGITS]   host id=%d logit=%g piece=%s\n", e.id, e.logit, piece.c_str());
+                        }
+                    }
+                }
+            }
+
             id = common_sampler_sample(smpl, ctx, -1);
+            log_sampled_token_dbg(id);
             common_sampler_accept(smpl, id, /* accept_grammar= */ true);
             embd.push_back(id);
             if (params.conversation_mode && !waiting_for_first_input && !llama_vocab_is_eog(vocab, id)) {

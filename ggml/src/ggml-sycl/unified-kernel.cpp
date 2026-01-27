@@ -22,9 +22,19 @@
 #include "unified-kernel.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 
 namespace ggml_sycl_unified {
+
+static bool ggml_sycl_unified_debug_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_DEBUG");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
 
 // =============================================================================
 // Kernel Class Names for Profiling
@@ -431,12 +441,14 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         return;
     }
 
-    // Debug: Print launch parameters
-    fprintf(stderr, "[unified-kernel] LAUNCH: M=%lld N=%lld K=%lld type=%d tile=(%d,%d,%d) xmx=%d\n",
-            static_cast<long long>(args.M), static_cast<long long>(args.N),
-            static_cast<long long>(args.K), args.quant_type,
-            args.tile_m, args.tile_n, args.tile_k, args.use_xmx ? 1 : 0);
-    fflush(stderr);
+    // Debug: Print launch parameters (opt-in to avoid log spam in production)
+    if (ggml_sycl_unified_debug_enabled()) {
+        fprintf(stderr, "[unified-kernel] LAUNCH: M=%lld N=%lld K=%lld type=%d tile=(%d,%d,%d) xmx=%d\n",
+                static_cast<long long>(args.M), static_cast<long long>(args.N),
+                static_cast<long long>(args.K), args.quant_type,
+                args.tile_m, args.tile_n, args.tile_k, args.use_xmx ? 1 : 0);
+        fflush(stderr);
+    }
 
     // Calculate grid dimensions
     const int tile_m = args.tile_m;
@@ -512,10 +524,35 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
     // A more sophisticated version would use template instantiation for common sizes
 
     if (tile_m == 1) {
-        // M=1 actual body
+        // Decode path: M=1. Use a wider N tile for better throughput.
+        // Important: we must actually submit a kernel here; otherwise the
+        // output buffer is left unchanged and sampling goes off the rails.
         constexpr int TM = 1;
         constexpr int TN = 64;
         constexpr int TK = 32;
+
+        const int tm_grid_m = (static_cast<int>(args.M) + TM - 1) / TM;
+        const int tm_grid_n = (static_cast<int>(args.N) + TN - 1) / TN;
+
+        const int wg_m = 1;
+        const int wg_n = std::min(TN, 16);
+
+        q.submit([&](sycl::handler & cgh) {
+            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
+            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
+
+            sycl::nd_range<2> range(
+                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
+                sycl::range<2>(wg_m, wg_n)
+            );
+
+            cgh.parallel_for<unified_matmul_kernel_name<TM, TN, TK, false>>(
+                range,
+                [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(16)]] {
+                    unified_matmul_kernel_impl<TM, TN, TK, false>(item, args, slm_w, slm_a);
+                }
+            );
+        });
     } else if (tile_m <= 8 && tile_n <= 16 && tile_k <= 32) {
         // Small tiles: 8x16x32
         constexpr int TM = 8;
@@ -554,9 +591,11 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         const int wg_m = std::min(TM, 8);
         const int wg_n = std::min(TN, 16);
 
-        fprintf(stderr, "[unified-kernel] MEDIUM path: TM=%d TN=%d TK=%d grid=(%d,%d) wg=(%d,%d)\n",
-                TM, TN, TK, tm_grid_m, tm_grid_n, wg_m, wg_n);
-        fflush(stderr);
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] MEDIUM path: TM=%d TN=%d TK=%d grid=(%d,%d) wg=(%d,%d)\n",
+                    TM, TN, TK, tm_grid_m, tm_grid_n, wg_m, wg_n);
+            fflush(stderr);
+        }
 
         q.submit([&](sycl::handler & cgh) {
             // GGML: weights[N,K] -> slm_w[TN * TK]
@@ -590,6 +629,11 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         constexpr int TN = 32;
         constexpr int TK = 32;
 
+        // IMPORTANT: grid dimensions must match the ACTUAL template tile sizes.
+        // Using the caller-provided tile sizes here can under-cover the output.
+        const int tm_grid_m = (static_cast<int>(args.M) + TM - 1) / TM;
+        const int tm_grid_n = (static_cast<int>(args.N) + TN - 1) / TN;
+
         const int wg_m = std::min(TM, 8);
         const int wg_n = std::min(TN, 16);
 
@@ -600,7 +644,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
             sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
 
             sycl::nd_range<2> range(
-                sycl::range<2>(grid_m * wg_m, grid_n * wg_n),
+                sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
                 sycl::range<2>(wg_m, wg_n)
             );
 

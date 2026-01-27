@@ -9,13 +9,25 @@
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
+#include "ggml-backend.h"
+
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
 #endif
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
+
+static bool llama_debug_input_tokens_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("LLAMA_DEBUG_INPUT_TOKENS");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     // Check for device tokens: first from ubatch, then from thread-local pending token
@@ -57,7 +69,38 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
         // Standard path: copy from host memory
         const int64_t n_tokens = ubatch->n_tokens;
+        if (llama_debug_input_tokens_enabled() && n_tokens > 0) {
+            static int dbg_left = 16;
+            if (dbg_left > 0) {
+                const int32_t t0 = ubatch->token[0];
+                const int32_t t_last = ubatch->token[n_tokens - 1];
+                LLAMA_LOG_INFO(
+                    "[INPUT-TOKENS] pre-set n_tokens=%lld token_ptr=%p t0=%d t_last=%d tokens_tensor=%p data=%p\n",
+                    (long long) n_tokens,
+                    (const void *) ubatch->token,
+                    t0,
+                    t_last,
+                    (void *) tokens,
+                    tokens ? tokens->data : nullptr);
+                dbg_left--;
+            }
+        }
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
+        if (llama_debug_input_tokens_enabled() && tokens && tokens->data && tokens->buffer &&
+            ggml_backend_buffer_is_host(tokens->buffer) && n_tokens > 0) {
+            static int dbg_left_post = 16;
+            if (dbg_left_post > 0) {
+                int32_t sample[4] = { -1, -1, -1, -1 };
+                const int64_t n_copy = std::min<int64_t>(n_tokens, 4);
+                std::memcpy(sample, tokens->data, (size_t) n_copy * sizeof(int32_t));
+                LLAMA_LOG_INFO(
+                    "[INPUT-TOKENS] post-set n_tokens=%lld data=%p sample=[%d,%d,%d,%d]\n",
+                    (long long) n_tokens,
+                    tokens->data,
+                    sample[0], sample[1], sample[2], sample[3]);
+                dbg_left_post--;
+            }
+        }
     }
 
     if (ubatch->embd) {

@@ -14,10 +14,15 @@
 
 #include "common.hpp"
 #include "dequantize.hpp"
+#include "ggml-backend.h"
 #include "ggml-impl.h"
 
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 static const ggml_tensor * get_storage_tensor(const ggml_tensor * t) {
@@ -48,6 +53,35 @@ static int64_t get_view_row_offset(const ggml_tensor * t) {
         current = current->view_src;
     }
     return offset;
+}
+
+static bool ggml_sycl_debug_getrows_tokens_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_DEBUG_GET_ROWS_TOKENS");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+static const char * ggml_sycl_layout_mode_name_local(layout_mode mode) {
+    switch (mode) {
+        case GGML_LAYOUT_AOS:         return "aos";
+        case GGML_LAYOUT_SOA:         return "soa";
+        case GGML_LAYOUT_COALESCED:   return "coalesced";
+        case GGML_LAYOUT_XMX_TILED:   return "xmx_tiled";
+        case GGML_LAYOUT_XMX_GEMM_TILED: return "xmx_gemm_tiled";
+        default:                      return "unknown";
+    }
+}
+
+static const char * ggml_sycl_usm_alloc_name(sycl::usm::alloc alloc) {
+    switch (alloc) {
+        case sycl::usm::alloc::host:   return "host";
+        case sycl::usm::alloc::shared: return "shared";
+        case sycl::usm::alloc::device: return "device";
+        default:                       return "unknown";
+    }
 }
 
 static bool ggml_sycl_wait_after_get_rows_q6_k_soa() {
@@ -1480,6 +1514,56 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t n_rows_total = dst->src[1]->ne[0];
     const bool    index_is_1d  = (dst->src[1]->ne[1] == 1 && dst->src[1]->ne[2] == 1 && dst->src[1]->ne[3] == 1);
 
+    if (ggml_sycl_debug_getrows_tokens_enabled() && src0->name &&
+        std::strstr(src0->name, "token_embd.weight") != nullptr && index_is_1d && n_rows_total > 0) {
+        static int dbg_left = 8;
+        if (dbg_left > 0) {
+            int32_t host_ids[4] = { -1, -1, -1, -1 };
+            int32_t direct_ids[4] = { -1, -1, -1, -1 };
+            const int64_t n_copy = std::min<int64_t>(n_rows_total, 4);
+            bool copied = false;
+            const char * buft_name = "(no-buft)";
+            if (dst->src[1] && dst->src[1]->buffer) {
+                ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(dst->src[1]->buffer);
+                if (buft) {
+                    buft_name = ggml_backend_buft_name(buft);
+                }
+            }
+            const char * alloc_name = "unknown";
+            if (ctx.stream()) {
+                const sycl::context & sycl_ctx = ctx.stream()->get_context();
+                const sycl::usm::alloc alloc = sycl::get_pointer_type(src1_i32, sycl_ctx);
+                alloc_name = ggml_sycl_usm_alloc_name(alloc);
+                if (alloc != sycl::usm::alloc::unknown) {
+                    ctx.stream()->memcpy(host_ids, src1_i32, sizeof(int32_t) * (size_t) n_copy).wait();
+                    copied = true;
+                    if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
+                        for (int64_t i = 0; i < n_copy; ++i) {
+                            direct_ids[(size_t) i] = src1_i32[i];
+                        }
+                    }
+                }
+            }
+            if (!copied) {
+                for (int64_t i = 0; i < n_copy; ++i) {
+                    host_ids[(size_t) i] = src1_i32[i];
+                    direct_ids[(size_t) i] = src1_i32[i];
+                }
+            }
+            GGML_LOG_INFO(
+                "[GET_ROWS] token_embd: buft=%s alloc=%s layout=%s mode=%s rows=%lld ids=[%d,%d,%d,%d] direct=[%d,%d,%d,%d] ptr=%p\n",
+                buft_name,
+                alloc_name,
+                ggml_sycl_layout_mode_name_local(layout),
+                ggml_sycl_layout_mode_name_local(mode),
+                (long long) n_rows_total,
+                host_ids[0], host_ids[1], host_ids[2], host_ids[3],
+                direct_ids[0], direct_ids[1], direct_ids[2], direct_ids[3],
+                (const void *) src1_i32);
+            dbg_left--;
+        }
+    }
+
     ggml_sycl::unified_cache * cache =
         ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*ctx.stream()) : nullptr;
     ggml_sycl_cache_id         cache_key =
@@ -1849,5 +1933,75 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 "dst[0..7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f zeros=%d/8\n",
                 device, out_vals[0], out_vals[1], out_vals[2], out_vals[3], out_vals[4], out_vals[5], out_vals[6],
                 out_vals[7], zero_count);
+    }
+
+    // Optional numeric spot-check for AoS Q4_0 GET_ROWS correctness.
+    // Enable with GGML_SYCL_GET_ROWS_COMPARE=1 and optionally filter by name with
+    // GGML_SYCL_GET_ROWS_COMPARE_TENSOR=<substring>.
+    static int compare_enabled = -1;
+    if (compare_enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_GET_ROWS_COMPARE");
+        compare_enabled  = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    if (compare_enabled && layout == GGML_LAYOUT_AOS && src0->type == GGML_TYPE_Q4_0 && src0_d && src1_i32 && dst_d) {
+        const char * tensor_filter = std::getenv("GGML_SYCL_GET_ROWS_COMPARE_TENSOR");
+        const bool filter_ok = !tensor_filter || (src0->name && std::strstr(src0->name, tensor_filter) != nullptr);
+        static std::atomic<int> compare_remaining{ 1 };
+        if (filter_ok) {
+            const int remaining = compare_remaining.fetch_sub(1);
+            if (remaining > 0) {
+                ctx.stream()->wait();
+
+                const int64_t sample_rows = std::min<int64_t>(n_rows_total, 2);
+                const int64_t sample_cols = std::min<int64_t>(dst->ne[0], 64);
+                if (sample_rows > 0 && sample_cols > 0) {
+                    std::vector<int32_t> indices_host(static_cast<size_t>(n_rows_total));
+                    ctx.stream()->memcpy(indices_host.data(), src1_i32, n_rows_total * sizeof(int32_t)).wait();
+
+                    const int64_t ncols = src0->ne[0];
+                    const size_t row_size = ggml_row_size(src0->type, ncols);
+                    const int64_t blocks_per_row = ncols / QK4_0;
+
+                    std::vector<float> out_host(static_cast<size_t>(sample_rows * sample_cols), 0.0f);
+                    for (int64_t r = 0; r < sample_rows; ++r) {
+                        const size_t dst_offset = static_cast<size_t>(r) * (dst->nb[1] / sizeof(float));
+                        ctx.stream()->memcpy(&out_host[static_cast<size_t>(r * sample_cols)],
+                                             dst_d + dst_offset,
+                                             static_cast<size_t>(sample_cols) * sizeof(float)).wait();
+                    }
+
+                    float max_abs_err = 0.0f;
+                    for (int64_t r = 0; r < sample_rows; ++r) {
+                        const int32_t row_idx = indices_host[static_cast<size_t>(r)];
+                        if (row_idx < 0 || row_idx >= storage_rows) {
+                            continue;
+                        }
+                        const uint8_t * row_ptr =
+                            static_cast<const uint8_t *>(src0_d) + static_cast<size_t>(row_idx) * src0->nb[1];
+                        std::vector<uint8_t> row_host(row_size);
+                        ctx.stream()->memcpy(row_host.data(), row_ptr, row_size).wait();
+                        const auto * row_blocks = reinterpret_cast<const block_q4_0 *>(row_host.data());
+
+                        for (int64_t c = 0; c < sample_cols; ++c) {
+                            const int64_t block_idx = c / QK4_0;
+                            const int idx_in_block = static_cast<int>(c % QK4_0);
+                            const block_q4_0 & block = row_blocks[block_idx];
+                            const float d = static_cast<float>(block.d);
+                            const int qs_val =
+                                (idx_in_block < 16) ? (block.qs[idx_in_block] & 0x0F)
+                                                    : (block.qs[idx_in_block - 16] >> 4);
+                            const float ref = static_cast<float>(qs_val - 8) * d;
+                            const float got = out_host[static_cast<size_t>(r * sample_cols + c)];
+                            max_abs_err = std::max(max_abs_err, std::fabs(got - ref));
+                        }
+                    }
+
+                    GGML_LOG_INFO(
+                        "[GET_ROWS-COMPARE] tensor=%s rows=%lld cols=%lld max_abs_err=%.6g\n",
+                        src0->name ? src0->name : "unknown", (long long) sample_rows, (long long) sample_cols,
+                        max_abs_err);
+                }
+            }
+        }
     }
 }

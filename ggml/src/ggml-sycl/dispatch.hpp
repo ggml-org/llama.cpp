@@ -26,6 +26,7 @@
 #include "op-context.hpp"
 
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 
 namespace ggml_sycl {
@@ -289,6 +290,36 @@ inline void ggml_sycl_mul_mat_unified(
     // 2. Get tuned parameters (handles cold-start internally)
     ggml_sycl_tuning::TunedParams params = tuning_engine.get_params(key);
     double confidence = tuning_engine.get_confidence(key);
+
+    // Optional tile overrides for debugging unified-kernel correctness.
+    auto parse_tile_override = [](const char * name) -> int {
+        const char * env = std::getenv(name);
+        if (!env || env[0] == '\0') {
+            return -1;
+        }
+        const int v = std::atoi(env);
+        return v > 0 ? v : -1;
+    };
+    static int override_tile_m = -2;
+    static int override_tile_n = -2;
+    static int override_tile_k = -2;
+    if (override_tile_m == -2) override_tile_m = parse_tile_override("GGML_SYCL_UNIFIED_TILE_M");
+    if (override_tile_n == -2) override_tile_n = parse_tile_override("GGML_SYCL_UNIFIED_TILE_N");
+    if (override_tile_k == -2) override_tile_k = parse_tile_override("GGML_SYCL_UNIFIED_TILE_K");
+    const bool has_override = (override_tile_m > 0) || (override_tile_n > 0) || (override_tile_k > 0);
+    if (has_override) {
+        if (override_tile_m > 0) params.tile_m = static_cast<uint16_t>(override_tile_m);
+        if (override_tile_n > 0) params.tile_n = static_cast<uint16_t>(override_tile_n);
+        if (override_tile_k > 0) params.tile_k = static_cast<uint16_t>(override_tile_k);
+        static bool logged_override = false;
+        if (!logged_override) {
+            logged_override = true;
+            fprintf(stderr,
+                    "[unified-dispatch] tile override: M=%d N=%d K=%d\n",
+                    override_tile_m, override_tile_n, override_tile_k);
+            fflush(stderr);
+        }
+    }
 
     // 3. Trace if debugging enabled
     const char* source = (confidence > 0.5) ? "CACHED" : "HEURISTIC";

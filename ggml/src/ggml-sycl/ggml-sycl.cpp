@@ -32,6 +32,7 @@
 #include <regex>
 #include <string>
 #include <typeinfo>
+#include <utility>
 #if !defined(_WIN32)
 #    include <sys/mman.h>
 #    include <unistd.h>
@@ -136,6 +137,73 @@ static int ggml_sycl_layout_priority(layout_mode mode);
 static constexpr size_t  k_reorder_guard_bytes   = 64;
 static constexpr uint8_t k_reorder_guard_pattern = 0xA5;
 
+struct ggml_sycl_canonical_checksum_info {
+    size_t   bytes    = 0;
+    uint64_t checksum = 0;
+};
+
+static std::mutex g_sycl_canonical_checksum_mutex;
+static std::unordered_map<std::string, ggml_sycl_canonical_checksum_info> g_sycl_canonical_checksums;
+
+static uint64_t ggml_sycl_fnv1a64(const uint8_t * data, size_t len) {
+    uint64_t hash = 1469598103934665603ULL;  // FNV offset basis
+    for (size_t i = 0; i < len; ++i) {
+        hash ^= static_cast<uint64_t>(data[i]);
+        hash *= 1099511628211ULL;  // FNV prime
+    }
+    return hash;
+}
+
+static void ggml_sycl_maybe_capture_canonical_checksum(const ggml_tensor * tensor, const void * data, size_t size) {
+    if (!tensor || !data || size == 0 || tensor->name[0] == '\0') {
+        return;
+    }
+    static int enabled = -1;
+    static std::string filter;
+    static size_t bytes_limit = 4096;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_CANONICAL_CHECKSUM_TENSOR");
+        enabled           = (env && env[0] != '\0') ? 1 : 0;
+        if (enabled) {
+            filter = env;
+        }
+        if (const char * bytes_env = std::getenv("GGML_SYCL_CANONICAL_CHECKSUM_BYTES")) {
+            const long long v = std::atoll(bytes_env);
+            if (v > 0) {
+                bytes_limit = static_cast<size_t>(v);
+            }
+        }
+    }
+    if (!enabled) {
+        return;
+    }
+    if (filter[0] != '\0' && std::strstr(tensor->name, filter.c_str()) == nullptr) {
+        return;
+    }
+
+    const size_t bytes = std::min(bytes_limit, size);
+    const auto checksum = ggml_sycl_fnv1a64(static_cast<const uint8_t *>(data), bytes);
+    {
+        std::lock_guard<std::mutex> lock(g_sycl_canonical_checksum_mutex);
+        g_sycl_canonical_checksums[std::string(tensor->name)] = ggml_sycl_canonical_checksum_info{ bytes, checksum };
+    }
+    GGML_LOG_INFO("[CANONICAL-CHECKSUM] captured tensor=%s bytes=%zu checksum=0x%016llx\n",
+                  tensor->name, bytes, (unsigned long long) checksum);
+}
+
+static bool ggml_sycl_get_canonical_checksum(const char * name, ggml_sycl_canonical_checksum_info & out) {
+    if (!name || name[0] == '\0') {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_sycl_canonical_checksum_mutex);
+    auto it = g_sycl_canonical_checksums.find(std::string(name));
+    if (it == g_sycl_canonical_checksums.end()) {
+        return false;
+    }
+    out = it->second;
+    return true;
+}
+
 // Check if unified dispatch is enabled via environment variable
 // GGML_SYCL_UNIFIED_DISPATCH=1 enables the unified kernel dispatch path
 static bool ggml_sycl_unified_dispatch_enabled() {
@@ -146,9 +214,27 @@ static bool ggml_sycl_unified_dispatch_enabled() {
     return g_ggml_sycl_unified_dispatch != 0;
 }
 
+// Unified kernel requires AoS inputs and performs its own internal reordering.
+// If we reorder weights ahead of time, we can end up double-reordering and
+// feeding the unified kernel the wrong layout.
+static bool ggml_sycl_unified_kernel_requires_aos(ggml_type type) {
+    return ggml_sycl_unified_dispatch_enabled() &&
+           ggml_sycl::is_unified_kernel_enabled() &&
+           ggml_sycl::should_use_unified(type);
+}
+
 static bool ggml_sycl_reorder_guard_enabled() {
     const char * env = std::getenv("GGML_SYCL_REORDER_GUARD");
     return env && std::atoi(env) != 0;
+}
+
+static bool ggml_sycl_debug_set_tensor_i32_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_DEBUG_SET_TENSOR_I32");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
 }
 
 static bool ggml_sycl_check_reorder_guard(const void * base,
@@ -291,6 +377,15 @@ bool ggml_sycl_reorder_enabled() {
         return false;
     }
     return true;
+}
+
+static bool ggml_sycl_reorder_allowed_for_type(ggml_type type) {
+    // Unified kernel requires AoS inputs and reorders internally.
+    // Reordering ahead of time would double-reorder and corrupt results.
+    if (ggml_sycl_unified_kernel_requires_aos(type)) {
+        return false;
+    }
+    return ggml_sycl_reorder_enabled();
 }
 
 // =============================================================================
@@ -936,6 +1031,7 @@ static bool ggml_sycl_get_layout_choice(const ggml_sycl_cache_id & key_id, int d
 static void ggml_sycl_register_layout_choice(const ggml_sycl_cache_id & key_id,
                                              int                        device,
                                              layout_mode                layout,
+                                             ggml_type                  type,
                                              const char *               name) {
     if (!key_id.valid) {
         return;
@@ -961,6 +1057,32 @@ static void ggml_sycl_register_layout_choice(const ggml_sycl_cache_id & key_id,
                             name ? name : "unknown", ggml_sycl_layout_mode_name(it->second),
                             ggml_sycl_layout_mode_name(layout));
         }
+    }
+
+    (void) type;
+}
+
+// Force a layout choice regardless of priority. Use sparingly.
+static void ggml_sycl_force_layout_choice(const ggml_sycl_cache_id & key_id,
+                                          int                        device,
+                                          layout_mode                layout,
+                                          const char *               name) {
+    if (!key_id.valid) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_sycl_layout_choice_mutex);
+    ggml_sycl_layout_choice_key key{ key_id, device };
+    auto                        it = g_sycl_layout_choices.find(key);
+    if (it == g_sycl_layout_choices.end()) {
+        g_sycl_layout_choices.emplace(key, layout);
+        return;
+    }
+    if (it->second != layout) {
+        GGML_SYCL_DEBUG("[LAYOUT] forcing %s from %s to %s\n",
+                        name ? name : "unknown",
+                        ggml_sycl_layout_mode_name(it->second),
+                        ggml_sycl_layout_mode_name(layout));
+        it->second = layout;
     }
 }
 
@@ -1594,7 +1716,7 @@ bool ggml_sycl_get_layout_choice_for_tensor(const ggml_tensor * tensor, int devi
             GGML_SYCL_DEBUG("[LAYOUT] missing choice for %s; registering fallback %s\n",
                             tensor->name ? tensor->name : "?", ggml_sycl_layout_mode_name(target));
         }
-        ggml_sycl_register_layout_choice(key, device, target, tensor->name);
+        ggml_sycl_register_layout_choice(key, device, target, tensor->type, tensor->name);
         *out = target;
         return true;
     }
@@ -2573,7 +2695,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         }
     } else if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K ||
                 tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_MXFP4) &&
-               ggml_sycl_reorder_enabled()) {
+               (ggml_sycl_reorder_enabled() || ggml_sycl_unified_kernel_requires_aos(tensor->type))) {
         // CRITICAL FIX: Reuse existing extra if present (may have been created by
         // ggml_backend_sycl_register_weight_identity with model_id already set).
         // Do NOT overwrite it or we lose the model_id for unified cache lookups.
@@ -2704,6 +2826,13 @@ layout_mode ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layou
         return GGML_LAYOUT_AOS;
     }
     if (!ggml_is_quantized(tensor->type)) {
+        return GGML_LAYOUT_AOS;
+    }
+
+    // Unified kernel requires AoS inputs and reorders internally. If we allow
+    // a non-AoS layout choice here, unified dispatch will request AoS later
+    // but the layout registry will block it as a mismatch.
+    if (target != GGML_LAYOUT_AOS && !ggml_sycl_reorder_allowed_for_type(tensor->type)) {
         return GGML_LAYOUT_AOS;
     }
     layout_mode resolved = target;
@@ -3587,7 +3716,6 @@ static void ggml_sycl_preload_model_weights() {
         const tensor_usage usage  = ggml_sycl_get_tensor_usage(tensor);
         layout_mode        target = layout_policy::get_with_override(tensor->type, usage, device);
         target                    = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-
         if (target != GGML_LAYOUT_AOS && !ggml_sycl_reorder_enabled()) {
             target = GGML_LAYOUT_AOS;
         }
@@ -3757,13 +3885,18 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         src_alloc = sycl::get_pointer_type(src_ptr, q.get_context());
     }
     const bool src_is_device = (src_alloc == sycl::usm::alloc::device);
-    layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
+    const bool strict_aos =
+        ggml_sycl_unified_dispatch_enabled() &&
+        ggml_sycl::should_use_unified(tensor->type) &&
+        target == GGML_LAYOUT_AOS;
+    layout_mode resolved = strict_aos ? GGML_LAYOUT_AOS
+                                      : ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
 
     // If a higher-priority layout was already registered for this tensor, use it instead.
     // This can happen when llama-bench runs multiple batch sizes (PP then TG) without
     // reloading the model - the PP test might register COALESCED while TG requests SOA.
     // Since COALESCED is a superset of SOA for most kernels, using it is safe.
-    if (ggml_sycl_layout_choices_finalized_for_device(device)) {
+    if (!strict_aos && ggml_sycl_layout_choices_finalized_for_device(device)) {
         layout_mode chosen = GGML_LAYOUT_AOS;
         if (ggml_sycl_get_layout_choice(cache_key, device, &chosen)) {
             if (ggml_sycl_layout_priority(chosen) > ggml_sycl_layout_priority(resolved)) {
@@ -3952,7 +4085,9 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, l
         ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, result.device_ptr, result.size,
                                            result.xmx_info);
     }
-    if (resolved != GGML_LAYOUT_AOS) {
+    const bool keep_aos =
+        ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type);
+    if (resolved != GGML_LAYOUT_AOS && !keep_aos) {
         ggml_sycl_drop_non_target_cache_entries(cache, cache_key, resolved);
     }
     return result.device_ptr;
@@ -3970,6 +4105,26 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
 
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
+    if (ggml_sycl_debug_set_tensor_i32_enabled() && tensor && tensor->type == GGML_TYPE_I32 && data &&
+        size <= 64) {
+        const int32_t * vals = static_cast<const int32_t *>(data);
+        const size_t n_vals = std::min<size_t>(size / sizeof(int32_t), 4);
+        int32_t sample[4] = { -1, -1, -1, -1 };
+        for (size_t i = 0; i < n_vals; ++i) {
+            sample[i] = vals[i];
+        }
+        const char * buft_name = buffer && buffer->buft ? buffer->buft->iface.get_name(buffer->buft) : "(no-buft)";
+        GGML_LOG_INFO(
+            "[SET_TENSOR-I32] name=%s input=%d buft=%s size=%zu offset=%zu vals=[%d,%d,%d,%d] data=%p tensor=%p\n",
+            tensor->name ? tensor->name : "(null)",
+            (tensor->flags & GGML_TENSOR_FLAG_INPUT) ? 1 : 0,
+            buft_name,
+            size,
+            offset,
+            sample[0], sample[1], sample[2], sample[3],
+            data,
+            (void *) tensor);
+    }
     ggml_sycl_set_device(ctx->device);
     // Use the buffer's stream for proper queue synchronization with compute operations
     auto stream = ctx->stream ? ctx->stream : &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
@@ -4001,6 +4156,9 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         }
 
     }
+    if (is_weight_buffer && offset == 0 && size > 0) {
+        ggml_sycl_maybe_capture_canonical_checksum(tensor, data, size);
+    }
     // Determine if we should do CPU-side SoA reordering during upload
     // This is faster than GPU-side reorder: no kernel launch, data already in cache
     // Check this FIRST before cache path, because cache stores AoS and we need SoA
@@ -4017,7 +4175,8 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
          tensor->type == GGML_TYPE_Q6_K || tensor->type == GGML_TYPE_MXFP4);
     bool dims_ok     = tensor->ne[0] > 0 && tensor->ne[1] > 0;
     bool full_tensor = (offset == 0 && size == ggml_nbytes(tensor));
-    if (type_ok && ggml_sycl_reorder_enabled() && ctx->supports_soa_reorder && dims_ok && full_tensor) {
+    if (type_ok && ggml_sycl_reorder_allowed_for_type(tensor->type) && ctx->supports_soa_reorder && dims_ok &&
+        full_tensor) {
         do_reorder = true;
     }
     const tensor_usage usage = is_weight_buffer ? ggml_sycl_get_tensor_usage(tensor) : tensor_usage::UNKNOWN;
@@ -4291,7 +4450,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
             ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx->device);
             if (cache_key.valid) {
-                ggml_sycl_register_layout_choice(cache_key, ctx->device, adjusted_layout, tensor->name);
+                ggml_sycl_register_layout_choice(cache_key, ctx->device, adjusted_layout, tensor->type, tensor->name);
             }
         }
 
@@ -13702,9 +13861,8 @@ static bool should_cpu_reorder(const ggml_tensor * tensor, const ggml_backend_sy
         tensor->type != GGML_TYPE_Q6_K && tensor->type != GGML_TYPE_MXFP4) {
         return false;
     }
-    // Check if reordering is enabled
-
-    if (!ggml_sycl_reorder_enabled()) {
+    // Check if reordering is allowed for this type (unified kernel requires AoS)
+    if (!ggml_sycl_reorder_allowed_for_type(tensor->type)) {
         return false;
     }
     // Need tensor dimensions
@@ -14767,7 +14925,6 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
                 } else {
                     target = layout_policy::get_with_override(src->type, usage, ctx.device);
                 }
-
             } else {
                 target = layout_policy::get_with_override(src->type, usage, ctx.device);
             }
@@ -14831,20 +14988,26 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
 
     for (const auto & entry : chosen_layouts) {
         const ggml_tensor * tensor = entry.first;
-        const layout_mode   target = entry.second;
+        layout_mode         target = entry.second;
         ggml_sycl_cache_id  key    = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
+        if (target != GGML_LAYOUT_AOS && !ggml_sycl_reorder_enabled()) {
+            target = GGML_LAYOUT_AOS;
+        }
 
         if (key.valid) {
-            ggml_sycl_register_layout_choice(key, ctx.device, target, ggml_get_name(tensor));
+            ggml_sycl_register_layout_choice(key, ctx.device, target, tensor->type, ggml_get_name(tensor));
         }
     }
     for (const auto & entry : moe_layouts) {
 
         const ggml_tensor * tensor    = entry.first;
-        const layout_mode   target    = entry.second.layout;
+        layout_mode         target    = entry.second.layout;
         const int64_t       n_experts = entry.second.n_experts;
         ggml_sycl_cache_id  base_key  = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
         auto *              extra     = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+        if (target != GGML_LAYOUT_AOS && !ggml_sycl_reorder_enabled()) {
+            target = GGML_LAYOUT_AOS;
+        }
         if (!extra) {
             GGML_LOG_ERROR("[LAYOUT] MoE layout registration missing extra for %s\n",
                            tensor->name ? tensor->name : "?");
@@ -14855,34 +15018,34 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
         for (int64_t e = 0; e < n_experts; ++e) {
             ggml_sycl_cache_id key = ggml_sycl_get_moe_expert_cache_key(tensor, extra, static_cast<int>(e));
             if (key.valid) {
-                ggml_sycl_register_layout_choice(key, ctx.device, target, ggml_get_name(tensor));
+                ggml_sycl_register_layout_choice(key, ctx.device, target, tensor->type, ggml_get_name(tensor));
             }
         }
         if (base_key.valid) {
-            ggml_sycl_register_layout_choice(base_key, ctx.device, target, ggml_get_name(tensor));
+            ggml_sycl_register_layout_choice(base_key, ctx.device, target, tensor->type, ggml_get_name(tensor));
         }
 
     }
     GGML_SYCL_DEBUG("[DEBUG-FINALIZE] Starting second loop (layout materialization)...\n");
     for (const auto & entry : chosen_layouts) {
         const ggml_tensor * tensor = entry.first;
-        const layout_mode   target = entry.second;
+        layout_mode         target = entry.second;
         if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
             extra->layout_dirty = false;
         }
-        if (target == GGML_LAYOUT_AOS) {
-            continue;
-        }
+        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
 
-        void * cached = ggml_sycl_get_weight_layout_ptr(tensor, ctx.device, target);
+        void * cached = nullptr;
+        if (target != GGML_LAYOUT_AOS) {
+            cached = ggml_sycl_get_weight_layout_ptr(tensor, ctx.device, target);
+        }
         if (g_ggml_sycl_debug >= 2) {
-            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
             fprintf(stderr, "[LAYOUT-TRACE] lookup tensor=%p name=%s model=%llu name_hash=0x%llx target=%s cached=%p\n",
                     (void *) tensor, ggml_get_name(tensor), (unsigned long long) cache_key.model_id,
                     (unsigned long long) cache_key.name_hash, ggml_sycl_layout_mode_name(target), cached);
 
         }
-        if (!cached) {
+        if (target != GGML_LAYOUT_AOS && !cached) {
             GGML_LOG_ERROR("[LAYOUT] Failed to materialize %s for %s\n", ggml_sycl_layout_mode_name(target),
                            ggml_get_name(tensor));
             GGML_ASSERT(cached && "failed to materialize chosen layout");
@@ -14890,13 +15053,17 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             all_ok = false;
             continue;
         }
-        converted_count++;
-        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, ctx.device);
+        if (target != GGML_LAYOUT_AOS) {
+            converted_count++;
+        }
 
-        if (cache && cache_key.valid) {
+        const bool keep_aos =
+            ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(tensor->type);
+        const bool need_drop = (target != GGML_LAYOUT_AOS) && !keep_aos;
+        if (need_drop && cache && cache_key.valid) {
             ggml_sycl_drop_non_target_cache_entries(cache, cache_key, target);
         }
-        if (host_cache && cache_key.valid && tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer)) {
+        if (need_drop && host_cache && cache_key.valid && tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer)) {
             ggml_sycl_drop_non_target_host_entries(host_cache, cache_key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1,
 
                                                    -1, target);
@@ -15470,7 +15637,8 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
 
         extra->moe_expert_ptrs_host[device][static_cast<size_t>(e)] = result.device_ptr;
 
-        if (cache && layout != GGML_LAYOUT_AOS) {
+        const bool need_drop = ggml_sycl_unified_kernel_requires_aos(src0->type) || layout != GGML_LAYOUT_AOS;
+        if (cache && need_drop) {
             ggml_sycl_drop_non_target_expert_entries(cache, expert_cache_key, layer_id, static_cast<int>(e), layout);
         }
 
@@ -15981,9 +16149,29 @@ static const ggml_sycl_mul_mat_kernel_caps * ggml_sycl_mul_mat_kernel_get_caps(g
     }
     return nullptr;
 }
+static bool ggml_sycl_dmmv_allow_reordered_layouts() {
+    static int allow = -1;
+    if (allow < 0) {
+        const char * env = std::getenv("GGML_SYCL_DMMV_USE_COALESCED");
+        allow             = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return allow != 0;
+}
 static layout_mode ggml_sycl_mul_mat_kernel_layout(ggml_sycl_mul_mat_kernel kernel) {
     const auto * caps = ggml_sycl_mul_mat_kernel_get_caps(kernel);
-    return caps ? caps->layout : GGML_LAYOUT_AOS;
+    if (!caps) {
+        return GGML_LAYOUT_AOS;
+    }
+    // Spinach: DMMV's reordered layouts are guarded by GGML_SYCL_DMMV_USE_COALESCED
+    // inside the DMMV kernel. If we select SOA/COALESCED here without that guard,
+    // we can pass a reordered pointer that DMMV then interprets as AoS, yielding NaNs.
+    // Force DMMV to use AoS unless the guard is explicitly enabled.
+    if ((kernel == ggml_sycl_mul_mat_kernel::DMMV_SOA ||
+         kernel == ggml_sycl_mul_mat_kernel::DMMV_COALESCED) &&
+        !ggml_sycl_dmmv_allow_reordered_layouts()) {
+        return GGML_LAYOUT_AOS;
+    }
+    return caps->layout;
 }
 static bool ggml_sycl_mul_mat_kernel_supports_batch(ggml_sycl_mul_mat_kernel kernel, int64_t batch) {
     const auto * caps = ggml_sycl_mul_mat_kernel_get_caps(kernel);
@@ -16401,7 +16589,6 @@ static bool ggml_sycl_can_use_layout_for_kernel(const ggml_tensor * tensor, layo
         return false;
     }
     if (layout != GGML_LAYOUT_AOS && !ggml_sycl_reorder_enabled()) {
-
         return false;
     }
     if (ggml_sycl_adjust_layout_for_tensor(tensor, layout, device) != layout) {
@@ -16738,40 +16925,329 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         // weights by n (output column) instead of m (output row).
 #if 1  // ENABLED - with AOS layout check to prevent crash with reordered weights
         if (ggml_sycl_unified_dispatch_enabled() && ggml_sycl::should_use_unified(src0->type)) {
-            // Check if weight tensor is in AOS layout - unified kernel only supports AOS currently
             auto * extra0 = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
             const layout_mode src0_layout = extra0 ? get_effective_layout_mode(extra0) : GGML_LAYOUT_AOS;
+            if (src0_layout != GGML_LAYOUT_AOS && g_ggml_sycl_debug) {
+                GGML_SYCL_DEBUG("[UNIFIED] tensor reports layout=%d; requesting AoS pointer explicitly\n",
+                                static_cast<int>(src0_layout));
+            }
+            const bool src1_contiguous =
+                ggml_is_contiguous(src1) && !ggml_is_transposed(src1) && !ggml_is_permuted(src1);
+            if (!src1_contiguous) {
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED] Skipping - src1 not contiguous/permuted: contig=%d transposed=%d permuted=%d (%s)\n",
+                    ggml_is_contiguous(src1) ? 1 : 0,
+                    ggml_is_transposed(src1) ? 1 : 0,
+                    ggml_is_permuted(src1) ? 1 : 0,
+                    src1->name ? src1->name : "?");
+            } else {
+            // Extract dimensions for unified kernel (GGML convention)
+            const int64_t M = src1->ne[1];  // batch size (output rows) - from src1
+            const int64_t K = src0->ne[0];  // reduction dimension - from src0
+            const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
 
-            if (src0_layout != GGML_LAYOUT_AOS) {
-                // Weight tensor has been reordered to SOA/COALESCED - fall back to legacy path
-                GGML_SYCL_DEBUG("[UNIFIED] Skipping - weight layout is %d (not AOS)\n", static_cast<int>(src0_layout));
+            // IMPORTANT: unified kernel must use device-accessible pointers.
+            // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
+            const char * src0_ptr_source = nullptr;
+            const void * src0_data =
+                ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS, &src0_ptr_source);
+            const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
+            float * dst_data = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
+
+            if (!src0_data || !src1_data || !dst_data) {
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED] Skipping - null pointer(s): src0=%p (%s) src1=%p dst=%p\n",
+                    src0_data, src0_ptr_source ? src0_ptr_source : "?", src1_data, dst_data);
                 // Fall through to legacy dispatch below
             } else {
-                // Extract dimensions for unified kernel (GGML convention)
-                const int64_t M = src1->ne[1];  // batch size (output rows) - from src1
-                const int64_t K = src0->ne[0];  // reduction dimension - from src0
-                const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
+                    // Validate that pointers are device-accessible USM.
+                    const sycl::context & sycl_ctx = ctx.stream()->get_context();
+                    const sycl::usm::alloc src0_alloc = sycl::get_pointer_type(src0_data, sycl_ctx);
+                    const sycl::usm::alloc src1_alloc = sycl::get_pointer_type(src1_data, sycl_ctx);
+                    const sycl::usm::alloc dst_alloc  = sycl::get_pointer_type(dst_data,  sycl_ctx);
 
-                // Get data pointers
-                const void * src0_data = src0->data;
-                const float * src1_data = static_cast<const float *>(src1->data);
-                float * dst_data = static_cast<float *>(dst->data);
+                    const bool src0_ok = src0_alloc != sycl::usm::alloc::unknown;
+                    const bool src1_ok = src1_alloc != sycl::usm::alloc::unknown;
+                    const bool dst_ok  = dst_alloc  != sycl::usm::alloc::unknown;
 
-                // Call unified dispatch
-                GGML_SYCL_DEBUG("[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d\n",
-                                (long long)M, (long long)K, (long long)N, src0->type, static_cast<int>(src0_layout));
+                    if (!src0_ok || !src1_ok || !dst_ok) {
+                        GGML_SYCL_DEBUG(
+                            "[UNIFIED] Skipping - non-USM pointer(s): src0=%p alloc=%d (%s) src1=%p alloc=%d dst=%p alloc=%d\n",
+                            src0_data, (int) src0_alloc, src0_ptr_source ? src0_ptr_source : "?",
+                            src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
+                        // Fall through to legacy dispatch below
+                    } else {
+                        // Call unified dispatch
+                        GGML_SYCL_DEBUG(
+                            "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d src0=%p(%s,%d) src1=%p(%d) dst=%p(%d)\n",
+                            (long long) M, (long long) K, (long long) N, src0->type, static_cast<int>(src0_layout),
+                            src0_data, src0_ptr_source ? src0_ptr_source : "?", (int) src0_alloc,
+                            src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
 
-                ggml_sycl::ggml_sycl_mul_mat_unified_default(
-                    *ctx.stream(),
-                    src0_data,
-                    src1_data,
-                    dst_data,
-                    M, N, K,
-                    src0->type);
+                        ggml_sycl::ggml_sycl_mul_mat_unified_default(
+                            *ctx.stream(),
+                            src0_data,
+                            src1_data,
+                            dst_data,
+                            M, N, K,
+                            src0->type);
 
-                return;
+                        // Optional numeric spot-check against a host reference.
+                        // Enable with GGML_SYCL_UNIFIED_COMPARE=1 and optionally
+                        // GGML_SYCL_UNIFIED_COMPARE_TENSOR=<substring>.
+                        static int compare_enabled = -1;
+                        if (compare_enabled < 0) {
+                            const char * env = std::getenv("GGML_SYCL_UNIFIED_COMPARE");
+                            compare_enabled = (env && std::string(env) == "1") ? 1 : 0;
+                        }
+                        if (compare_enabled) {
+                            const char * tensor_filter = std::getenv("GGML_SYCL_UNIFIED_COMPARE_TENSOR");
+                            const bool filter_ok = !tensor_filter || std::strstr(src0->name, tensor_filter) != nullptr;
+                            static int compare_limit = -1;
+                            static int compare_required_m = -2;  // -2 = uninitialized, -1 = any
+                            static std::atomic<int> compare_remaining{ 1 };
+                            if (compare_limit < 0) {
+                                const char * limit_env = std::getenv("GGML_SYCL_UNIFIED_COMPARE_LIMIT");
+                                const int parsed_limit = limit_env ? std::atoi(limit_env) : 1;
+                                compare_limit = parsed_limit > 0 ? parsed_limit : 1;
+                                compare_remaining.store(compare_limit);
+                            }
+                            if (compare_required_m == -2) {
+                                const char * require_m_env = std::getenv("GGML_SYCL_UNIFIED_COMPARE_REQUIRE_M");
+                                compare_required_m = require_m_env ? std::atoi(require_m_env) : -1;
+                            }
+                            const bool m_ok =
+                                (compare_required_m < 0) || (M == static_cast<int64_t>(compare_required_m));
+                            if (filter_ok && m_ok) {
+                                const int remaining = compare_remaining.fetch_sub(1);
+                                if (remaining > 0 && src0->type == GGML_TYPE_Q4_0 && src0->data) {
+                                    const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+                                    const int reorder_mode_val =
+                                        extra ? static_cast<int>(extra->optimized_feature.get_reorder()) : -1;
+                                    const int layout_mode_val = extra ? static_cast<int>(extra->layout.mode) : -1;
+                                    GGML_LOG_INFO(
+                                        "[UNIFIED-COMPARE] tensor=%s src0_ptr_source=%s extra_layout=%s reorder_mode=%d\n",
+                                        src0->name ? src0->name : "unknown",
+                                        src0_ptr_source ? src0_ptr_source : "?",
+                                        ggml_sycl_layout_mode_name(static_cast<ggml_layout_mode>(layout_mode_val)),
+                                        reorder_mode_val);
+                                    const size_t row_size = ggml_row_size(src0->type, static_cast<int64_t>(K));
+                                    GGML_LOG_INFO(
+                                        "[UNIFIED-COMPARE] tensor=%s row_size=%zu nb0=%lld nb1=%lld nbytes=%zu\n",
+                                        src0->name ? src0->name : "unknown", row_size,
+                                        (long long) src0->nb[0], (long long) src0->nb[1], ggml_nbytes(src0));
+
+                                    const int64_t k_blocks_per_row = K / QK4_0;
+                                    const int64_t total_blocks = static_cast<int64_t>(N) * k_blocks_per_row;
+                                    const int64_t sample_blocks = std::min<int64_t>(k_blocks_per_row, 4);
+
+                                    // Force completion so we can safely read back a small slice.
+                                    ctx.stream()->wait();
+
+                                    const size_t weight_bytes =
+                                        static_cast<size_t>(total_blocks) * sizeof(block_q4_0);
+                                    std::vector<uint8_t> weights_host_bytes(weight_bytes);
+                                    ctx.stream()->memcpy(weights_host_bytes.data(), src0_data, weight_bytes).wait();
+                                    const block_q4_0 * w_host =
+                                        reinterpret_cast<const block_q4_0 *>(weights_host_bytes.data());
+
+                                    static int device_checksum_enabled = -1;
+                                    static size_t device_checksum_limit = 4096;
+                                    if (device_checksum_enabled < 0) {
+                                        const char * env = std::getenv("LLAMA_CANONICAL_CHECKSUM_TENSOR");
+                                        device_checksum_enabled = (env && env[0] != '\0') ? 1 : 0;
+                                        if (const char * bytes_env = std::getenv("LLAMA_CANONICAL_CHECKSUM_BYTES")) {
+                                            const long long v = std::atoll(bytes_env);
+                                            if (v > 0) {
+                                                device_checksum_limit = static_cast<size_t>(v);
+                                            }
+                                        }
+                                    }
+                                    if (device_checksum_enabled && weight_bytes > 0) {
+                                        const size_t bytes = std::min(device_checksum_limit, weight_bytes);
+                                        const uint64_t device_checksum = ggml_sycl_fnv1a64(weights_host_bytes.data(), bytes);
+                                        GGML_LOG_INFO(
+                                            "[LLAMA-DEVICE-CHECKSUM] tensor=%s bytes=%zu checksum=0x%016llx\n",
+                                            src0->name ? src0->name : "unknown", bytes,
+                                            (unsigned long long) device_checksum);
+                                    }
+
+                                    ggml_sycl_canonical_checksum_info canonical{};
+                                    if (ggml_sycl_get_canonical_checksum(src0->name, canonical) &&
+                                        canonical.bytes > 0 && weight_bytes > 0) {
+                                        const size_t bytes = std::min(canonical.bytes, weight_bytes);
+                                        const uint64_t device_checksum = ggml_sycl_fnv1a64(weights_host_bytes.data(), bytes);
+                                        const bool match = (device_checksum == canonical.checksum);
+                                        GGML_LOG_INFO(
+                                            "[CANONICAL-CHECKSUM] tensor=%s bytes=%zu canonical=0x%016llx device=0x%016llx match=%d\n",
+                                            src0->name ? src0->name : "unknown", bytes,
+                                            (unsigned long long) canonical.checksum,
+                                            (unsigned long long) device_checksum, match ? 1 : 0);
+                                    }
+
+                                    // If the tensor data pointer is host-accessible, compare a few samples.
+                                    const sycl::context & sycl_ctx_local = ctx.stream()->get_context();
+                                    const sycl::usm::alloc src0_tensor_alloc =
+                                        sycl::get_pointer_type(src0->data, sycl_ctx_local);
+                                    const bool src0_host_accessible = (src0_tensor_alloc != sycl::usm::alloc::device);
+                                    if (src0_host_accessible && sample_blocks > 0 && weight_bytes > 0) {
+                                        const size_t block_bytes = sizeof(block_q4_0);
+                                        const size_t sample_bytes = static_cast<size_t>(sample_blocks) * block_bytes;
+                                        auto diff_at_block_offset = [&](int64_t block_offset) {
+                                            const int64_t clamped_offset = std::max<int64_t>(
+                                                0, std::min<int64_t>(block_offset, total_blocks - sample_blocks));
+                                            const size_t byte_offset = static_cast<size_t>(clamped_offset) * block_bytes;
+                                            const uint8_t * cache_ptr = weights_host_bytes.data() + byte_offset;
+                                            const uint8_t * host_ptr =
+                                                static_cast<const uint8_t *>(src0->data) + byte_offset;
+                                            size_t diff_bytes = 0;
+                                            for (size_t i = 0; i < sample_bytes; ++i) {
+                                                diff_bytes += (cache_ptr[i] != host_ptr[i]) ? 1u : 0u;
+                                            }
+                                            return std::make_pair(clamped_offset, diff_bytes);
+                                        };
+
+                                        const auto [off0, diff0] = diff_at_block_offset(0);
+                                        const auto [off1, diff1] = diff_at_block_offset(total_blocks / 2);
+                                        const auto [off2, diff2] =
+                                            diff_at_block_offset(total_blocks - sample_blocks);
+                                        GGML_LOG_INFO(
+                                            "[UNIFIED-COMPARE] tensor=%s weight_sample_bytes=%zu diffs: off=%lld diff=%zu; off=%lld diff=%zu; off=%lld diff=%zu\n",
+                                            src0->name ? src0->name : "unknown", sample_bytes,
+                                            (long long) off0, diff0,
+                                            (long long) off1, diff1,
+                                            (long long) off2, diff2);
+                                    } else if (!src0_host_accessible) {
+                                        GGML_LOG_INFO(
+                                            "[UNIFIED-COMPARE] tensor=%s src0->data is device-only; skipping host diff\n",
+                                            src0->name ? src0->name : "unknown");
+                                    }
+
+                                    const int64_t m_s = std::min<int64_t>(M, 2);
+                                    static int compare_sample_cols = -1;
+                                    if (compare_sample_cols < 0) {
+                                        const char * env = std::getenv("GGML_SYCL_UNIFIED_COMPARE_SAMPLE_COLS");
+                                        compare_sample_cols = env ? std::atoi(env) : 64;
+                                        if (compare_sample_cols <= 0) {
+                                            compare_sample_cols = 64;
+                                        }
+                                    }
+                                    const int64_t sample_count =
+                                        std::min<int64_t>(N, static_cast<int64_t>(compare_sample_cols));
+                                    std::vector<int64_t> sample_cols(static_cast<size_t>(sample_count), 0);
+                                    if (sample_count == 1) {
+                                        sample_cols[0] = 0;
+                                    } else if (sample_count > 1) {
+                                        for (int64_t i = 0; i < sample_count; ++i) {
+                                            sample_cols[static_cast<size_t>(i)] =
+                                                (i * (N - 1)) / (sample_count - 1);
+                                        }
+                                    }
+
+                                    std::vector<float> act_host(static_cast<size_t>(m_s * K));
+                                    std::vector<float> out_host(static_cast<size_t>(m_s * N));
+                                    ctx.stream()
+                                        ->memcpy(act_host.data(), src1_data, act_host.size() * sizeof(float))
+                                        .wait();
+                                    ctx.stream()
+                                        ->memcpy(out_host.data(), dst_data, out_host.size() * sizeof(float))
+                                        .wait();
+                                    {
+                                        const int64_t scale_sample_blocks = std::min<int64_t>(total_blocks, 4096);
+                                        float min_scale = std::numeric_limits<float>::infinity();
+                                        float max_scale = -std::numeric_limits<float>::infinity();
+                                        for (int64_t bi = 0; bi < scale_sample_blocks; ++bi) {
+                                            const float s = static_cast<float>(w_host[bi].d);
+                                            min_scale = std::min(min_scale, s);
+                                            max_scale = std::max(max_scale, s);
+                                        }
+                                        auto scale_at = [&](int64_t bi) {
+                                            const int64_t clamped = std::max<int64_t>(0, std::min<int64_t>(bi, total_blocks - 1));
+                                            const uint16_t raw =
+                                                *reinterpret_cast<const uint16_t *>(&w_host[clamped].d);
+                                            const float s = static_cast<float>(w_host[clamped].d);
+                                            return std::make_pair(raw, s);
+                                        };
+                                        const auto [raw0, s0] = scale_at(0);
+                                        const auto [raw1, s1] = scale_at(k_blocks_per_row);
+                                        const auto [rawm, sm] = scale_at(total_blocks / 2);
+                                        const auto [rawl, sl] = scale_at(total_blocks - 1);
+                                        const uint8_t * b0 = reinterpret_cast<const uint8_t *>(&w_host[0]);
+                                        GGML_LOG_INFO(
+                                            "[UNIFIED-COMPARE] tensor=%s scale_sample_blocks=%lld min_scale=%.6g max_scale=%.6g raw_scales: [0]=0x%04x(%.6g) [row1]=0x%04x(%.6g) [mid]=0x%04x(%.6g) [last]=0x%04x(%.6g) first_block_bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                            src0->name ? src0->name : "unknown", (long long) scale_sample_blocks,
+                                            min_scale, max_scale,
+                                            raw0, s0, raw1, s1, rawm, sm, rawl, sl,
+                                            b0[0], b0[1], b0[2], b0[3], b0[4], b0[5], b0[6], b0[7]);
+                                    }
+                                    auto dequant_q4_0_host = [](const block_q4_0 & block, int i) {
+                                        const float d = static_cast<float>(block.d);
+                                        const int qs_val = (i < 16) ? (block.qs[i] & 0x0F) : (block.qs[i - 16] >> 4);
+                                        return (static_cast<float>(qs_val - 8)) * d;
+                                    };
+
+                                    float max_abs_err = 0.0f;
+                                    std::vector<float> col_err(static_cast<size_t>(sample_count), 0.0f);
+                                    for (int64_t m_i = 0; m_i < m_s; ++m_i) {
+                                        for (int64_t n_i = 0; n_i < sample_count; ++n_i) {
+                                            const int64_t n_col = sample_cols[static_cast<size_t>(n_i)];
+                                            float ref = 0.0f;
+                                            for (int64_t k_i = 0; k_i < K; ++k_i) {
+                                                const int64_t block_idx = n_col * k_blocks_per_row + (k_i / QK4_0);
+                                                const int idx_in_block = static_cast<int>(k_i % QK4_0);
+                                                const float w = dequant_q4_0_host(w_host[block_idx], idx_in_block);
+                                                const float a = act_host[static_cast<size_t>(m_i * K + k_i)];
+                                                ref += w * a;
+                                            }
+                                            const float got = out_host[static_cast<size_t>(m_i * N + n_col)];
+                                            const float err = std::fabs(got - ref);
+                                            max_abs_err = std::max(max_abs_err, err);
+                                            col_err[static_cast<size_t>(n_i)] =
+                                                std::max(col_err[static_cast<size_t>(n_i)], err);
+                                        }
+                                    }
+
+                                    // Report the top few columns by error to detect patterns.
+                                    constexpr int TOP_K = 5;
+                                    int   top_idx[TOP_K] = { -1, -1, -1, -1, -1 };
+                                    float top_err[TOP_K] = { 0, 0, 0, 0, 0 };
+                                    for (int64_t n_i = 0; n_i < sample_count; ++n_i) {
+                                        const float err = col_err[static_cast<size_t>(n_i)];
+                                        const int actual_col = static_cast<int>(sample_cols[static_cast<size_t>(n_i)]);
+                                        for (int k = 0; k < TOP_K; ++k) {
+                                            if (err > top_err[k]) {
+                                                for (int shift = TOP_K - 1; shift > k; --shift) {
+                                                    top_err[shift] = top_err[shift - 1];
+                                                    top_idx[shift] = top_idx[shift - 1];
+                                                }
+                                                top_err[k] = err;
+                                                top_idx[k] = actual_col;
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    GGML_LOG_INFO(
+                                        "[UNIFIED-COMPARE] tensor=%s M=%lld N=%lld K=%lld sample=(%lldx%lld) max_abs_err=%.6g\n",
+                                        src0->name, (long long) M, (long long) N, (long long) K,
+                                        (long long) m_s, (long long) sample_count, max_abs_err);
+                                    GGML_LOG_INFO(
+                                        "[UNIFIED-COMPARE] tensor=%s top_col_errs: n=%d err=%.6g; n=%d err=%.6g; n=%d err=%.6g; n=%d err=%.6g; n=%d err=%.6g\n",
+                                        src0->name,
+                                        top_idx[0], top_err[0],
+                                        top_idx[1], top_err[1],
+                                        top_idx[2], top_err[2],
+                                        top_idx[3], top_err[3],
+                                        top_idx[4], top_err[4]);
+                                }
+                            }
+                        }
+
+                        return;
+                    }
+                }
             }
-        }
+            }
 #endif
 
         // =====================================================================
@@ -16783,9 +17259,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             override_layout = *forced_layout;
             has_override    = true;
         }
-        const bool  layout_finalized      = ggml_sycl_layout_choices_finalized_for_device(ctx.device);
-        const bool  enforce_layout_choice = layout_finalized && !has_override && ggml_sycl_tensor_is_weight(src0);
-        layout_mode chosen_layout         = GGML_LAYOUT_AOS;
+        const bool layout_finalized = ggml_sycl_layout_choices_finalized_for_device(ctx.device);
+        bool       enforce_layout_choice = layout_finalized && !has_override && ggml_sycl_tensor_is_weight(src0);
+        layout_mode chosen_layout = GGML_LAYOUT_AOS;
         if (enforce_layout_choice) {
             if (!ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen_layout)) {
                 ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
@@ -16793,6 +17269,17 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                src0->name ? src0->name : "?", (unsigned long long) key.model_id,
                                (unsigned long long) key.name_hash, ctx.device);
                 GGML_ABORT("MUL_MAT dispatch missing layout choice");
+            }
+            // Spinach: unified kernel selection can finalize reordered layouts for prefill,
+            // but DMMV decode (batch=1) is guarded against reordered layouts unless
+            // GGML_SYCL_DMMV_USE_COALESCED=1. If we enforce a reordered layout here,
+            // we can dead-end into "no eligible kernel" or pass mismatched pointers.
+            const bool dmmv_batch1 = (src1->ne[1] == 1) && can_use_dequantize_mul_mat_vec(src0, src1, dst);
+            if (dmmv_batch1 && chosen_layout != GGML_LAYOUT_AOS && !ggml_sycl_dmmv_allow_reordered_layouts()) {
+                GGML_SYCL_DEBUG(
+                    "[MUL_MAT] Relaxing finalized layout=%s for DMMV batch=1 without reordered layouts: %s\n",
+                    ggml_sycl_layout_mode_name(chosen_layout), src0->name ? src0->name : "?");
+                enforce_layout_choice = false;
             }
         }
         // Use unified kernel selection (consolidates all eligibility logic)
@@ -20338,6 +20825,17 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
         fprintf(stderr, "[RANK %d] GRAPH_COMPUTE_IMPL: starting node loop\n", g_sycl_tp_config.mpi_rank);
     }
+    // Optional NaN-first-occurrence debugging. This is intentionally gated behind
+    // an environment variable because it adds device->host copies per node.
+    auto nan_check_enabled = []() {
+        static int enabled = -1;
+        if (enabled < 0) {
+            const char * env = std::getenv("GGML_SYCL_NAN_CHECK");
+            enabled           = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+        }
+        return enabled != 0;
+    };
+    const bool do_nan_check = nan_check_enabled();
     GGML_SYCL_DEBUG("[DEBUG-IMPL] Starting node loop, n_nodes=%d\n", cgraph->n_nodes);
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
@@ -20670,6 +21168,110 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 GGML_LOG_ERROR("[SYCL] debug sync failed after node %d (%s): %s\n", i,
                                node->name ? node->name : "(null)", e.what());
                 std::abort();
+            }
+        }
+        if (do_nan_check && (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16)) {
+            queue_ptr   stream     = sycl_ctx->stream(sycl_ctx->device, 0);
+            const void * node_data = ggml_sycl_get_data_ptr(node, sycl_ctx->device);
+            const int64_t n_el     = ggml_nelements(node);
+            const int64_t sample_n = std::min<int64_t>(n_el, 256);
+
+            if (node_data != nullptr && sample_n > 0) {
+                bool    has_nan     = false;
+                int64_t first_index = -1;
+                float   first_value = 0.0f;
+
+                if (node->type == GGML_TYPE_F32) {
+                    std::vector<float> sample(static_cast<size_t>(sample_n));
+                    stream->memcpy(sample.data(), node_data, static_cast<size_t>(sample_n * sizeof(float))).wait();
+                    for (int64_t k = 0; k < sample_n; ++k) {
+                        if (std::isnan(sample[static_cast<size_t>(k)])) {
+                            has_nan     = true;
+                            first_index = k;
+                            first_value = sample[static_cast<size_t>(k)];
+                            break;
+                        }
+                    }
+                } else {
+                    std::vector<sycl::half> sample(static_cast<size_t>(sample_n));
+                    stream->memcpy(sample.data(), node_data, static_cast<size_t>(sample_n * sizeof(sycl::half))).wait();
+                    for (int64_t k = 0; k < sample_n; ++k) {
+                        const float v = static_cast<float>(sample[static_cast<size_t>(k)]);
+                        if (std::isnan(v)) {
+                            has_nan     = true;
+                            first_index = k;
+                            first_value = v;
+                            break;
+                        }
+                    }
+                }
+
+                if (has_nan) {
+                    fprintf(stderr,
+                            "[NAN-CHECK] NaN after node %d/%d: op=%s name=%s type=%d ne=[%lld,%lld,%lld,%lld] "
+                            "sample=%lld first_idx=%lld value=%f\n",
+                            i, cgraph->n_nodes, ggml_op_name(node->op), node->name ? node->name : "(null)", node->type,
+                            (long long) node->ne[0], (long long) node->ne[1], (long long) node->ne[2],
+                            (long long) node->ne[3], (long long) sample_n, (long long) first_index, first_value);
+
+                    // When we hit a NaN, also inspect the immediate sources to see whether
+                    // the NaN was already present in the inputs or introduced by this op.
+                    auto inspect_src = [&](const ggml_tensor * src, const char * role) {
+                        if (!src || (src->type != GGML_TYPE_F32 && src->type != GGML_TYPE_F16)) {
+                            return;
+                        }
+                        const void * src_data = ggml_sycl_get_data_ptr(src, sycl_ctx->device);
+                        const int64_t src_el  = ggml_nelements(src);
+                        const int64_t src_n   = std::min<int64_t>(src_el, 128);
+                        if (!src_data || src_n <= 0) {
+                            return;
+                        }
+
+                        int64_t src_nan = 0;
+                        float   src_min = std::numeric_limits<float>::infinity();
+                        float   src_max = -std::numeric_limits<float>::infinity();
+
+                        if (src->type == GGML_TYPE_F32) {
+                            std::vector<float> sample_src(static_cast<size_t>(src_n));
+                            stream->memcpy(sample_src.data(), src_data, static_cast<size_t>(src_n * sizeof(float))).wait();
+                            for (int64_t k = 0; k < src_n; ++k) {
+                                const float v = sample_src[static_cast<size_t>(k)];
+                                if (std::isnan(v)) {
+                                    ++src_nan;
+                                    continue;
+                                }
+                                src_min = std::min(src_min, v);
+                                src_max = std::max(src_max, v);
+                            }
+                        } else {
+                            std::vector<sycl::half> sample_src(static_cast<size_t>(src_n));
+                            stream->memcpy(sample_src.data(), src_data, static_cast<size_t>(src_n * sizeof(sycl::half))).wait();
+                            for (int64_t k = 0; k < src_n; ++k) {
+                                const float v = static_cast<float>(sample_src[static_cast<size_t>(k)]);
+                                if (std::isnan(v)) {
+                                    ++src_nan;
+                                    continue;
+                                }
+                                src_min = std::min(src_min, v);
+                                src_max = std::max(src_max, v);
+                            }
+                        }
+
+                        fprintf(stderr,
+                                "[NAN-CHECK]   src(%s): name=%s op=%s type=%d ne=[%lld,%lld,%lld,%lld] sample=%lld "
+                                "nan=%lld min=%g max=%g\n",
+                                role, src->name ? src->name : "(null)", ggml_op_name(src->op), src->type,
+                                (long long) src->ne[0], (long long) src->ne[1], (long long) src->ne[2],
+                                (long long) src->ne[3], (long long) src_n, (long long) src_nan, src_min, src_max);
+                    };
+
+                    inspect_src(node->src[0], "src0");
+                    inspect_src(node->src[1], "src1");
+                    static const char * abort_env = std::getenv("GGML_SYCL_NAN_ABORT");
+                    if (abort_env != nullptr && std::atoi(abort_env) != 0) {
+                        GGML_ABORT("GGML_SYCL_NAN_ABORT triggered");
+                    }
+                }
             }
         }
     }

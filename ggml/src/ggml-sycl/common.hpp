@@ -543,6 +543,17 @@ struct layout_policy {
     }
 
     static layout_mode get_with_override(ggml_type qtype, tensor_usage usage, int device_id = -1) {
+        // Unified kernel requires AoS layout for supported types (Q4_0 today).
+        // It performs reordering internally, so pre-reordering here would
+        // double-transform the weights and corrupt results.
+        static int unified_dispatch_enabled = -1;
+        if (unified_dispatch_enabled < 0) {
+            const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
+            unified_dispatch_enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+        }
+        if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0) {
+            return GGML_LAYOUT_AOS;
+        }
         return get_optimal(qtype, usage, device_id);
     }
 };
@@ -1479,20 +1490,42 @@ inline const ggml_tensor_layout * ggml_sycl_get_layout_info(const ggml_tensor * 
 // Get the correct data pointer for a tensor on a specific device
 // For TP buffers, returns device-specific pointer; otherwise returns tensor->data
 // In TP mode, if returning tensor->data, stages it to USM memory first
+inline void ggml_sycl_refresh_cached_input_ptr(void * dst, const void * src, size_t bytes, int device) {
+    if (dst == nullptr || src == nullptr || bytes == 0) {
+        return;
+    }
+    sycl::queue & q = dpct::dev_mgr::instance().get_device(device).default_queue();
+    sycl::usm::alloc alloc = sycl::get_pointer_type(dst, q.get_context());
+    if (alloc == sycl::usm::alloc::device) {
+        q.memcpy(dst, src, bytes).wait();
+        return;
+    }
+    // Host/shared/unknown: use CPU memcpy
+    std::memcpy(dst, src, bytes);
+}
+
 inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
     if (tensor == nullptr) {
         return nullptr;
     }
+    const bool is_input_tensor = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
+    const bool tp_enabled      = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
     if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
         sycl::usm::alloc alloc      = sycl::usm::alloc::unknown;
         void *           cached_ptr = ggml_sycl_get_cached_tensor_ptr_for(tensor, device, nullptr, nullptr, &alloc);
         if (cached_ptr != nullptr) {
+            if (is_input_tensor && !tp_enabled && tensor->data) {
+                ggml_sycl_refresh_cached_input_ptr(cached_ptr, tensor->data, ggml_nbytes(tensor), device);
+            }
             return cached_ptr;
         }
     }
     if (tensor->extra != nullptr) {
-        const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(tensor->extra);
+        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
         if (extra->data_device[device] != nullptr) {
+            if (is_input_tensor && !tp_enabled && tensor->data) {
+                ggml_sycl_refresh_cached_input_ptr(extra->data_device[device], tensor->data, ggml_nbytes(tensor), device);
+            }
             GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
                             tensor->name, device, device, extra->data_device[device]);
             return extra->data_device[device];
@@ -1559,6 +1592,10 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
             size_t nbytes = ggml_nbytes(tensor);
             void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
             if (staged != nullptr) {
+                if (is_input_tensor && !tp_enabled) {
+                    // Refresh staged data for dynamic inputs on every call.
+                    std::memcpy(staged, tensor->data, nbytes);
+                }
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
                                 tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
                 return staged;
@@ -1682,6 +1719,20 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
 
 // Resolve a weight layout pointer for a specific target layout.
 // Returns nullptr if the requested layout cannot be satisfied.
+inline bool ggml_sycl_unified_dispatch_env_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
+        enabled          = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+inline bool ggml_sycl_should_use_unified_type(ggml_type type) {
+    // Mirror ggml_sycl::should_use_unified() without pulling in dispatch.hpp
+    return type == GGML_TYPE_Q4_0;
+}
+
 inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
                                            int                 device,
                                            layout_mode         target,
@@ -1716,8 +1767,13 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
     }
 
     if (ggml_sycl_tensor_is_weight(tensor)) {
+        const bool unified_aos_request =
+            ggml_sycl_unified_dispatch_env_enabled() &&
+            ggml_sycl_should_use_unified_type(tensor->type) &&
+            target == GGML_LAYOUT_AOS;
+
         const layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(tensor, target, device);
-        if (resolved != target) {
+        if (!unified_aos_request && resolved != target) {
             return nullptr;
         }
         // Ensure layout choice is registered (with fallback for weights not visited during finalization).
@@ -1731,11 +1787,16 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
             return nullptr;
         }
         // Verify the registered layout matches the requested target
-        if (registered_layout != target) {
+        if (!unified_aos_request && registered_layout != target) {
             if (out_source) {
                 *out_source = "layout_mismatch";
             }
             return nullptr;
+        }
+        if (unified_aos_request && registered_layout != target && g_ggml_sycl_debug) {
+            GGML_SYCL_DEBUG(
+                "[LAYOUT] unified AoS request bypassing registered layout=%d for %s\n",
+                (int) registered_layout, tensor->name ? tensor->name : "(null)");
         }
     }
 

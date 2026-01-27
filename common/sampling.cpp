@@ -4,8 +4,10 @@
 #include "log.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <unordered_map>
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
@@ -423,11 +425,62 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     gsmpl->set_logits(ctx, idx);
 
+    if (common_log_verbosity_thold >= LOG_LEVEL_DEBUG) {
+        struct top_entry {
+            llama_token id = LLAMA_TOKEN_NULL;
+            float logit = -std::numeric_limits<float>::infinity();
+        };
+
+        auto top_insert = [](std::array<top_entry, 5> & top, llama_token id, float logit) {
+            if (!std::isfinite(logit) || logit <= top.back().logit) {
+                return;
+            }
+            top.back() = { id, logit };
+            for (int i = (int) top.size() - 1; i > 0; --i) {
+                if (top[i].logit > top[i - 1].logit) {
+                    std::swap(top[i], top[i - 1]);
+                } else {
+                    break;
+                }
+            }
+        };
+
+        std::array<top_entry, 5> top{};
+        float min_logit = std::numeric_limits<float>::infinity();
+        float max_logit = -std::numeric_limits<float>::infinity();
+        int nan_count = 0;
+
+        for (const auto & td : gsmpl->cur) {
+            const float logit = td.logit;
+            if (std::isnan(logit)) {
+                nan_count++;
+                continue;
+            }
+            min_logit = std::min(min_logit, logit);
+            max_logit = std::max(max_logit, logit);
+            top_insert(top, td.id, logit);
+        }
+
+        LOG_DBG(
+            "logits pre-sampler: min=%g max=%g nan=%d top=[(%d,%g), (%d,%g), (%d,%g), (%d,%g), (%d,%g)]\n",
+            min_logit, max_logit, nan_count,
+            top[0].id, top[0].logit,
+            top[1].id, top[1].logit,
+            top[2].id, top[2].logit,
+            top[3].id, top[3].logit,
+            top[4].id, top[4].logit);
+    }
+
     llama_sampler_apply(chain, &cur_p);
 
     GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
 
     id = cur_p.data[cur_p.selected].id;
+
+    if (common_log_verbosity_thold >= LOG_LEVEL_DEBUG) {
+        const auto & sel = cur_p.data[cur_p.selected];
+        LOG_DBG("logits post-sampler: selected id=%d logit=%g p=%g\n", sel.id, sel.logit, sel.p);
+    }
 
     return id;
 }
