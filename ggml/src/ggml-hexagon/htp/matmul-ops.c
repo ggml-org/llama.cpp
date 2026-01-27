@@ -465,11 +465,8 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    r0_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r0_sum));
-    r1_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r1_sum));
-    HVX_VectorPair p0 = Q6_W_vshuff_VVR(r1_sum, r0_sum, 4);
-
-    hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
+    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
+    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
 }
 
 static void vec_dot_q8x4x2_q8x4x2(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
@@ -638,11 +635,8 @@ static void vec_dot_q8x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    r0_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r0_sum));
-    r1_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r1_sum));
-    HVX_VectorPair p0 = Q6_W_vshuff_VVR(r1_sum, r0_sum, 4);
-
-    hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
+    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
+    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
 }
 
 static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
@@ -880,11 +874,8 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    r0_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r0_sum));
-    r1_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r1_sum));
-    HVX_VectorPair p0 = Q6_W_vshuff_VVR(r1_sum, r0_sum, 4);
-
-    hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
+    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
+    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
 }
 
 static void vec_dot_f16_f16_aa(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
@@ -957,11 +948,8 @@ static void vec_dot_f16_f16_aa_rx2(const int n,
         rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
     }
 
-    rsum0 = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum0));
-    rsum1 = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum1));
-    HVX_VectorPair p0 = Q6_W_vshuff_VVR(rsum1, rsum0, 4);
-
-    hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
+    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(rsum0, rsum1);
+    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
 }
 
 static void vec_dot_f16_f16_uu(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
