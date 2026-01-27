@@ -80,6 +80,7 @@
 					/>
 
 					<textarea
+						use:autoResizeTextarea
 						placeholder={valuePlaceholder}
 						value={pair.value}
 						oninput={(e) => {
