@@ -10,6 +10,7 @@
 		displayName: string;
 		faviconUrl: string | null;
 		enabled: boolean;
+		disabled?: boolean;
 		onToggle: (enabled: boolean) => void;
 		serverInfo?: MCPServerInfo;
 		capabilities?: MCPCapabilitiesInfo;
@@ -20,6 +21,7 @@
 		displayName,
 		faviconUrl,
 		enabled,
+		disabled = false,
 		onToggle,
 		serverInfo,
 		capabilities,
@@ -100,7 +102,7 @@
 		</div>
 
 		<div class="flex shrink-0 items-center pl-2">
-			<Switch checked={enabled} onCheckedChange={onToggle} />
+			<Switch checked={enabled} {disabled} onCheckedChange={onToggle} />
 		</div>
 	</div>
 </div>

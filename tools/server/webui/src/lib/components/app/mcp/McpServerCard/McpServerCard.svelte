@@ -110,6 +110,7 @@
 			{displayName}
 			{faviconUrl}
 			enabled={enabled ?? server.enabled}
+			disabled={isError}
 			{onToggle}
 			{serverInfo}
 			{capabilities}
