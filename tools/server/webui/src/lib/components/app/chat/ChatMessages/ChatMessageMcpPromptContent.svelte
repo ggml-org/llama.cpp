@@ -103,9 +103,7 @@
 	let isAttachment = $derived(variant === McpPromptVariant.ATTACHMENT);
 	let textSizeClass = $derived(isAttachment ? 'text-sm' : 'text-md');
 	let maxHeightStyle = $derived(
-		isAttachment
-			? 'max-height: 10rem; overflow-wrap: anywhere; word-break: break-word;'
-			: 'max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;'
+		isAttachment ? 'max-height: 10rem;' : 'max-height: var(--max-message-height);'
 	);
 </script>
 
@@ -148,39 +146,51 @@
 
 	{#if loadError}
 		<Card
-			class="relative overflow-y-auto rounded-[1.125rem] border border-destructive/50 bg-destructive/10 px-3.75 py-2.5 backdrop-blur-md"
-			style={maxHeightStyle}
+			class="relative overflow-hidden rounded-[1.125rem] border border-destructive/50 bg-destructive/10 backdrop-blur-md"
 		>
-			<span class="{textSizeClass} text-destructive">{loadError}</span>
+			<div
+				class="overflow-y-auto px-3.75 py-2.5"
+				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
+			>
+				<span class="{textSizeClass} text-destructive">{loadError}</span>
+			</div>
 		</Card>
 	{:else if isLoading}
 		<Card
-			class="relative overflow-y-auto rounded-[1.125rem] border border-purple-200 bg-purple-500/10 px-3.75 py-2.5 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
-			style={maxHeightStyle}
+			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
-			<span class="{textSizeClass} text-purple-500 italic dark:text-purple-400">
-				Loading prompt content...
-			</span>
+			<div
+				class="overflow-y-auto px-3.75 py-2.5"
+				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
+			>
+				<span class="{textSizeClass} text-purple-500 italic dark:text-purple-400">
+					Loading prompt content...
+				</span>
+			</div>
 		</Card>
 	{:else if hasContent}
 		<Card
-			class="relative overflow-y-auto rounded-[1.125rem] border border-purple-200 bg-purple-500/10 px-3.75 py-2.5 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
-			style={maxHeightStyle}
+			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
-			<span class="{textSizeClass} whitespace-pre-wrap">
-				<!-- This formatting is needed to keep the text in proper shape -->
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				{#each contentParts as part, i (i)}{#if part.argKey}<span
-							class="rounded-sm bg-purple-300/50 px-0.5 text-purple-900 transition-opacity dark:bg-purple-700/50 dark:text-purple-100 {hoveredArgKey &&
-							hoveredArgKey !== part.argKey
-								? 'opacity-30'
-								: ''}"
-							onmouseenter={() => (hoveredArgKey = part.argKey)}
-							onmouseleave={() => (hoveredArgKey = null)}>{part.text}</span
-						>{:else}<span class="transition-opacity {hoveredArgKey ? 'opacity-30' : ''}"
-							>{part.text}</span
-						>{/if}{/each}</span
+			<div
+				class="overflow-y-auto px-3.75 py-2.5"
+				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 			>
+				<span class="{textSizeClass} whitespace-pre-wrap">
+					<!-- This formatting is needed to keep the text in proper shape -->
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					{#each contentParts as part, i (i)}{#if part.argKey}<span
+								class="rounded-sm bg-purple-300/50 px-0.5 text-purple-900 transition-opacity dark:bg-purple-700/50 dark:text-purple-100 {hoveredArgKey &&
+								hoveredArgKey !== part.argKey
+									? 'opacity-30'
+									: ''}"
+								onmouseenter={() => (hoveredArgKey = part.argKey)}
+								onmouseleave={() => (hoveredArgKey = null)}>{part.text}</span
+							>{:else}<span class="transition-opacity {hoveredArgKey ? 'opacity-30' : ''}"
+								>{part.text}</span
+							>{/if}{/each}</span
+				>
+			</div>
 		</Card>
 	{/if}
 </div>
