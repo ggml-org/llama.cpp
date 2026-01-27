@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   close-issues:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     permissions:
       issues: write
       pull-requests: write

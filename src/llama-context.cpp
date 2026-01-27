@@ -793,7 +793,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
-        const uint32_t n_embd_out = model.hparams.get_n_embd_out();
+        const uint32_t n_embd_out = model.hparams.n_embd_out();
         return embd + j*n_embd_out;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
@@ -1279,7 +1279,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
                 {
                     // extract token embeddings
                     GGML_ASSERT(embd != nullptr);
-                    const uint32_t n_embd_out = hparams.get_n_embd_out();
+                    const uint32_t n_embd_out = hparams.n_embd_out();
 
                     GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd_size);
                     ggml_backend_tensor_get_async(backend_embd, t_embd, embd, 0, n_tokens*n_embd_out*sizeof(float));
@@ -1688,7 +1688,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     {
                         // extract token embeddings
                         GGML_ASSERT(embd != nullptr);
-                        const uint32_t n_embd_out = hparams.get_n_embd_out();
+                        const uint32_t n_embd_out = hparams.n_embd_out();
                         float * embd_out = embd + n_outputs_prev*n_embd_out;
 
                         if (n_outputs) {
@@ -1821,7 +1821,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
 
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
-    const auto n_embd_out = hparams.get_n_embd_out();
+    const auto n_embd_out = hparams.n_embd_out();
 
     bool has_logits = true;
     bool has_embd   = cparams.embeddings;
@@ -2171,13 +2171,6 @@ llm_graph_cb llama_context::graph_get_cb() const {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
-        }
-
-        if (!cparams.offload_kqv) {
-            if (strcmp(name, "kqv_merged_cont") == 0) {
-                // all nodes between the KV store and the attention output are run on the CPU
-                ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend_cpu);
-            }
         }
 
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
@@ -2559,6 +2552,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
         }
     }
 
+    // [TAG_CONTEXT_STATE_LOGITS]
     // write logits
     {
         LLAMA_LOG_DEBUG("%s: - writing logits\n", __func__);

@@ -8,7 +8,7 @@ on:
 jobs:
   update:
     name: Update Winget Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     if: github.repository_owner == 'ggml-org'
 
     steps:
