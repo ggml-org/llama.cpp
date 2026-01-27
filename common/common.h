@@ -61,6 +61,10 @@ const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "
 
 struct common_control_vector_load_info;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 //
 // CPU utils
 //
@@ -74,8 +78,12 @@ struct cpu_params {
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
 };
 
-int32_t cpu_get_num_physical_cores();
-int32_t cpu_get_num_math();
+LLAMA_API int32_t cpu_get_num_physical_cores();
+LLAMA_API int32_t cpu_get_num_math();
+
+#ifdef __cplusplus
+}
+#endif
 
 //
 // Common params
