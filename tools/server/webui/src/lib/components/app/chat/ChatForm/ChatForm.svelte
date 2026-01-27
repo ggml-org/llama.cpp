@@ -259,19 +259,42 @@
 		if (text.startsWith('"')) {
 			const parsed = parseClipboardContent(text);
 
-			if (parsed.textAttachments.length > 0) {
+			if (parsed.textAttachments.length > 0 || parsed.mcpPromptAttachments.length > 0) {
 				event.preventDefault();
 				value = parsed.message;
 				onValueChange?.(parsed.message);
 
-				const attachmentFiles = parsed.textAttachments.map(
-					(att) =>
-						new File([att.content], att.name, {
-							type: MimeTypeText.PLAIN
-						})
-				);
+				// Handle text attachments as files
+				if (parsed.textAttachments.length > 0) {
+					const attachmentFiles = parsed.textAttachments.map(
+						(att) =>
+							new File([att.content], att.name, {
+								type: MimeTypeText.PLAIN
+							})
+					);
+					onFilesAdd?.(attachmentFiles);
+				}
 
-				onFilesAdd?.(attachmentFiles);
+				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
+				if (parsed.mcpPromptAttachments.length > 0) {
+					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
+						id: crypto.randomUUID(),
+						name: att.name,
+						size: att.content.length,
+						type: SpecialFileType.MCP_PROMPT,
+						file: new File([att.content], `${att.name}.txt`, { type: 'text/plain' }),
+						isLoading: false,
+						textContent: att.content,
+						mcpPrompt: {
+							serverName: att.serverName,
+							promptName: att.promptName,
+							arguments: att.arguments
+						}
+					}));
+
+					uploadedFiles = [...uploadedFiles, ...mcpPromptFiles];
+					onUploadedFilesChange?.(uploadedFiles);
+				}
 
 				setTimeout(() => {
 					textareaRef?.focus();
