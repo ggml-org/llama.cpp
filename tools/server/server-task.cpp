@@ -77,7 +77,7 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
             {"speculative.p_min",         speculative.p_min},
-            {"speculative.draftless_t",   common_speculative_type_to_str(speculative.draftless_type)},
+            {"speculative.type",          common_speculative_type_to_str(speculative.type)},
             {"speculative.ngram_size_n",  speculative.ngram_size_n},
             {"speculative.ngram_size_m",  speculative.ngram_size_m},
             {"speculative.ngram_c_rate",  speculative.ngram_check_rate},
@@ -141,7 +141,7 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
         {"speculative.p_min",         speculative.p_min},
-        {"speculative.draftless_t",   common_speculative_type_to_str(speculative.draftless_type)},
+        {"speculative.type",          common_speculative_type_to_str(speculative.type)},
         {"speculative.ngram_size_n",  speculative.ngram_size_n},
         {"speculative.ngram_size_m",  speculative.ngram_size_m},
         {"speculative.ngram_c_rate",  speculative.ngram_check_rate},
@@ -253,7 +253,8 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.n_min = std::max(params.speculative.n_min, 0);
     params.speculative.n_max = std::max(params.speculative.n_max, 0);
 
-    params.speculative.draftless_type   = common_speculative_type_from_name(json_value(data, "speculative.draftless_t", common_speculative_type_to_str(defaults.speculative.draftless_type)));
+    params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
+
     params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
     params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
     params.speculative.ngram_check_rate = json_value(data, "speculative.ngram_c_rate", defaults.speculative.ngram_check_rate);

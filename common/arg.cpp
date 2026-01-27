@@ -3400,18 +3400,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--spec-draftless"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
-            common_speculative_type_to_str(params.speculative.draftless_type).c_str()),
+            common_speculative_type_to_str(params.speculative.type).c_str()),
         [](common_params & params, const std::string & value) {
             if (value == "none") {
-                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NONE;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NONE;
             } else if (value == "ngram-cache") {
-                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_CACHE;
             } else if (value == "ngram-simple") {
-                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE;
             } else if (value == "ngram-map-k") {
-                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K;
             } else if (value == "ngram-map-k4v") {
-                params.speculative.draftless_type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
             } else {
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }

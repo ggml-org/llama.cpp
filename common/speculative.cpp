@@ -355,12 +355,14 @@ struct common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft =!params.model.path.empty();
+        bool has_draft = !params.model.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
-        bool has_ngram_cache = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
-        bool has_ngram_simple = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
-        bool has_ngram_map_k = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-        bool has_ngram_map_k4v = (params.draftless_type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+
+        bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
+        bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+        bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+        bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
         if (has_ngram_simple) {

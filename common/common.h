@@ -273,9 +273,7 @@ struct common_params_speculative {
 
     struct common_params_model model;
 
-    // draftless:
-
-    common_speculative_type draftless_type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding without a draft model
+    common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE; // type of speculative decoding
 
     uint16_t ngram_size_n     = 12; // ngram size for lookup
     uint16_t ngram_size_m     = 48; // mgram size for speculative tokens
