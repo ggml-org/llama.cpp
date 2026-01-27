@@ -44,6 +44,15 @@ static std::string get_line_col(const std::string & source, size_t pos) {
     return "line " + std::to_string(line) + ", column " + std::to_string(col);
 }
 
+static void ensure_key_type_allowed(const value & val) {
+    bool allowed = is_val<value_string>(val) || is_val<value_int>(val) || is_val<value_float>(val)
+                || is_val<value_bool>(val) || is_val<value_tuple>(val)
+                || is_val<value_undefined>(val) || is_val<value_none>(val);
+    if (!allowed) {
+        throw std::runtime_error("Type: " + val->type() + " is not allowed as object key");
+    }
+}
+
 // execute with error handling
 value statement::execute(context & ctx) {
     try {
@@ -585,11 +594,13 @@ value set_statement::execute_impl(context & ctx) {
     auto rhs = val ? val->execute(ctx) : exec_statements(body, ctx);
 
     if (is_stmt<identifier>(assignee)) {
+        // case: {% set my_var = value %}
         auto var_name = cast_stmt<identifier>(assignee)->val;
         JJ_DEBUG("Setting global variable '%s' with value type %s", var_name.c_str(), rhs->type().c_str());
         ctx.set_val(var_name, rhs);
 
     } else if (is_stmt<tuple_literal>(assignee)) {
+        // case: {% set a, b = value %}
         auto tuple = cast_stmt<tuple_literal>(assignee);
         if (!is_val<value_array>(rhs)) {
             throw std::runtime_error("Cannot unpack non-iterable type in set: " + rhs->type());
@@ -608,6 +619,7 @@ value set_statement::execute_impl(context & ctx) {
         }
 
     } else if (is_stmt<member_expression>(assignee)) {
+        // case: {% set ns.my_var = value %}
         auto member = cast_stmt<member_expression>(assignee);
         if (member->computed) {
             throw std::runtime_error("Cannot assign to computed member");
@@ -750,12 +762,14 @@ value member_expression::execute_impl(context & ctx) {
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
+    ensure_key_type_allowed(property);
 
     value val = mk_val<value_undefined>("object_property");
 
     if (is_val<value_undefined>(object)) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
         return val;
+
     } else if (is_val<value_object>(object)) {
         auto key = property->as_string().str();
         val = object->at(property, val);
@@ -763,6 +777,7 @@ value member_expression::execute_impl(context & ctx) {
             val = try_builtin_func(ctx, key, object, true);
         }
         JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
+
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
         if (is_val<value_int>(property)) {
             int64_t index = property->as_int();
@@ -786,6 +801,7 @@ value member_expression::execute_impl(context & ctx) {
             auto key = property->as_string().str();
             JJ_DEBUG("Accessing %s built-in '%s'", is_val<value_array>(object) ? "array" : "string", key.c_str());
             val = try_builtin_func(ctx, key, object, true);
+
         } else {
             throw std::runtime_error("Cannot access property with non-string/non-number: got " + property->type());
         }

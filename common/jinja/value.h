@@ -140,13 +140,13 @@ struct value_t {
     }
 
     virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual void insert(const value &, const value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value &, value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string &, value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(int64_t, value &) { throw std::runtime_error(type() + " is not an array value"); }
-    virtual value & at(int64_t) { throw std::runtime_error(type() + " is not an array value"); }
+    virtual void insert(const value & /* key */, const value & /* val */) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const value & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const value & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const std::string & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(const std::string & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
+    virtual value & at(int64_t /* idx */, value & /* default_val */) { throw std::runtime_error(type() + " is not an array value"); }
+    virtual value & at(int64_t /* idx */) { throw std::runtime_error(type() + " is not an array value"); }
 
     virtual bool is_numeric() const { return false; }
     virtual bool is_hashable() const { return false; }
@@ -602,8 +602,7 @@ struct value_none_t : public value_t {
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        return hasher().update(&type_hash, sizeof(type_hash));
+        return hasher(typeid(*this));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
@@ -710,14 +709,16 @@ struct value_func_t : public value_t {
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
     virtual bool is_hashable() const override { return true; }
     virtual hasher unique_hash() const noexcept override {
+        // Note: this is unused for now, we don't support function as object keys
         // use function pointer as unique identifier
         const auto target = val_func.target<func_hptr>();
         return hasher(typeid(*this)).update(&target, sizeof(target));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
+        // Note: this is unused for now, we don't support function as object keys
         // compare function pointers
-        // (note: val_func == other.val_func does not work as std::function::operator== is only used for nullptr check)
+        // (val_func == other.val_func does not work as std::function::operator== is only used for nullptr check)
         const auto target_this  = this->val_func.target<func_hptr>();
         const auto target_other = other.val_func.target<func_hptr>();
         return typeid(*this) == typeid(other) && target_this == target_other;

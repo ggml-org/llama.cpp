@@ -68,8 +68,8 @@ int main(int argc, char *argv[]) {
     t.test("string methods", test_string_methods);
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
-    t.test("hasher", test_hasher);
     if (!g_python_mode) {
+        t.test("hasher", test_hasher);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -457,6 +457,18 @@ static void test_set_statement(testing & t) {
         "{% set d = [0, none, 1.0, '0', true, (0, 0)] %}{{ d|string }}",
         json::object(),
         "[0, None, 1.0, '0', True, (0, 0)]"
+    );
+
+    test_template(t, "object member assignment with mixed key types",
+        "{% set d = namespace() %}{% set d.a = 123 %}{{ d['a'] == 123 }}",
+        json::object(),
+        "True"
+    );
+
+    test_template(t, "tuple unpacking",
+        "{% set t = (1, 2, 3) %}{% set a, b, c = t %}{{ a + b + c }}",
+        json::object(),
+        "6"
     );
 }
 
@@ -1368,6 +1380,18 @@ static void test_object_methods(testing & t) {
         "{{ keys is undefined }} {{ obj.keys is defined }}",
         {{"obj", {{"a", "b"}}}},
         "True True"
+    );
+
+    test_template(t, "expression as object key",
+        "{% set d = {'ab': 123} %}{{ d['a' + 'b'] == 123 }}",
+        json::object(),
+        "True"
+    );
+
+    test_template(t, "numeric as object key (template: Seed-OSS)",
+        "{% set d = {1: 'a', 2: 'b'} %}{{ d[1] == 'a' and d[2] == 'b' }}",
+        json::object(),
+        "True"
     );
 }
 

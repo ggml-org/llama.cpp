@@ -140,7 +140,7 @@ private:
                       | (static_cast<uint64_t>(block[6]) << 48)
                       | (static_cast<uint64_t>(block[7]) << 56);
         }
-        state ^= static_cast<size_t>(blk);
+        state ^= blk;
         state *= prime;
     }
 };

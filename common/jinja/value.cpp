@@ -1132,6 +1132,8 @@ void global_from_json(context & ctx, const nlohmann::ordered_json & json_obj, bo
     }
 }
 
+// recursively convert value to JSON string
+// TODO: avoid circular references
 static void value_to_json_internal(std::ostringstream & oss, const value & val, int curr_lvl, int indent, const std::string_view item_sep, const std::string_view key_sep) {
     auto indent_str = [indent, curr_lvl]() -> std::string {
         return (indent > 0) ? std::string(curr_lvl * indent, ' ') : "";
@@ -1218,6 +1220,7 @@ std::string value_to_json(const value & val, int indent, const std::string_view 
     return oss.str();
 }
 
+// TODO: avoid circular references
 std::string value_to_string_repr(const value & val) {
     if (is_val<value_string>(val)) {
         const std::string val_str = val->as_string().str();
