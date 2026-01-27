@@ -5,6 +5,8 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { McpPromptVariant } from '$lib/enums';
+	import TruncatedText from '../../misc/TruncatedText.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface ContentPart {
 		text: string;
@@ -109,20 +111,27 @@
 
 <div class="flex flex-col gap-2 {className}">
 	<div class="flex items-center justify-between gap-2">
-		<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-			{#if getServerFavicon()}
-				<img
-					src={getServerFavicon()}
-					alt=""
-					class="h-3 w-3 shrink-0 rounded-sm"
-					onerror={(e) => {
-						(e.currentTarget as HTMLImageElement).style.display = 'none';
-					}}
-				/>
-			{/if}
-			<span>{getServerDisplayName()}</span>
-			<span>·</span>
-			<span>{prompt.name}</span>
+		<div class="inline-flex flex-wrap items-center gap-1.25 text-xs text-muted-foreground">
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#if getServerFavicon()}
+						<img
+							src={getServerFavicon()}
+							alt=""
+							class="h-3.5 w-3.5 shrink-0 rounded-sm"
+							onerror={(e) => {
+								(e.currentTarget as HTMLImageElement).style.display = 'none';
+							}}
+						/>
+					{/if}
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<span>{getServerDisplayName()}</span>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			<TruncatedText text={prompt.name} />
 		</div>
 
 		{#if showArgBadges}
