@@ -122,3 +122,12 @@ export { parseAgenticContent, type AgenticSection } from './agentic';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+
+// Abort signal utilities
+export {
+	throwIfAborted,
+	isAbortError,
+	createLinkedController,
+	createTimeoutSignal,
+	withAbortSignal
+} from './abort';

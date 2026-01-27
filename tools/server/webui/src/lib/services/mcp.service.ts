@@ -37,6 +37,7 @@ import type {
 } from '$lib/types';
 import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import { throwIfAborted, isAbortError } from '$lib/utils';
 
 interface ToolResultContentItem {
 	type: string;
@@ -341,9 +342,7 @@ export class MCPService {
 		params: ToolCallParams,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
-		if (signal?.aborted) {
-			throw new DOMException('Aborted', 'AbortError');
-		}
+		throwIfAborted(signal);
 
 		try {
 			const result = await connection.client.callTool(
@@ -357,7 +356,7 @@ export class MCPService {
 				isError: (result as ToolCallResult).isError ?? false
 			};
 		} catch (error) {
-			if (error instanceof DOMException && error.name === 'AbortError') {
+			if (isAbortError(error)) {
 				throw error;
 			}
 
