@@ -1003,7 +1003,12 @@ const func_builtins & value_none_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
         {"tojson", tojson},
-        {"string", [](const func_args &) -> value { return mk_val<value_string>("None"); }}
+        {"string", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
+        {"safe", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
     };
     return builtins;
 }
@@ -1012,9 +1017,86 @@ const func_builtins & value_none_t::get_builtins() const {
 const func_builtins & value_undefined_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
-        {"tojson", [](const func_args & args) -> value {
-            args.ensure_vals<value_undefined>();
-            return mk_val<value_string>("null");
+        {"capitalize", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"first", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"items", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"join", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"last", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"length", [](const func_args &) -> value {
+            return mk_val<value_int>(0);
+        }},
+        {"list", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"lower", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"map", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"max", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"min", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"reject", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"rejectattr", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"replace", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"reverse", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"safe", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"select", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"selectattr", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"sort", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"string", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"strip", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"sum", [](const func_args &) -> value {
+            return mk_val<value_int>(0);
+        }},
+        {"title", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"truncate", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"unique", [](const func_args &) -> value {
+            return mk_val<value_array>();
+        }},
+        {"upper", [](const func_args &) -> value {
+            return mk_val<value_string>();
+        }},
+        {"wordcount", [](const func_args &) -> value {
+            return mk_val<value_int>(0);
         }},
     };
     return builtins;
