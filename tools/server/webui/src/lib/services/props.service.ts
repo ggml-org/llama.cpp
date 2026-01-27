@@ -1,4 +1,4 @@
-import { getAuthHeaders } from '$lib/utils';
+import { apiFetchWithParams } from '$lib/utils';
 
 /**
  * PropsService - Server properties management
@@ -31,23 +31,12 @@ export class PropsService {
 	 * @throws {Error} If the request fails or returns invalid data
 	 */
 	static async fetch(autoload = false): Promise<ApiLlamaCppServerProps> {
-		const url = new URL('./props', window.location.href);
+		const params: Record<string, string> = {};
 		if (!autoload) {
-			url.searchParams.set('autoload', 'false');
+			params.autoload = 'false';
 		}
 
-		const response = await fetch(url.toString(), {
-			headers: getAuthHeaders()
-		});
-
-		if (!response.ok) {
-			throw new Error(
-				`Failed to fetch server properties: ${response.status} ${response.statusText}`
-			);
-		}
-
-		const data = await response.json();
-		return data as ApiLlamaCppServerProps;
+		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
 	}
 
 	/**
@@ -59,23 +48,11 @@ export class PropsService {
 	 * @throws {Error} If the request fails or returns invalid data
 	 */
 	static async fetchForModel(modelId: string, autoload = false): Promise<ApiLlamaCppServerProps> {
-		const url = new URL('./props', window.location.href);
-		url.searchParams.set('model', modelId);
+		const params: Record<string, string> = { model: modelId };
 		if (!autoload) {
-			url.searchParams.set('autoload', 'false');
+			params.autoload = 'false';
 		}
 
-		const response = await fetch(url.toString(), {
-			headers: getAuthHeaders()
-		});
-
-		if (!response.ok) {
-			throw new Error(
-				`Failed to fetch model properties: ${response.status} ${response.statusText}`
-			);
-		}
-
-		const data = await response.json();
-		return data as ApiLlamaCppServerProps;
+		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
 	}
 }

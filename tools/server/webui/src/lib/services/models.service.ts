@@ -1,6 +1,5 @@
-import { base } from '$app/paths';
 import { ServerModelStatus } from '$lib/enums';
-import { getJsonHeaders } from '$lib/utils';
+import { apiFetch, apiPost } from '$lib/utils';
 
 /**
  * ModelsService - Stateless service for model management API communication
@@ -31,15 +30,7 @@ export class ModelsService {
 	 * Works in both MODEL and ROUTER modes
 	 */
 	static async list(): Promise<ApiModelListResponse> {
-		const response = await fetch(`${base}/v1/models`, {
-			headers: getJsonHeaders()
-		});
-
-		if (!response.ok) {
-			throw new Error(`Failed to fetch model list (status ${response.status})`);
-		}
-
-		return response.json() as Promise<ApiModelListResponse>;
+		return apiFetch<ApiModelListResponse>('/v1/models');
 	}
 
 	/**
@@ -47,15 +38,7 @@ export class ModelsService {
 	 * Returns models with load status, paths, and other metadata
 	 */
 	static async listRouter(): Promise<ApiRouterModelsListResponse> {
-		const response = await fetch(`${base}/v1/models`, {
-			headers: getJsonHeaders()
-		});
-
-		if (!response.ok) {
-			throw new Error(`Failed to fetch router models list (status ${response.status})`);
-		}
-
-		return response.json() as Promise<ApiRouterModelsListResponse>;
+		return apiFetch<ApiRouterModelsListResponse>('/v1/models');
 	}
 
 	/**
@@ -78,18 +61,7 @@ export class ModelsService {
 			payload.extra_args = extraArgs;
 		}
 
-		const response = await fetch(`${base}/models/load`, {
-			method: 'POST',
-			headers: getJsonHeaders(),
-			body: JSON.stringify(payload)
-		});
-
-		if (!response.ok) {
-			const errorData = await response.json().catch(() => ({}));
-			throw new Error(errorData.error || `Failed to load model (status ${response.status})`);
-		}
-
-		return response.json() as Promise<ApiRouterModelsLoadResponse>;
+		return apiPost<ApiRouterModelsLoadResponse>('/models/load', payload);
 	}
 
 	/**
@@ -98,18 +70,7 @@ export class ModelsService {
 	 * @param modelId - Model identifier to unload
 	 */
 	static async unload(modelId: string): Promise<ApiRouterModelsUnloadResponse> {
-		const response = await fetch(`${base}/models/unload`, {
-			method: 'POST',
-			headers: getJsonHeaders(),
-			body: JSON.stringify({ model: modelId })
-		});
-
-		if (!response.ok) {
-			const errorData = await response.json().catch(() => ({}));
-			throw new Error(errorData.error || `Failed to unload model (status ${response.status})`);
-		}
-
-		return response.json() as Promise<ApiRouterModelsUnloadResponse>;
+		return apiPost<ApiRouterModelsUnloadResponse>('/models/unload', { model: modelId });
 	}
 
 	/**
