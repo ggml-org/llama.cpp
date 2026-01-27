@@ -106,8 +106,15 @@ class ChatStore {
 		this.isLoading = this.chatLoadingStates.get(convId) || false;
 		const s = this.chatStreamingStates.get(convId);
 		this.currentResponse = s?.response || '';
-		if (s?.response && s?.messageId && this.messageUpdateCallback)
-			this.messageUpdateCallback(s.messageId, { content: s.response });
+		this.isStreamingActive = s !== undefined;
+		this.setActiveProcessingConversation(convId);
+		// Sync streaming content to activeMessages so UI displays current content
+		if (s?.response && s?.messageId) {
+			const idx = conversationsStore.findMessageIndex(s.messageId);
+			if (idx !== -1) {
+				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
+			}
+		}
 	}
 	registerMessageUpdateCallback(
 		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
