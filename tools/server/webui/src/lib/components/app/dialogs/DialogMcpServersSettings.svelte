@@ -2,7 +2,6 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { McpLogo, McpServersSettings } from '$lib/components/app';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpClient } from '$lib/clients/mcp.client';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -13,7 +12,7 @@
 
 	$effect(() => {
 		if (open) {
-			mcpClient.runHealthChecksForServers(mcpStore.getServers());
+			mcpStore.runHealthChecksForServers(mcpStore.getServers());
 		}
 	});
 

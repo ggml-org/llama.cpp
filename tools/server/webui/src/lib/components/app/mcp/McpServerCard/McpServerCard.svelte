@@ -5,7 +5,6 @@
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpClient } from '$lib/clients/mcp.client';
 	import {
 		McpServerCardActions,
 		McpServerCardDeleteDialog,
@@ -62,7 +61,7 @@
 	let editFormRef: McpServerCardEditForm | null = $state(null);
 
 	function handleHealthCheck() {
-		mcpClient.runHealthCheck(server);
+		mcpStore.runHealthCheck(server);
 	}
 
 	async function startEditing() {
@@ -87,7 +86,7 @@
 		isEditing = false;
 
 		if (server.enabled && url) {
-			setTimeout(() => mcpClient.runHealthCheck({ ...server, url }), 100);
+			setTimeout(() => mcpStore.runHealthCheck({ ...server, url }), 100);
 		}
 	}
 

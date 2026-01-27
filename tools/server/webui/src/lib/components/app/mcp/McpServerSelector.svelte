@@ -5,7 +5,6 @@
 	import { DropdownMenuSearchable, McpActiveServersAvatars } from '$lib/components/app';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpClient } from '$lib/clients/mcp.client';
 	import { getFaviconUrl } from '$lib/utils';
 	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
@@ -55,7 +54,7 @@
 
 	function handleDropdownOpen(open: boolean) {
 		if (open) {
-			mcpClient.runHealthChecksForServers(mcpServers);
+			mcpStore.runHealthChecksForServers(mcpServers);
 		}
 	}
 

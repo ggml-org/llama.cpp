@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { mcpClient } from '$lib/clients/mcp.client';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce } from '$lib/utils';
@@ -81,14 +80,14 @@
 		try {
 			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
-			const initialized = await mcpClient.ensureInitialized(perChatOverrides);
+			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 			if (!initialized) {
 				prompts = [];
 				return;
 			}
 
-			prompts = await mcpClient.getAllPrompts();
+			prompts = await mcpStore.getAllPrompts();
 		} catch (error) {
 			console.error('[ChatFormPromptPicker] Failed to load prompts:', error);
 			prompts = [];
@@ -123,7 +122,7 @@
 		onClose?.();
 
 		try {
-			const result = await mcpClient.getPrompt(prompt.serverName, prompt.name, args);
+			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, args);
 			onPromptLoadComplete?.(placeholderId, result);
 		} catch (error) {
 			const errorMessage =
@@ -158,7 +157,7 @@
 		loadingSuggestions[argName] = true;
 
 		try {
-			const result = await mcpClient.getPromptCompletions(
+			const result = await mcpStore.getPromptCompletions(
 				selectedPrompt.serverName,
 				selectedPrompt.name,
 				argName,
