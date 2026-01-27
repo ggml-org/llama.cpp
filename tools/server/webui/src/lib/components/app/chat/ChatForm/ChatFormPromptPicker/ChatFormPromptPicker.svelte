@@ -4,11 +4,11 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce } from '$lib/utils';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
-	import { fly } from 'svelte/transition';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatFormPromptPickerList from './ChatFormPromptPickerList.svelte';
 	import ChatFormPromptPickerHeader from './ChatFormPromptPickerHeader.svelte';
 	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
+	import * as Popover from '$lib/components/ui/popover';
 
 	interface Props {
 		class?: string;
@@ -320,50 +320,62 @@
 	let showSearchInput = $derived(prompts.length > 3);
 </script>
 
-{#if isOpen}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div
-		class="absolute right-0 bottom-full left-0 z-50 mb-3 {className}"
-		transition:fly={{ y: 10, duration: 150 }}
+<Popover.Root
+	bind:open={isOpen}
+	onOpenChange={(open) => {
+		if (!open) {
+			onClose?.();
+		}
+	}}
+>
+	<Popover.Trigger class="pointer-events-none absolute top-0 right-0 left-0 h-0 w-full opacity-0">
+		<span class="sr-only">Open prompt picker</span>
+	</Popover.Trigger>
+
+	<Popover.Content
+		side="top"
+		align="start"
+		sideOffset={12}
+		avoidCollisions={false}
+		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl {className}"
 		onkeydown={handleKeydown}
+		onOpenAutoFocus={(e) => e.preventDefault()}
 	>
-		<div class="overflow-hidden rounded-xl border border-border/50 bg-popover shadow-xl">
-			{#if selectedPrompt}
-				{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
-				{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
+		{#if selectedPrompt}
+			{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
+			{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
 
-				<div class="p-4">
-					<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
+			<div class="p-4">
+				<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
 
-					<ChatFormPromptPickerArgumentForm
-						prompt={selectedPrompt}
-						{promptArgs}
-						{suggestions}
-						{loadingSuggestions}
-						{activeAutocomplete}
-						{autocompleteIndex}
-						{promptError}
-						onArgInput={handleArgInput}
-						onArgKeydown={handleArgKeydown}
-						onArgBlur={handleArgBlur}
-						onArgFocus={handleArgFocus}
-						onSelectSuggestion={selectSuggestion}
-						onSubmit={handleArgumentSubmit}
-						onCancel={handleCancelArgumentForm}
-					/>
-				</div>
-			{:else}
-				<ChatFormPromptPickerList
-					prompts={filteredPrompts}
-					{isLoading}
-					{selectedIndex}
-					bind:searchQuery={internalSearchQuery}
-					{showSearchInput}
-					{serverSettingsMap}
-					getServerLabel={(server) => mcpStore.getServerLabel(server)}
-					onPromptClick={handlePromptClick}
+				<ChatFormPromptPickerArgumentForm
+					prompt={selectedPrompt}
+					{promptArgs}
+					{suggestions}
+					{loadingSuggestions}
+					{activeAutocomplete}
+					{autocompleteIndex}
+					{promptError}
+					onArgInput={handleArgInput}
+					onArgKeydown={handleArgKeydown}
+					onArgBlur={handleArgBlur}
+					onArgFocus={handleArgFocus}
+					onSelectSuggestion={selectSuggestion}
+					onSubmit={handleArgumentSubmit}
+					onCancel={handleCancelArgumentForm}
 				/>
-			{/if}
-		</div>
-	</div>
-{/if}
+			</div>
+		{:else}
+			<ChatFormPromptPickerList
+				prompts={filteredPrompts}
+				{isLoading}
+				{selectedIndex}
+				bind:searchQuery={internalSearchQuery}
+				{showSearchInput}
+				{serverSettingsMap}
+				getServerLabel={(server) => mcpStore.getServerLabel(server)}
+				onPromptClick={handlePromptClick}
+			/>
+		{/if}
+	</Popover.Content>
+</Popover.Root>
