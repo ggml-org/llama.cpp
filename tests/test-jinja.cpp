@@ -1373,6 +1373,9 @@ static void test_object_methods(testing & t) {
 
 static void test_hasher(testing & t) {
     static const std::vector<std::pair<size_t, size_t>> chunk_sizes = {
+        {1, 2},
+        {1, 16},
+        {8, 1},
         {1, 1024},
         {5, 512},
         {16, 256},
@@ -1385,7 +1388,6 @@ static void test_hasher(testing & t) {
         data.resize(length);
         for (size_t i = 0; i < length; ++i) {
             data[i] = static_cast<char>(rand() % 256);
-            data[i] = data[i] == 0 ? 1 : data[i];
         }
         return data;
     };

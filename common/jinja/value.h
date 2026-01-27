@@ -95,7 +95,8 @@ void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input);
 
 struct func_args; // function argument values
 
-using func_handler = std::function<value(const func_args &)>;
+using func_hptr = value(const func_args &);
+using func_handler = std::function<func_hptr>;
 using func_builtins = std::map<std::string, func_handler>;
 
 enum value_compare_op { eq, ge, gt, lt, ne };
@@ -122,6 +123,7 @@ struct value_t {
     value_t(const value_t &) = default;
     virtual ~value_t() = default;
 
+    // Note: only for debugging and error reporting purposes
     virtual std::string type() const { return ""; }
 
     virtual int64_t as_int() const { throw std::runtime_error(type() + " is not an int value"); }
@@ -222,9 +224,7 @@ struct value_int_t : public value_t {
     virtual bool is_numeric() const override { return true; }
     virtual bool is_hashable() const override { return true; }
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        return hasher()
-            .update(&type_hash, sizeof(type_hash))
+        return hasher(typeid(*this))
             .update(&val_int, sizeof(val_int))
             .update(&val_flt, sizeof(val_flt));
     }
@@ -265,9 +265,7 @@ struct value_float_t : public value_t {
         if (static_cast<double>(val_int) == val_flt) {
             return val->unique_hash();
         } else {
-            const auto type_hash = typeid(*this).hash_code();
-            return hasher()
-                .update(&type_hash, sizeof(type_hash))
+            return hasher(typeid(*this))
                 .update(&val_int, sizeof(val_int))
                 .update(&val_flt, sizeof(val_flt));
         }
@@ -439,9 +437,10 @@ struct value_array_t : public value_t {
         return false;
     }
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        auto hash = hasher().update(&type_hash, sizeof(type_hash));
+        auto hash = hasher(typeid(*this));
         for (const auto & val : val_arr) {
+            // must use digest to prevent problems from "concatenation" property of hasher
+            // for ex. hash of [ "ab", "c" ] should be different from [ "a", "bc" ]
             const size_t val_hash = val->unique_hash().digest();
             hash.update(&val_hash, sizeof(size_t));
         }
@@ -563,18 +562,19 @@ struct value_object_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
-            if (std::all_of(val_obj.begin(), val_obj.end(), [&](auto & pair) -> bool {
-                const auto & val = pair.second;
-                return val->is_immutable() && val->is_hashable();
-            })) {
-                return true;
-            }
-            return false;
+        if (std::all_of(val_obj.begin(), val_obj.end(), [&](auto & pair) -> bool {
+            const auto & val = pair.second;
+            return val->is_immutable() && val->is_hashable();
+        })) {
+            return true;
+        }
+        return false;
     }
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        auto hash = hasher().update(&type_hash, sizeof(type_hash));
+        auto hash = hasher(typeid(*this));
         for (const auto & [key, val] : val_obj) {
+            // must use digest to prevent problems from "concatenation" property of hasher
+            // for ex. hash of key="ab", value="c" should be different from key="a", value="bc"
             const size_t key_hash = key->unique_hash().digest();
             const size_t val_hash = val->unique_hash().digest();
             hash.update(&key_hash, sizeof(key_hash));
@@ -621,8 +621,7 @@ struct value_undefined_t : public value_t {
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        return hasher().update(&type_hash, sizeof(type_hash));
+        return hasher(typeid(*this));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
@@ -711,23 +710,17 @@ struct value_func_t : public value_t {
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
     virtual bool is_hashable() const override { return true; }
     virtual hasher unique_hash() const noexcept override {
-        const auto type_hash = typeid(*this).hash_code();
-        const auto target_type_hash = val_func.target_type().hash_code();
-        const auto target = val_func.target<value(const func_args &)>();
-        const auto target_hash = target ? typeid(*target).hash_code() : 0;
-        hasher hash;
-        if (arg0) {
-            hash = arg0->unique_hash();
-        }
-        hash.update(&type_hash, sizeof(type_hash))
-            .update(&target_type_hash, sizeof(target_type_hash))
-            .update(&target_hash, sizeof(target_hash));
-        return hash;
+        // use function pointer as unique identifier
+        const auto target = val_func.target<func_hptr>();
+        return hasher(typeid(*this)).update(&target, sizeof(target));
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        const value_func_t & other_val = static_cast<const value_func_t &>(other);
-        return typeid(*this) == typeid(other) && val_func.target_type() == other.val_func.target_type() && val_func.target<value(const func_args &)>() == other.val_func.target<value(const func_args &)>() && arg0 == other_val.arg0;
+        // compare function pointers
+        // (note: val_func == other.val_func does not work as std::function::operator== is only used for nullptr check)
+        const auto target_this  = this->val_func.target<func_hptr>();
+        const auto target_other = other.val_func.target<func_hptr>();
+        return typeid(*this) == typeid(other) && target_this == target_other;
     }
 };
 using value_func = std::shared_ptr<value_func_t>;
