@@ -76,7 +76,7 @@ __device__ void sigmoid_warp_inplace(float (&vals)[experts_per_thread], const in
 
     It is intended as fusion of softmax->top-k->get_rows pipeline for MoE models
 */
-template <int n_experts>
+template <int n_experts, bool has_bias>
 __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float *         logits,
                                                                   float *               weights,
                                                                   int32_t *             ids,
@@ -113,33 +113,26 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
 
     if (!config.delayed_softmax) {
         if (config.use_sigmoid) {
-            if constexpr (n_experts % WARP_SIZE == 0) {
-                sigmoid_warp_inplace<experts_per_thread, false>(wt, n_experts, threadIdx.x);
-            } else {
-                sigmoid_warp_inplace<experts_per_thread, true>(wt, n_experts, threadIdx.x);
-            }
+           sigmoid_warp_inplace<experts_per_thread, false>(wt, n_experts, threadIdx.x);
         } else {
-            softmax_warp_inplace<experts_per_thread, false>(wt, n_experts, threadIdx.x);
+           softmax_warp_inplace<experts_per_thread, false>(wt, n_experts, threadIdx.x);
         }
     }
 
-    float selection_wt[experts_per_thread];
-#pragma unroll
-    for (int i = 0; i < experts_per_thread; i++) {
-        selection_wt[i] = -INFINITY;
-    }
+    // selection_wt is only needed when bias is present (selection uses wt + bias)
+    // when no bias, we use wt directly for both selection and weight values
+    float selection_wt[has_bias ? experts_per_thread : 1];
 
-    if (bias) {
+    if constexpr (has_bias) {
+#pragma unroll
+        for (int i = 0; i < experts_per_thread; i++) {
+            selection_wt[i] = -INFINITY;
+        }
 #pragma unroll
         for (int i = 0; i < n_experts; i += WARP_SIZE) {
             const int expert = i + threadIdx.x;
             selection_wt[i / WARP_SIZE] =
                 (n_experts % WARP_SIZE == 0 || expert < n_experts) ? wt[i / WARP_SIZE] + bias[expert] : -INFINITY;
-        }
-    } else {
-#pragma unroll
-        for (int i = 0; i < experts_per_thread; i++) {
-            selection_wt[i] = wt[i];
         }
     }
 
@@ -157,29 +150,59 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     }
 
     for (int k = 0; k < n_expert_used; k++) {
-        float max_val    = wt[0];            // actual weight value (without bias)
-        float max_val_s  = selection_wt[0];  // selection value (with bias)
+        float max_val    = wt[0];
         int   max_expert = threadIdx.x;
 
-#pragma unroll
-        for (int i = 1; i < experts_per_thread; i++) {
-            const int expert = threadIdx.x + i * WARP_SIZE;
-            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
-                max_val    = wt[i];
-                max_val_s  = selection_wt[i];
-                max_expert = expert;
-            }
-        }
+        if constexpr (has_bias) {
+            float max_val_s = selection_wt[0];
 
 #pragma unroll
-        for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-            const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-            const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
-            const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
-            if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
-                max_val    = val;
-                max_val_s  = val_s;
-                max_expert = expert;
+            for (int i = 1; i < experts_per_thread; i++) {
+                const int expert = threadIdx.x + i * WARP_SIZE;
+                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
+                    max_val    = wt[i];
+                    max_val_s  = selection_wt[i];
+                    max_expert = expert;
+                }
+            }
+
+#pragma unroll
+            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
+                const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
+                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
+                    max_val    = val;
+                    max_val_s  = val_s;
+                    max_expert = expert;
+                }
+            }
+
+            if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
+                selection_wt[max_expert / WARP_SIZE] = -INFINITY;
+            }
+        } else {
+#pragma unroll
+            for (int i = 1; i < experts_per_thread; i++) {
+                const int expert = threadIdx.x + i * WARP_SIZE;
+                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
+                    max_val    = wt[i];
+                    max_expert = expert;
+                }
+            }
+
+#pragma unroll
+            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
+                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                if (val > max_val || (val == max_val && expert < max_expert)) {
+                    max_val    = val;
+                    max_expert = expert;
+                }
+            }
+
+            if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
+                wt[max_expert / WARP_SIZE] = -INFINITY;
             }
         }
 
@@ -188,8 +211,6 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
         }
 
         if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-            selection_wt[max_expert / WARP_SIZE] = -INFINITY;
-
             ids[k] = max_expert;
             if (config.with_norm) {
                 wt_sum += max_val;
@@ -220,6 +241,7 @@ __launch_bounds__(4 * WARP_SIZE, 1) __global__ void topk_moe_cuda(const float * 
     }
 }
 
+template<bool has_bias>
 static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
                                  const float *               logits,
                                  float *                     weights,
@@ -240,47 +262,47 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
 
     switch (n_expert) {
         case 1:
-            topk_moe_cuda<1><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<1, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                    clamp_val, scale_val, config);
             break;
         case 2:
-            topk_moe_cuda<2><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<2, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                    clamp_val, scale_val, config);
             break;
         case 4:
-            topk_moe_cuda<4><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<4, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                    clamp_val, scale_val, config);
             break;
         case 8:
-            topk_moe_cuda<8><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<8, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                    clamp_val, scale_val, config);
             break;
         case 16:
-            topk_moe_cuda<16><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<16, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                     clamp_val, scale_val, config);
             break;
         case 32:
-            topk_moe_cuda<32><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<32, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                     clamp_val, scale_val, config);
             break;
         case 64:
-            topk_moe_cuda<64><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<64, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                     clamp_val, scale_val, config);
             break;
         case 128:
-            topk_moe_cuda<128><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<128, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                      clamp_val, scale_val, config);
             break;
         case 256:
-            topk_moe_cuda<256><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<256, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                      clamp_val, scale_val, config);
             break;
         case 512:
-            topk_moe_cuda<512><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<512, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                      clamp_val, scale_val, config);
             break;
         case 576:
-            topk_moe_cuda<576><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
+            topk_moe_cuda<576, has_bias><<<grid_dims, block_dims, 0, stream>>>(logits, weights, ids, bias, n_rows, n_expert_used,
                                                                      clamp_val, scale_val, config);
             break;
         default:
@@ -328,8 +350,13 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
         .delayed_softmax = args.delayed_softmax,
     };
 
-    launch_topk_moe_cuda(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
-                         scale_val, config);
+    if (bias) {
+        launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
+                             scale_val, config);
+    } else {
+        launch_topk_moe_cuda<false>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
+                             scale_val, config);
+    }
 }
 
 bool ggml_cuda_should_use_topk_moe(const ggml_tensor * gating_op,
