@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
-	import { config } from '$lib/stores/settings.svelte';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 	import { MessageRole, AttachmentType } from '$lib/enums';
-	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
@@ -18,42 +17,12 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		onCopy?: (message: DatabaseMessage) => void;
-		onContinueAssistantMessage?: (message: DatabaseMessage) => void;
-		onDelete?: (message: DatabaseMessage) => void;
-		onEditWithBranching?: (
-			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
-		) => void;
-		onEditWithReplacement?: (
-			message: DatabaseMessage,
-			newContent: string,
-			shouldBranch: boolean
-		) => void;
-		onEditUserMessagePreserveResponses?: (
-			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
-		) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerateWithBranching?: (message: DatabaseMessage, modelOverride?: string) => void;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
-	let {
-		class: className = '',
-		message,
-		onCopy,
-		onContinueAssistantMessage,
-		onDelete,
-		onEditWithBranching,
-		onEditWithReplacement,
-		onEditUserMessagePreserveResponses,
-		onNavigateToSibling,
-		onRegenerateWithBranching,
-		siblingInfo = null
-	}: Props = $props();
+	let { class: className = '', message, siblingInfo = null }: Props = $props();
+
+	const chatActions = getChatActionsContext();
 
 	let deletionInfo = $state<{
 		totalCount: number;
@@ -83,7 +52,6 @@
 		return null;
 	});
 
-	// Auto-start edit mode if this message is the pending edit target
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
 
@@ -112,23 +80,12 @@
 		editedUploadedFiles = [];
 	}
 
-	function handleEditedExtrasChange(extras: DatabaseMessageExtra[]) {
-		editedExtras = extras;
-	}
-
-	function handleEditedUploadedFilesChange(files: ChatUploadedFile[]) {
-		editedUploadedFiles = files;
-	}
-
-	async function handleCopy() {
-		const asPlainText = Boolean(config().copyTextAttachmentsAsPlainText);
-		const clipboardContent = formatMessageForClipboard(message.content, message.extra, asPlainText);
-		await copyToClipboard(clipboardContent, 'Message copied to clipboard');
-		onCopy?.(message);
+	function handleCopy() {
+		chatActions.copy(message);
 	}
 
 	function handleConfirmDelete() {
-		onDelete?.(message);
+		chatActions.delete(message);
 		showDeleteDialog = false;
 	}
 
@@ -159,28 +116,16 @@
 		}, 0);
 	}
 
-	function handleEditedContentChange(content: string) {
-		editedContent = content;
-	}
-
-	function handleEditKeydown(event: KeyboardEvent) {
-		// Check for IME composition using isComposing property and keyCode 229 (specifically for IME composition on Safari)
-		// This prevents saving edit when confirming IME word selection (e.g., Japanese/Chinese input)
-		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-			handleSaveEdit();
-		} else if (event.key === 'Escape') {
-			event.preventDefault();
-			handleCancelEdit();
-		}
-	}
-
 	function handleRegenerate(modelOverride?: string) {
-		onRegenerateWithBranching?.(message, modelOverride);
+		chatActions.regenerateWithBranching(message, modelOverride);
 	}
 
 	function handleContinue() {
-		onContinueAssistantMessage?.(message);
+		chatActions.continueAssistantMessage(message);
+	}
+
+	function handleNavigateToSibling(siblingId: string) {
+		chatActions.navigateToSibling(siblingId);
 	}
 
 	async function handleSaveEdit() {
@@ -205,11 +150,11 @@
 			}
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
-			onEditWithBranching?.(message, editedContent.trim(), finalExtras);
+			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
 		} else {
 			// For assistant messages, preserve exact content including trailing whitespace
 			// This is important for the Continue feature to work properly
-			onEditWithReplacement?.(message, editedContent, shouldBranchAfterEdit);
+			chatActions.editWithReplacement(message, editedContent, shouldBranchAfterEdit);
 		}
 
 		isEditing = false;
@@ -250,18 +195,12 @@
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{isEditing}
 		{message}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditKeydown={handleEditKeydown}
-		onEditedContentChange={handleEditedContentChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -270,23 +209,13 @@
 	<ChatMessageMcpPrompt
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{editedExtras}
-		{editedUploadedFiles}
-		{isEditing}
 		{message}
 		mcpPrompt={mcpPromptExtra}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditedContentChange={handleEditedContentChange}
-		onEditedExtrasChange={handleEditedExtrasChange}
-		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
-		onSaveEditOnly={handleSaveEditOnly}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -295,22 +224,12 @@
 	<ChatMessageUser
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{editedExtras}
-		{editedUploadedFiles}
-		{isEditing}
 		{message}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditedContentChange={handleEditedContentChange}
-		onEditedExtrasChange={handleEditedExtrasChange}
-		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
-		onSaveEditOnly={handleSaveEditOnly}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -320,24 +239,16 @@
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{isEditing}
 		{message}
 		messageContent={message.content}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onContinue={handleContinue}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditKeydown={handleEditKeydown}
-		onEditedContentChange={handleEditedContentChange}
-		{onNavigateToSibling}
+		onNavigateToSibling={handleNavigateToSibling}
 		onRegenerate={handleRegenerate}
-		onSaveEdit={handleSaveEdit}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{shouldBranchAfterEdit}
-		onShouldBranchAfterEditChange={(value) => (shouldBranchAfterEdit = value)}
 		{showDeleteDialog}
 		{siblingInfo}
 	/>
