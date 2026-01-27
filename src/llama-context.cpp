@@ -253,11 +253,7 @@ llama_context::llama_context(
 
         // graph outputs buffer
         {
-            // resized during inference when a batch uses more outputs
-            // Create a dummy batch for initialization.
-            llama_batch dummy_batch = {};
-            dummy_batch.n_tokens = 0;
-            if (output_reserve(params.n_seq_max, dummy_batch) < params.n_seq_max) {
+            if (output_reserve(params.n_seq_max) < params.n_seq_max) {
                 throw std::runtime_error("failed to reserve initial output buffer");
             }
 
@@ -1225,7 +1221,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     n_queued_tokens += n_tokens;
 
     // reserve output buffer
-    if (output_reserve(n_tokens, batch_inp) < n_tokens) {
+    if (output_reserve(n_tokens) < n_tokens) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_tokens);
         return -2;
     };
@@ -1605,7 +1601,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // reserve output buffer
-    if (output_reserve(n_outputs_all, balloc->get_batch()) < n_outputs_all) {
+    if (output_reserve(n_outputs_all) < n_outputs_all) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
         return -2;
     };
@@ -1824,8 +1820,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 // output
 //
 
-uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & batch) {
-    GGML_UNUSED(batch);
+uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const auto & hparams = model.hparams;
     const auto & vocab   = model.vocab;
@@ -2604,10 +2599,7 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         auto n_outputs = this->n_outputs;
         io.read_to(&n_outputs, sizeof(n_outputs));
 
-        // Create a dummy batch for state loading.
-        llama_batch dummy_batch = {};
-        dummy_batch.n_tokens = 0;
-        if (n_outputs > output_reserve(n_outputs, dummy_batch)) {
+        if (n_outputs > output_reserve(n_outputs)) {
             throw std::runtime_error("could not reserve outputs");
         }
 
@@ -2852,7 +2844,7 @@ void llama_context::opt_epoch_iter(
         }
 
         // reserve output buffer
-        if (output_reserve(n_outputs_all, balloc->get_batch()) < n_outputs_all) {
+        if (output_reserve(n_outputs_all) < n_outputs_all) {
             LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
             GGML_ABORT("TODO: handle this error");
         };
