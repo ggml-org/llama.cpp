@@ -528,7 +528,7 @@ class ModelBase:
                     up_data = self._up_exp_buffer.pop(bid)
                     # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
                     fused_data = torch.cat([gate_data, up_data], dim=1)
-                    fused_name = f"blk.{bid}.ffn_gate_up_exps.weight"
+                    fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
                     logger.info(f"Fused gate_exps and up_exps for layer {bid}")
                     return [(fused_name, fused_data)]
                 return []  # Wait for up_exps
