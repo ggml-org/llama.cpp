@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "common.cuh"
 #include "convert.cuh"
+#include "cp-async.cuh"
 #include "conv2d-implicit.cuh"
 
 
@@ -365,7 +366,7 @@ __device__ __forceinline__ void ldmatrix_a(
   unsigned int logical_offset = (threadIdx.x % 32) * smem_stride;
   unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b10000000) >> 4);
   swizzled_offset = swizzled_offset ^ ((swizzled_offset & 0b1100000) >> 2);
-  uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
+  uint32_t src_addr = ggml_cuda_cvta_generic_to_shared(src + swizzled_offset);
   constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
 
     // 0
@@ -633,7 +634,7 @@ __device__ __forceinline__ void ldmatrix_b(
   unsigned int logical_offset = (threadIdx.x % 32) * smem_stride;
   unsigned int swizzled_offset = logical_offset ^ ((logical_offset & 0b10000000) >> 4);
   swizzled_offset = swizzled_offset ^ ((swizzled_offset & 0b1100000) >> 2);
-  uint32_t src_addr = cvta_to_shared_u32(src + swizzled_offset);
+  uint32_t src_addr = ggml_cuda_cvta_generic_to_shared(src + swizzled_offset);
   constexpr unsigned int smem_stride_ = smem_stride * sizeof(half); // convert stride to bytes
 
     // 0

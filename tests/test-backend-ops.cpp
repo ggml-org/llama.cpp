@@ -40,6 +40,7 @@
 #include <thread>
 #include <vector>
 #include <unordered_map>
+#include <map>
 
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1

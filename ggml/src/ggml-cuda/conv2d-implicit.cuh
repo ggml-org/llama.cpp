@@ -592,18 +592,6 @@ __device__ __forceinline__ void tileMemcpySwizzleStore(
 #endif
 }
 
-__device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
-    uint32_t address;
-    asm("{\n\t"
-        "  .reg .u64 u64addr;\n\t"
-        "  cvta.to.shared.u64 u64addr, %1;\n\t"
-        "  cvt.u32.u64 %0, u64addr;\n\t"
-        "}"
-        : "=r"(address)
-        : "l"(pointer));
-    return address;
-}
-
 template<typename T, const int BN, const int rowStrideA, const int layout,
          const bool vec_load, const int ksplit, const int PAD>
 __device__ __forceinline__ void loadFilter(const T * __restrict__ kernel,
