@@ -4,6 +4,7 @@
 	import ChatFormPromptPickerListItem from './ChatFormPromptPickerListItem.svelte';
 	import ChatFormPromptPickerListItemSkeleton from './ChatFormPromptPickerListItemSkeleton.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
+	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 
 	interface Props {
 		prompts: MCPPromptInfo[];
@@ -28,14 +29,14 @@
 	}: Props = $props();
 </script>
 
-<div>
+<ScrollArea>
 	{#if showSearchInput}
-		<div class="p-2 pb-0">
+		<div class="absolute top-0 right-0 left-0 z-10 p-2 pb-0">
 			<SearchInput placeholder="Search prompts..." bind:value={searchQuery} />
 		</div>
 	{/if}
 
-	<div class="max-h-64 overflow-y-auto p-2">
+	<div class="max-h-64 p-2" class:pt-13={showSearchInput}>
 		{#if isLoading}
 			<ChatFormPromptPickerListItemSkeleton />
 		{:else if prompts.length === 0}
@@ -57,4 +58,4 @@
 			{/each}
 		{/if}
 	</div>
-</div>
+</ScrollArea>
