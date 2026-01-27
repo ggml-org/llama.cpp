@@ -79,15 +79,15 @@ struct context {
     }
 
     value get_val(const std::string & name) {
-        auto it = env->val_obj.unordered.find(name);
-        if (it != env->val_obj.unordered.end()) {
-            return it->second;
-        } else {
-            return mk_val<value_undefined>(name);
-        }
+        value default_val = mk_val<value_undefined>(name);
+        return env->at(name, default_val);
     }
 
     void set_val(const std::string & name, const value & val) {
+        env->insert(name, val);
+    }
+
+    void set_val(const value & name, const value & val) {
         env->insert(name, val);
     }
 
@@ -344,9 +344,19 @@ struct array_literal : public expression {
     }
 };
 
-struct tuple_literal : public array_literal {
-    explicit tuple_literal(statements && val) : array_literal(std::move(val)) {}
+struct tuple_literal : public expression {
+    statements val;
+    explicit tuple_literal(statements && val) : val(std::move(val)) {
+        for (const auto& item : this->val) chk_type<expression>(item);
+    }
     std::string type() const override { return "TupleLiteral"; }
+    value execute_impl(context & ctx) override {
+        auto arr = mk_val<value_array>();
+        for (const auto & item_stmt : val) {
+            arr->push_back(item_stmt->execute(ctx));
+        }
+        return mk_val<value_tuple>(std::move(arr->as_array()));
+    }
 };
 
 struct object_literal : public expression {
