@@ -23,6 +23,7 @@
  * - Lazy disconnect after flow completes
  */
 
+import { BaseClient } from './base-client';
 import { mcpClient } from '$lib/clients';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
@@ -108,32 +109,7 @@ interface AgenticStoreStateCallbacks {
 	clearStreamingToolCall: (conversationId: string) => void;
 }
 
-export class AgenticClient {
-	private storeCallbacks: AgenticStoreStateCallbacks | null = null;
-
-	/**
-	 *
-	 *
-	 * Store Integration
-	 *
-	 *
-	 */
-
-	/**
-	 * Sets callbacks for store state updates.
-	 * Called by agenticStore during initialization.
-	 */
-	setStoreCallbacks(callbacks: AgenticStoreStateCallbacks): void {
-		this.storeCallbacks = callbacks;
-	}
-
-	private get store(): AgenticStoreStateCallbacks {
-		if (!this.storeCallbacks) {
-			throw new Error('AgenticClient: Store callbacks not initialized');
-		}
-		return this.storeCallbacks;
-	}
-
+export class AgenticClient extends BaseClient<AgenticStoreStateCallbacks> {
 	/**
 	 *
 	 *

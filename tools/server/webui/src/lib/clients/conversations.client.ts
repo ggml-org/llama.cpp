@@ -20,6 +20,7 @@
  * - Title management with confirmation
  */
 
+import { BaseClient } from './base-client';
 import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
@@ -46,32 +47,7 @@ interface ConversationsStoreStateCallbacks {
 		| undefined;
 }
 
-export class ConversationsClient {
-	private storeCallbacks: ConversationsStoreStateCallbacks | null = null;
-
-	/**
-	 *
-	 *
-	 * Store Integration
-	 *
-	 *
-	 */
-
-	/**
-	 * Sets callbacks for store state updates.
-	 * Called by conversationsStore during initialization.
-	 */
-	setStoreCallbacks(callbacks: ConversationsStoreStateCallbacks): void {
-		this.storeCallbacks = callbacks;
-	}
-
-	private get store(): ConversationsStoreStateCallbacks {
-		if (!this.storeCallbacks) {
-			throw new Error('ConversationsClient: Store callbacks not initialized');
-		}
-		return this.storeCallbacks;
-	}
-
+export class ConversationsClient extends BaseClient<ConversationsStoreStateCallbacks> {
 	/**
 	 *
 	 *
