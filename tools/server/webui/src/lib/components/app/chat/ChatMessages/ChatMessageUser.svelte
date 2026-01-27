@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getMessageEditContext, getChatActionsContext } from '$lib/contexts';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
@@ -17,17 +17,13 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		onCancelEdit: () => void;
-		onSaveEdit: () => void;
-		onSaveEditOnly?: () => void;
-		onEditedContentChange: (content: string) => void;
-		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
-		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
-		onCopy: () => void;
+		showDeleteDialog: boolean;
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		onNavigateToSibling?: (siblingId: string) => void;
+		onCopy: () => void;
 	}
 
 	let {
@@ -35,18 +31,13 @@
 		message,
 		siblingInfo = null,
 		deletionInfo,
-		onCancelEdit,
-		onSaveEdit,
-		onSaveEditOnly,
-		onEditedContentChange,
-		onEditedExtrasChange,
-		onEditedUploadedFilesChange,
-		onCopy,
+		showDeleteDialog,
 		onEdit,
 		onDelete,
 		onConfirmDelete,
+		onShowDeleteDialogChange,
 		onNavigateToSibling,
-		onShowDeleteDialogChange
+		onCopy
 	}: Props = $props();
 
 	// Get contexts
@@ -86,21 +77,8 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	{#if isEditing}
-		<ChatMessageEditForm
-			{editedContent}
-			{editedExtras}
-			{editedUploadedFiles}
-			originalContent={message.content}
-			originalExtras={message.extra}
-			showSaveOnlyOption={!!onSaveEditOnly}
-			{onCancelEdit}
-			{onSaveEdit}
-			{onSaveEditOnly}
-			{onEditedContentChange}
-			{onEditedExtrasChange}
-			{onEditedUploadedFilesChange}
-		/>
+	{#if editCtx.isEditing}
+		<ChatMessageEditForm />
 	{:else}
 		{#if message.extra && message.extra.length > 0}
 			<div class="mb-2 max-w-[80%]">

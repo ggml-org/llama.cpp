@@ -7,12 +7,11 @@
 		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
-	import ChatMessageThinkingBlock from './ChatMessageThinkingBlock.svelte';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
-	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
+	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -34,7 +33,6 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		messageContent: string | undefined;
 		onCopy: () => void;
@@ -53,7 +51,6 @@
 	let {
 		class: className = '',
 		deletionInfo,
-		isLastAssistantMessage = false,
 		message,
 		messageContent,
 		onConfirmDelete,
@@ -68,6 +65,22 @@
 		siblingInfo = null,
 		textareaElement = $bindable()
 	}: Props = $props();
+
+	// Get edit context
+	const editCtx = getMessageEditContext();
+
+	// Local state for assistant-specific editing
+	let shouldBranchAfterEdit = $state(false);
+
+	function handleEditKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+			event.preventDefault();
+			editCtx.save();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			editCtx.cancel();
+		}
+	}
 
 	const hasAgenticMarkers = $derived(
 		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false

@@ -3,38 +3,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
-	interface Props {
-		editedContent: string;
-		editedExtras?: DatabaseMessageExtra[];
-		editedUploadedFiles?: ChatUploadedFile[];
-		originalContent: string;
-		originalExtras?: DatabaseMessageExtra[];
-		showSaveOnlyOption?: boolean;
-		onCancelEdit: () => void;
-		onSaveEdit: () => void;
-		onSaveEditOnly?: () => void;
-		onEditedContentChange: (content: string) => void;
-		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
-		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
-	}
-
-	let {
-		editedContent,
-		editedExtras = [],
-		editedUploadedFiles = [],
-		originalContent,
-		originalExtras = [],
-		showSaveOnlyOption = false,
-		onCancelEdit,
-		onSaveEdit,
-		onSaveEditOnly,
-		onEditedContentChange,
-		onEditedExtrasChange,
-		onEditedUploadedFilesChange
-	}: Props = $props();
+	const editCtx = getMessageEditContext();
 
 	let inputAreaRef: ChatForm | undefined = $state(undefined);
 	let saveWithoutRegenerate = $state(false);
@@ -58,7 +31,7 @@
 			(editCtx.editedUploadedFiles && editCtx.editedUploadedFiles.length > 0)
 	);
 
-	let canSubmit = $derived(editedContent.trim().length > 0 || hasAttachments);
+	let canSubmit = $derived(editCtx.editedContent.trim().length > 0 || hasAttachments);
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ESCAPE) {
@@ -88,30 +61,23 @@
 	}
 
 	function handleAttachmentRemove(index: number) {
-		if (!onEditedExtrasChange) return;
-
-		const newExtras = [...editedExtras];
+		const newExtras = [...editCtx.editedExtras];
 		newExtras.splice(index, 1);
-		onEditedExtrasChange(newExtras);
+		editCtx.setExtras(newExtras);
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
-		if (!onEditedUploadedFilesChange) return;
-
-		const newFiles = editedUploadedFiles.filter((f) => f.id !== fileId);
-		onEditedUploadedFilesChange(newFiles);
+		const newFiles = editCtx.editedUploadedFiles.filter((f) => f.id !== fileId);
+		editCtx.setUploadedFiles(newFiles);
 	}
 
 	async function handleFilesAdd(files: File[]) {
-		if (!onEditedUploadedFilesChange) return;
-
 		const processed = await processFilesToChatUploaded(files);
-
-		onEditedUploadedFilesChange([...editedUploadedFiles, processed].flat());
+		editCtx.setUploadedFiles([...editCtx.editedUploadedFiles, ...processed]);
 	}
 
 	function handleUploadedFilesChange(files: ChatUploadedFile[]) {
-		onEditedUploadedFilesChange?.(files);
+		editCtx.setUploadedFiles(files);
 	}
 
 	$effect(() => {
@@ -128,11 +94,11 @@
 <div class="relative w-full max-w-[80%]">
 	<ChatForm
 		bind:this={inputAreaRef}
-		value={editedContent}
-		attachments={editedExtras}
-		uploadedFiles={editedUploadedFiles}
+		value={editCtx.editedContent}
+		attachments={editCtx.editedExtras}
+		uploadedFiles={editCtx.editedUploadedFiles}
 		placeholder="Edit your message..."
-		onValueChange={onEditedContentChange}
+		onValueChange={editCtx.setContent}
 		onAttachmentRemove={handleAttachmentRemove}
 		onUploadedFileRemove={handleUploadedFileRemove}
 		onUploadedFilesChange={handleUploadedFilesChange}
