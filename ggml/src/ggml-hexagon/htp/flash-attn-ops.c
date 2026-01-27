@@ -17,6 +17,12 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
+static inline HVX_Vector hvx_load_f32_to_f16(const HVX_Vector * restrict src, const HVX_Vector zero) {
+    HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(src[0], zero);  // 32 elements
+    HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(src[1], zero);  // 32 elements
+    return Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+}
+
 // Dot product of FP32 and FP16 vectors, accumulating to float
 static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
     const HVX_Vector * restrict vy = (const HVX_Vector * restrict) y; // fp32
@@ -33,9 +39,7 @@ static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict 
     #pragma unroll(4)
     for (i = 0; i < nvec; i++) {
         // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+        HVX_Vector y_hf  = hvx_load_f32_to_f16(&vy[i*2], zero);
 
         // Load x (fp16)
         HVX_Vector x_hf  = vx[i];
@@ -47,9 +51,7 @@ static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict 
 
     if (nloe) {
         // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+        HVX_Vector y_hf  = hvx_load_f32_to_f16(&vy[i*2], zero);
 
         // Load x (fp16)
         HVX_Vector x_hf  = vx[i];
@@ -94,10 +96,7 @@ static inline void hvx_dot_f32_f16_aa_rx2(float * restrict r,
     #pragma unroll(2)
     for (i = 0; i < nvec; i++) {
         // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
-
+        HVX_Vector y_hf  = hvx_load_f32_to_f16(&vy[i*2], zero);
         // Load x (fp16)
         HVX_Vector x0_hf = vx0[i];
         HVX_Vector x1_hf = vx1[i];
@@ -111,9 +110,7 @@ static inline void hvx_dot_f32_f16_aa_rx2(float * restrict r,
 
     if (nloe) {
         // Load y (fp32) and convert into fp16
-        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 0], zero);  // 32 elements
-        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i * 2 + 1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
+        HVX_Vector y_hf  = hvx_load_f32_to_f16(&vy[i*2], zero);
 
         // Load x (fp16)
         HVX_Vector x0_hf = vx0[i];
