@@ -475,7 +475,12 @@ class MCPStore {
 		console.log(`[MCPStore] Connection acquired (active flows: ${this.activeFlowCount})`);
 	}
 
-	async releaseConnection(shutdownIfUnused = true): Promise<void> {
+	/**
+	 * Release a connection reference.
+	 * By default, keeps connections alive for reuse (shutdownIfUnused=false).
+	 * MCP spec encourages long-lived sessions to avoid reconnection overhead.
+	 */
+	async releaseConnection(shutdownIfUnused = false): Promise<void> {
 		this.activeFlowCount = Math.max(0, this.activeFlowCount - 1);
 		console.log(`[MCPStore] Connection released (active flows: ${this.activeFlowCount})`);
 		if (shutdownIfUnused && this.activeFlowCount === 0) {
@@ -698,7 +703,8 @@ class MCPStore {
 			requestTimeoutSeconds: number;
 			headers?: string;
 		}[],
-		skipIfChecked = true
+		skipIfChecked = true,
+		promoteToActive = false
 	): Promise<void> {
 		const serversToCheck = skipIfChecked
 			? servers.filter((s) => !this.hasHealthCheck(s.id) && s.url.trim())
@@ -707,11 +713,61 @@ class MCPStore {
 		const BATCH_SIZE = 5;
 		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
 			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-			await Promise.all(batch.map((server) => this.runHealthCheck(server)));
+			await Promise.all(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
 		}
 	}
 
-	async runHealthCheck(server: HealthCheckParams): Promise<void> {
+	/**
+	 * Check if a server already has an active connection that can be reused.
+	 * Returns the existing connection if available.
+	 */
+	getExistingConnection(serverId: string): MCPConnection | undefined {
+		return this.connections.get(serverId);
+	}
+
+	/**
+	 * Run a health check for a server.
+	 * If the server already has an active connection, reuses it instead of creating a new one.
+	 * If promoteToActive is true and server is enabled, the connection will be kept
+	 * and promoted to an active connection instead of being disconnected.
+	 */
+	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
+		// Check if we already have an active connection for this server
+		const existingConnection = this.connections.get(server.id);
+		if (existingConnection) {
+			// Reuse existing connection - just refresh tools list
+			try {
+				const tools = await MCPService.listTools(existingConnection);
+				const capabilities = buildCapabilitiesInfo(
+					existingConnection.serverCapabilities,
+					existingConnection.clientCapabilities
+				);
+				this.updateHealthCheck(server.id, {
+					status: HealthCheckStatus.SUCCESS,
+					tools: tools.map((tool) => ({
+						name: tool.name,
+						description: tool.description,
+						title: tool.title
+					})),
+					serverInfo: existingConnection.serverInfo,
+					capabilities,
+					transportType: existingConnection.transportType,
+					protocolVersion: existingConnection.protocolVersion,
+					instructions: existingConnection.instructions,
+					connectionTimeMs: existingConnection.connectionTimeMs,
+					logs: []
+				});
+				console.log(`[MCPStore] Reused existing connection for health check: ${server.id}`);
+				return;
+			} catch (error) {
+				console.warn(
+					`[MCPStore] Failed to reuse connection for ${server.id}, creating new one:`,
+					error
+				);
+				// Connection may be stale, remove it and create new one
+				this.connections.delete(server.id);
+			}
+		}
 		const trimmedUrl = server.url.trim();
 		const logs: MCPConnectionLog[] = [];
 		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.IDLE;
@@ -788,6 +844,31 @@ class MCPStore {
 				logs
 			});
 		}
+	}
+
+	/**
+	 * Promote a health check connection to an active connection.
+	 * This avoids the need to reconnect when the server is needed for agentic flows.
+	 */
+	private promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
+		// Register tools from the connection
+		for (const tool of connection.tools) {
+			if (this.toolsIndex.has(tool.name)) {
+				console.warn(
+					`[MCPStore] Tool name conflict during promotion: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverId}". Using tool from "${serverId}".`
+				);
+			}
+			this.toolsIndex.set(tool.name, serverId);
+		}
+
+		// Add to active connections
+		this.connections.set(serverId, connection);
+
+		// Update state
+		this.updateState({
+			toolCount: this.toolsIndex.size,
+			connectedServers: Array.from(this.connections.keys())
+		});
 	}
 
 	getServersStatus(): ServerStatus[] {
