@@ -118,6 +118,7 @@ extern std::atomic<bool> g_ggml_sycl_debug_forced_off;
 // Track when SYCL graph recording is active
 extern thread_local bool g_ggml_sycl_graph_recording;
 extern std::atomic<int>  g_ggml_sycl_graph_recording_depth;
+int                      ggml_sycl_graph_inflight_count();
 
 inline bool ggml_sycl_graph_recording_active() {
     return g_ggml_sycl_graph_recording || g_ggml_sycl_graph_recording_depth.load(std::memory_order_acquire) > 0;
@@ -549,7 +550,8 @@ struct layout_policy {
         static int unified_dispatch_enabled = -1;
         if (unified_dispatch_enabled < 0) {
             const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
-            unified_dispatch_enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+            // Default unified dispatch to ON unless explicitly disabled.
+            unified_dispatch_enabled = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
         }
         if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0) {
             return GGML_LAYOUT_AOS;
@@ -1497,7 +1499,13 @@ inline void ggml_sycl_refresh_cached_input_ptr(void * dst, const void * src, siz
     sycl::queue & q = dpct::dev_mgr::instance().get_device(device).default_queue();
     sycl::usm::alloc alloc = sycl::get_pointer_type(dst, q.get_context());
     if (alloc == sycl::usm::alloc::device) {
-        q.memcpy(dst, src, bytes).wait();
+        const bool avoid_wait =
+            ggml_sycl_graph_recording_active() || ggml_sycl_graph_inflight_count() > 0;
+        if (avoid_wait) {
+            q.memcpy(dst, src, bytes);
+        } else {
+            q.memcpy(dst, src, bytes).wait();
+        }
         return;
     }
     // Host/shared/unknown: use CPU memcpy
@@ -1723,7 +1731,8 @@ inline bool ggml_sycl_unified_dispatch_env_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
-        enabled          = (env && std::atoi(env) != 0) ? 1 : 0;
+        // Keep this helper consistent with ggml_sycl_unified_dispatch_enabled().
+        enabled          = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
     }
     return enabled != 0;
 }

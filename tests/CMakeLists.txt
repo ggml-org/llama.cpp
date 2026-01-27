@@ -769,6 +769,19 @@ if(GGML_SYCL)
     add_test(NAME test-moe-mini-graph COMMAND $<TARGET_FILE:test-moe-mini-graph>)
 endif()
 
+# test-sycl-graph-input-refresh: graph replay must refresh input tensors
+if(GGML_SYCL)
+    add_executable(test-sycl-graph-input-refresh test-sycl-graph-input-refresh.cpp)
+    target_link_libraries(test-sycl-graph-input-refresh PRIVATE ggml ggml-cpu)
+    target_include_directories(test-sycl-graph-input-refresh PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-graph-input-refresh PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-graph-input-refresh PRIVATE "-fsycl")
+    install(TARGETS test-sycl-graph-input-refresh RUNTIME)
+    add_test(NAME test-sycl-graph-input-refresh COMMAND $<TARGET_FILE:test-sycl-graph-input-refresh>)
+endif()
+
 # test-layout-cache: layout selection + unified cache AoS drop
 if(GGML_SYCL)
     add_executable(test-layout-cache test-layout-cache.cpp)

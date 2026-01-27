@@ -115,6 +115,10 @@ static std::atomic<int>  g_sycl_graph_inflight{ 0 };
 static std::atomic<bool> g_sycl_graph_multithreaded{ false };
 std::atomic<bool>        g_ggml_sycl_debug_forced_off{ false };
 
+int ggml_sycl_graph_inflight_count() {
+    return g_sycl_graph_inflight.load(std::memory_order_acquire);
+}
+
 static std::atomic<int> g_ggml_sycl_debug_override{ -1 };
 
 enum class ggml_sycl_host_weight_release_mode {
@@ -205,11 +209,11 @@ static bool ggml_sycl_get_canonical_checksum(const char * name, ggml_sycl_canoni
 }
 
 // Check if unified dispatch is enabled via environment variable
-// GGML_SYCL_UNIFIED_DISPATCH=1 enables the unified kernel dispatch path
+// Unified dispatch defaults to enabled; set GGML_SYCL_UNIFIED_DISPATCH=0 to disable.
 static bool ggml_sycl_unified_dispatch_enabled() {
     if (g_ggml_sycl_unified_dispatch < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
-        g_ggml_sycl_unified_dispatch = (env && std::atoi(env) != 0) ? 1 : 0;
+        g_ggml_sycl_unified_dispatch = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
     }
     return g_ggml_sycl_unified_dispatch != 0;
 }
@@ -16153,7 +16157,10 @@ static bool ggml_sycl_dmmv_allow_reordered_layouts() {
     static int allow = -1;
     if (allow < 0) {
         const char * env = std::getenv("GGML_SYCL_DMMV_USE_COALESCED");
-        allow             = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+        // Default reordered layouts to ON for DMMV. This avoids layout mismatch
+        // failures when unified dispatch is disabled and layouts are finalized to
+        // SOA/COALESCED. Set GGML_SYCL_DMMV_USE_COALESCED=0 to force AoS.
+        allow             = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
     }
     return allow != 0;
 }
@@ -16162,10 +16169,8 @@ static layout_mode ggml_sycl_mul_mat_kernel_layout(ggml_sycl_mul_mat_kernel kern
     if (!caps) {
         return GGML_LAYOUT_AOS;
     }
-    // Spinach: DMMV's reordered layouts are guarded by GGML_SYCL_DMMV_USE_COALESCED
-    // inside the DMMV kernel. If we select SOA/COALESCED here without that guard,
-    // we can pass a reordered pointer that DMMV then interprets as AoS, yielding NaNs.
-    // Force DMMV to use AoS unless the guard is explicitly enabled.
+    // DMMV reordered layouts can be disabled via GGML_SYCL_DMMV_USE_COALESCED=0.
+    // Keep this escape hatch but default to allowing reordered layouts.
     if ((kernel == ggml_sycl_mul_mat_kernel::DMMV_SOA ||
          kernel == ggml_sycl_mul_mat_kernel::DMMV_COALESCED) &&
         !ggml_sycl_dmmv_allow_reordered_layouts()) {
@@ -17270,14 +17275,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                                (unsigned long long) key.name_hash, ctx.device);
                 GGML_ABORT("MUL_MAT dispatch missing layout choice");
             }
-            // Spinach: unified kernel selection can finalize reordered layouts for prefill,
-            // but DMMV decode (batch=1) is guarded against reordered layouts unless
-            // GGML_SYCL_DMMV_USE_COALESCED=1. If we enforce a reordered layout here,
-            // we can dead-end into "no eligible kernel" or pass mismatched pointers.
+            // If reordered layouts are explicitly disabled for DMMV, relax the
+            // finalized layout choice to avoid layout/kind mismatches at dispatch.
             const bool dmmv_batch1 = (src1->ne[1] == 1) && can_use_dequantize_mul_mat_vec(src0, src1, dst);
             if (dmmv_batch1 && chosen_layout != GGML_LAYOUT_AOS && !ggml_sycl_dmmv_allow_reordered_layouts()) {
                 GGML_SYCL_DEBUG(
-                    "[MUL_MAT] Relaxing finalized layout=%s for DMMV batch=1 without reordered layouts: %s\n",
+                    "[MUL_MAT] Relaxing finalized layout=%s for DMMV batch=1 with reordered layouts disabled: %s\n",
                     ggml_sycl_layout_mode_name(chosen_layout), src0->name ? src0->name : "?");
                 enforce_layout_choice = false;
             }
@@ -21897,6 +21900,62 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
                     staged_count, cache_hit_count, already_device_count, skipped_weight_count, tiered_weight_promoted_count);
 }
 
+// When reusing an executable SYCL command graph, the usual per-op pointer refresh
+// paths are not executed. We must explicitly refresh dynamic input tensors (e.g. tokens)
+// on device before replaying the graph.
+static void graph_refresh_input_tensors(ggml_backend_sycl_context * ctx, const ggml_cgraph * cgraph) {
+    if (!ctx || !cgraph || cgraph->n_nodes == 0) {
+        return;
+    }
+    std::unordered_set<const void *> refreshed_ptrs;
+    int                              refreshed_count = 0;
+
+    auto refresh_tensor = [&](const ggml_tensor * tensor) {
+        if (!tensor || !tensor->data) {
+            return;
+        }
+        if (ggml_sycl_tensor_is_weight(tensor)) {
+            return;
+        }
+        const bool is_input = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
+        if (!is_input) {
+            return;
+        }
+
+        // Deduplicate by source data pointer; input tensors reuse the same storage.
+        if (!refreshed_ptrs.insert(tensor->data).second) {
+            return;
+        }
+
+        // Trigger the standard SYCL pointer path to refresh any cached/staged storage
+        // (tiered cache, extra->data_device, and pinned staging buffers).
+        void * resolved_ptr = ggml_sycl_get_data_ptr(tensor, ctx->device);
+
+        refreshed_count++;
+        if (g_ggml_sycl_debug) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed input tensor %s -> %p\n",
+                            tensor->name ? tensor->name : "?", resolved_ptr);
+        }
+    };
+
+    for (int i = 0; i < cgraph->n_leafs; ++i) {
+        refresh_tensor(cgraph->leafs[i]);
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (!node) {
+            continue;
+        }
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            refresh_tensor(node->src[j]);
+        }
+    }
+
+    if (g_ggml_sycl_debug && refreshed_count > 0) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed %d input tensors before graph replay\n", refreshed_count);
+    }
+}
+
 static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
     if (!cgraph) {
 
@@ -22293,6 +22352,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // are captured by reference in SYCL kernels, so updates happen automatically.
         if (sycl_ctx->exec_graph) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute existing graph...\n");
+            graph_refresh_input_tensors(sycl_ctx, cgraph);
             graph_executed = true;
             sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
