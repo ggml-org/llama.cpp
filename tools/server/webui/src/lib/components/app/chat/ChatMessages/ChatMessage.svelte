@@ -270,13 +270,23 @@
 	<ChatMessageMcpPrompt
 		class={className}
 		{deletionInfo}
+		{editedContent}
+		{editedExtras}
+		{editedUploadedFiles}
+		{isEditing}
 		{message}
 		mcpPrompt={mcpPromptExtra}
+		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
+		onEditedContentChange={handleEditedContentChange}
+		onEditedExtrasChange={handleEditedExtrasChange}
+		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
 		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onSaveEditOnly={handleSaveEditOnly}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
