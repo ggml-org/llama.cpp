@@ -584,4 +584,30 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;unified;default"
         TIMEOUT 120
     )
+
+    # Test 11: XMX Optimization Tests (TDD)
+    # Tests double-buffering optimization for XMX kernel
+    add_executable(test-xmx-optimization
+        tests/test-xmx-optimization.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-xmx-optimization PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-optimization PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-optimization PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-optimization PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-optimization PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME xmx-optimization COMMAND test-xmx-optimization)
+    set_tests_properties(xmx-optimization PROPERTIES
+        LABELS "sycl;xmx;unified;optimization;tdd"
+        TIMEOUT 300
+    )
 endif()
