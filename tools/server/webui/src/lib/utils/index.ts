@@ -119,3 +119,6 @@ export { getFaviconUrl } from './favicon';
 
 // Agentic content parsing utilities
 export { parseAgenticContent, type AgenticSection } from './agentic';
+
+// Cache utilities
+export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
