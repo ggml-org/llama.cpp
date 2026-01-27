@@ -1,7 +1,7 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
-import type { ApiChatMessageContentPart } from '$lib/types/api';
+import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
 export class ChatService {
@@ -637,14 +637,30 @@ export class ChatService {
 		// Handle tool result messages (role: 'tool')
 		if (message.role === MessageRole.TOOL && message.toolCallId) {
 			return {
+				role: MessageRole.TOOL,
+				content: message.content,
+				tool_call_id: message.toolCallId
+			};
+		}
+
+		// Parse tool calls for assistant messages
+		let toolCalls: ApiChatCompletionToolCall[] | undefined;
+		if (message.toolCalls) {
+			try {
+				toolCalls = JSON.parse(message.toolCalls);
+			} catch {
+				// Ignore parse errors for malformed tool calls
+			}
+		}
+
+		if (!message.extra || message.extra.length === 0) {
+			const result: ApiChatMessageData = {
 				role: message.role as MessageRole,
 				content: message.content
 			};
-
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
-
 			return result;
 		}
 
@@ -748,11 +764,13 @@ export class ChatService {
 			});
 		}
 
-		return {
+		const result: ApiChatMessageData = {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
-
+		if (toolCalls && toolCalls.length > 0) {
+			result.tool_calls = toolCalls;
+		}
 		return result;
 	}
 
