@@ -707,7 +707,7 @@ struct value_func_t : public value_t {
     }
     virtual std::string type() const override { return "Function"; }
     virtual std::string as_repr() const override { return type() + "<" + name + ">(" + (arg0 ? arg0->as_repr() : "") + ")"; }
-    virtual bool is_hashable() const override { return true; }
+    virtual bool is_hashable() const override { return false; }
     virtual hasher unique_hash() const noexcept override {
         // Note: this is unused for now, we don't support function as object keys
         // use function pointer as unique identifier

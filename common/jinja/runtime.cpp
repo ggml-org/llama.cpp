@@ -45,10 +45,7 @@ static std::string get_line_col(const std::string & source, size_t pos) {
 }
 
 static void ensure_key_type_allowed(const value & val) {
-    bool allowed = is_val<value_string>(val) || is_val<value_int>(val) || is_val<value_float>(val)
-                || is_val<value_bool>(val) || is_val<value_tuple>(val)
-                || is_val<value_undefined>(val) || is_val<value_none>(val);
-    if (!allowed) {
+    if (!val->is_hashable()) {
         throw std::runtime_error("Type: " + val->type() + " is not allowed as object key");
     }
 }
