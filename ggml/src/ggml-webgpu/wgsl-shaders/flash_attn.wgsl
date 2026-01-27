@@ -22,8 +22,8 @@ enable chromium_experimental_subgroup_matrix;
 #define K_UNROLL 2u
 
 // Default values
-#define HEAD_DIM_QK 128
-#define HEAD_DIM_V 128
+#define HEAD_DIM_QK 64
+#define HEAD_DIM_V 64
 
 // The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
 // Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
@@ -33,8 +33,8 @@ enable chromium_experimental_subgroup_matrix;
 
 // Each workgroup processes one subgroup matrix of Q rows
 #define Q_TILE SG_MAT_M
-#define KV_TILE 64
-#define WG_SIZE 128
+#define KV_TILE 16
+#define WG_SIZE 64
 
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
 #define KV_BLOCKS (KV_TILE / SG_MAT_N)
@@ -688,25 +688,6 @@ for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
     workgroupBarrier();
 #endif
 
-    // write output back to global memory
-    // for (var q_tile_row = subgroup_id;
-    //      q_tile_row < Q_TILE;
-    //      q_tile_row += num_subgroups) {
-    //         let global_q_row = q_row_start + q_tile_row;
-    //         if (global_q_row >= params.seq_len_q) {
-    //             break;
-    //         }
-
-    //         let exp_sum = exp_sum_shmem[q_tile_row];
-    //         let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0);
-
-    //         for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
-    //             let o_val = o_shmem[q_tile_row * HEAD_DIM_V + elem_idx];
-    //             let scaled = f32(o_val) * scale;
-    //             dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
-    //         }
-    // }
-// write output back to global memory (vectorized)
 for (var q_tile_row = subgroup_id;
      q_tile_row < Q_TILE;
      q_tile_row += num_subgroups) {
