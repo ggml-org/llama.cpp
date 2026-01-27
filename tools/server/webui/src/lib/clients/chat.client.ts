@@ -1,3 +1,4 @@
+import { BaseClient } from './base-client';
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
@@ -79,32 +80,7 @@ const wrapReasoningContent = (content: string, reasoningContent?: string): strin
  * - Error handling (timeout, server errors)
  * - Graceful stop with partial response saving
  */
-export class ChatClient {
-	private storeCallbacks: ChatStoreStateCallbacks | null = null;
-
-	/**
-	 *
-	 *
-	 * Store Integration
-	 *
-	 *
-	 */
-
-	/**
-	 * Sets callbacks for store state updates.
-	 * Called by chatStore during initialization to establish bidirectional communication.
-	 */
-	setStoreCallbacks(callbacks: ChatStoreStateCallbacks): void {
-		this.storeCallbacks = callbacks;
-	}
-
-	private get store(): ChatStoreStateCallbacks {
-		if (!this.storeCallbacks) {
-			throw new Error('ChatClient: Store callbacks not initialized');
-		}
-		return this.storeCallbacks;
-	}
-
+export class ChatClient extends BaseClient<ChatStoreStateCallbacks> {
 	/**
 	 *
 	 *

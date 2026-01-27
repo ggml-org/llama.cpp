@@ -16,6 +16,9 @@
  * @see stores/ for reactive state
  */
 
+// Base Client
+export { BaseClient } from './base-client';
+
 // MCP Client
 export { MCPClient, mcpClient } from './mcp.client';
 
