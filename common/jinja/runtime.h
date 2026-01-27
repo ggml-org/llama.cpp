@@ -53,6 +53,9 @@ struct context {
 
     bool is_get_stats = false; // whether to collect stats
 
+    int recursion_depth = 0;
+    static constexpr int max_recursion_depth = 100;
+
     // src is optional, used for error reporting
     context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
         env = mk_val<value_object>();
@@ -76,6 +79,7 @@ struct context {
         current_time = parent.current_time;
         is_get_stats = parent.is_get_stats;
         src = parent.src;
+        recursion_depth = parent.recursion_depth;
     }
 
     value get_val(const std::string & name) {
