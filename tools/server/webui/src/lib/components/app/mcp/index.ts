@@ -176,7 +176,7 @@ export { default as McpLogo } from './McpLogo.svelte';
  * - Composes header, tools list, logs, and actions sub-components
  * - Manages local edit/delete state
  * - Reads health state from mcpStore
- * - Triggers health checks via mcpClient
+ * - Triggers health checks via mcpStore
  *
  * **Features:**
  * - Server header with favicon, name, version, and toggle
