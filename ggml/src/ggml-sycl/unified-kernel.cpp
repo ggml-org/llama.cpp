@@ -160,10 +160,10 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
     // Cast weight pointer
     const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
 
-    // Initialize accumulator (in registers)
-    // Each thread stores its portion of the output tile
+    // Initialize accumulator (in registers).
+    // compute_tile_xmx() treats this as a full [TILE_M x TILE_N] buffer.
     constexpr int ACC_SIZE = TILE_M * TILE_N;
-    float acc_regs[ACC_SIZE / 16] = {0.0f};  // Distributed across 16 threads per sub-group
+    float acc_regs[ACC_SIZE] = {0.0f};
 
     // Clear accumulator SLM
     for (int i = local_linear; i < XMX_TILE_M * XMX_TILE_N; i += local_total) {
@@ -251,11 +251,7 @@ void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>                   item,
             const int64_t n_global = n_start + n_off;
 
             if (m_global < args.M && n_global < args.N) {
-                // Read from appropriate register
-                int reg_idx = i / XMX_SUBGROUP_SIZE;
-                if (reg_idx < static_cast<int>(sizeof(acc_regs) / sizeof(float))) {
-                    args.output[m_global * args.N + n_global] = acc_regs[reg_idx];
-                }
+                args.output[m_global * args.N + n_global] = acc_regs[i];
             }
         }
     }

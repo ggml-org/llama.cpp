@@ -1218,8 +1218,11 @@ inline void compute_tile_xmx(
 /**
  * Check if XMX unified kernel path is enabled via environment.
  *
- * Set GGML_SYCL_XMX_UNIFIED=1 to enable the experimental XMX path.
- * Default is disabled until implementation is fully validated.
+ * XMX unified path is DISABLED by default due to 27% performance regression
+ * (PP512: 25.73 -> 18.78 t/s). Set GGML_SYCL_XMX_UNIFIED=1 to enable for testing.
+ *
+ * The XMX path correctness issues have been resolved.
+ * TODO: Enable by default once kernel is optimized (see llama.cpp-gkvk).
  *
  * @return true if XMX unified path is enabled
  */
@@ -1227,6 +1230,9 @@ inline bool is_xmx_unified_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char* env = std::getenv("GGML_SYCL_XMX_UNIFIED");
+        // Disabled by default (opt-in): XMX path shows 27% regression vs scalar path
+        // Enable with GGML_SYCL_XMX_UNIFIED=1 for testing/development only
+        // TODO: Enable by default once XMX kernel is optimized (see llama.cpp-gkvk benchmark results)
         enabled = (env && std::string(env) == "1") ? 1 : 0;
     }
     return enabled != 0;
@@ -1236,7 +1242,7 @@ inline bool is_xmx_unified_enabled() {
  * Check if XMX path can be used for given dimensions.
  *
  * XMX requires:
- * - Environment gate enabled (GGML_SYCL_XMX_UNIFIED=1)
+ * - XMX enabled (GGML_SYCL_XMX_UNIFIED=1, disabled by default)
  * - M >= XMX_TILE_M (8)
  * - N >= XMX_TILE_N (16)
  * - K aligned to XMX_TILE_K (16) for dpas
@@ -1247,7 +1253,7 @@ inline bool is_xmx_unified_enabled() {
  * @return true if XMX can be used
  */
 inline bool can_use_xmx(int64_t M, int64_t N, int64_t K) {
-    // XMX path is gated by environment variable until fully validated
+    // XMX path disabled by default, enable with GGML_SYCL_XMX_UNIFIED=1
     if (!is_xmx_unified_enabled()) {
         return false;
     }

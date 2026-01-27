@@ -558,4 +558,30 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;unified;matmul"
         TIMEOUT 300
     )
+
+    # Test 10: XMX Default Enable Tests
+    # Tests that XMX is enabled by default and uses XMXCapabilities
+    add_executable(test-xmx-default-enable
+        tests/test-xmx-default-enable.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-xmx-default-enable PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-default-enable PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-default-enable PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-default-enable PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-default-enable PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME xmx-default-enable COMMAND test-xmx-default-enable)
+    set_tests_properties(xmx-default-enable PROPERTIES
+        LABELS "sycl;xmx;unified;default"
+        TIMEOUT 120
+    )
 endif()

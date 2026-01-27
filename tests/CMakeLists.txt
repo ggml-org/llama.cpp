@@ -386,6 +386,17 @@ if(GGML_SYCL)
     add_test(NAME test-scalar-fallback COMMAND $<TARGET_FILE:test-scalar-fallback>)
 endif()
 
+# test-xmx-quant-loaders: unit tests for XMX quantization loader infrastructure
+# Tests QuantTraits compile-time constants and XMXTileLoader dequantization
+# Pure C++ test - only uses header types, no SYCL runtime required
+add_executable(test-xmx-quant-loaders test-xmx-quant-loaders.cpp)
+target_include_directories(test-xmx-quant-loaders PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+install(TARGETS test-xmx-quant-loaders RUNTIME)
+add_test(NAME test-xmx-quant-loaders COMMAND $<TARGET_FILE:test-xmx-quant-loaders>)
+
 # test-fattn-mask: unit tests for Flash Attention mask slope calculation (SYCL unified KV fix)
 llama_build_and_test(test-fattn-mask.cpp)
 
@@ -780,6 +791,19 @@ if(GGML_SYCL)
     target_link_options(test-sycl-graph-input-refresh PRIVATE "-fsycl")
     install(TARGETS test-sycl-graph-input-refresh RUNTIME)
     add_test(NAME test-sycl-graph-input-refresh COMMAND $<TARGET_FILE:test-sycl-graph-input-refresh>)
+endif()
+
+# test-sycl-xmx-unified-correctness: XMX unified must match CPU reference
+if(GGML_SYCL)
+    add_executable(test-sycl-xmx-unified-correctness test-sycl-xmx-unified-correctness.cpp)
+    target_link_libraries(test-sycl-xmx-unified-correctness PRIVATE ggml ggml-cpu)
+    target_include_directories(test-sycl-xmx-unified-correctness PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-xmx-unified-correctness PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-xmx-unified-correctness PRIVATE "-fsycl")
+    install(TARGETS test-sycl-xmx-unified-correctness RUNTIME)
+    add_test(NAME test-sycl-xmx-unified-correctness COMMAND $<TARGET_FILE:test-sycl-xmx-unified-correctness>)
 endif()
 
 # test-layout-cache: layout selection + unified cache AoS drop
@@ -1850,4 +1874,25 @@ if(GGML_SYCL)
     install(TARGETS test-unified-dispatch-integration RUNTIME)
     add_test(NAME test-unified-dispatch-integration COMMAND $<TARGET_FILE:test-unified-dispatch-integration>)
     set_property(TEST test-unified-dispatch-integration PROPERTY LABELS "sycl;integration")
+
+    # test-xmx-kernel-config: Unit tests for XMX kernel configuration types
+    # Pure C++ test (no SYCL required) - tests the template infrastructure for unified kernel
+    # Part of task llama.cpp-0hw0 - consolidate Q4_0 kernel variants
+    add_executable(test-xmx-kernel-config test-xmx-kernel-config.cpp)
+    target_include_directories(test-xmx-kernel-config PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+    install(TARGETS test-xmx-kernel-config RUNTIME)
+    add_test(NAME test-xmx-kernel-config COMMAND $<TARGET_FILE:test-xmx-kernel-config>)
+    set_property(TEST test-xmx-kernel-config PROPERTY LABELS "sycl;xmx")
+
+    # test-xmx-unified-kernel: Unit tests for unified Q4_0 XMX kernel template
+    # Tests that unified kernel template produces correct outputs for all 7 configurations
+    # Part of task llama.cpp-0hw0 - consolidate Q4_0 kernel variants
+    add_executable(test-xmx-unified-kernel test-xmx-unified-kernel.cpp)
+    target_include_directories(test-xmx-unified-kernel PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl
+        ${PROJECT_SOURCE_DIR}/ggml/include)
+    install(TARGETS test-xmx-unified-kernel RUNTIME)
+    add_test(NAME test-xmx-unified-kernel COMMAND $<TARGET_FILE:test-xmx-unified-kernel>)
+    set_property(TEST test-xmx-unified-kernel PROPERTY LABELS "sycl;xmx")
 endif()
