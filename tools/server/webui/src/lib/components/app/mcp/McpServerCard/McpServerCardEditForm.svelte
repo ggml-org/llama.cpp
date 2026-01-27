@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import McpServerForm from '$lib/components/app/mcp/McpServerForm.svelte';
+	import { McpServerForm } from '$lib/components/app/mcp';
 
 	interface Props {
 		serverId: string;

@@ -460,6 +460,29 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.svelte';
 
 /**
+ * User message display component. Renders user messages with right-aligned bubble styling.
+ * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
+ * Supports inline editing mode with ChatMessageEditForm integration.
+ */
+export { default as ChatMessageUser } from './ChatMessages/ChatMessageUser.svelte';
+
+/**
+ * Assistant message display component. Renders assistant responses with left-aligned styling.
+ * Supports both plain markdown content (via MarkdownContent) and agentic content with tool calls
+ * (via ChatMessageAgenticContent). Shows model info badge, statistics, and action buttons.
+ * Handles streaming state with real-time content updates.
+ */
+export { default as ChatMessageAssistant } from './ChatMessages/ChatMessageAssistant.svelte';
+
+/**
+ * Inline message editing form. Provides textarea for editing message content with
+ * attachment management. Shows save/cancel buttons and optional "Save only" button
+ * for editing without regenerating responses. Used within ChatMessage components
+ * when user enters edit mode.
+ */
+export { default as ChatMessageEditForm } from './ChatMessages/ChatMessageEditForm.svelte';
+
+/**
  *
  * SCREEN
  *
@@ -523,6 +546,13 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.s
  * ```
  */
 export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
+
+/**
+ * Visual overlay displayed when user drags files over the chat screen.
+ * Shows drop zone indicator to guide users where to release files.
+ * Integrated with ChatScreen's drag-drop file upload handling.
+ */
+export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOverlay.svelte';
 
 /**
  * Chat form wrapper within ChatScreen. Positions the ChatForm component at the
@@ -698,6 +728,13 @@ export { default as ChatSettingsParameterSourceIndicator } from './ChatSettings/
  * ```
  */
 export { default as ChatSidebar } from './ChatSidebar/ChatSidebar.svelte';
+
+/**
+ * Action buttons for sidebar header. Contains new chat button, settings button,
+ * and delete all conversations button. Manages dialog states for settings and
+ * delete confirmation.
+ */
+export { default as ChatSidebarActions } from './ChatSidebar/ChatSidebarActions.svelte';
 
 /**
  * Single conversation item in sidebar. Displays conversation title (truncated),
