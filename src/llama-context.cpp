@@ -1456,7 +1456,7 @@ static void copy_tensor_async_candidates(
     }
 }
 
-static bool needs_cpu_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers) {
+static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers) {
     for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
         if (!ubatch.output[i]) {
             continue;
@@ -1678,7 +1678,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        if (logits && t_logits && n_outputs > 0 && needs_cpu_logits(ubatch, sampling.samplers)) {
+        if (logits && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits != nullptr);
