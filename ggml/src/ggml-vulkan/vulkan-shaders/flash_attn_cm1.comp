@@ -158,13 +158,36 @@ void main() {
                 uint32_t c = (idx + tid) / (Br / 4);
                 uint32_t r = (idx + tid) % (Br / 4);
                 if (idx + tid < Bc * Br / 4 || idx + gl_WorkGroupSize.x <= Bc * Br / 4) {
-                    if ((!KV_bounds_check || j * Bc + c < KV) && (!nem1_bounds_check || i * Br + r * 4 < p.nem1)) {
-                        const f16vec4 m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
-                                                  data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
-                                                  data_m[m_offset + (i * Br + r * 4 + 2) * m_stride + (j * Bc + c)],
-                                                  data_m[m_offset + (i * Br + r * 4 + 3) * m_stride + (j * Bc + c)]);
+                    if ((!KV_bounds_check || j * Bc + c < KV)) {
+                        f16vec4 m;
+                        if (!nem1_bounds_check || i * Br + r * 4 + 3 < p.nem1) {
+                            m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 2) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 3) * m_stride + (j * Bc + c)]);
+                            max_mask = max(max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2])), float(m[3]));
+                        } else if (i * Br + r * 4 + 2 < p.nem1) {
+                            m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 2) * m_stride + (j * Bc + c)],
+                                        0.0);
+                            max_mask = max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2]));
+                        } else if (i * Br + r * 4 + 1 < p.nem1) {
+                            m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
+                                        data_m[m_offset + (i * Br + r * 4 + 1) * m_stride + (j * Bc + c)],
+                                        0.0,
+                                        0.0);
+                            max_mask = max(max(max_mask, float(m[0])), float(m[1]));
+                        } else if (i * Br + r * 4 < p.nem1) {
+                            m = f16vec4(data_m[m_offset + (i * Br + r * 4    ) * m_stride + (j * Bc + c)],
+                                        0.0,
+                                        0.0,
+                                        0.0);
+                            max_mask = max(max_mask, float(m[0]));
+                        } else {
+                            m = f16vec4(0.0);
+                        }
                         mask_cache[idx / WorkGroupSize] = m;
-                        max_mask = max(max(max(max(max_mask, float(m[0])), float(m[1])), float(m[2])), float(m[3]));
                     }
                 }
             }
@@ -282,36 +305,15 @@ void main() {
         }
 
         if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
-            bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
-
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) / (Br / 4);
                 uint32_t r = (idx + tid) % (Br / 4);
                 if (idx + tid < Bc * Br / 4 || idx + gl_WorkGroupSize.x <= Bc * Br / 4) {
                     if (!KV_bounds_check || j * Bc + c < KV) {
-                        if (!nem1_bounds_check || i * Br + r * 4 + 3 < p.nem1) {
-                            ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
-                            ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
-                            sfsh[c * sfshstride + r] += slopes * masks;
-                        } else if (i * Br + r * 4 + 2 < p.nem1) {
-                            ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
-                            masks.w = ACC_TYPE(0.0f);
-                            ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
-                            sfsh[c * sfshstride + r] += slopes * masks;
-                        } else if (i * Br + r * 4 + 1 < p.nem1) {
-                            ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
-                            masks.z = ACC_TYPE(0.0f);
-                            masks.w = ACC_TYPE(0.0f);
-                            ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
-                            sfsh[c * sfshstride + r] += slopes * masks;
-                        } else if (i * Br + r * 4 < p.nem1) {
-                            ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
-                            masks.y = ACC_TYPE(0.0f);
-                            masks.z = ACC_TYPE(0.0f);
-                            masks.w = ACC_TYPE(0.0f);
-                            ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
-                            sfsh[c * sfshstride + r] += slopes * masks;
-                        }
+                        // Mask nem1 bounds check is handled when loading masks
+                        ACC_TYPEV4 masks = ACC_TYPEV4(mask_cache[idx / WorkGroupSize]);
+                        ACC_TYPEV4 slopes = ACC_TYPEV4(slope[r * 4], slope[r * 4 + 1], slope[r * 4 + 2], slope[r * 4 + 3]);
+                        sfsh[c * sfshstride + r] += slopes * masks;
                     }
                 }
             }
