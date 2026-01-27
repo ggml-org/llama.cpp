@@ -615,13 +615,8 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
                 }
             );
         });
-        // Synchronous error check for debugging
-        try {
-            q.wait_and_throw();
-        } catch (sycl::exception const& e) {
-            fprintf(stderr, "[unified-kernel] ERROR in MEDIUM path: %s\n", e.what());
-            abort();
-        }
+        // NOTE: Don't call q.wait_and_throw() here - incompatible with SYCL command graphs.
+        // Errors will be caught when the queue is synchronized elsewhere.
     } else {
         // Fallback: use 32x32x32 tiles with dynamic SLM allocation
         // This path handles larger tile sizes
