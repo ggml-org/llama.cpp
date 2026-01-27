@@ -3,16 +3,16 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { config } from '$lib/stores/settings.svelte';
+	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		isEditing: boolean;
-		editedContent: string;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
@@ -21,10 +21,6 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		onCancelEdit: () => void;
-		onSaveEdit: () => void;
-		onEditKeydown: (event: KeyboardEvent) => void;
-		onEditedContentChange: (content: string) => void;
 		onCopy: () => void;
 		onEdit: () => void;
 		onDelete: () => void;
@@ -37,15 +33,9 @@
 	let {
 		class: className = '',
 		message,
-		isEditing,
-		editedContent,
 		siblingInfo = null,
 		showDeleteDialog,
 		deletionInfo,
-		onCancelEdit,
-		onSaveEdit,
-		onEditKeydown,
-		onEditedContentChange,
 		onCopy,
 		onEdit,
 		onDelete,
@@ -55,10 +45,25 @@
 		textareaElement = $bindable()
 	}: Props = $props();
 
+	const editCtx = getMessageEditContext();
+
+	function handleEditKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+			event.preventDefault();
+
+			editCtx.save();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+
+			editCtx.cancel();
+		}
+	}
+
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
 	let isExpanded = $state(false);
 	let contentHeight = $state(0);
+
 	const MAX_HEIGHT = 200; // pixels
 	const currentConfig = config();
 
@@ -98,24 +103,29 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	{#if isEditing}
+	{#if editCtx.isEditing}
 		<div class="w-full max-w-[80%]">
 			<textarea
 				bind:this={textareaElement}
-				bind:value={editedContent}
+				value={editCtx.editedContent}
 				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange(e.currentTarget.value)}
+				onkeydown={handleEditKeydown}
+				oninput={(e) => editCtx.setContent(e.currentTarget.value)}
 				placeholder="Edit system message..."
 			></textarea>
 
 			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 					<X class="mr-1 h-3 w-3" />
 					Cancel
 				</Button>
 
-				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
+				<Button
+					class="h-8 px-3"
+					onclick={editCtx.save}
+					disabled={!editCtx.editedContent.trim()}
+					size="sm"
+				>
 					<Check class="mr-1 h-3 w-3" />
 					Save
 				</Button>

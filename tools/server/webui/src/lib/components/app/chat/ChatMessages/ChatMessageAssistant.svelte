@@ -7,10 +7,11 @@
 		ModelBadge,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
-	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
+	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -32,25 +33,17 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		editedContent?: string;
-		isEditing?: boolean;
 		message: DatabaseMessage;
 		messageContent: string | undefined;
-		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
-		onEditKeydown?: (event: KeyboardEvent) => void;
-		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		onShouldBranchAfterEditChange?: (value: boolean) => void;
 		showDeleteDialog: boolean;
-		shouldBranchAfterEdit?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 	}
@@ -58,28 +51,36 @@
 	let {
 		class: className = '',
 		deletionInfo,
-		editedContent = '',
-		isEditing = false,
 		message,
 		messageContent,
-		onCancelEdit,
 		onConfirmDelete,
 		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
-		onEditKeydown,
-		onEditedContentChange,
 		onNavigateToSibling,
 		onRegenerate,
-		onSaveEdit,
 		onShowDeleteDialogChange,
-		onShouldBranchAfterEditChange,
 		showDeleteDialog,
-		shouldBranchAfterEdit = false,
 		siblingInfo = null,
 		textareaElement = $bindable()
 	}: Props = $props();
+
+	// Get edit context
+	const editCtx = getMessageEditContext();
+
+	// Local state for assistant-specific editing
+	let shouldBranchAfterEdit = $state(false);
+
+	function handleEditKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+			event.preventDefault();
+			editCtx.save();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			editCtx.cancel();
+		}
+	}
 
 	const hasAgenticMarkers = $derived(
 		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
@@ -104,7 +105,7 @@
 	}
 
 	$effect(() => {
-		if (isEditing && textareaElement) {
+		if (editCtx.isEditing && textareaElement) {
 			autoResizeTextarea(textareaElement);
 		}
 	});
@@ -131,16 +132,16 @@
 		</div>
 	{/if}
 
-	{#if isEditing}
+	{#if editCtx.isEditing}
 		<div class="w-full">
 			<textarea
 				bind:this={textareaElement}
-				bind:value={editedContent}
+				value={editCtx.editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={onEditKeydown}
+				onkeydown={handleEditKeydown}
 				oninput={(e) => {
 					autoResizeTextarea(e.currentTarget);
-					onEditedContentChange?.(e.currentTarget.value);
+					editCtx.setContent(e.currentTarget.value);
 				}}
 				placeholder="Edit assistant message..."
 			></textarea>
@@ -150,19 +151,24 @@
 					<Checkbox
 						id="branch-after-edit"
 						bind:checked={shouldBranchAfterEdit}
-						onCheckedChange={(checked) => onShouldBranchAfterEditChange?.(checked === true)}
+						onCheckedChange={(checked) => (shouldBranchAfterEdit = checked === true)}
 					/>
 					<Label for="branch-after-edit" class="cursor-pointer text-sm text-muted-foreground">
 						Branch conversation after edit
 					</Label>
 				</div>
 				<div class="flex gap-2">
-					<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="outline">
+					<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 						<X class="mr-1 h-3 w-3" />
 						Cancel
 					</Button>
 
-					<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent?.trim()} size="sm">
+					<Button
+						class="h-8 px-3"
+						onclick={editCtx.save}
+						disabled={!editCtx.editedContent?.trim()}
+						size="sm"
+					>
 						<Check class="mr-1 h-3 w-3" />
 						Save
 					</Button>
@@ -239,7 +245,7 @@
 		{/if}
 	</div>
 
-	{#if message.timestamp && !isEditing}
+	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActions
 			role={MessageRole.ASSISTANT}
 			justify="start"

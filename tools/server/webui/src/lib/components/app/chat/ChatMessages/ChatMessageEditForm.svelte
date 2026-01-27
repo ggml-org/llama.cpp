@@ -3,50 +3,23 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
-	interface Props {
-		editedContent: string;
-		editedExtras?: DatabaseMessageExtra[];
-		editedUploadedFiles?: ChatUploadedFile[];
-		originalContent: string;
-		originalExtras?: DatabaseMessageExtra[];
-		showSaveOnlyOption?: boolean;
-		onCancelEdit: () => void;
-		onSaveEdit: () => void;
-		onSaveEditOnly?: () => void;
-		onEditedContentChange: (content: string) => void;
-		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
-		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
-	}
-
-	let {
-		editedContent,
-		editedExtras = [],
-		editedUploadedFiles = [],
-		originalContent,
-		originalExtras = [],
-		showSaveOnlyOption = false,
-		onCancelEdit,
-		onSaveEdit,
-		onSaveEditOnly,
-		onEditedContentChange,
-		onEditedExtrasChange,
-		onEditedUploadedFilesChange
-	}: Props = $props();
+	const editCtx = getMessageEditContext();
 
 	let inputAreaRef: ChatForm | undefined = $state(undefined);
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 
 	let hasUnsavedChanges = $derived.by(() => {
-		if (editedContent !== originalContent) return true;
-		if (editedUploadedFiles.length > 0) return true;
+		if (editCtx.editedContent !== editCtx.originalContent) return true;
+		if (editCtx.editedUploadedFiles.length > 0) return true;
 
 		const extrasChanged =
-			editedExtras.length !== originalExtras.length ||
-			editedExtras.some((extra, i) => extra !== originalExtras[i]);
+			editCtx.editedExtras.length !== editCtx.originalExtras.length ||
+			editCtx.editedExtras.some((extra, i) => extra !== editCtx.originalExtras[i]);
 
 		if (extrasChanged) return true;
 
@@ -54,11 +27,11 @@
 	});
 
 	let hasAttachments = $derived(
-		(editedExtras && editedExtras.length > 0) ||
-			(editedUploadedFiles && editedUploadedFiles.length > 0)
+		(editCtx.editedExtras && editCtx.editedExtras.length > 0) ||
+			(editCtx.editedUploadedFiles && editCtx.editedUploadedFiles.length > 0)
 	);
 
-	let canSubmit = $derived(editedContent.trim().length > 0 || hasAttachments);
+	let canSubmit = $derived(editCtx.editedContent.trim().length > 0 || hasAttachments);
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') {
@@ -71,47 +44,40 @@
 		if (hasUnsavedChanges) {
 			showDiscardDialog = true;
 		} else {
-			onCancelEdit();
+			editCtx.cancel();
 		}
 	}
 
 	function handleSubmit() {
 		if (!canSubmit) return;
 
-		if (saveWithoutRegenerate && onSaveEditOnly) {
-			onSaveEditOnly();
+		if (saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
+			editCtx.saveOnly();
 		} else {
-			onSaveEdit();
+			editCtx.save();
 		}
 
 		saveWithoutRegenerate = false;
 	}
 
 	function handleAttachmentRemove(index: number) {
-		if (!onEditedExtrasChange) return;
-
-		const newExtras = [...editedExtras];
+		const newExtras = [...editCtx.editedExtras];
 		newExtras.splice(index, 1);
-		onEditedExtrasChange(newExtras);
+		editCtx.setExtras(newExtras);
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
-		if (!onEditedUploadedFilesChange) return;
-
-		const newFiles = editedUploadedFiles.filter((f) => f.id !== fileId);
-		onEditedUploadedFilesChange(newFiles);
+		const newFiles = editCtx.editedUploadedFiles.filter((f) => f.id !== fileId);
+		editCtx.setUploadedFiles(newFiles);
 	}
 
 	async function handleFilesAdd(files: File[]) {
-		if (!onEditedUploadedFilesChange) return;
-
 		const processed = await processFilesToChatUploaded(files);
-
-		onEditedUploadedFilesChange([...editedUploadedFiles, processed].flat());
+		editCtx.setUploadedFiles([...editCtx.editedUploadedFiles, ...processed]);
 	}
 
 	function handleUploadedFilesChange(files: ChatUploadedFile[]) {
-		onEditedUploadedFilesChange?.(files);
+		editCtx.setUploadedFiles(files);
 	}
 
 	$effect(() => {
@@ -128,11 +94,11 @@
 <div class="relative w-full max-w-[80%]">
 	<ChatForm
 		bind:this={inputAreaRef}
-		value={editedContent}
-		attachments={editedExtras}
-		uploadedFiles={editedUploadedFiles}
+		value={editCtx.editedContent}
+		attachments={editCtx.editedExtras}
+		uploadedFiles={editCtx.editedUploadedFiles}
 		placeholder="Edit your message..."
-		onValueChange={onEditedContentChange}
+		onValueChange={editCtx.setContent}
 		onAttachmentRemove={handleAttachmentRemove}
 		onUploadedFileRemove={handleUploadedFileRemove}
 		onUploadedFilesChange={handleUploadedFilesChange}
@@ -142,7 +108,7 @@
 </div>
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
-	{#if showSaveOnlyOption && onSaveEditOnly}
+	{#if editCtx.showSaveOnlyOption}
 		<div class="flex items-center gap-2">
 			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
 
@@ -169,6 +135,6 @@
 	cancelText="Keep editing"
 	variant="destructive"
 	icon={AlertTriangle}
-	onConfirm={onCancelEdit}
+	onConfirm={editCtx.cancel}
 	onCancel={() => (showDiscardDialog = false)}
 />
