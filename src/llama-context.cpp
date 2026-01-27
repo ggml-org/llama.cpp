@@ -1456,6 +1456,23 @@ static void copy_tensor_async_candidates(
     }
 }
 
+static bool needs_cpu_logits(const llama_ubatch & ubatch, const std::map<llama_seq_id, llama_sampler *> & samplers) {
+    for (uint32_t i = 0; i < ubatch.n_tokens; i++) {
+        if (!ubatch.output[i]) {
+            continue;
+        }
+
+        // Check if the output token has at least one sequence without a backend sampler.
+        for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+            llama_seq_id seq_id = ubatch.seq_id[i][j];
+            if (samplers.find(seq_id) == samplers.end()) {
+                return true;
+            }
+        }
+    }
+    return false; // all sequences use backend sampling
+}
+
 int llama_context::decode(const llama_batch & batch_inp) {
     GGML_ASSERT((!batch_inp.token && batch_inp.embd) || (batch_inp.token && !batch_inp.embd)); // NOLINT
 
@@ -1661,10 +1678,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        // For multi-sequence batches that mix backend samplers and CPU sampler
-        // this is currently inefficient as we copy all logits even for the
-        // backend sampled tokens.
-        if (logits && t_logits && n_outputs > 0) {
+        if (logits && t_logits && n_outputs > 0 && needs_cpu_logits(ubatch, sampling.samplers)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
             GGML_ASSERT(logits != nullptr);
@@ -1734,11 +1748,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // This flag indicates whether a backend sampler has actually sampled a specific
-        // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
-        const bool has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
-
-        if (has_samplers && has_sampled) {
+        // Copy backend sampling output if this ubatch produced any sampling tensors.
+        if (has_samplers && (!res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty())) {
             const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
             const auto stride = n_vocab;
 
