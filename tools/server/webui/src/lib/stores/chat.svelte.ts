@@ -395,7 +395,7 @@ class ChatStore {
 		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
 		extras?: DatabaseMessageExtra[]
-	): Promise<DatabaseMessage | null> {
+	): Promise<DatabaseMessage> {
 		return chatClient.addMessage(role, content, type, parent, extras);
 	}
 

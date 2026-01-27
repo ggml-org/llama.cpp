@@ -12,7 +12,8 @@ import {
 	normalizeModelName,
 	filterByLeafNodeId,
 	findDescendantMessages,
-	findLeafNode
+	findLeafNode,
+	isAbortError
 } from '$lib/utils';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
@@ -132,7 +133,8 @@ export class ChatClient {
 	 * @param type - Message type (text or root)
 	 * @param parent - Parent message ID, or '-1' to append to conversation end
 	 * @param extras - Optional attachments (images, files, etc.)
-	 * @returns The created message or null if failed
+	 * @returns The created message
+	 * @throws Error if no active conversation or database operation fails
 	 */
 	async addMessage(
 		role: MessageRole,
@@ -140,56 +142,50 @@ export class ChatClient {
 		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
 		extras?: DatabaseMessageExtra[]
-	): Promise<DatabaseMessage | null> {
+	): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) {
-			console.error('No active conversation when trying to add message');
-			return null;
+			throw new Error('No active conversation when trying to add message');
 		}
 
-		try {
-			let parentId: string | null = null;
+		let parentId: string | null = null;
 
-			if (parent === '-1') {
-				const activeMessages = conversationsStore.activeMessages;
-				if (activeMessages.length > 0) {
-					parentId = activeMessages[activeMessages.length - 1].id;
-				} else {
-					const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-					const rootMessage = allMessages.find((m) => m.parent === null && m.type === 'root');
-					if (!rootMessage) {
-						parentId = await DatabaseService.createRootMessage(activeConv.id);
-					} else {
-						parentId = rootMessage.id;
-					}
-				}
+		if (parent === '-1') {
+			const activeMessages = conversationsStore.activeMessages;
+			if (activeMessages.length > 0) {
+				parentId = activeMessages[activeMessages.length - 1].id;
 			} else {
-				parentId = parent;
+				const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+				const rootMessage = allMessages.find((m) => m.parent === null && m.type === 'root');
+				if (!rootMessage) {
+					parentId = await DatabaseService.createRootMessage(activeConv.id);
+				} else {
+					parentId = rootMessage.id;
+				}
 			}
-
-			const message = await DatabaseService.createMessageBranch(
-				{
-					convId: activeConv.id,
-					role,
-					content,
-					type,
-					timestamp: Date.now(),
-					toolCalls: '',
-					children: [],
-					extra: extras
-				},
-				parentId
-			);
-
-			conversationsStore.addMessageToActive(message);
-			await conversationsStore.updateCurrentNode(message.id);
-			conversationsStore.updateConversationTimestamp();
-
-			return message;
-		} catch (error) {
-			console.error('Failed to add message:', error);
-			return null;
+		} else {
+			parentId = parent;
 		}
+
+		const message = await DatabaseService.createMessageBranch(
+			{
+				convId: activeConv.id,
+				role,
+				content,
+				type,
+				timestamp: Date.now(),
+				toolCalls: '',
+				children: [],
+				extra: extras
+			},
+			parentId
+		);
+
+		conversationsStore.addMessageToActive(message);
+		await conversationsStore.updateCurrentNode(message.id);
+		conversationsStore.updateConversationTimestamp();
+
+		return message;
 	}
 
 	/**
@@ -334,9 +330,11 @@ export class ChatClient {
 	 *
 	 */
 
-	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage | null> {
+	private async createAssistantMessage(parentId?: string): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv) return null;
+		if (!activeConv) {
+			throw new Error('No active conversation when creating assistant message');
+		}
 
 		return await DatabaseService.createMessageBranch(
 			{
@@ -406,12 +404,10 @@ export class ChatClient {
 				parentIdForUserMessage ?? '-1',
 				extras
 			);
-			if (!userMessage) throw new Error('Failed to add user message');
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
 
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
@@ -419,7 +415,7 @@ export class ChatClient {
 				assistantMessage
 			);
 		} catch (error) {
-			if (this.isAbortError(error)) {
+			if (isAbortError(error)) {
 				this.store.setChatLoading(currentConv.id, false);
 				return;
 			}
@@ -611,7 +607,7 @@ export class ChatClient {
 			onError: (error: Error) => {
 				this.store.setStreamingActive(false);
 
-				if (this.isAbortError(error)) {
+				if (isAbortError(error)) {
 					this.store.setChatLoading(assistantMessage.convId, false);
 					this.store.clearChatStreaming(assistantMessage.convId);
 					this.store.setProcessingState(assistantMessage.convId, null);
@@ -806,7 +802,6 @@ export class ChatClient {
 			this.store.clearChatStreaming(activeConv.id);
 
 			const assistantMessage = await this.createAssistantMessage();
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
 
 			conversationsStore.addMessageToActive(assistantMessage);
 
@@ -822,7 +817,7 @@ export class ChatClient {
 				}
 			);
 		} catch (error) {
-			if (!this.isAbortError(error)) console.error('Failed to update message:', error);
+			if (!isAbortError(error)) console.error('Failed to update message:', error);
 		}
 	}
 
@@ -861,14 +856,13 @@ export class ChatClient {
 					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
 					: undefined;
 			const assistantMessage = await this.createAssistantMessage(parentMessageId);
-			if (!assistantMessage) throw new Error('Failed to create assistant message');
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
 				assistantMessage
 			);
 		} catch (error) {
-			if (!this.isAbortError(error)) console.error('Failed to regenerate message:', error);
+			if (!isAbortError(error)) console.error('Failed to regenerate message:', error);
 			this.store.setChatLoading(activeConv?.id || '', false);
 		}
 	}
@@ -926,7 +920,7 @@ export class ChatClient {
 				modelToUse
 			);
 		} catch (error) {
-			if (!this.isAbortError(error))
+			if (!isAbortError(error))
 				console.error('Failed to regenerate message with branching:', error);
 			this.store.setChatLoading(activeConv?.id || '', false);
 		}
@@ -1153,7 +1147,7 @@ export class ChatClient {
 					},
 
 					onError: async (error: Error) => {
-						if (this.isAbortError(error)) {
+						if (isAbortError(error)) {
 							if (hasReceivedContent && appendedContent) {
 								await DatabaseService.updateMessage(msg.id, {
 									content: originalContent + appendedContent,
@@ -1189,7 +1183,7 @@ export class ChatClient {
 				abortController.signal
 			);
 		} catch (error) {
-			if (!this.isAbortError(error)) console.error('Failed to continue message:', error);
+			if (!isAbortError(error)) console.error('Failed to continue message:', error);
 			if (activeConv) this.store.setChatLoading(activeConv.id, false);
 		}
 	}
@@ -1563,10 +1557,6 @@ export class ChatClient {
 	 *
 	 *
 	 */
-
-	private isAbortError(error: unknown): boolean {
-		return error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException);
-	}
 
 	private isChatLoading(convId: string): boolean {
 		const streamingState = this.store.getChatStreaming(convId);

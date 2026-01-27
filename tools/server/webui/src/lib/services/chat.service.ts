@@ -1,4 +1,4 @@
-import { getJsonHeaders, formatAttachmentText } from '$lib/utils';
+import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart } from '$lib/types/api';
@@ -257,7 +257,7 @@ export class ChatService {
 				);
 			}
 		} catch (error) {
-			if (error instanceof Error && error.name === 'AbortError') {
+			if (isAbortError(error)) {
 				console.log('Chat completion request was aborted');
 				return;
 			}

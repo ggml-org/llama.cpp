@@ -55,6 +55,7 @@ import type {
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
 import { AttachmentType, MessageRole } from '$lib/enums';
+import { isAbortError } from '$lib/utils';
 
 /**
  * Converts API messages to agentic format.
@@ -507,7 +508,7 @@ export class AgenticClient {
 					const executionResult = await mcpClient.executeTool(mcpCall, signal);
 					result = executionResult.content;
 				} catch (error) {
-					if (error instanceof Error && error.name === 'AbortError') {
+					if (isAbortError(error)) {
 						onComplete?.(
 							'',
 							undefined,
