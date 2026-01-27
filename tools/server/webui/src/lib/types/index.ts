@@ -87,6 +87,8 @@ export type {
 	KeyValuePair,
 	BinaryDetectionOptions,
 	ClipboardTextAttachment,
+	ClipboardMcpPromptAttachment,
+	ClipboardAttachment,
 	ParsedClipboardContent
 } from './common';
 

@@ -4,7 +4,10 @@ import type {
 	DatabaseMessageExtra,
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraMcpPrompt,
 	ClipboardTextAttachment,
+	ClipboardMcpPromptAttachment,
+	ClipboardAttachment,
 	ParsedClipboardContent
 } from '$lib/types';
 
