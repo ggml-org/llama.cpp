@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
+	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
@@ -27,16 +28,13 @@
 			);
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
-
 		delete: async (message: DatabaseMessage) => {
 			await chatStore.deleteMessage(message.id);
 			refreshAllMessages();
 		},
-
 		navigateToSibling: async (siblingId: string) => {
 			await conversationsStore.navigateToSibling(siblingId);
 		},
-
 		editWithBranching: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -46,7 +44,6 @@
 			await chatStore.editMessageWithBranching(message.id, newContent, newExtras);
 			refreshAllMessages();
 		},
-
 		editWithReplacement: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -56,7 +53,6 @@
 			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
 			refreshAllMessages();
 		},
-
 		editUserMessagePreserveResponses: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -66,13 +62,11 @@
 			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
 			refreshAllMessages();
 		},
-
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
 		},
-
 		continueAssistantMessage: async (message: DatabaseMessage) => {
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
@@ -139,13 +133,8 @@
 	});
 </script>
 
-<div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
-	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
-		<ChatMessage
-			class="mx-auto w-full max-w-[48rem]"
-			{message}
-			{isLastAssistantMessage}
-			{siblingInfo}
-		/>
+<div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
+	{#each displayMessages as { message, siblingInfo } (message.id)}
+		<ChatMessage class="mx-auto w-full max-w-[48rem]" {message} {siblingInfo} />
 	{/each}
 </div>

@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 	import { MessageRole, AttachmentType } from '$lib/enums';
-	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
@@ -17,16 +17,12 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
-	let {
-		class: className = '',
-		message,
-		isLastAssistantMessage = false,
-		siblingInfo = null
-	}: Props = $props();
+	let { class: className = '', message, siblingInfo = null }: Props = $props();
+
+	const chatActions = getChatActionsContext();
 
 	const chatActions = getChatActionsContext();
 
@@ -58,7 +54,6 @@
 		return null;
 	});
 
-	// Auto-start edit mode if this message is the pending edit target
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
 
@@ -91,17 +86,8 @@
 		chatActions.copy(message);
 	}
 
-	async function handleConfirmDelete() {
-		if (message.role === MessageRole.SYSTEM) {
-			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
-
-			if (conversationDeleted) {
-				goto(`${base}/`);
-			}
-		} else {
-			chatActions.delete(message);
-		}
-
+	function handleConfirmDelete() {
+		chatActions.delete(message);
 		showDeleteDialog = false;
 	}
 
@@ -225,23 +211,13 @@
 	<ChatMessageMcpPrompt
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{editedExtras}
-		{editedUploadedFiles}
-		{isEditing}
 		{message}
 		mcpPrompt={mcpPromptExtra}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditedContentChange={handleEditedContentChange}
-		onEditedExtrasChange={handleEditedExtrasChange}
-		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
-		onSaveEditOnly={handleSaveEditOnly}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -255,12 +231,7 @@
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditedContentChange={handleEditedContentChange}
-		onEditedExtrasChange={handleEditedExtrasChange}
-		onEditedUploadedFilesChange={handleEditedUploadedFilesChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
-		onSaveEditOnly={handleSaveEditOnly}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -270,7 +241,6 @@
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
-		{isLastAssistantMessage}
 		{message}
 		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}
