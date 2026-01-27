@@ -2,6 +2,8 @@ import { SvelteSet } from 'svelte/reactivity';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
+import { TTLCache } from '$lib/utils';
+import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES } from '$lib/constants/cache';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -51,10 +53,14 @@ class ModelsStore {
 	private modelLoadingStates = $state<Map<string, boolean>>(new Map());
 
 	/**
-	 * Model-specific props cache
+	 * Model-specific props cache with TTL
 	 * Key: modelId, Value: props data including modalities
+	 * TTL: 10 minutes - props don't change frequently
 	 */
-	private modelPropsCache = $state<Map<string, ApiLlamaCppServerProps>>(new Map());
+	private modelPropsCache = new TTLCache<string, ApiLlamaCppServerProps>({
+		ttlMs: MODEL_PROPS_CACHE_TTL_MS,
+		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES
+	});
 	private modelPropsFetching = $state<Set<string>>(new Set());
 
 	/**
@@ -164,14 +170,14 @@ class ModelsStore {
 	 * Get props for a specific model (from cache)
 	 */
 	getModelProps(modelId: string): ApiLlamaCppServerProps | null {
-		return this.modelPropsCache.get(modelId) ?? null;
+		return this.modelPropsCache.get(modelId);
 	}
 
 	/**
 	 * Get context size (n_ctx) for a specific model from cached props
 	 */
 	getModelContextSize(modelId: string): number | null {
-		const props = this.modelPropsCache.get(modelId);
+		const props = this.getModelProps(modelId);
 		return props?.default_generation_settings?.n_ctx ?? null;
 	}
 
@@ -602,6 +608,14 @@ class ModelsStore {
 		this.modelLoadingStates.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
+	}
+
+	/**
+	 * Prune expired entries from caches.
+	 * Call periodically for proactive memory cleanup.
+	 */
+	pruneExpiredCache(): number {
+		return this.modelPropsCache.prune();
 	}
 }
 
