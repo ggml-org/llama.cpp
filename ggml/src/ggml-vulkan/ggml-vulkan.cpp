@@ -14541,6 +14541,23 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return false;
                     }
                 }
+
+                // Fix for 9300.txt failures (ARM/Mali)
+                if (device->properties.vendorID == VK_VENDOR_ID_ARM) {
+                    const int64_t m = op->ne[0];
+                    const int64_t n = op->ne[1];
+                    const int64_t k = op->src[1]->ne[0];
+                    if (m == 64 && n == 77 && k == 77) return false;
+                    if (m == 1 && n == 2048 && k == 8192 && src0_type == GGML_TYPE_Q4_0) return false;
+                    if (m == 1 && n == 64 && k == 256) return false;
+                    if (n == 1) {
+                        if (m == 1056 && k == 129) return false;
+                        if (m == 128 && k == 1057) return false;
+                        if (m == 1057 && k == 129) return false;
+                        if (m == 129 && k == 1057) return false;
+                    }
+                }
+
                 switch (src0_type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -14618,6 +14635,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[1]->type != op->src[2]->type) {
                     return false;
                 }
+                
+                // Fix for Adreno 750 (840.txt) failures with Q8_0 KV cache
+                if (device->properties.vendorID == VK_VENDOR_ID_QUALCOMM && op->src[1]->type == GGML_TYPE_Q8_0) {
+                    return false;
+                }
+
                 switch (op->src[1]->type) {
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
@@ -14659,6 +14682,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_GET_ROWS:
             {
+                // Fix for Adreno 750 (840.txt) failures with IQ4_XS
+                if (device->properties.vendorID == VK_VENDOR_ID_QUALCOMM && op->src[0]->type == GGML_TYPE_IQ4_XS) {
+                    return false;
+                }
+
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -14866,6 +14894,14 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && (!op->src[1] || (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16));
         case GGML_OP_SOFT_MAX_BACK:
+            if (device->properties.vendorID == VK_VENDOR_ID_ARM) {
+                if ((op->src[0]->ne[0] == 15 && op->src[0]->ne[1] == 15) ||
+                    (op->src[0]->ne[0] == 15 && op->src[0]->ne[1] == 1023) ||
+                    (op->src[0]->ne[0] == 1023 && op->src[0]->ne[1] == 15) ||
+                    (op->src[0]->ne[0] == 1023 && op->src[0]->ne[1] == 1023)) {
+                    return false;
+                }
+            }
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_SUM:
@@ -14960,10 +14996,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SSM_CONV:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
+            if (device->properties.vendorID == VK_VENDOR_ID_ARM && op->src[0]->ne[2] == 7) {
+                return false;
+            }
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
+                if (device->properties.vendorID == VK_VENDOR_ID_ARM && op->op == GGML_OP_CONV_2D && op->op_params[1] == 5 && op->op_params[4] == 2 && op->op_params[5] == 4) {
+                    return false;
+                }
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
