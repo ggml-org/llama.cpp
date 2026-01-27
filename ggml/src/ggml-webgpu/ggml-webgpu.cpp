@@ -3472,7 +3472,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.wgpu_global_ctx->instance = std::move(inst);
 
 #ifdef __EMSCRIPTEN__
-    if (webgpu_ctx->instance == nullptr) {
+    if (ctx.wgpu_global_ctx->instance == nullptr) {
         GGML_LOG_ERROR("ggml_webgpu: Failed to create WebGPU instance. Make sure either -sASYNCIFY or -sJSPI is set\n");
         return nullptr;
     }
