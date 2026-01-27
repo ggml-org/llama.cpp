@@ -38,6 +38,45 @@
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
+	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
+
+	setMessageEditContext({
+		get isEditing() {
+			return isEditing;
+		},
+		get editedContent() {
+			return editedContent;
+		},
+		get editedExtras() {
+			return editedExtras;
+		},
+		get editedUploadedFiles() {
+			return editedUploadedFiles;
+		},
+		get originalContent() {
+			return message.content;
+		},
+		get originalExtras() {
+			return message.extra || [];
+		},
+		get showSaveOnlyOption() {
+			return showSaveOnlyOption;
+		},
+		setContent: (content: string) => {
+			editedContent = content;
+		},
+		setExtras: (extras: DatabaseMessageExtra[]) => {
+			editedExtras = extras;
+		},
+		setUploadedFiles: (files: ChatUploadedFile[]) => {
+			editedUploadedFiles = files;
+		},
+		save: handleSaveEdit,
+		saveOnly: handleSaveEditOnly,
+		cancel: handleCancelEdit,
+		startEdit: handleEdit
+	});
+
 	let mcpPromptExtra = $derived.by(() => {
 		if (message.role !== MessageRole.USER) return null;
 		if (message.content.trim()) return null;
@@ -166,7 +205,7 @@
 		if (message.role === MessageRole.USER) {
 			// For user messages, trim to avoid accidental whitespace
 			const finalExtras = await getMergedExtras();
-			onEditUserMessagePreserveResponses?.(message, editedContent.trim(), finalExtras);
+			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
 		}
 
 		isEditing = false;
