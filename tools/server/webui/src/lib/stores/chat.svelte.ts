@@ -29,6 +29,14 @@ import type {
 	DatabaseMessageExtra
 } from '$lib/types';
 import { MessageRole, MessageType } from '$lib/enums';
+import {
+	MAX_INACTIVE_CONVERSATION_STATES,
+	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
+} from '$lib/constants/cache';
+
+interface ConversationStateEntry {
+	lastAccessed: number;
+}
 
 class ChatStore {
 	activeProcessingState = $state<ApiProcessingState | null>(null);
@@ -39,6 +47,8 @@ class ChatStore {
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
+
+	/** Track when each conversation state was last accessed for cleanup */
 	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
@@ -73,6 +83,7 @@ class ChatStore {
 	}
 
 	private setChatLoading(convId: string, loading: boolean): void {
+		this.touchConversationState(convId);
 		import('$lib/stores/conversations.svelte').then(({ conversationsStore }) => {
 			if (loading) {
 				this.chatLoadingStates.set(convId, true);
@@ -263,6 +274,106 @@ class ChatStore {
 
 	isChatLoadingPublic(convId: string): boolean {
 		return this.chatLoadingStates.get(convId) || false;
+	}
+
+	/**
+	 * Update last accessed timestamp for a conversation.
+	 */
+	private touchConversationState(convId: string): void {
+		this.conversationStateTimestamps.set(convId, { lastAccessed: Date.now() });
+	}
+
+	/**
+	 * Clean up states for old/inactive conversations to prevent memory bloat.
+	 * This removes loading states, streaming states, abort controllers, and processing states
+	 * for conversations that haven't been accessed recently.
+	 *
+	 * @param activeConversationIds - Set of conversation IDs that should not be cleaned up
+	 * @returns Number of conversation states cleaned up
+	 */
+	cleanupOldConversationStates(activeConversationIds?: string[]): number {
+		const now = Date.now();
+		const activeIdsList = activeConversationIds ?? [];
+
+		// Always preserve the currently active conversation
+		const preserveIds = this.activeConversationId
+			? [...activeIdsList, this.activeConversationId]
+			: activeIdsList;
+
+		// Collect all unique conversation IDs that have any state
+		const allConvIdsArray = [
+			...this.chatLoadingStates.keys(),
+			...this.chatStreamingStates.keys(),
+			...this.abortControllers.keys(),
+			...this.processingStates.keys(),
+			...this.conversationStateTimestamps.keys()
+		];
+		const allConvIds = [...new Map(allConvIdsArray.map((id) => [id, true])).keys()];
+
+		// Filter to candidates for cleanup (not active, not currently loading/streaming)
+		const cleanupCandidates: Array<{ convId: string; lastAccessed: number }> = [];
+
+		for (const convId of allConvIds) {
+			// Never clean up active conversations or those with active streams
+			if (preserveIds.includes(convId)) continue;
+			if (this.chatLoadingStates.get(convId)) continue;
+			if (this.chatStreamingStates.has(convId)) continue;
+
+			const timestamp = this.conversationStateTimestamps.get(convId);
+			const lastAccessed = timestamp?.lastAccessed ?? 0;
+
+			cleanupCandidates.push({ convId, lastAccessed });
+		}
+
+		// Sort by last accessed (oldest first)
+		cleanupCandidates.sort((a, b) => a.lastAccessed - b.lastAccessed);
+
+		let cleanedUp = 0;
+
+		for (const { convId, lastAccessed } of cleanupCandidates) {
+			// Clean up if:
+			// 1. Too many inactive states, OR
+			// 2. State is older than max age
+			const tooManyStates = cleanupCandidates.length - cleanedUp > MAX_INACTIVE_CONVERSATION_STATES;
+			const tooOld = now - lastAccessed > INACTIVE_CONVERSATION_STATE_MAX_AGE_MS;
+
+			if (tooManyStates || tooOld) {
+				this.cleanupConversationState(convId);
+				cleanedUp++;
+			}
+		}
+
+		return cleanedUp;
+	}
+
+	/**
+	 * Clean up all state for a specific conversation.
+	 */
+	private cleanupConversationState(convId: string): void {
+		// Abort any pending request
+		const controller = this.abortControllers.get(convId);
+		if (controller && !controller.signal.aborted) {
+			controller.abort();
+		}
+
+		// Remove all state
+		this.chatLoadingStates.delete(convId);
+		this.chatStreamingStates.delete(convId);
+		this.abortControllers.delete(convId);
+		this.processingStates.delete(convId);
+		this.conversationStateTimestamps.delete(convId);
+	}
+
+	/**
+	 * Get the number of tracked conversation states (for debugging/monitoring).
+	 */
+	getTrackedConversationCount(): number {
+		return new Set([
+			...this.chatLoadingStates.keys(),
+			...this.chatStreamingStates.keys(),
+			...this.abortControllers.keys(),
+			...this.processingStates.keys()
+		]).size;
 	}
 
 	async addMessage(
