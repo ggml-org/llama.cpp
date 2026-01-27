@@ -1,4 +1,4 @@
-name: Manual Release (Win Vulkan/SYCL x64 + macOS Metal) - R2 Upload
+name: Manual Release (Win Vulkan/SYCL x64 + macOS Metal + Linux CPU) - R2 Upload
 
 on:
   workflow_dispatch: # manual only
@@ -55,6 +55,59 @@ jobs:
         run: |
           cd tools/server/tests
           pytest -v -x -m "not slow"
+
+  linux_cpu_x64:
+    name: Linux CPU x64
+    needs: [server_tests]
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-cpu-cmake-x64
+          evict-old-files: 1d
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential libssl-dev
+
+      - name: Build
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DLLAMA_CURL=OFF \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p upload
+          find ./build/bin -name "*.so" -exec cp {} ./upload/ \;
+          cp ./build/bin/llama-server ./upload/boxed-logic-engine
+
+      - name: Install AWS CLI
+        run: |
+          pip install awscli
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+        run: |
+          aws s3 sync ./upload/ s3://${{ env.R2_BUCKET }}/linux/cpu/ --endpoint-url ${{ env.AWS_ENDPOINT_URL }}
 
   windows_cpu_x64:
     name: Windows CPU x64
