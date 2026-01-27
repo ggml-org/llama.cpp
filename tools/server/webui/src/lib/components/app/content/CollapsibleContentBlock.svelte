@@ -1,4 +1,13 @@
 <script lang="ts">
+	/**
+	 * CollapsibleInfoCard - Reusable collapsible card component
+	 *
+	 * Used for displaying thinking content, tool calls, and other collapsible information
+	 * with a consistent UI pattern.
+	 *
+	 * Features auto-scroll during streaming: scrolls to bottom automatically,
+	 * stops when user scrolls up, resumes when user scrolls back to bottom.
+	 */
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
@@ -62,9 +71,7 @@
 				{#if Icon}
 					<Icon class={iconClass} />
 				{/if}
-
 				<span class="font-mono text-sm font-medium">{title}</span>
-
 				{#if subtitle}
 					<span class="text-xs italic">{subtitle}</span>
 				{/if}
@@ -78,7 +85,6 @@
 				})}
 			>
 				<ChevronsUpDownIcon class="h-4 w-4" />
-
 				<span class="sr-only">Toggle content</span>
 			</div>
 		</Collapsible.Trigger>
@@ -88,7 +94,7 @@
 				bind:this={contentContainer}
 				class="overflow-y-auto border-t border-muted px-3 pb-3"
 				onscroll={handleScroll}
-				style="min-height: var(--min-message-height); max-height: var(--max-message-height);"
+				style="max-height: var(--max-message-height);"
 			>
 				{@render children()}
 			</div>

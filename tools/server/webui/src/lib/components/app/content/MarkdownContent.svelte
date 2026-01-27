@@ -11,21 +11,12 @@
 	import type { Root as MdastRoot } from 'mdast';
 	import { browser } from '$app/environment';
 	import { onDestroy, tick } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
-	import {
-		IMAGE_NOT_ERROR_BOUND_SELECTOR,
-		DATA_ERROR_BOUND_ATTR,
-		DATA_ERROR_HANDLED_ATTR,
-		BOOL_TRUE_STRING
-	} from '$lib/constants/markdown';
-	import { UrlPrefix } from '$lib/enums';
-	import { FileTypeText } from '$lib/enums/files';
 	import {
 		highlightCode,
 		detectIncompleteCodeBlock,
@@ -35,12 +26,13 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { ActionIconsCodeBlock, DialogCodePreview } from '$lib/components/app';
+	import { DialogCodePreview } from '$lib/components/app/dialogs';
+	import CodeBlockActions from './CodeBlockActions.svelte';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import type { DatabaseMessageExtra } from '$lib/types/database';
+	import type { DatabaseMessage } from '$lib/types/database';
 
 	interface Props {
-		attachments?: DatabaseMessageExtra[];
+		message?: DatabaseMessage;
 		content: string;
 		class?: string;
 		disableMath?: boolean;
@@ -49,10 +41,9 @@
 	interface MarkdownBlock {
 		id: string;
 		html: string;
-		contentHash?: string;
 	}
 
-	let { content, attachments, class: className = '', disableMath = false }: Props = $props();
+	let { content, message, class: className = '', disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -69,15 +60,10 @@
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
 
-	// Per-instance transform cache, avoids re-transforming stable blocks during streaming
-	// Garbage collected when component is destroyed (on conversation change)
-	const transformCache = new SvelteMap<string, string>();
-	let previousContent = '';
-
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
-		void attachments;
+		void message;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
@@ -95,13 +81,11 @@
 		}
 
 		return proc
-			.use(rehypeHighlight, {
-				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] }
-			}) // Add syntax highlighting
+			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
-			.use(rehypeResolveAttachmentImages, { attachments })
+			.use(rehypeResolveAttachmentImages, { message })
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
@@ -199,61 +183,6 @@
 	}
 
 	/**
-	 * Generates a hash for MDAST node based on its position.
-	 * Used for cache lookup during incremental rendering.
-	 */
-	function getMdastNodeHash(node: unknown, index: number): string {
-		const n = node as {
-			type?: string;
-			position?: { start?: { offset?: number }; end?: { offset?: number } };
-		};
-
-		if (n.position?.start?.offset != null && n.position?.end?.offset != null) {
-			return `${n.type}-${n.position.start.offset}-${n.position.end.offset}`;
-		}
-
-		return `${n.type}-idx${index}`;
-	}
-
-	/**
-	 * Check if we're in append-only mode (streaming).
-	 */
-	function isAppendMode(newContent: string): boolean {
-		return previousContent.length > 0 && newContent.startsWith(previousContent);
-	}
-
-	/**
-	 * Transforms a single MDAST node to HTML string with caching.
-	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
-	 * on an isolated single-node tree, then stringifies the resulting HAST to HTML.
-	 * Results are cached by node position hash for streaming performance.
-	 * @param processorInstance - The remark/rehype processor instance
-	 * @param node - The MDAST node to transform
-	 * @param index - Node index for hash fallback
-	 * @returns Object containing the HTML string and cache hash
-	 */
-	async function transformMdastNode(
-		processorInstance: ReturnType<typeof processor>,
-		node: unknown,
-		index: number
-	): Promise<{ html: string; hash: string }> {
-		const hash = getMdastNodeHash(node, index);
-
-		const cached = transformCache.get(hash);
-		if (cached) {
-			return { html: cached, hash };
-		}
-
-		const singleNodeRoot = { type: 'root', children: [node] };
-		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
-		const html = processorInstance.stringify(transformedRoot);
-
-		transformCache.set(hash, html);
-
-		return { html, hash };
-	}
-
-	/**
 	 * Handles click events on copy buttons within code blocks.
 	 * Copies the raw code content to the clipboard.
 	 * @param event - The click event from the copy button
@@ -328,16 +257,10 @@
 	 * @param markdown - The raw markdown string to process
 	 */
 	async function processMarkdown(markdown: string) {
-		// Early exit if content unchanged (can happen with rapid coalescing)
-		if (markdown === previousContent) {
-			return;
-		}
-
 		if (!markdown) {
 			renderedBlocks = [];
 			unstableBlockHtml = '';
 			incompleteCodeBlock = null;
-			previousContent = '';
 			return;
 		}
 
@@ -352,37 +275,23 @@
 				const normalizedPrefix = preprocessLaTeX(prefixMarkdown);
 				const processorInstance = processor();
 				const ast = processorInstance.parse(normalizedPrefix) as MdastRoot;
-				const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
+				const processedRoot = (await processorInstance.run(ast)) as HastRoot;
+				const processedChildren = processedRoot.children ?? [];
 				const nextBlocks: MarkdownBlock[] = [];
 
-				// Check if we're in append mode for cache reuse
-				const appendMode = isAppendMode(prefixMarkdown);
-				const previousBlockCount = appendMode ? renderedBlocks.length : 0;
-
 				// All prefix blocks are now stable since code block is separate
-				for (let index = 0; index < mdastChildren.length; index++) {
-					const child = mdastChildren[index];
+				for (let index = 0; index < processedChildren.length; index++) {
+					const hastChild = processedChildren[index];
+					const id = getHastNodeId(hastChild, index);
+					const existing = renderedBlocks[index];
 
-					// In append mode, reuse previous blocks if unchanged
-					if (appendMode && index < previousBlockCount) {
-						const prevBlock = renderedBlocks[index];
-						const currentHash = getMdastNodeHash(child, index);
-
-						if (prevBlock?.contentHash === currentHash) {
-							nextBlocks.push(prevBlock);
-
-							continue;
-						}
+					if (existing && existing.id === id) {
+						nextBlocks.push(existing);
+						continue;
 					}
 
-					// Transform this block (with caching)
-					const { html, hash } = await transformMdastNode(processorInstance, child, index);
-					const id = getHastNodeId(
-						{ position: (child as { position?: unknown }).position } as HastRootContent,
-						index
-					);
-
-					nextBlocks.push({ id, html, contentHash: hash });
+					const html = stringifyProcessedNode(processorInstance, processedRoot, hastChild);
+					nextBlocks.push({ id, html });
 				}
 
 				renderedBlocks = nextBlocks;
@@ -390,10 +299,8 @@
 				renderedBlocks = [];
 			}
 
-			previousContent = prefixMarkdown;
 			unstableBlockHtml = '';
 			incompleteCodeBlock = incompleteBlock;
-
 			return;
 		}
 
@@ -403,52 +310,38 @@
 		const normalized = preprocessLaTeX(markdown);
 		const processorInstance = processor();
 		const ast = processorInstance.parse(normalized) as MdastRoot;
-		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
-		const stableCount = Math.max(mdastChildren.length - 1, 0);
+		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
+		const processedChildren = processedRoot.children ?? [];
+		const stableCount = Math.max(processedChildren.length - 1, 0);
 		const nextBlocks: MarkdownBlock[] = [];
 
-		// Check if we're in append mode for cache reuse
-		const appendMode = isAppendMode(markdown);
-		const previousBlockCount = appendMode ? renderedBlocks.length : 0;
-
 		for (let index = 0; index < stableCount; index++) {
-			const child = mdastChildren[index];
+			const hastChild = processedChildren[index];
+			const id = getHastNodeId(hastChild, index);
+			const existing = renderedBlocks[index];
 
-			// In append mode, reuse previous blocks if unchanged
-			if (appendMode && index < previousBlockCount) {
-				const prevBlock = renderedBlocks[index];
-				const currentHash = getMdastNodeHash(child, index);
-				if (prevBlock?.contentHash === currentHash) {
-					nextBlocks.push(prevBlock);
-
-					continue;
-				}
+			if (existing && existing.id === id) {
+				nextBlocks.push(existing);
+				continue;
 			}
 
-			// Transform this block (with caching)
-			const { html, hash } = await transformMdastNode(processorInstance, child, index);
-			const id = getHastNodeId(
-				{ position: (child as { position?: unknown }).position } as HastRootContent,
-				index
+			const html = stringifyProcessedNode(
+				processorInstance,
+				processedRoot,
+				processedChildren[index]
 			);
 
-			nextBlocks.push({ id, html, contentHash: hash });
+			nextBlocks.push({ id, html });
 		}
 
 		let unstableHtml = '';
 
-		if (mdastChildren.length > stableCount) {
-			const unstableChild = mdastChildren[stableCount];
-			const singleNodeRoot = { type: 'root', children: [unstableChild] };
-			const transformedRoot = (await processorInstance.run(
-				singleNodeRoot as MdastRoot
-			)) as HastRoot;
-
-			unstableHtml = processorInstance.stringify(transformedRoot);
+		if (processedChildren.length > stableCount) {
+			const unstableChild = processedChildren[stableCount];
+			unstableHtml = stringifyProcessedNode(processorInstance, processedRoot, unstableChild);
 		}
 
 		renderedBlocks = nextBlocks;
-		previousContent = markdown;
 		await tick(); // Force DOM sync before updating unstable HTML block
 		unstableBlockHtml = unstableHtml;
 	}
@@ -485,10 +378,10 @@
 	function setupImageErrorHandlers() {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
+		const images = containerRef.querySelectorAll<HTMLImageElement>('img:not([data-error-bound])');
 
 		for (const img of images) {
-			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
+			img.dataset.errorBound = 'true';
 			img.addEventListener('error', handleImageError);
 		}
 	}
@@ -502,12 +395,8 @@
 		if (!img || !img.src) return;
 
 		// Don't handle data URLs or already-handled images
-		if (
-			img.src.startsWith(UrlPrefix.DATA) ||
-			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
-		)
-			return;
-		img.dataset[DATA_ERROR_HANDLED_ATTR] = BOOL_TRUE_STRING;
+		if (img.src.startsWith('data:') || img.dataset.errorHandled === 'true') return;
+		img.dataset.errorHandled = 'true';
 
 		const src = img.src;
 		// Create fallback element
@@ -520,9 +409,29 @@
 	}
 
 	/**
+	 * Converts a single HAST node to an enhanced HTML string.
+	 * Applies link and code block enhancements to the output.
+	 * @param processorInstance - The remark/rehype processor instance
+	 * @param processedRoot - The full processed HAST root (for context)
+	 * @param child - The specific HAST child node to stringify
+	 * @returns Enhanced HTML string representation of the node
+	 */
+	function stringifyProcessedNode(
+		processorInstance: ReturnType<typeof processor>,
+		processedRoot: HastRoot,
+		child: unknown
+	) {
+		const root: HastRoot = {
+			...(processedRoot as HastRoot),
+			children: [child as never]
+		};
+
+		return processorInstance.stringify(root);
+	}
+
+	/**
 	 * Queues markdown for processing with coalescing support.
 	 * Only processes the latest markdown when multiple updates arrive quickly.
-	 * Uses requestAnimationFrame to yield to browser paint between batches.
 	 * @param markdown - The markdown content to render
 	 */
 	async function updateRenderedBlocks(markdown: string) {
@@ -540,12 +449,6 @@
 				pendingMarkdown = null;
 
 				await processMarkdown(nextMarkdown);
-
-				// Yield to browser for paint. During this, new chunks coalesce
-				// into pendingMarkdown, so we always render the latest state.
-				if (pendingMarkdown !== null) {
-					await new Promise((resolve) => requestAnimationFrame(resolve));
-				}
 			}
 		} catch (error) {
 			console.error('Failed to process markdown:', error);
@@ -612,7 +515,7 @@
 		<div class="code-block-wrapper streaming-code-block relative">
 			<div class="code-block-header">
 				<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
-				<ActionIconsCodeBlock
+				<CodeBlockActions
 					code={incompleteCodeBlock.code}
 					language={incompleteCodeBlock.language || 'text'}
 					disabled={true}
@@ -895,7 +798,6 @@
 		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		background: var(--code-background);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-		min-height: var(--min-message-height);
 		max-height: var(--max-message-height);
 	}
 
@@ -906,7 +808,6 @@
 	/* Scroll container for code blocks (both streaming and completed) */
 	div :global(.code-block-scroll-container),
 	.streaming-code-scroll-container {
-		min-height: var(--min-message-height);
 		max-height: var(--max-message-height);
 		overflow-y: auto;
 		overflow-x: auto;
@@ -1013,7 +914,7 @@
 	/* Disable hover effects when rendering user messages */
 	.markdown-user-content :global(a),
 	.markdown-user-content :global(a:hover) {
-		color: inherit;
+		color: var(--primary-foreground);
 	}
 
 	.markdown-user-content :global(table:hover) {

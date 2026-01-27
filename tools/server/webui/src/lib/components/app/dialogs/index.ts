@@ -138,6 +138,44 @@ export { default as DialogConversationTitleUpdate } from './DialogConversationTi
 
 /**
  *
+ * CONTENT PREVIEW DIALOGS
+ *
+ * Dialogs for previewing and displaying content in full-screen or modal views.
+ *
+ */
+
+/**
+ * **DialogCodePreview** - Full-screen code/HTML preview
+ *
+ * Full-screen dialog for previewing HTML or code in an isolated iframe.
+ * Used by MarkdownContent component for previewing rendered HTML blocks
+ * from code blocks in chat messages.
+ *
+ * **Architecture:**
+ * - Uses ShadCN Dialog with full viewport layout
+ * - Sandboxed iframe execution (allow-scripts only)
+ * - Clears content when closed for security
+ *
+ * **Features:**
+ * - Full viewport iframe preview
+ * - Sandboxed execution environment
+ * - Close button with mix-blend-difference for visibility over any content
+ * - Automatic content cleanup on close
+ * - Supports HTML preview with proper isolation
+ *
+ * @example
+ * ```svelte
+ * <DialogCodePreview
+ *   bind:open={showPreview}
+ *   code={htmlContent}
+ *   language="html"
+ * />
+ * ```
+ */
+export { default as DialogCodePreview } from './DialogCodePreview.svelte';
+
+/**
+ *
  * ATTACHMENT DIALOGS
  *
  * Dialogs for viewing and managing file attachments. Support both

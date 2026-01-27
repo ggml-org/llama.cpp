@@ -26,7 +26,7 @@
  *
  * @example
  * ```svelte
- * <MarkdownContent content={message.content} attachments={message.extra} />
+ * <MarkdownContent content={message.content} {message} />
  * ```
  */
 export { default as MarkdownContent } from './MarkdownContent.svelte';
@@ -77,3 +77,6 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```
  */
 export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.svelte';
+
+/** Code block actions component (copy, preview). */
+export { default as CodeBlockActions } from './CodeBlockActions.svelte';

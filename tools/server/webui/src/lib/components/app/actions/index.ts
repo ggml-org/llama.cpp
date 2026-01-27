@@ -6,14 +6,14 @@
  *
  */
 
-/** Styled icon button for action triggers with tooltip. */
-export { default as ActionIcon } from './ActionIcon.svelte';
+/** Styled button for action triggers with icon support. */
+export { default as ActionButton } from './ActionButton.svelte';
 
-/** Code block actions component (copy, preview). */
-export { default as ActionIconsCodeBlock } from './ActionIconsCodeBlock.svelte';
+/** Copy-to-clipboard button with success feedback. */
+export { default as CopyToClipboardIcon } from './CopyToClipboardIcon.svelte';
 
-/** Copy-to-clipboard icon button with click handler. */
-export { default as ActionIconCopyToClipboard } from './ActionIconCopyToClipboard.svelte';
+/** Remove/delete button with X icon. */
+export { default as RemoveButton } from './RemoveButton.svelte';
 
-/** Remove/delete icon button with X icon. */
-export { default as ActionIconRemove } from './ActionIconRemove.svelte';
+/** Display for keyboard shortcut hints (e.g., "⌘ + Enter"). */
+export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
