@@ -2995,7 +2995,6 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
                                                        WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
                                                        wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage,
                                                        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
-    // >> stopship
     ctx->wgpu_global_ctx->queue = ctx->wgpu_global_ctx->device.GetQueue();
 
     GGML_LOG_INFO(
@@ -3010,7 +3009,6 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
     ggml_backend_webgpu_device_context * dev_ctx    = (ggml_backend_webgpu_device_context *) dev->context;
     webgpu_context                       webgpu_ctx = std::make_shared<webgpu_context_struct>();
     webgpu_ctx->global_ctx                          = dev_ctx->reg_context->wgpu_global_ctx;
-    // webgpu_ctx->queue         = webgpu_ctx->global_ctx->device.GetQueue();
     webgpu_ctx->global_ctx->param_buf_pool.init(webgpu_ctx->global_ctx->device, WEBGPU_NUM_PARAM_BUFS,
                                                 WEBGPU_PARAMS_BUF_SIZE_BYTES,
                                                 wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
@@ -3027,7 +3025,6 @@ static webgpu_context initialize_webgpu_context(ggml_backend_dev_t dev) {
                                                          wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage,
                                                          wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
 
-    // ggml_webgpu_init_memset_pipeline(webgpu_ctx);
     ggml_webgpu_init_mul_mat_pipeline(webgpu_ctx);
     ggml_webgpu_init_get_rows_pipeline(webgpu_ctx);
     ggml_webgpu_init_cpy_pipeline(webgpu_ctx);
@@ -3411,7 +3408,6 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 
     static ggml_backend_webgpu_device_context device_ctx;
     device_ctx.device_name = GGML_WEBGPU_NAME;
-    // TODO: we get the device description when actually initializing the webgpu device, so move this to backend context?
     device_ctx.device_desc = GGML_WEBGPU_NAME;
     device_ctx.reg_context = reg_ctx;
 
