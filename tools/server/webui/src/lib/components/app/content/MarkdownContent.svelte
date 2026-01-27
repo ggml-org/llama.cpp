@@ -26,7 +26,8 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import CodePreviewDialog from './CodePreviewDialog.svelte';
+	import { DialogCodePreview } from '$lib/components/app/dialogs';
+	import CodeBlockActions from './CodeBlockActions.svelte';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
 
@@ -514,58 +515,16 @@
 		<div class="code-block-wrapper streaming-code-block relative">
 			<div class="code-block-header">
 				<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
-				<div class="code-block-actions">
-					<button
-						class="copy-code-btn"
-						title="Copy code"
-						aria-label="Copy code"
-						type="button"
-						onclick={() => copyCodeToClipboard(incompleteCodeBlock?.code ?? '')}
-					>
-						<svg
-							xmlns="http://www.w3.org/2000/svg"
-							width="16"
-							height="16"
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							stroke-width="2"
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path
-								d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"
-							/></svg
-						>
-					</button>
-					{#if incompleteCodeBlock.language?.toLowerCase() === 'html'}
-						<button
-							class="preview-code-btn"
-							title="Preview code"
-							aria-label="Preview code"
-							type="button"
-							onclick={() => {
-								previewCode = incompleteCodeBlock?.code ?? '';
-								previewLanguage = incompleteCodeBlock?.language ?? 'html';
-								previewDialogOpen = true;
-							}}
-						>
-							<svg
-								xmlns="http://www.w3.org/2000/svg"
-								width="16"
-								height="16"
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								stroke-width="2"
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								><path
-									d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"
-								/><circle cx="12" cy="12" r="3" /></svg
-							>
-						</button>
-					{/if}
-				</div>
+				<CodeBlockActions
+					code={incompleteCodeBlock.code}
+					language={incompleteCodeBlock.language || 'text'}
+					disabled={true}
+					onPreview={(code, lang) => {
+						previewCode = code;
+						previewLanguage = lang;
+						previewDialogOpen = true;
+					}}
+				/>
 			</div>
 			<div
 				bind:this={streamingCodeScrollContainer}
@@ -584,7 +543,7 @@
 	{/if}
 </div>
 
-<CodePreviewDialog
+<DialogCodePreview
 	open={previewDialogOpen}
 	code={previewCode}
 	language={previewLanguage}
