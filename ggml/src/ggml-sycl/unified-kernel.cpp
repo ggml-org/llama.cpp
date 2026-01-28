@@ -400,6 +400,221 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
 #endif  // GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
 
 // =============================================================================
+// ESIMD dpas Kernel - FP16 Path (Phase 2)
+// =============================================================================
+// Uses Intel ESIMD xmx::dpas for explicit SIMD control on XMX hardware.
+// This path provides better XVE utilization than joint_matrix for some cases.
+//
+// ESIMD dpas characteristics:
+// - dpas operand order: dpas(accumulator, B_tile, A_tile) - B before A!
+// - K-tile for FP16 = 16 (SystolicDepth=8 x OpsPerChannel=2)
+// - RepeatCount = 1-8, determines M dimension (we use 8)
+// - ExecutionSize = 16 for Arc (determines N dimension)
+// - Output tile: 8x16 (M x N)
+
+#if GGML_SYCL_ESIMD_AVAILABLE
+
+// Kernel class name for SYCL naming and profiling
+template <int TILE_M, int TILE_N>
+class esimd_fp16_kernel;
+
+// =============================================================================
+// ESIMD dpas Constants
+// =============================================================================
+// Hardware-defined parameters for FP16 dpas on Intel Arc
+constexpr int ESIMD_SYSTOLIC_DEPTH = 8;   // Always 8 for dpas
+constexpr int ESIMD_REPEAT_COUNT = 8;     // M dimension = RepeatCount
+constexpr int ESIMD_EXEC_SIZE = 16;       // N dimension = ExecutionSize
+constexpr int ESIMD_K_PER_DPAS = 16;      // K elements per dpas for FP16
+
+// Operand sizes for dpas
+// A (activations): Repeat * K_per = 8 * 16 = 128 half elements
+// B (weights): K_per * ExecSize = 16 * 16 = 256 half elements
+// Acc (output): Repeat * ExecSize = 8 * 16 = 128 float elements
+constexpr int ESIMD_A_SIZE = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;   // 128
+constexpr int ESIMD_B_SIZE = ESIMD_K_PER_DPAS * ESIMD_EXEC_SIZE;     // 256
+constexpr int ESIMD_ACC_SIZE = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE; // 128
+
+/**
+ * ESIMD FP16 matmul kernel using xmx::dpas instruction.
+ *
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * Uses ESIMD xmx::dpas for hardware-accelerated matrix multiplication.
+ * Each work-item processes one 8x16 output tile using dpas instruction.
+ *
+ * dpas layout requirements:
+ * - A matrix (activations): [Repeat x K] = [8 x 16] half, row-major packed
+ * - B matrix (weights): [K x ExecSize] = [16 x 16] half, VNNI-like layout
+ * - Output: [Repeat x ExecSize] = [8 x 16] float accumulator
+ *
+ * Work distribution:
+ * - 2D grid: [ceil(M/8), ceil(N/16)]
+ * - Each work-item handles one 8x16 output tile
+ *
+ * @tparam TILE_M  M tile size (must be 8 for dpas)
+ * @tparam TILE_N  N tile size (must be 16 for dpas)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
+    const UnifiedKernelArgs args,
+    int64_t                 m_start,
+    int64_t                 n_start) {
+
+    // Validate tile sizes match dpas requirements
+    static_assert(TILE_M == ESIMD_REPEAT_COUNT, "TILE_M must be 8 for dpas");
+    static_assert(TILE_N == ESIMD_EXEC_SIZE, "TILE_N must be 16 for dpas");
+
+    // Boundary checking: return early if entire tile is out of bounds
+    if (m_start >= args.M || n_start >= args.N) {
+        return;
+    }
+
+    // Number of Q4_0 blocks per weight row
+    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+
+    // Cast weight pointer
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+
+    // Initialize accumulator: [8 x 16] float
+    esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
+
+    // Number of K tiles (each dpas processes 16 K elements)
+    const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS - 1) / ESIMD_K_PER_DPAS;
+
+    // K-loop: iterate over K dimension in tiles of 16
+    for (int64_t kt = 0; kt < k_tiles; kt++) {
+        const int64_t k_start = kt * ESIMD_K_PER_DPAS;
+        // Calculate remaining K elements (avoid sycl::min which is not supported in ESIMD)
+        const int64_t k_remaining = args.K - k_start;
+        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+
+        // ============================================================
+        // Load and dequantize weights into B matrix with VNNI packing
+        // dpas computes: C[m,n] += sum_k(A[m,k] * B[k,n])
+        // GGML wants: dst[m,n] = sum_k(activations[m,k] * weights[n,k])
+        // So B[k,n] = weights[n,k] (transpose)
+        //
+        // For FP16 dpas, B matrix needs VNNI-like layout:
+        // B_vnni[k/2 * N * 2 + n * 2 + k%2] = B[k,n]
+        // This groups consecutive K values together for systolic array
+        // ============================================================
+        esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec = sycl::half(0.0f);
+
+        // Iterate n first, then k pairs for VNNI packing
+        #pragma unroll
+        for (int n = 0; n < TILE_N; n++) {
+            const int64_t n_global = n_start + n;
+            if (n_global >= args.N) continue;
+
+            #pragma unroll
+            for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                if (k >= k_len) break;
+                const int64_t k_global = k_start + k;
+                const int k_block_idx_part = static_cast<int>(k_global / UNIFIED_QK4_0);
+                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+
+                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx_part);
+                const block_q4_0_unified * blk = &weights[block_idx];
+                const sycl::half d = blk->d;
+                int qs_val;
+                if (idx_in_block < 16) {
+                    qs_val = blk->qs[idx_in_block] & 0x0F;
+                } else {
+                    qs_val = blk->qs[idx_in_block - 16] >> 4;
+                }
+
+                // VNNI layout for FP16: b[(k/2) * N * 2 + n * 2 + (k%2)]
+                // = b[k/2 * 32 + n * 2 + k%2]
+                const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
+                b_vec[vnni_idx] = static_cast<sycl::half>(qs_val - 8) * d;
+            }
+        }
+
+        // ============================================================
+        // Load activations into A matrix [Repeat x K] = [8 x 16]
+        // A is stored row-major: a[m * K_per + k]
+        // ============================================================
+        esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec = sycl::half(0.0f);
+
+        #pragma unroll
+        for (int m = 0; m < TILE_M; m++) {
+            const int64_t m_global = m_start + m;
+            if (m_global >= args.M) continue;
+
+            #pragma unroll
+            for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                if (k >= k_len) break;
+
+                const int64_t k_global = k_start + k;
+                const float act_f32 = args.activations[m_global * args.K + k_global];
+                // A layout for dpas: a[m * K_per + k]
+                a_vec[m * ESIMD_K_PER_DPAS + k] = static_cast<sycl::half>(act_f32);
+            }
+        }
+
+        // ============================================================
+        // Execute dpas: acc += A @ B (computes C[m,n] += sum_k(A[m,k] * B[k,n]))
+        //
+        // dpas<SystolicDepth, RepeatCount, AccType, CType, BType, AType>
+        // Note: operand order is dpas(acc, B, A) - B before A!
+        //
+        // dpas computes: C[m,n] += sum_k(A[m,k] * B[k,n])
+        // A layout: row-major, a[m * K + k] where m=0..7, k=0..15
+        // B layout: VNNI-packed, b[(k/2) * N * 2 + n * 2 + (k%2)] for k=0..15, n=0..15
+        // ============================================================
+        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                        float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+    }
+
+    // Write output with boundary checking
+    // Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
+    #pragma unroll
+    for (int m = 0; m < TILE_M; m++) {
+        const int64_t m_global = m_start + m;
+        if (m_global >= args.M) continue;
+
+        #pragma unroll
+        for (int n = 0; n < TILE_N; n++) {
+            const int64_t n_global = n_start + n;
+            if (n_global >= args.N) continue;
+
+            args.output[m_global * args.N + n_global] = acc[m * TILE_N + n];
+        }
+    }
+}
+
+/**
+ * Check if ESIMD dpas path can be used for given dimensions.
+ *
+ * ESIMD dpas requires:
+ * - ESIMD enabled via GGML_SYCL_XMX_ESIMD=1
+ * - M >= 1 (we handle partial tiles)
+ * - N >= 1 (we handle partial tiles)
+ * - K aligned to Q4_0 block size (32)
+ *
+ * @param M  Output rows
+ * @param N  Output columns
+ * @param K  Reduction dimension
+ * @return true if ESIMD dpas can be used
+ */
+inline bool can_use_esimd_dpas(int64_t M, int64_t N, int64_t K) {
+    // ESIMD path disabled by default, enable with GGML_SYCL_XMX_ESIMD=1
+    if (!use_esimd_dpas()) {
+        return false;
+    }
+    // K must be multiple of Q4_0 block size for proper dequantization
+    if (K % UNIFIED_QK4_0 != 0) {
+        return false;
+    }
+    // Must have at least some work to do
+    return M >= 1 && N >= 1 && K >= 1;
+}
+
+#endif  // GGML_SYCL_ESIMD_AVAILABLE
+
+// =============================================================================
 // Unified Matmul Kernel - Scalar Path
 // =============================================================================
 
@@ -650,6 +865,53 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         return;
     }
 #endif  // GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
+
+    // ==========================================================================
+    // ESIMD dpas Path: Use ESIMD xmx::dpas for explicit SIMD control
+    // ==========================================================================
+    // Enabled via GGML_SYCL_XMX_ESIMD=1 environment variable.
+    // Each work-item processes one 8x16 output tile using ESIMD dpas instruction.
+
+#if GGML_SYCL_ESIMD_AVAILABLE
+    if (can_use_esimd_dpas(args.M, args.N, args.K)) {
+        // ESIMD dpas tile sizes (fixed by hardware)
+        constexpr int ESIMD_TM = 8;   // RepeatCount = 8
+        constexpr int ESIMD_TN = 16;  // ExecutionSize = 16
+
+        const int esimd_grid_m = (static_cast<int>(args.M) + ESIMD_TM - 1) / ESIMD_TM;
+        const int esimd_grid_n = (static_cast<int>(args.N) + ESIMD_TN - 1) / ESIMD_TN;
+
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] ESIMD path: M=%lld N=%lld K=%lld grid=(%d,%d)\n",
+                    static_cast<long long>(args.M), static_cast<long long>(args.N),
+                    static_cast<long long>(args.K), esimd_grid_m, esimd_grid_n);
+            fflush(stderr);
+        }
+
+        q.submit([&](sycl::handler & cgh) {
+            // ESIMD kernel: one work-item per output tile (no work-group cooperation)
+            // Total work items = grid_m * grid_n
+            sycl::range<2> global(esimd_grid_m, esimd_grid_n);
+            sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
+
+            cgh.parallel_for<esimd_fp16_kernel<ESIMD_TM, ESIMD_TN>>(
+                sycl::nd_range<2>(global, local),
+                [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                    // Calculate tile coordinates
+                    const int tile_row = item.get_global_id(0);  // M tile index
+                    const int tile_col = item.get_global_id(1);  // N tile index
+
+                    const int64_t m_start = tile_row * ESIMD_TM;
+                    const int64_t n_start = tile_col * ESIMD_TN;
+
+                    // Call ESIMD kernel implementation
+                    esimd_matmul_fp16_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
+                }
+            );
+        });
+        return;
+    }
+#endif  // GGML_SYCL_ESIMD_AVAILABLE
 
     // ==========================================================================
     // Scalar Path: Standard matmul with dequantization
