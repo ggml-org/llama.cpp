@@ -3,11 +3,11 @@
 The document covers procedures for installing the latest GPU and NPU drivers, and OpenCL and Hexagon SDKs.
 
 
-In order to use Hexagon NPU on Snapdragon Windows devices the underlying HTP Ops libraries (e.g libggml-htp-v73.so) 
-must be included in the .cat file digitally signed with a trusted certificate. 
+In order to use Hexagon NPU on Snapdragon Windows devices the underlying HTP Ops libraries (e.g libggml-htp-v73.so)
+must be included in the .cat file digitally signed with a trusted certificate.
 
 This document covers details on how to generate personal certificate files (.pfx) and how to configure the system
-to allow for test signatures (aka test-signing). 
+to allow for test signatures (aka test-signing).
 
 ## Install the latest Adreno OpenCL SDK
 
@@ -56,7 +56,7 @@ Download the driver from
 After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager` (under `Neural Processors`).
 
 If the device is not available you can try installing all components (`qcnspmcdm8380`, `qcnspmcdm8380_ext`) manually.
-The components are extracted into 
+The components are extracted into
 ```
 c:\QCDrivers\qcnspmcdm...
 ```
@@ -87,7 +87,7 @@ For additional details see Microsoft guide at
 
 ### Create personal certificate
 
-The tools required for this procedure are available as part of Windows SDK and Windows Driver Kit which should be 
+The tools required for this procedure are available as part of Windows SDK and Windows Driver Kit which should be
 installed as part of the MS Visual Studio.
 They are typically located at
 ```
@@ -101,9 +101,9 @@ To create personal self-signed certificate run the following commands (either fr
 > mkdir Certs
 > cd Certs
 > makecert -r -pe -ss PrivateCertStore -n CN=GGML.HTP.v1 -eku 1.3.6.1.5.5.7.3.3 -sv ggml-htp-v1.pvk ggml-htp-v1.cer
-> pvk2pfx.exe' -pvk ggml-htp-v1.pvk -spc ggml-htp-v1.cer -pfx ggml-htp-v1.pfx
+> pvk2pfx.exe -pvk ggml-htp-v1.pvk -spc ggml-htp-v1.cer -pfx ggml-htp-v1.pfx
 ```
-(replace `MyUser` with your username). 
+(replace `MyUser` with your username).
 
 Add this certificate to `Trusted Root Certification Authorities` and `Trusted Publishers` stores.
 This can be done using `certlm` Certificate Manager tool.
@@ -120,7 +120,7 @@ Please note that the same certificate can be used for signing any number of buil
 ## Build Hexagon backend with signed HTP ops libraries
 
 The overall Hexagon backend build procedure for Windows on Snapdragon is the same as for other platforms.
-However, additional settings are required for generating and signing HTP Ops libraries. 
+However, additional settings are required for generating and signing HTP Ops libraries.
 ```
 > $env:OPENCL_SDK_ROOT="C:\Qualcomm\OpenCL_SDK\2.3.2"
 > $env:HEXAGON_SDK_ROOT="C:\Qualcomm\Hexagon_SDK\6.4.0.2"
@@ -147,7 +147,7 @@ Once the build is complete HTP ops libraries will be installed like this
 The .cat file, the signature and proper certicate installation can be verified with
 
 ```
-> signtool.exe" verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
+> signtool.exe verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
 Verifying: .\pkg-snapdragon\lib\libggml-htp.cat
 
 Signature Index: 0 (Primary Signature)

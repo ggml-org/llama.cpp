@@ -1,4 +1,4 @@
-# Requires Run as Administrator is NOT strictly necessary for User-scope env vars, 
+# Requires Run as Administrator is NOT strictly necessary for User-scope env vars,
 # but recommended for creating directories in C:\ root if permissions are restricted.
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +41,7 @@ function Install-QualcommSDK {
     }
     else {
         Write-Host "$Name not found. preparing to download..." -ForegroundColor Yellow
-        
+
         # Create the target directory to extract into
         New-Item -Path $TargetDir -ItemType Directory -Force | Out-Null
 
@@ -52,14 +52,14 @@ function Install-QualcommSDK {
             # Download
             Write-Host "Downloading from: $Url"
             Invoke-WebRequest -Uri $Url -OutFile $TempFile
-            
+
             # Untar
             # Note: We assume Windows includes tar.exe (Win 10 build 17063+)
             Write-Host "Extracting archive to $TargetDir..."
-            
+
             # We use -C to extract contents INTO the target directory created above
             tar -xJvf $TempFile -C $TargetDir\..
-            
+
             Write-Host "Extraction complete." -ForegroundColor Green
         }
         catch {

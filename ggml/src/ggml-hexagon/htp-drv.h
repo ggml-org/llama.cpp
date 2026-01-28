@@ -90,7 +90,7 @@ extern "C" {
 
 /**
  * htpdrv_init API: driver interface entry point
- * 
+ *
  * @return      Return AEE error codes as defined in Hexagon SDK.
  */
 HTPDRV_API int htpdrv_init(void);

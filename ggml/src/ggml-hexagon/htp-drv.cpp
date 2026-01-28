@@ -242,7 +242,7 @@ static std::string get_driver_path() {
     }
 
     // Store the size of buffer used as an output.
-    DWORD bufferSize; 
+    DWORD bufferSize;
     if (!QueryServiceConfigW(schService, NULL, 0, &bufferSize) &&
         (GetLastError() != ERROR_INSUFFICIENT_BUFFER)) {
         GGML_LOG_ERROR("ggml-hex: Failed to query service config. Error: %lu\n", GetLastError());
