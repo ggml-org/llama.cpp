@@ -2,7 +2,6 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
-#include "ggml-cpu.h"
 #include "zendnnl.hpp"
 
 #include <cstring>
@@ -122,8 +121,8 @@ static void ggml_zendnn_compute_forward_mul_mat(
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    ggml_type         const vec_dot_type = ggml_get_type_traits_cpu(src0->type)->vec_dot_type;
-    ggml_from_float_t const from_float = ggml_get_type_traits_cpu(vec_dot_type)->from_float;
+    ggml_type         const vec_dot_type = src0->type;
+    ggml_from_float_t const from_float = ggml_get_type_traits(vec_dot_type)->from_float_ref;
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
