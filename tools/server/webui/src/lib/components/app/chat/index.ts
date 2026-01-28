@@ -59,6 +59,11 @@ export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachment
 export { default as ChatAttachmentMcpPrompt } from './ChatAttachments/ChatAttachmentMcpPrompt.svelte';
 
 /**
+ * Todo - add description
+ */
+export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAttachmentMcpResource.svelte';
+
+/**
  * Full-size attachment preview component for dialog display. Handles different file types:
  * images (full-size display), text files (syntax highlighted), PDFs (text extraction or image preview),
  * audio (placeholder with download), and generic files (download option).

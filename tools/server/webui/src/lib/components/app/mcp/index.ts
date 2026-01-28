@@ -211,3 +211,50 @@ export { default as McpServerCardDeleteDialog } from './McpServerCard/McpServerC
  * Displays guidance text from the MCP server for users.
  */
 export { default as McpServerInfo } from './McpServerInfo.svelte';
+
+/**
+ * **McpResourceBrowser** - MCP resources tree browser
+ *
+ * Tree view component showing resources grouped by server.
+ * Supports resource selection and quick attach actions.
+ *
+ * **Features:**
+ * - Collapsible server sections
+ * - Resource icons based on MIME type
+ * - Resource selection highlighting
+ * - Quick attach button per resource
+ * - Refresh all resources action
+ * - Loading states per server
+ */
+export { default as McpResourceBrowser } from './McpResourceBrowser.svelte';
+
+/**
+ * **McpResourcePreview** - MCP resource content preview
+ *
+ * Preview panel showing resource content with metadata.
+ * Supports text and binary content display.
+ *
+ * **Features:**
+ * - Text content display with monospace formatting
+ * - Image preview for image MIME types
+ * - Copy to clipboard action
+ * - Download content action
+ * - Resource metadata display (MIME type, priority, server)
+ * - Loading and error states
+ */
+export { default as McpResourcePreview } from './McpResourcePreview.svelte';
+
+/**
+ * **McpResourcePicker** - MCP resource selection dialog
+ *
+ * Full dialog for browsing and attaching MCP resources.
+ * Combines browser and preview panels.
+ *
+ * **Features:**
+ * - Split panel layout (browser + preview)
+ * - Resource selection with preview
+ * - Quick attach from browser
+ * - Attach selected resource action
+ * - Auto-fetch resources on open
+ */
+export { default as McpResourcePicker } from './McpResourcePicker.svelte';
