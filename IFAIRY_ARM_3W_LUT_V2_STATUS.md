@@ -12,7 +12,7 @@ Status: Draft (2026-01-25)
 
 ## 基线（Baseline）
 
-### merged64（现有 fastest 路径）
+### vec_dot（现有 fastest 路径）
 - Machine: Mac16,12 (Apple M4), macOS 26.2 (25C56)
 - Build: `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release` + `cmake --build build-rel` (OpenMP not found)
 - Command:
@@ -52,6 +52,16 @@ Status: Draft (2026-01-25)
 ## 变更记录（Changelog）
 
 按日期追加（YYYY-MM-DD）：
+
+### 2026-01-28 (build `35a9928b`)
+- Correctness:
+  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel-lut/bin/test-ifairy`: PASS
+- `llama-cli` (lut_c sanity, no-cnv):
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
+- `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256, repetitions=3):
+  - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=112.76 ± 0.83 tok/s`, `tg256=67.07 ± 0.31 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut16_35a9928b.txt`)
+  - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-bench ...`: `pp128=110.10 ± 2.45 tok/s`, `tg256=65.13 ± 3.31 tok/s` (raw: `tmp/bench/bench_build-rel-lut_lut_c_35a9928b.txt`)
 
 ### 2026-01-24
 - 初始化 V2 文档占位（尚未进行代码重构与 lut_c 接入）。
