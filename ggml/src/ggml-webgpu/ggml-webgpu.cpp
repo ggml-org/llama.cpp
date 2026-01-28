@@ -8,6 +8,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml-webgpu-shader-lib.hpp"
+#include "ggml-wgsl-binary-shaders.hpp"
 #include "ggml-wgsl-shaders.hpp"
 #include "pre_wgsl.hpp"
 
