@@ -8916,9 +8916,11 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
         # Determine whether this is a mamba layer or an attention layer
         if bid in self._ssm_layers:
-            return Mamba2Model.modify_tensors(self, data_torch, name, bid)
+            yield from Mamba2Model.modify_tensors(self, data_torch, name, bid)
+            return
         elif bid in self._attn_layers:
-            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            yield from GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            return
         yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def set_gguf_parameters(self):
