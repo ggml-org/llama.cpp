@@ -698,15 +698,12 @@ for (var q_tile_row = subgroup_id;
   let exp_sum = exp_sum_shmem[q_tile_row];
   let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
 
-  // row_base is in f32 elements
   let row_base: u32 = dst_global_offset + q_tile_row * dst2_stride;
 
-  // Each lane writes one vec4, then strides by subgroup_size vec4s
   for (var elem_base = sg_inv_id * 4u;
        elem_base < HEAD_DIM_V;
        elem_base += subgroup_size * 4u) {
 
-    // Load 4 values (f16) from shared and scale to f32
     let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
     let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
     let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
@@ -719,7 +716,6 @@ for (var q_tile_row = subgroup_id;
       f32(o_shmem[i3]) * scale
     );
 
-    // Convert f32-element index to vec4 index
     let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
     dst[dst_vec_index] = v;
   }
