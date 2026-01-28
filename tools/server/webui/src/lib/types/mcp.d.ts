@@ -167,6 +167,7 @@ export type HealthCheckState =
  */
 export interface HealthCheckParams {
 	id: string;
+	enabled: boolean;
 	url: string;
 	requestTimeoutSeconds: number;
 	headers?: string;
@@ -248,4 +249,168 @@ export interface ToolCallParams {
 export interface ToolExecutionResult {
 	content: string;
 	isError: boolean;
+}
+
+/**
+ * Progress tracking state for a specific operation
+ */
+export interface MCPProgressState {
+	progressToken: string | number;
+	serverName: string;
+	progress: number;
+	total?: number;
+	message?: string;
+	startTime: Date;
+	lastUpdate: Date;
+}
+
+/**
+ * Resource annotations for audience and priority hints
+ */
+export interface MCPResourceAnnotations {
+	audience?: ('user' | 'assistant')[];
+	priority?: number;
+	lastModified?: string;
+}
+
+/**
+ * Icon definition for resources
+ */
+export interface MCPResourceIcon {
+	src: string;
+	mimeType?: string;
+	sizes?: string[];
+	theme?: 'light' | 'dark';
+}
+
+/**
+ * A known resource that the server is capable of reading
+ */
+export interface MCPResource {
+	uri: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	annotations?: MCPResourceAnnotations;
+	icons?: MCPResourceIcon[];
+	_meta?: Record<string, unknown>;
+}
+
+/**
+ * A template for dynamically generating resource URIs
+ */
+export interface MCPResourceTemplate {
+	uriTemplate: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	annotations?: MCPResourceAnnotations;
+	icons?: MCPResourceIcon[];
+	_meta?: Record<string, unknown>;
+}
+
+/**
+ * Text content from a resource
+ */
+export interface MCPTextResourceContent {
+	uri: string;
+	mimeType?: string;
+	text: string;
+}
+
+/**
+ * Binary (blob) content from a resource
+ */
+export interface MCPBlobResourceContent {
+	uri: string;
+	mimeType?: string;
+	/** Base64-encoded binary data */
+	blob: string;
+}
+
+/**
+ * Union type for resource content
+ */
+export type MCPResourceContent = MCPTextResourceContent | MCPBlobResourceContent;
+
+/**
+ * Result from reading a resource
+ */
+export interface MCPReadResourceResult {
+	contents: MCPResourceContent[];
+	_meta?: Record<string, unknown>;
+}
+
+/**
+ * Resource information for display in UI
+ */
+export interface MCPResourceInfo {
+	uri: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	serverName: string;
+	annotations?: MCPResourceAnnotations;
+	icons?: MCPResourceIcon[];
+}
+
+/**
+ * Resource template information for display in UI
+ */
+export interface MCPResourceTemplateInfo {
+	uriTemplate: string;
+	name: string;
+	title?: string;
+	description?: string;
+	mimeType?: string;
+	serverName: string;
+	annotations?: MCPResourceAnnotations;
+	icons?: MCPResourceIcon[];
+}
+
+/**
+ * Cached resource content with metadata
+ */
+export interface MCPCachedResource {
+	resource: MCPResourceInfo;
+	content: MCPResourceContent[];
+	fetchedAt: Date;
+	/** Whether this resource has an active subscription */
+	subscribed?: boolean;
+}
+
+/**
+ * Resource attachment for chat context
+ */
+export interface MCPResourceAttachment {
+	id: string;
+	resource: MCPResourceInfo;
+	content?: MCPResourceContent[];
+	loading?: boolean;
+	error?: string;
+}
+
+/**
+ * State for resource subscriptions
+ */
+export interface MCPResourceSubscription {
+	uri: string;
+	serverName: string;
+	subscribedAt: Date;
+	lastUpdate?: Date;
+}
+
+/**
+ * Aggregated resources state per server
+ */
+export interface MCPServerResources {
+	serverName: string;
+	resources: MCPResource[];
+	templates: MCPResourceTemplate[];
+	lastFetched?: Date;
+	loading: boolean;
+	error?: string;
 }
