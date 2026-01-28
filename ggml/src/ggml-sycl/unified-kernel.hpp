@@ -134,6 +134,112 @@ inline bool use_int8_dpas() {
 }
 
 // =============================================================================
+// Kernel Path Selection for Batch-Size Gating (Phase 3)
+// =============================================================================
+// ESIMD dpas kernels have overhead that makes them slower than scalar for small
+// batches due to register setup cost, SLM initialization, and dpas instruction
+// latency vs ALU ops. This section provides intelligent dispatch that routes to
+// ESIMD only when beneficial.
+//
+// Batch regime guidelines:
+// - Batch=1: DMMV (memory-bound, optimized for single vector)
+// - Batch<threshold: MMVQ (small batch, still memory-bound)
+// - Batch>=threshold: ESIMD dpas (compute-bound, XMX beneficial)
+//
+// The threshold is configurable via GGML_SYCL_ESIMD_MIN_BATCH (default: 8).
+
+/**
+ * Kernel path enum for dispatch decisions.
+ *
+ * Used by select_kernel_path() to determine which kernel implementation
+ * to use based on batch size, hardware capabilities, and environment overrides.
+ */
+enum class KernelPath {
+    DMMV,       ///< Dense matrix-vector multiply (batch=1, memory-bound)
+    MMVQ,       ///< Matrix-matrix vector quantized (small batch)
+    ESIMD_DPAS  ///< ESIMD dpas path (large batch, compute-bound)
+};
+
+/**
+ * Get minimum batch size for ESIMD dispatch (cached).
+ *
+ * Reads GGML_SYCL_ESIMD_MIN_BATCH environment variable once at initialization.
+ * Default value is 8 (empirically determined crossover point).
+ *
+ * @return Minimum batch size for routing to ESIMD path
+ */
+inline int get_esimd_min_batch() {
+    static int min_batch = -1;
+    if (min_batch < 0) {
+        const char * env = std::getenv("GGML_SYCL_ESIMD_MIN_BATCH");
+        if (env) {
+            int val = std::atoi(env);
+            min_batch = (val > 0) ? val : 8;  // Clamp to positive
+        } else {
+            min_batch = 8;  // Default threshold
+        }
+    }
+    return min_batch;
+}
+
+/**
+ * Check if MMVQ path is forced via environment (cached).
+ *
+ * When GGML_SYCL_FORCE_MMVQ=1 is set, always use MMVQ path regardless of
+ * batch size or ESIMD availability. Useful for testing/debugging.
+ *
+ * @return true if MMVQ is forced
+ */
+inline bool env_force_mmvq() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char * env = std::getenv("GGML_SYCL_FORCE_MMVQ");
+        forced           = (env && std::string(env) == "1") ? 1 : 0;
+    }
+    return forced != 0;
+}
+
+/**
+ * Check if ESIMD path is forced via environment (cached).
+ *
+ * When GGML_SYCL_FORCE_ESIMD=1 is set, always use ESIMD path regardless of
+ * batch size (if hardware supports it). Useful for testing/debugging.
+ *
+ * @return true if ESIMD is forced
+ */
+inline bool env_force_esimd() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char * env = std::getenv("GGML_SYCL_FORCE_ESIMD");
+        forced           = (env && std::string(env) == "1") ? 1 : 0;
+    }
+    return forced != 0;
+}
+
+// Forward declaration for XMXConfig (defined below)
+struct XMXConfig;
+
+// Forward declaration for select_kernel_path (defined after XMXConfig)
+KernelPath select_kernel_path(
+    int batch_size, int64_t M, int64_t N, int64_t K,
+    int quant_type, const XMXConfig & cfg);
+
+/**
+ * Get kernel path name as string for debug logging.
+ *
+ * @param path Kernel path enum value
+ * @return Human-readable name string
+ */
+inline const char * kernel_path_name(KernelPath path) {
+    switch (path) {
+        case KernelPath::DMMV:       return "DMMV";
+        case KernelPath::MMVQ:       return "MMVQ";
+        case KernelPath::ESIMD_DPAS: return "ESIMD_DPAS";
+        default:                     return "UNKNOWN";
+    }
+}
+
+// =============================================================================
 // XMXConfig: Hardware-queried Configuration for ESIMD dpas
 // =============================================================================
 // This struct captures hardware-specific XMX dimensions and capabilities.
@@ -208,6 +314,77 @@ struct XMXConfig {
 
 // Note: XMXConfig::from_device() is implemented in unified-kernel.cpp
 // because it requires access to ggml_sycl_device_info which is defined in common.hpp.
+
+// =============================================================================
+// Kernel Path Selection Implementation (defined after XMXConfig)
+// =============================================================================
+
+/**
+ * Select the optimal kernel path based on batch size and hardware capabilities.
+ *
+ * This is the primary dispatch function for batch-size gating. It considers:
+ * 1. Batch size thresholds (DMMV for 1, MMVQ for small, ESIMD for large)
+ * 2. Hardware capability (cfg.supported)
+ * 3. Environment overrides (GGML_SYCL_FORCE_MMVQ, GGML_SYCL_FORCE_ESIMD)
+ *
+ * Decision tree:
+ * - batch_size == 1 -> DMMV (always, memory-bound single vector)
+ * - FORCE_MMVQ=1 -> MMVQ (environment override)
+ * - batch_size < min_batch -> MMVQ (small batch, memory-bound)
+ * - !cfg.supported -> MMVQ (no XMX hardware)
+ * - FORCE_ESIMD=1 -> ESIMD_DPAS (environment override)
+ * - Otherwise -> ESIMD_DPAS (compute-bound, XMX beneficial)
+ *
+ * @param batch_size   Number of tokens (M dimension)
+ * @param M            Output rows (same as batch_size for inference)
+ * @param N            Output columns (hidden dim)
+ * @param K            Reduction dimension
+ * @param quant_type   Quantization type (GGML_TYPE_*)
+ * @param cfg          XMX hardware configuration
+ * @return Selected kernel path
+ *
+ * Performance: O(1) time, no memory allocation, simple integer comparisons only.
+ */
+inline KernelPath select_kernel_path(
+    int batch_size, int64_t M, int64_t N, int64_t K,
+    int quant_type, const XMXConfig & cfg) {
+    // Suppress unused parameter warnings (reserved for future use)
+    (void)M;
+    (void)N;
+    (void)K;
+    (void)quant_type;
+
+    // Batch=1: Always DMMV (memory-bound, optimized for single vector)
+    if (batch_size == 1) {
+        return KernelPath::DMMV;
+    }
+
+    // Environment override: Force MMVQ path
+    if (env_force_mmvq()) {
+        return KernelPath::MMVQ;
+    }
+
+    // Check environment override first (cached at init)
+    const int min_batch = get_esimd_min_batch();
+
+    // Batch < threshold: MMVQ (small batch, still memory-bound)
+    if (batch_size < min_batch) {
+        return KernelPath::MMVQ;
+    }
+
+    // Check if ESIMD available
+    if (!cfg.supported) {
+        return KernelPath::MMVQ;
+    }
+
+    // Environment override: Force ESIMD path
+    if (env_force_esimd()) {
+        return KernelPath::ESIMD_DPAS;
+    }
+
+    // Default: ESIMD dpas for compute-bound regime
+    return KernelPath::ESIMD_DPAS;
+}
 
 // =============================================================================
 // Batch Strategy for XMX Path

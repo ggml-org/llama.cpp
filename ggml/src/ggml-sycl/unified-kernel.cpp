@@ -1981,6 +1981,40 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         return;
     }
 
+    // ==========================================================================
+    // Batch-Size Gating: Select optimal kernel path
+    // ==========================================================================
+    // Query XMX config for dispatch decision (cached in XMXConfig::from_device)
+    // Use device 0 by default (single-GPU typical case)
+    XMXConfig cfg = XMXConfig::from_device(0);
+
+    // Batch size is the M dimension (number of tokens being processed)
+    const int batch_size = static_cast<int>(args.M);
+
+    // Select kernel path based on batch size and hardware capabilities
+    KernelPath selected_path = select_kernel_path(
+        batch_size, args.M, args.N, args.K, args.quant_type, cfg);
+
+    // Debug: Print dispatch decision (controlled by GGML_SYCL_DEBUG=1)
+    if (ggml_sycl_unified_debug_enabled()) {
+        fprintf(stderr, "[unified-kernel] DISPATCH: batch=%d path=%s M=%lld N=%lld K=%lld "
+                "min_batch=%d xmx_supported=%d force_mmvq=%d force_esimd=%d\n",
+                batch_size, kernel_path_name(selected_path),
+                static_cast<long long>(args.M), static_cast<long long>(args.N),
+                static_cast<long long>(args.K),
+                get_esimd_min_batch(), cfg.supported ? 1 : 0,
+                env_force_mmvq() ? 1 : 0, env_force_esimd() ? 1 : 0);
+        fflush(stderr);
+    }
+
+    // Early return for DMMV and MMVQ paths - these are handled by existing kernels
+    // in ggml-sycl.cpp. The unified kernel only handles the ESIMD_DPAS path here.
+    // The caller (ggml_sycl_mul_mat) should check the path and dispatch accordingly.
+    //
+    // NOTE: This function is the unified kernel launcher. For now, we continue
+    // with ESIMD path selection below if ESIMD is available. The DMMV/MMVQ
+    // fallback is implicit: if ESIMD paths don't match, scalar path is used.
+
     // Debug: Print launch parameters (opt-in to avoid log spam in production)
     if (ggml_sycl_unified_debug_enabled()) {
         fprintf(stderr, "[unified-kernel] LAUNCH: M=%lld N=%lld K=%lld type=%d tile=(%d,%d,%d) xmx=%d\n",
@@ -2066,10 +2100,16 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
     // 2. FP16 (default when ESIMD enabled): K=16 per dpas
     //
     // NOTE: INT8 is LOSSY - not bit-exact with FP16 path!
+    //
+    // Batch-size gating: Only use ESIMD path if selected_path == ESIMD_DPAS
+    // Small batches should use scalar DMMV/MMVQ kernels instead.
 
 #if GGML_SYCL_ESIMD_AVAILABLE
-    // Try INT8 path first (requires both ESIMD and INT8 flags)
-    if (can_use_esimd_int8_dpas(args.M, args.N, args.K)) {
+    // Only proceed with ESIMD paths if batch-size gating selected ESIMD_DPAS
+    const bool esimd_enabled_by_gating = (selected_path == KernelPath::ESIMD_DPAS);
+
+    // Try INT8 path first (requires both ESIMD and INT8 flags AND batch-size gating)
+    if (esimd_enabled_by_gating && can_use_esimd_int8_dpas(args.M, args.N, args.K)) {
         // ESIMD INT8 dpas tile sizes (fixed by hardware)
         constexpr int ESIMD_TM = 8;   // RepeatCount = 8
         constexpr int ESIMD_TN = 16;  // ExecutionSize = 16
@@ -2111,7 +2151,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
     // Cooperative ESIMD FP16 path (multi-work-item with named barriers)
     // Enabled via GGML_SYCL_XMX_COOPERATIVE=1 in addition to GGML_SYCL_XMX_ESIMD=1
     // Work-group size configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
-    if (can_use_cooperative_esimd(args.M, args.N, args.K)) {
+    if (esimd_enabled_by_gating && can_use_cooperative_esimd(args.M, args.N, args.K)) {
         // Get configured work-group size (default: 32)
         const int wg_size = get_cooperative_wg_size();
 
@@ -2152,7 +2192,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
     }
 
     // FP16 path (ESIMD enabled but INT8 not enabled)
-    if (can_use_esimd_dpas(args.M, args.N, args.K)) {
+    if (esimd_enabled_by_gating && can_use_esimd_dpas(args.M, args.N, args.K)) {
         // ESIMD FP16 dpas tile sizes (fixed by hardware)
         constexpr int ESIMD_TM = 8;   // RepeatCount = 8
         constexpr int ESIMD_TN = 16;  // ExecutionSize = 16

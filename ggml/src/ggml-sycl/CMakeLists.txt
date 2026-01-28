@@ -663,4 +663,26 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;esimd;dequant"
         TIMEOUT 120
     )
+
+    # Test 14: Kernel Dispatch Tests (Batch-Size Gating)
+    # Tests the ESIMD batch-size gating logic for intelligent dispatch
+    # NOTE: This is a pure CPU test - no GPU calls, just dispatch logic testing
+    add_executable(test-kernel-dispatch
+        tests/test-kernel-dispatch.cpp
+    )
+    target_include_directories(test-kernel-dispatch PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    # No SYCL compile/link options needed - this test is pure C++
+    target_compile_definitions(test-kernel-dispatch PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    add_test(NAME kernel-dispatch COMMAND test-kernel-dispatch)
+    set_tests_properties(kernel-dispatch PROPERTIES
+        LABELS "sycl;xmx;dispatch;gating"
+        TIMEOUT 60
+    )
 endif()
