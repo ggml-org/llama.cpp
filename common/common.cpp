@@ -1195,9 +1195,6 @@ llama_context * common_init_result::context() {
 }
 
 common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
-    if (pimpl->samplers.size() <= (size_t) seq_id) {
-        return nullptr;
-    }
     return pimpl->samplers[seq_id].get();
 }
 
