@@ -340,9 +340,9 @@ apir_encoder * remote_call_prepare(virtgpu * gpu, ApirCommandType apir_cmd_type,
      * Prepare the command encoder and its buffer
      */
 
-    static char encoder_buffer[4096];
+    thread_local char encoder_buffer[4096];
 
-    static apir_encoder enc;
+    thread_local apir_encoder enc;
     enc = {
         .cur   = encoder_buffer,
         .start = encoder_buffer,
