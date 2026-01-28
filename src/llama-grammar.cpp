@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <stdexcept>
 
+#include <unordered_set>
+
 #define MAX_REPETITION_THRESHOLD 2000
 #define MAX_GRAMMAR_RECURSION_DEPTH 2000
 //
@@ -826,18 +828,29 @@ static bool llama_grammar_match_token(
     return false;
 }
 
+// Hash function for llama_grammar_stack to enable std::unordered_set usage
+struct llama_grammar_stack_hash {
+    std::size_t operator()(const llama_grammar_stack & stack) const {
+        std::size_t hash = 0;
+        for (const auto * elem : stack) {
+            hash ^= std::hash<const void*>{}(elem) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        }
+        return hash;
+    }
+};
+
 // transforms a grammar pushdown stack into N possible stacks, all ending
 // at a character range (terminal element)
 static void llama_grammar_advance_stack(
         const llama_grammar_rules  & rules,
         const llama_grammar_stack  & stack,
               llama_grammar_stacks & new_stacks,
-        std::vector<llama_grammar_stack> & history) {
+        std::unordered_set<llama_grammar_stack, llama_grammar_stack_hash> & history) {
     if (history.size() >= MAX_GRAMMAR_RECURSION_DEPTH) {
         return;
     }
 
-    if (std::find(history.begin(), history.end(), stack) != history.end()) {
+    if (history.count(stack) > 0) {
         return;
     }
 
@@ -865,9 +878,9 @@ static void llama_grammar_advance_stack(
                     // if alternate is nonempty, add to stack
                     new_stack.push_back(subpos);
                 }
-                history.push_back(stack);
+                history.insert(stack);
                 llama_grammar_advance_stack(rules, new_stack, new_stacks, history);
-                history.pop_back();
+                history.erase(stack);
                 while (!llama_grammar_is_end_of_sequence(subpos)) {
                     // scan to end of alternate def
                     subpos++;
@@ -903,7 +916,7 @@ static void llama_grammar_advance_stack(
         const llama_grammar_rules  & rules,
         const llama_grammar_stack  & stack,
               llama_grammar_stacks & new_stacks) {
-    std::vector<llama_grammar_stack> history;
+    std::unordered_set<llama_grammar_stack, llama_grammar_stack_hash> history;
     llama_grammar_advance_stack(rules, stack, new_stacks, history);
 }
 
