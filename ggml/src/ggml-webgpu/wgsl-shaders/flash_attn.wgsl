@@ -329,52 +329,49 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let inter_offset = kv_block * SG_MAT_N;
             var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(
                     &inter_shmem, inter_offset, false, KV_TILE);
-            
-            const HQ: u32 = u32(HEAD_DIM_QK);
-            const SGK: u32 = u32(SG_MAT_K);
-            const TILES: u32 = HEAD_DIM_QK / SG_MAT_K;
-            var q_cur = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 0u, false, HQ);
+    
+            var q_cur = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 0u, false, HEAD_DIM_QK);
 
 #ifdef KV_DIRECT
             var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
                 &K, k_global_offset + 0u, true, params.stride_k1);
 #else
             var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
-                &kv_shmem, k_block_offset + 0u, true, HQ);
+                &kv_shmem, k_block_offset + 0u, true, HEAD_DIM_QK);
 #endif
 
             var t: u32 = 1u;
-            for (; t + 1u < TILES; t += 2u) {
-                let h0 = t * SGK;
-                var q0 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h0, false, HQ);
+            for (; t + 1u < HEAD_DIM_QK / SG_MAT_K; t += 2u) {
+                let h0 = t * SG_MAT_K;
+                var q0 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h0, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
                 var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h0, true, params.stride_k1);
 #else
-                var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h0, true, HQ);
+                var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h0, true, HEAD_DIM_QK);
 #endif
                 acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
                 q_cur = q0;
                 k_cur = k0;
 
-                let h1 = (t + 1u) * SGK;
-                var q1g = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h1, false, HQ);
+                let h1 = (t + 1u) * SG_MAT_K;
+                var q1g = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h1, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
                 var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h1, true, params.stride_k1);
 #else
-                var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h1, true, HQ);
+                var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h1, true, HEAD_DIM_QK);
 #endif
                 acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
                 q_cur = q1g;
                 k_cur = k1g;
             }
 
-    for (; t < TILES; t += 1u) {
-        let h = t * SGK;
-        var qn = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h, false, HQ);
+    for (; t < HEAD_DIM_QK / SG_MAT_K; t += 1u) {
+        let h = t * SG_MAT_K;
+        var qn = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
         var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h, true, params.stride_k1);
 #else
-        var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h, true, HQ);
+        var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h, true, HEAD_DIM_QK);
 #endif
         acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
         q_cur = qn;
