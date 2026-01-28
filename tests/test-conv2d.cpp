@@ -43,7 +43,7 @@ struct ggml_cgraph * build_graph_1(const test_model&);
 void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, int kh = 3, bool use_gpu = false ) {
     // create data
     int KW = kw, KH = kh, IC = ic, OC = oc;
-    int IW = iw, IH = ih, N = 1;
+    int IW = iw, IH = ih, N = 2;
     // srand(time(NULL));
 
     // printf(" input: IC = %d, OC = %d, IW = %d, IH = %d \n ", IC, OC, IW, IH);
@@ -178,19 +178,19 @@ struct ggml_cgraph * build_graph_0(const test_model& model) {
 
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
-    int s0 = 1;
-    int s1 = 1;
-    int p0 = 1;
-    int p1 = 1;
-    int d0 = 1;
-    int d1 = 1;
+    // int s0 = 1;
+    // int s1 = 1;
+    // int p0 = 1;
+    // int p1 = 1;
+    // int d0 = 1;
+    // int d1 = 1;
 
-    // int s0 = 3;
-    // int s1 = 5;
-    // int p0 = 5;
-    // int p1 = 5;
-    // int d0 = 2;
-    // int d1 = 4;
+    int s0 = 1;
+    int s1 = 5;
+    int p0 = 5;
+    int p1 = 2;
+    int d0 = 2;
+    int d1 = 4;
 
     // recalculate for avoid fragmentation
     struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
@@ -224,12 +224,12 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
 
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
-    int s0 = 1;
-    int s1 = 1;
-    int p0 = 1;
-    int p1 = 1;
-    int d0 = 1;
-    int d1 = 1;
+    // int s0 = 1;
+    // int s1 = 1;
+    // int p0 = 1;
+    // int p1 = 1;
+    // int d0 = 1;
+    // int d1 = 1;
 
 
     // int s0 = 3;
@@ -238,6 +238,13 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     // int p1 = 5;
     // int d0 = 2;
     // int d1 = 4;
+
+    int s0 = 1;
+    int s1 = 5;
+    int p0 = 5;
+    int p1 = 2;
+    int d0 = 2;
+    int d1 = 4;
 
 
     // recalculate for avoid fragmentation
@@ -319,7 +326,8 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(960,320,104,152,3,3),
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
-        std::make_tuple(1280,1280,16,16,3,3),
+        // std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1,1,1,133,1,1),
         // std::make_tuple(32,12,141,133,3,3),
         // std::make_tuple(32,6,141,133,3,3),
         // std::make_tuple(32,12,141,121,3,3),
@@ -695,6 +703,7 @@ int main(void)
         test_model model;
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
             std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
+            // std::get<3>(c), std::get<4>(c), std::get<5>(c), false);
 
         ggml_gallocr_t allocr = NULL;
         allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
@@ -751,15 +760,16 @@ int main(void)
        // int i = 2048;
         // for(int i = 0; i < ggml_nelements(wino_res); i++) {
         // for(int i = 0; i < 26*38; i++) {
-        // for(int i = 0; i < conv2d_data.size(); i++) {
-        //     float diff = fabs(im2col_data[i] - conv2d_data[i]);
-        //     // if(diff > 0.5) {
-        //           printf("(%7.3f, %7.3f, %.2f, %d) \n",
-        //           im2col_data[i], conv2d_data[i],
-        //           diff, i);
-        //         // break;
-        //     // }
-        // }
+        for(int i = 0; i < conv2d_data.size(); i++) {
+            float diff = fabs(im2col_data[i] - conv2d_data[i]);
+            // if(diff > 0.5) {
+                //   printf("(%7.3f, %7.3f, %.2f, %d) \n",
+                    printf("(%f, %f, %f, %d) \n",
+                  im2col_data[i], conv2d_data[i],
+                  diff, i);
+                // break;
+            // }
+        }
 
         ggml_free(model.ctx);
         ggml_backend_buffer_free(model.buffer);
