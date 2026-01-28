@@ -4,8 +4,10 @@
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormPromptPicker,
-		ChatFormTextarea
+		ChatFormTextarea,
+		McpResourcePicker
 	} from '$lib/components/app';
+	import ChatFormResourceAttachments from '../ChatFormResourceAttachments.svelte';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { MimeTypeText, SpecialFileType } from '$lib/enums';
@@ -14,6 +16,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import type { GetPromptResult, MCPPromptInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
@@ -90,6 +93,10 @@
 	// Prompt Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
+
+	// Resource Picker State
+	let isResourcePickerOpen = $state(false);
+	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
 	/**
 	 *
@@ -489,7 +496,7 @@
 			onpaste={handlePaste}
 		>
 			<ChatFormTextarea
-				class="px-2 py-1 md:py-0"
+				class="px-2 py-1.5 md:pt-0"
 				bind:this={textareaRef}
 				bind:value
 				onKeydown={handleKeydown}
@@ -500,6 +507,16 @@
 				{disabled}
 				{placeholder}
 			/>
+
+			{#if mcpHasResourceAttachments()}
+				<ChatFormResourceAttachments
+					class="mb-3"
+					onResourceClick={(uri) => {
+						preSelectedResourceUri = uri;
+						isResourcePickerOpen = true;
+					}}
+				/>
+			{/if}
 
 			<ChatFormActions
 				bind:this={chatFormActionsRef}
@@ -514,7 +531,18 @@
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
+				onMcpResourcesClick={() => (isResourcePickerOpen = true)}
 			/>
 		</div>
 	</div>
 </form>
+
+<McpResourcePicker
+	bind:open={isResourcePickerOpen}
+	preSelectedUri={preSelectedResourceUri}
+	onOpenChange={(newOpen) => {
+		if (!newOpen) {
+			preSelectedResourceUri = undefined;
+		}
+	}}
+/>

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare, Zap } from '@lucide/svelte';
+	import { Plus, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -14,10 +14,12 @@
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
 		hasMcpPromptsSupport?: boolean;
+		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
 		onMcpServersClick?: () => void;
+		onMcpResourcesClick?: () => void;
 	}
 
 	let {
@@ -26,10 +28,12 @@
 		hasAudioModality = false,
 		hasVisionModality = false,
 		hasMcpPromptsSupport = false,
+		hasMcpResourcesSupport = false,
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpServersClick
+		onMcpServersClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let isNewChat = $derived(!page.params.id);
@@ -50,6 +54,11 @@
 	function handleMcpServersClick() {
 		dropdownOpen = false;
 		onMcpServersClick?.();
+	}
+
+	function handleMcpResourcesClick() {
+		dropdownOpen = false;
+		onMcpResourcesClick?.();
 	}
 
 	const fileUploadTooltipText = 'Add files, system prompt or MCP Servers';
@@ -193,6 +202,17 @@
 					<Zap class="h-4 w-4" />
 
 					<span>MCP Prompt</span>
+				</DropdownMenu.Item>
+			{/if}
+
+			{#if hasMcpResourcesSupport}
+				<DropdownMenu.Item
+					class="flex cursor-pointer items-center gap-2"
+					onclick={handleMcpResourcesClick}
+				>
+					<FolderOpen class="h-4 w-4" />
+
+					<span>MCP Resources</span>
 				</DropdownMenu.Item>
 			{/if}
 		</DropdownMenu.Content>
