@@ -28,7 +28,7 @@ llama_tokens common_ngram_simple_draft(
     const size_t cur_len = tokens.size();
     // Only check every check_rate tokens to save compute
     // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (state.idx_last_check + state.config.check_rate > cur_len && cur_len > state.idx_last_check) {
+    if (state.idx_last_check + state.config.check_rate > cur_len) {
         llama_tokens draft_tokens;
         return draft_tokens;
     }
@@ -119,7 +119,7 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // Only check every check_rate tokens to save compute
     // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (map.idx_last_check + map.check_rate > cur_len && cur_len > map.idx_last_check) {
+    if (map.idx_last_check + map.check_rate > cur_len) {
         return;
     }
     map.idx_last_check = cur_len;
