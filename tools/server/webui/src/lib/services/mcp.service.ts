@@ -33,7 +33,11 @@ import type {
 	MCPConnection,
 	MCPPhaseCallback,
 	MCPConnectionLog,
-	MCPServerInfo
+	MCPServerInfo,
+	MCPResource,
+	MCPResourceTemplate,
+	MCPResourceContent,
+	MCPReadResourceResult
 } from '$lib/types';
 import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
@@ -434,5 +438,177 @@ export class MCPService {
 			console.error(`[MCPService] Failed to get completions:`, error);
 			return null;
 		}
+	}
+
+	/**
+	 *
+	 *
+	 * Resources Operations
+	 *
+	 *
+	 */
+
+	/**
+	 * List resources from a connection.
+	 * @param connection - The MCP connection to use
+	 * @param cursor - Optional pagination cursor
+	 * @returns Array of available resources and optional next cursor
+	 */
+	static async listResources(
+		connection: MCPConnection,
+		cursor?: string
+	): Promise<{ resources: MCPResource[]; nextCursor?: string }> {
+		try {
+			const result = await connection.client.listResources(cursor ? { cursor } : undefined);
+			return {
+				resources: (result.resources ?? []) as MCPResource[],
+				nextCursor: result.nextCursor
+			};
+		} catch (error) {
+			console.warn(`[MCPService][${connection.serverName}] Failed to list resources:`, error);
+			return { resources: [] };
+		}
+	}
+
+	/**
+	 * List all resources from a connection (handles pagination automatically).
+	 * @param connection - The MCP connection to use
+	 * @returns Array of all available resources
+	 */
+	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
+		const allResources: MCPResource[] = [];
+		let cursor: string | undefined;
+
+		do {
+			const result = await this.listResources(connection, cursor);
+			allResources.push(...result.resources);
+			cursor = result.nextCursor;
+		} while (cursor);
+
+		return allResources;
+	}
+
+	/**
+	 * List resource templates from a connection.
+	 * @param connection - The MCP connection to use
+	 * @param cursor - Optional pagination cursor
+	 * @returns Array of available resource templates and optional next cursor
+	 */
+	static async listResourceTemplates(
+		connection: MCPConnection,
+		cursor?: string
+	): Promise<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string }> {
+		try {
+			const result = await connection.client.listResourceTemplates(cursor ? { cursor } : undefined);
+			return {
+				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[],
+				nextCursor: result.nextCursor
+			};
+		} catch (error) {
+			console.warn(
+				`[MCPService][${connection.serverName}] Failed to list resource templates:`,
+				error
+			);
+			return { resourceTemplates: [] };
+		}
+	}
+
+	/**
+	 * List all resource templates from a connection (handles pagination automatically).
+	 * @param connection - The MCP connection to use
+	 * @returns Array of all available resource templates
+	 */
+	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
+		const allTemplates: MCPResourceTemplate[] = [];
+		let cursor: string | undefined;
+
+		do {
+			const result = await this.listResourceTemplates(connection, cursor);
+			allTemplates.push(...result.resourceTemplates);
+			cursor = result.nextCursor;
+		} while (cursor);
+
+		return allTemplates;
+	}
+
+	/**
+	 * Read the contents of a resource.
+	 * @param connection - The MCP connection to use
+	 * @param uri - The URI of the resource to read
+	 * @returns The resource contents
+	 */
+	static async readResource(
+		connection: MCPConnection,
+		uri: string
+	): Promise<MCPReadResourceResult> {
+		try {
+			const result = await connection.client.readResource({ uri });
+			return {
+				contents: (result.contents ?? []) as MCPResourceContent[],
+				_meta: result._meta
+			};
+		} catch (error) {
+			console.error(`[MCPService][${connection.serverName}] Failed to read resource:`, error);
+			throw error;
+		}
+	}
+
+	/**
+	 * Subscribe to updates for a resource.
+	 * The server will send notifications/resources/updated when the resource changes.
+	 * @param connection - The MCP connection to use
+	 * @param uri - The URI of the resource to subscribe to
+	 */
+	static async subscribeResource(connection: MCPConnection, uri: string): Promise<void> {
+		try {
+			await connection.client.subscribeResource({ uri });
+			console.log(`[MCPService][${connection.serverName}] Subscribed to resource: ${uri}`);
+		} catch (error) {
+			console.error(
+				`[MCPService][${connection.serverName}] Failed to subscribe to resource:`,
+				error
+			);
+			throw error;
+		}
+	}
+
+	/**
+	 * Unsubscribe from updates for a resource.
+	 * @param connection - The MCP connection to use
+	 * @param uri - The URI of the resource to unsubscribe from
+	 */
+	static async unsubscribeResource(connection: MCPConnection, uri: string): Promise<void> {
+		try {
+			await connection.client.unsubscribeResource({ uri });
+			console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
+		} catch (error) {
+			console.error(
+				`[MCPService][${connection.serverName}] Failed to unsubscribe from resource:`,
+				error
+			);
+			throw error;
+		}
+	}
+
+	/**
+	 * Check if a connection supports resources.
+	 * Per MCP spec: presence of the `resources` key (even as empty object {}) indicates support.
+	 * Empty object means resources are supported but no sub-features (subscribe, listChanged).
+	 * @param connection - The MCP connection to check
+	 * @returns Whether the server supports resources
+	 */
+	static supportsResources(connection: MCPConnection): boolean {
+		// Per MCP spec: "Servers that support resources MUST declare the resources capability"
+		// The presence of the key indicates support, even if it's an empty object
+		return connection.serverCapabilities?.resources !== undefined;
+	}
+
+	/**
+	 * Check if a connection supports resource subscriptions.
+	 * @param connection - The MCP connection to check
+	 * @returns Whether the server supports resource subscriptions
+	 */
+	static supportsResourceSubscriptions(connection: MCPConnection): boolean {
+		return !!connection.serverCapabilities?.resources?.subscribe;
 	}
 }

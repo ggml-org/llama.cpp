@@ -118,7 +118,22 @@ export type {
 	Tool,
 	Prompt,
 	GetPromptResult,
-	PromptMessage
+	PromptMessage,
+	MCPProgressState,
+	MCPResourceAnnotations,
+	MCPResourceIcon,
+	MCPResource,
+	MCPResourceTemplate,
+	MCPTextResourceContent,
+	MCPBlobResourceContent,
+	MCPResourceContent,
+	MCPReadResourceResult,
+	MCPResourceInfo,
+	MCPResourceTemplateInfo,
+	MCPCachedResource,
+	MCPResourceAttachment,
+	MCPResourceSubscription,
+	MCPServerResources
 } from './mcp';
 
 // Agentic types
