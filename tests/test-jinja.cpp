@@ -1024,6 +1024,18 @@ static void test_tests(testing & t) {
         {{"x", {{"a", 1}}}},
         "yes"
     );
+
+    test_template(t, "undefined is sequence",
+        "{{ 'yes' if x is sequence }}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "undefined is iterable",
+        "{{ 'yes' if x is iterable }}",
+        json::object(),
+        "yes"
+    );
 }
 
 static void test_string_methods(testing & t) {
