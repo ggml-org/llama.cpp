@@ -71,6 +71,10 @@ static inline ggml_backend_buffer_type_t apir_decode_ggml_buffer_type(apir_decod
     return (ggml_backend_buffer_type_t) handle;
 }
 
+static inline void apir_encode_apir_buffer_type_host_handle(apir_encoder * enc, apir_buffer_type_host_handle_t handle) {
+    apir_encoder_write(enc, sizeof(handle), &handle, sizeof(handle));
+}
+
 static inline apir_buffer_type_host_handle_t apir_decode_apir_buffer_type_host_handle(apir_decoder * dec) {
     apir_buffer_type_host_handle_t handle;
 
