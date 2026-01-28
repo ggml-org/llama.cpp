@@ -41,6 +41,25 @@
 #    define GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE 0
 #endif
 
+// =============================================================================
+// ESIMD dpas Support
+// =============================================================================
+// Check for ESIMD extension availability for low-level dpas access.
+// ESIMD provides explicit SIMD control for XMX instructions.
+// NOTE: These includes MUST be before any namespace declaration to avoid
+// namespace collision issues with SYCL internal headers.
+
+#if __has_include(<sycl/ext/intel/esimd.hpp>) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#    define GGML_SYCL_ESIMD_AVAILABLE 1
+#    include <sycl/ext/intel/esimd.hpp>
+#    include <sycl/ext/intel/esimd/xmx/dpas.hpp>
+// Namespace aliases for cleaner ESIMD dpas code (in global namespace)
+namespace esimd = sycl::ext::intel::esimd;
+namespace xmx = sycl::ext::intel::esimd::xmx;
+#else
+#    define GGML_SYCL_ESIMD_AVAILABLE 0
+#endif
+
 namespace ggml_sycl_unified {
 
 // =============================================================================
@@ -62,6 +81,123 @@ constexpr int XMX_TILE_K = 16;  // K step per dpas instruction (for half precisi
 
 // Sub-group size required for joint_matrix operations
 constexpr int XMX_SUBGROUP_SIZE = 16;
+
+// =============================================================================
+// Environment Variable Checks for XMX Configuration
+// =============================================================================
+// These functions use static caching to avoid repeated getenv() calls.
+// GGML_SYCL_XMX_ESIMD=1: Enable ESIMD dpas path (disabled by default)
+// GGML_SYCL_XMX_INT8=1: Enable INT8 quantization in dpas (disabled by default)
+
+/**
+ * Check if ESIMD dpas path is enabled via environment.
+ *
+ * The ESIMD dpas path uses low-level ESIMD instructions instead of joint_matrix.
+ * This is disabled by default. Set GGML_SYCL_XMX_ESIMD=1 to enable.
+ *
+ * @return true if ESIMD dpas path is enabled
+ */
+inline bool use_esimd_dpas() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_XMX_ESIMD");
+        enabled          = (env && std::string(env) == "1") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+/**
+ * Check if INT8 dpas quantization is enabled via environment.
+ *
+ * When enabled, uses INT8 quantization in dpas instructions (K=32 per step).
+ * Default is FP16 (K=16 per step). Set GGML_SYCL_XMX_INT8=1 to enable.
+ *
+ * @return true if INT8 dpas quantization is enabled
+ */
+inline bool use_int8_dpas() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_XMX_INT8");
+        enabled          = (env && std::string(env) == "1") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+// =============================================================================
+// XMXConfig: Hardware-queried Configuration for ESIMD dpas
+// =============================================================================
+// This struct captures hardware-specific XMX dimensions and capabilities.
+// Use XMXConfig::from_device(device_id) to query actual hardware values.
+// Default constructor provides safe fallback values for Intel Arc GPUs.
+
+// Note: XMXConfig::from_device() is implemented in unified-kernel.cpp
+// and requires ggml_sycl_device_info which is defined in common.hpp (global namespace).
+
+/**
+ * XMX configuration for ESIMD dpas kernels.
+ *
+ * Captures hardware-queried tile dimensions and capabilities.
+ * Intel ESIMD dpas parameters:
+ * - SystolicDepth: Always 8 (fixed in hardware)
+ * - RepeatCount: 1-8, determines M dimension (we use 8 for full utilization)
+ * - ExecutionSize: 8 for DG2, 16 for PVC/Arc (determines N dimension)
+ */
+struct XMXConfig {
+    // =========================================================================
+    // XMX Tile Dimensions
+    // =========================================================================
+    // These are hardware-defined constraints for dpas instructions.
+    // Default values are for Intel Arc B580.
+
+    size_t xmx_m = 8;  // RepeatCount determines M (1-8, we use 8)
+    size_t xmx_n = 16; // ExecutionSize: 8 for DG2, 16 for PVC/Arc
+    size_t xmx_k_fp16 = 16;  // K for FP16: SystolicDepth(8) x OpsPerChannel(2) = 16
+    size_t xmx_k_int8 = 32;  // K for INT8: SystolicDepth(8) x OpsPerChannel(4) = 32
+
+    // =========================================================================
+    // Hardware Resources
+    // =========================================================================
+
+    size_t slm_size = 65536;  // SLM bytes per work-group (default 64KB)
+    int    nsm      = 20;     // Compute units (streaming multiprocessors)
+
+    // =========================================================================
+    // Capability Flags (from hardware query)
+    // =========================================================================
+
+    bool supported     = false;  // Hardware has XMX support
+    bool supports_int8 = false;  // INT8 dpas available
+    bool supports_fp16 = false;  // FP16 dpas available
+
+    // =========================================================================
+    // Derived Configuration
+    // =========================================================================
+
+    bool use_double_buffer  = false;  // SLM can hold 2x tile buffers
+    int  tiles_per_workitem = 1;      // Tiles processed per work-item
+
+    // =========================================================================
+    // Factory Method
+    // =========================================================================
+
+    /**
+     * Query hardware and create configuration for a specific device.
+     *
+     * @param device_id  Device index (0-based), or -1 for default config
+     * @return XMXConfig populated with hardware values, or defaults if unavailable
+     *
+     * Edge cases handled:
+     * - device_id < 0: Returns default config
+     * - device_id >= device_count: Returns default config
+     * - xmx.M/N/K = 0: Uses fallback defaults
+     * - xmx.slm_size = 0: Uses default 65536
+     * - xmx.supported = false: Returns config with supported=false
+     */
+    static XMXConfig from_device(int device_id);
+};
+
+// Note: XMXConfig::from_device() is implemented in unified-kernel.cpp
+// because it requires access to ggml_sycl_device_info which is defined in common.hpp.
 
 // =============================================================================
 // Batch Strategy for XMX Path

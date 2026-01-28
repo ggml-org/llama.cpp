@@ -20,12 +20,81 @@
 //
 
 #include "unified-kernel.hpp"
+#include "common.hpp"  // For ggml_sycl_info() and GGML_SYCL_DEBUG
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
 
 namespace ggml_sycl_unified {
+
+// =============================================================================
+// XMXConfig::from_device() Implementation
+// =============================================================================
+// Queries hardware-specific XMX capabilities with robust edge case handling.
+
+XMXConfig XMXConfig::from_device(int device_id) {
+    XMXConfig cfg;  // Start with safe defaults
+
+    // Edge case: device_id < 0 returns default config
+    if (device_id < 0) {
+        GGML_SYCL_DEBUG("[XMXConfig] device_id=%d < 0, returning default config\n", device_id);
+        return cfg;
+    }
+
+    // Edge case: device_id >= device_count returns default config
+    // Note: ggml_sycl_info() is in global namespace (defined in common.hpp)
+    const auto & info = ::ggml_sycl_info();
+    if (device_id >= info.device_count) {
+        GGML_SYCL_DEBUG("[XMXConfig] device_id=%d >= device_count=%d, returning default config\n",
+                        device_id, info.device_count);
+        return cfg;
+    }
+
+    // Safe to access device info now
+    const auto & dev = info.devices[device_id];
+    const auto & xmx = dev.xmx_caps;
+
+    // Copy hardware capability flags
+    cfg.supported     = xmx.supported;
+    cfg.supports_int8 = xmx.supports_int8;
+    cfg.supports_fp16 = xmx.supports_fp16;
+
+    // Copy nsm (compute units)
+    cfg.nsm = dev.nsm > 0 ? dev.nsm : 20;  // Fallback to 20 if 0
+
+    // Edge case: slm_size = 0 should use default
+    cfg.slm_size = xmx.slm_size > 0 ? xmx.slm_size : 65536;
+
+    // Edge case: M/N/K = 0 should use fallback defaults
+    // XMX dimensions: Use queried values if valid, otherwise defaults
+    cfg.xmx_m = (xmx.M > 0) ? xmx.M : 8;
+    cfg.xmx_n = (xmx.N > 0) ? xmx.N : 16;
+
+    // K dimension depends on data type:
+    // - For INT8: Use queried K if valid (expected: 32)
+    // - For FP16: Always 16 (SystolicDepth(8) x OpsPerChannel(2))
+    cfg.xmx_k_int8 = (xmx.K > 0) ? xmx.K : 32;
+    cfg.xmx_k_fp16 = 16;  // Fixed for FP16
+
+    // Derived: double buffer feasibility
+    // Double buffer if SLM can hold 2x tile buffers (conservative: 50% of SLM)
+    // Tile buffer = M x K x sizeof(half) for activations + N x K x sizeof(half) for weights
+    size_t tile_size = cfg.xmx_m * cfg.xmx_k_int8 * sizeof(sycl::half) +
+                       cfg.xmx_n * cfg.xmx_k_int8 * sizeof(sycl::half);
+    cfg.use_double_buffer = (2 * tile_size) < (cfg.slm_size / 2);
+
+    // Default tiles per work-item (can be tuned later)
+    cfg.tiles_per_workitem = 1;
+
+    GGML_SYCL_DEBUG("[XMXConfig] device=%d: M=%zu N=%zu K_INT8=%zu K_FP16=%zu SLM=%zu nsm=%d "
+                    "supported=%d int8=%d fp16=%d double_buf=%d\n",
+                    device_id, cfg.xmx_m, cfg.xmx_n, cfg.xmx_k_int8, cfg.xmx_k_fp16,
+                    cfg.slm_size, cfg.nsm, cfg.supported, cfg.supports_int8,
+                    cfg.supports_fp16, cfg.use_double_buffer);
+
+    return cfg;
+}
 
 static bool ggml_sycl_unified_debug_enabled() {
     static int enabled = -1;

@@ -610,4 +610,31 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;unified;optimization;tdd"
         TIMEOUT 300
     )
+
+    # Test 12: XMXConfig struct unit tests
+    # Tests hardware-queried dimensions for ESIMD dpas kernel configuration
+    add_executable(test-xmx-config
+        tests/test-xmx-config.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-xmx-config PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-xmx-config PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-config PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-xmx-config PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    target_link_libraries(test-xmx-config PRIVATE ggml-sycl ggml-base ggml)
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-xmx-config PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME xmx-config COMMAND test-xmx-config)
+    set_tests_properties(xmx-config PROPERTIES
+        LABELS "sycl;xmx;unified;config"
+        TIMEOUT 60
+    )
 endif()
