@@ -31,6 +31,7 @@
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
+		onMcpResourcesClick?: () => void;
 	}
 
 	let {
@@ -45,7 +46,8 @@
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick
+		onMcpPromptClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -165,6 +167,11 @@
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		return mcpStore.hasEnabledServers(perChatOverrides);
 	});
+
+	let hasMcpResourcesSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		return mcpStore.hasEnabledServers(perChatOverrides) && mcpStore.hasResourcesCapability();
+	});
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
@@ -174,9 +181,11 @@
 			{hasAudioModality}
 			{hasVisionModality}
 			{hasMcpPromptsSupport}
+			{hasMcpResourcesSupport}
 			{onFileUpload}
 			{onSystemPromptClick}
 			{onMcpPromptClick}
+			{onMcpResourcesClick}
 			onMcpServersClick={() => (showMcpDialog = true)}
 		/>
 
