@@ -21,7 +21,7 @@ import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
+import { DEFAULT_AGENTIC_CONFIG, AGENTIC_TAGS } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole } from '$lib/enums';
 import type {
 	AgenticFlowParams,
@@ -342,7 +342,7 @@ class AgenticStore {
 										lastArgs: ''
 									};
 									if (!state.emittedOnce) {
-										const output = `\n\n<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:${toolName}>>>\n<<<TOOL_ARGS_START>>>\n${toolArgs}`;
+										const output = `\n\n${AGENTIC_TAGS.TOOL_CALL_START}\n${AGENTIC_TAGS.TOOL_NAME_PREFIX}${toolName}${AGENTIC_TAGS.TAG_SUFFIX}\n${AGENTIC_TAGS.TOOL_ARGS_START}\n${toolArgs}`;
 										onChunk?.(output);
 										state.emittedOnce = true;
 										state.lastArgs = toolArgs;
@@ -580,10 +580,10 @@ class AgenticStore {
 		emit?: (chunk: string) => void
 	): void {
 		if (!emit) return;
-		let output = `\n<<<TOOL_ARGS_END>>>`;
+		let output = `\n${AGENTIC_TAGS.TOOL_ARGS_END}`;
 		const lines = result.split('\n');
 		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
-		output += `\n${trimmedLines.join('\n')}\n<<<AGENTIC_TOOL_CALL_END>>>\n`;
+		output += `\n${trimmedLines.join('\n')}\n${AGENTIC_TAGS.TOOL_CALL_END}\n`;
 		emit(output);
 	}
 
