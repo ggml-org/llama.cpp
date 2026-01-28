@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileText, Loader2, AlertCircle, Image, Download, Copy, Check } from '@lucide/svelte';
+	import { FileText, Loader2, AlertCircle, Download, Copy, Check } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -153,7 +153,7 @@
 					<pre class="font-mono text-xs break-words whitespace-pre-wrap">{textContent}</pre>
 				{/if}
 
-				{#each blobContent as blob}
+				{#each blobContent as blob (blob.uri)}
 					{#if isImageMimeType(blob.mimeType)}
 						<img
 							src={`data:${blob.mimeType};base64,${blob.blob}`}
