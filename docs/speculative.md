@@ -46,16 +46,16 @@ The number of accepted tokens is stored for each used n-gram.
 
 **Example:** Server options to be used if there are a lot of longer repetitions.
 ```bash
-llama-server [...] --spec-draftless ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2
+llama-server [...] --spec-type ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2
 ```
 
 
-## Command-Line Options (draftless)
+## Command-Line Options
 
 If a draft model is combined with a draftless decoding the draftless decoding has higher precedence.
 
 ```
---spec-draftless [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]
+--spec-type [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]
                                         type of speculative decoding to use when no draft model is provided
                                         (default: none)
 --spec-ngram-size-n N                   ngram size N for ngram-simple/ngram-map speculative decoding, length
@@ -67,7 +67,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 --spec-ngram-min-hits N                 minimum hits for ngram-map speculative decoding (default: 1)
 ```
 
-### `--spec-draftless TYPE`
+### `--spec-type TYPE`
 
 Specifies a type of speculative decoding without draft model.
 
@@ -81,7 +81,7 @@ Specifies a type of speculative decoding without draft model.
 
 **Example:** Server-instance used to refactor source code.
 ```bash
-./llama-server [...] --spec-draftless ngram-simple
+./llama-server [...] --spec-type ngram-simple
 ```
 
 ### `--spec-ngram-size-n N`

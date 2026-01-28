@@ -3398,7 +3398,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-draftless"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]",
+        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
             common_speculative_type_to_str(params.speculative.type).c_str()),
         [](common_params & params, const std::string & value) {
