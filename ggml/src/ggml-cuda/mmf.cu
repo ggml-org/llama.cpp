@@ -2,7 +2,7 @@
 #include "mmf.cuh"
 #include "mmid.cuh"
 
-static __forceinline__ int get_mmf_rows_per_block(const int cc) {
+static __forceinline__ int mmf_get_rows_per_block(const int cc) {
     if (GGML_CUDA_CC_IS_CDNA(cc)) {
         return MMF_ROWS_PER_BLOCK_CDNA;
     } else {
@@ -98,7 +98,7 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
 
     const int device    = ggml_cuda_get_device();
     const int cc        = ggml_cuda_info().devices[device].cc;
-    const int rows_per_block = get_mmf_rows_per_block(cc);
+    const int rows_per_block = mmf_get_rows_per_block(cc);
 
     switch (src0->type) {
         case GGML_TYPE_F32: {
@@ -151,7 +151,7 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
             return false;
         }
     }
-    if (src0_ne[1] % get_mmf_rows_per_block(cc) != 0) {
+    if (src0_ne[1] % mmf_get_rows_per_block(cc) != 0) {
         return false;
     }
 
