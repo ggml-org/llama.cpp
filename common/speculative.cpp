@@ -45,10 +45,10 @@ struct common_speculative_config {
 };
 
 static bool common_speculative_are_compatible(
-    const struct llama_model * model_tgt,
-    const struct llama_model * model_dft) {
-    const struct llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
-    const struct llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+    const llama_model * model_tgt,
+    const llama_model * model_dft) {
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
 
     const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
     LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
@@ -125,14 +125,22 @@ struct common_speculative_state {
 
     virtual ~common_speculative_state() = default;
 
+    virtual void begin(const llama_tokens & prompt) = 0;
+
+    virtual void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) = 0;
+
     virtual void accept(uint16_t n_accepted) = 0;
 };
 
 struct common_speculative_state_draft : public common_speculative_state {
-    struct llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
-    struct llama_context * ctx_dft;
+    llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
+    llama_context * ctx_dft;
 
-    struct common_sampler * smpl;
+    common_sampler * smpl;
 
     llama_batch  batch;
     llama_tokens prompt_dft;
@@ -142,8 +150,8 @@ struct common_speculative_state_draft : public common_speculative_state {
 
     common_speculative_state_draft(
             enum common_speculative_type type,
-            struct llama_context * ctx_tgt,
-            struct llama_context * ctx_dft,
+            llama_context * ctx_tgt,
+            llama_context * ctx_dft,
             const std::vector<std::pair<std::string, std::string>> & replacements)
         : common_speculative_state(type)
         , ctx_tgt(ctx_tgt)
@@ -201,14 +209,244 @@ struct common_speculative_state_draft : public common_speculative_state {
         llama_batch_free(batch);
     }
 
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        auto * spec = this;
+
+        auto & batch      = spec->batch;
+        auto & ctx_tgt    = spec->ctx_tgt;
+        auto & ctx_dft    = spec->ctx_dft;
+        auto & smpl       = spec->smpl;
+        auto & prompt_dft = spec->prompt_dft;
+
+        auto * mem_dft = llama_get_memory(ctx_dft);
+
+        int reuse_i = 0;
+        int reuse_n = 0;
+
+        const int n_ctx = llama_n_ctx(ctx_dft) - params.n_draft;
+
+        llama_tokens prompt_cnv;
+        if (!spec->vocab_cmpt) {
+            std::string text;
+
+            text = common_detokenize(ctx_tgt, prompt_tgt, true);
+            text = replace_to_dft(text);
+
+            LOG_DBG("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
+
+            prompt_cnv = common_tokenize(ctx_dft, text, false, true);
+
+            // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
+            const auto * model_tgt = llama_get_model(ctx_tgt);
+            const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
+
+            int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
+            GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
+
+            text.resize(-n_chars);
+            llama_detokenize(vocab_tgt, &id_last, 1, text.data(), text.size(), false, false);
+            text = replace_to_dft(text);
+
+            LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
+            id_last = common_tokenize(ctx_dft, text, false, true)[0];
+        }
+
+        const llama_tokens & prompt_cur = spec->vocab_cmpt ? prompt_tgt : prompt_cnv;
+
+        const int i_start = std::max<int>(0, (int) prompt_cur.size() - n_ctx);
+
+        // reuse as much as possible from the old draft context
+        // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
+        for (int i = 0; i < (int) prompt_dft.size(); ++i) {
+            int cur = 0;
+            while (i_start + cur < (int) prompt_cur.size() &&
+                    i       + cur < (int) prompt_dft.size() &&
+                    prompt_cur[i_start + cur] == prompt_dft[i + cur]) {
+                cur++;
+            }
+
+            if ((cur >= 256 || n_ctx >= (int) prompt_cur.size()) && cur > reuse_n) {
+                reuse_i = i;
+                reuse_n = cur;
+            }
+        }
+
+        LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt_dft.size());
+
+        result.clear();
+        result.reserve(params.n_draft);
+
+        if (reuse_n == 0) {
+            llama_memory_clear(mem_dft, false);
+            prompt_dft.clear();
+        } else {
+            // this happens when a previous draft has been discarded (for example, due to being too small), but the
+            // target model agreed with it. in this case, we simply pass back the previous results to save compute
+            if (reuse_i + reuse_n < (int) prompt_dft.size() && prompt_dft[reuse_i + reuse_n] == id_last) {
+                for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
+                    result.push_back(prompt_dft[i]);
+
+                    if (params.n_draft <= (int) result.size()) {
+                        break;
+                    }
+                }
+
+                return;
+            }
+
+            if (reuse_i > 0) {
+                llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
+                llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
+
+                prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
+            }
+
+            if (reuse_n < (int) prompt_dft.size()) {
+                llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
+                prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
+            }
+        }
+
+        // prepare a batch to evaluate any new tokens in the prompt
+        common_batch_clear(batch);
+
+        for (size_t i = i_start + reuse_n; i < prompt_cur.size(); ++i) {
+            //LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_cur[i]);
+            common_batch_add(batch, prompt_cur[i], i - i_start, { 0 }, false);
+
+            prompt_dft.push_back(prompt_cur[i]);
+        }
+
+        // we should rarely end-up here during normal decoding
+        if (batch.n_tokens > 0) {
+            //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
+
+            llama_decode(ctx_dft, batch);
+        }
+
+        const llama_pos n_past = prompt_dft.size();
+
+        LOG_DBG("%s: n_past = %d\n", __func__, n_past);
+
+        common_batch_clear(batch);
+        common_batch_add  (batch, id_last, n_past, { 0 }, true);
+
+        prompt_dft.push_back(id_last);
+
+        LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx_dft, prompt_dft).c_str());
+
+        llama_decode(ctx_dft, batch);
+
+        common_sampler_reset(smpl);
+
+        // sample n_draft tokens from the draft model
+        for (int i = 0; i < params.n_draft; ++i) {
+            common_batch_clear(batch);
+
+            common_sampler_sample(smpl, ctx_dft, 0, true);
+
+            const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+            for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                        k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+            }
+
+            // add drafted token for each sequence
+            const llama_token id = cur_p->data[0].id;
+
+            common_sampler_accept(smpl, id, true);
+
+            result.push_back(id);
+
+            if (params.n_draft <= (int) result.size()) {
+                break;
+            }
+
+            // only collect very high-confidence draft tokens
+            if (cur_p->data[0].p < params.p_min) {
+                break;
+            }
+
+            common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
+
+            // evaluate the drafted tokens on the draft model
+            llama_decode(ctx_dft, batch);
+
+            prompt_dft.push_back(id);
+        }
+
+        if (!spec->vocab_cmpt) {
+            std::string detokenized = common_detokenize(ctx_dft, result, true);
+            detokenized = replace_to_tgt(detokenized);
+            LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
+            result = common_tokenize(ctx_tgt, detokenized, false, true);
+            if (result.size() > (size_t)params.n_draft) {
+                result.resize(params.n_draft);
+            }
+        }
+    }
+
     void accept(uint16_t n_accepted) override {
         // noop
         GGML_UNUSED(n_accepted);
+    }
+
+    std::string replace_to_dft(const std::string & input) const {
+        std::string result = input;
+
+        for (const auto & pair : this->vocab_map) {
+            size_t pos = result.find(pair.first);
+            while (pos != std::string::npos) {
+                result.replace(pos, pair.first.length(), pair.second);
+                pos = result.find(pair.first, pos + pair.second.length());
+            }
+        }
+
+        return result;
+    }
+
+    std::string replace_to_tgt(const std::string & input) const {
+        std::string result = input;
+
+        for (const auto & pair : this->vocab_map) {
+            size_t pos = result.find(pair.second);
+            while (pos != std::string::npos) {
+                result.replace(pos, pair.second.length(), pair.first);
+                pos = result.find(pair.second, pos + pair.first.length());
+            }
+        }
+
+        return result;
     }
 };
 
 struct common_speculative_state_eagle3 : public common_speculative_state {
     common_speculative_state_eagle3(enum common_speculative_type type) : common_speculative_state(type) {}
+
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & draft_tokens) override {
+        // TODO: implement
+        GGML_UNUSED(params);
+        GGML_UNUSED(prompt_tgt);
+        GGML_UNUSED(id_last);
+        GGML_UNUSED(draft_tokens);
+    }
 
     void accept(uint16_t n_accepted) override {
         // noop
@@ -225,6 +463,19 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
             common_ngram_simple_state state)
         : common_speculative_state(type), state(state) {}
 
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        result = common_ngram_simple_draft(state, prompt_tgt, id_last);
+        GGML_UNUSED(params);
+    }
+
     void accept(uint16_t n_accepted) override {
         // noop
         GGML_UNUSED(n_accepted);
@@ -240,16 +491,18 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
             common_ngram_map map)
         : common_speculative_state(type), map(std::move(map)) {}
 
-    void accept(uint16_t n_accepted) override {
-        common_ngram_map_accept(map, n_accepted);
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
     }
-};
 
-struct common_speculative_state_ngram_map_k4v : public common_speculative_state_ngram_map_k {
-    common_speculative_state_ngram_map_k4v(
-            enum common_speculative_type type,
-            common_ngram_map map)
-        : common_speculative_state_ngram_map_k(type, std::move(map)) {}
+    void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        common_ngram_map_draft(map, prompt_tgt, id_last, result);
+        GGML_UNUSED(params);
+    }
 
     void accept(uint16_t n_accepted) override {
         common_ngram_map_accept(map, n_accepted);
@@ -298,6 +551,51 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
         }
     }
 
+    void begin(const llama_tokens & prompt) override {
+        GGML_UNUSED(prompt);
+    }
+
+    void draft(
+            const common_speculative_params & params,
+            const llama_tokens & prompt_tgt,
+            llama_token id_last,
+            llama_tokens & result) override {
+        GGML_UNUSED(params);
+
+        if (cache_size < prompt_tgt.size() + 1) {
+            llama_tokens tokens_new;
+            tokens_new.reserve(prompt_tgt.size() + 1 - cache_size);
+            for (size_t j = cache_size; j < prompt_tgt.size(); ++j) {
+                tokens_new.push_back(prompt_tgt[j]);
+            }
+            tokens_new.push_back(id_last); // add the last token
+
+            // Update context ngram cache with new prompt_tgt:
+            common_ngram_cache_update(ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
+                    tokens_new, tokens_new.size(), false);
+            cache_size = prompt_tgt.size() + 1;
+        }
+
+        llama_tokens inp;
+        inp.reserve(prompt_tgt.size() + 1);
+        for (size_t j = 0; j < prompt_tgt.size(); ++j) {
+            inp.push_back(prompt_tgt[j]);
+        }
+        inp.push_back(id_last);
+
+        result.push_back(id_last);
+
+        common_ngram_cache_draft(inp, result, n_draft, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
+                ngram_cache_context,
+                ngram_cache_dynamic,
+                ngram_cache_static);
+
+        if (result.size() > 0) {
+            // delete first token in result (which is the id_last token)
+            result.erase(result.begin());
+        }
+    }
+
     void accept(uint16_t n_accepted) override {
         // TODO: noop
         GGML_UNUSED(n_accepted);
@@ -319,7 +617,7 @@ static common_ngram_map get_common_ngram_map(const common_speculative_config & c
     return common_ngram_map(size_key, size_value, key_only, check_rate, min_hits);
 }
 
-static struct common_speculative_state_ngram_cache create_state_ngram_cache(
+static common_speculative_state_ngram_cache create_state_ngram_cache(
         const std::string & path_static, const std::string & path_dynamic,
         const common_speculative_config & config) {
     uint16_t n_draft = 8; // TODO get from config?
@@ -367,11 +665,11 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 
 // initialization of the speculative decoding system
 //
-struct common_speculative * common_speculative_init(
-        const struct common_params_speculative & params,
-              struct llama_context             * ctx_tgt,
-        const struct llama_context_params      & cparams_dft,
-              struct llama_model               * model_dft) {
+common_speculative * common_speculative_init(
+        const common_params_speculative & params,
+              llama_context             * ctx_tgt,
+        const llama_context_params      & cparams_dft,
+              llama_model               * model_dft) {
     llama_context * ctx_dft = nullptr;
     if (model_dft) {
         ctx_dft = llama_init_from_model(model_dft, cparams_dft);
@@ -454,17 +752,11 @@ struct common_speculative * common_speculative_init(
                 implementations.push_back(std::move(state));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K: {
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
                 implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
                     (config.type),
                     get_common_ngram_map(config)
-                ));
-                break;
-            }
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
-                implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k4v>(
-                            (config.type),
-                            get_common_ngram_map(config)
                 ));
                 break;
             }
@@ -486,13 +778,13 @@ struct common_speculative * common_speculative_init(
     }
 
     auto * result = new common_speculative {
-        /* .impls          = */ std::move(implementations)
+        /* .impls = */ std::move(implementations)
     };
 
     return result;
 }
 
-void common_speculative_free(struct common_speculative * spec) {
+void common_speculative_free(common_speculative * spec) {
     if (spec == nullptr) {
         return;
     }
@@ -500,352 +792,43 @@ void common_speculative_free(struct common_speculative * spec) {
     delete spec;
 }
 
-static std::string replace_to_dft(
-        struct common_speculative_state_draft * spec,
-        const std::string & input) {
-    std::string result = input;
-
-    for (const auto & pair : spec->vocab_map) {
-        size_t pos = result.find(pair.first);
-        while (pos != std::string::npos) {
-            result.replace(pos, pair.first.length(), pair.second);
-            pos = result.find(pair.first, pos + pair.second.length());
-        }
+void common_speculative_begin(common_speculative * spec, const llama_tokens & prompt) {
+    if (spec == nullptr) {
+        return;
     }
 
-    return result;
-}
-
-static std::string replace_to_tgt(
-        struct common_speculative_state_draft * spec,
-        const std::string& input) {
-    std::string result = input;
-
-    for (const auto & pair : spec->vocab_map) {
-        size_t pos = result.find(pair.second);
-        while (pos != std::string::npos) {
-            result.replace(pos, pair.second.length(), pair.first);
-            pos = result.find(pair.second, pos + pair.first.length());
-        }
+    for (auto & impl : spec->impls) {
+        impl->begin(prompt);
     }
-
-    return result;
 }
 
-static llama_tokens common_speculative_use_draft_model(
-        struct common_speculative_state_draft * spec,
-        struct common_speculative_params params,
+llama_tokens common_speculative_draft(
+        common_speculative * spec,
+        const common_speculative_params & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
-    auto & batch      = spec->batch;
-    auto & ctx_tgt    = spec->ctx_tgt;
-    auto & ctx_dft    = spec->ctx_dft;
-    auto & smpl       = spec->smpl;
-    auto & prompt_dft = spec->prompt_dft;
-
-    auto * mem_dft = llama_get_memory(ctx_dft);
-
-    int reuse_i = 0;
-    int reuse_n = 0;
-
-    const int n_ctx = llama_n_ctx(ctx_dft) - params.n_draft;
-
-    llama_tokens prompt_cnv;
-    if (!spec->vocab_cmpt) {
-        std::string text;
-
-        text = common_detokenize(ctx_tgt, prompt_tgt, true);
-        text = replace_to_dft(spec, text);
-
-        LOG_DBG("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
-
-        prompt_cnv = common_tokenize(ctx_dft, text, false, true);
-
-        // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
-        const auto * model_tgt = llama_get_model(ctx_tgt);
-        const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
-
-        int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
-        GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
-
-        text.resize(-n_chars);
-        llama_detokenize(vocab_tgt, &id_last, 1, text.data(), text.size(), false, false);
-        text = replace_to_dft(spec, text);
-
-        LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
-        id_last = common_tokenize(ctx_dft, text, false, true)[0];
-    }
-
-    const llama_tokens & prompt_cur = spec->vocab_cmpt ? prompt_tgt : prompt_cnv;
-
-    const int i_start = std::max<int>(0, (int) prompt_cur.size() - n_ctx);
-
-    // reuse as much as possible from the old draft context
-    // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
-    for (int i = 0; i < (int) prompt_dft.size(); ++i) {
-        int cur = 0;
-        while (i_start + cur < (int) prompt_cur.size() &&
-               i       + cur < (int) prompt_dft.size() &&
-               prompt_cur[i_start + cur] == prompt_dft[i + cur]) {
-            cur++;
-        }
-
-        if ((cur >= 256 || n_ctx >= (int) prompt_cur.size()) && cur > reuse_n) {
-            reuse_i = i;
-            reuse_n = cur;
-        }
-    }
-
-    LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt_dft.size());
-
     llama_tokens result;
-    result.reserve(params.n_draft);
-
-    if (reuse_n == 0) {
-        llama_memory_clear(mem_dft, false);
-        prompt_dft.clear();
-    } else {
-        // this happens when a previous draft has been discarded (for example, due to being too small), but the
-        // target model agreed with it. in this case, we simply pass back the previous results to save compute
-        if (reuse_i + reuse_n < (int) prompt_dft.size() && prompt_dft[reuse_i + reuse_n] == id_last) {
-            for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
-                result.push_back(prompt_dft[i]);
-
-                if (params.n_draft <= (int) result.size()) {
-                    break;
-                }
-            }
-
-            return result;
-        }
-
-        if (reuse_i > 0) {
-            llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
-            llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
-
-            prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
-        }
-
-        if (reuse_n < (int) prompt_dft.size()) {
-            llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
-            prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
-        }
-    }
-
-    // prepare a batch to evaluate any new tokens in the prompt
-    common_batch_clear(batch);
-
-    for (size_t i = i_start + reuse_n; i < prompt_cur.size(); ++i) {
-        //LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_cur[i]);
-        common_batch_add(batch, prompt_cur[i], i - i_start, { 0 }, false);
-
-        prompt_dft.push_back(prompt_cur[i]);
-    }
-
-    // we should rarely end-up here during normal decoding
-    if (batch.n_tokens > 0) {
-        //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
-
-        llama_decode(ctx_dft, batch);
-    }
-
-    const llama_pos n_past = prompt_dft.size();
-
-    LOG_DBG("%s: n_past = %d\n", __func__, n_past);
-
-    common_batch_clear(batch);
-    common_batch_add  (batch, id_last, n_past, { 0 }, true);
-
-    prompt_dft.push_back(id_last);
-
-    LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx_dft, prompt_dft).c_str());
-
-    llama_decode(ctx_dft, batch);
-
-    common_sampler_reset(smpl);
-
-    // sample n_draft tokens from the draft model
-    for (int i = 0; i < params.n_draft; ++i) {
-        common_batch_clear(batch);
-
-        common_sampler_sample(smpl, ctx_dft, 0, true);
-
-        const auto * cur_p = common_sampler_get_candidates(smpl, true);
-
-        for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-            LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                    k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
-        }
-
-        // add drafted token for each sequence
-        const llama_token id = cur_p->data[0].id;
-
-        common_sampler_accept(smpl, id, true);
-
-        result.push_back(id);
-
-        if (params.n_draft <= (int) result.size()) {
-            break;
-        }
-
-        // only collect very high-confidence draft tokens
-        if (cur_p->data[0].p < params.p_min) {
-            break;
-        }
-
-        common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
-
-        // evaluate the drafted tokens on the draft model
-        llama_decode(ctx_dft, batch);
-
-        prompt_dft.push_back(id);
-    }
-
-    if (!spec->vocab_cmpt) {
-        std::string detokenized = common_detokenize(ctx_dft, result, true);
-        detokenized = replace_to_tgt(spec, detokenized);
-        LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
-        result = common_tokenize(ctx_tgt, detokenized, false, true);
-        if (result.size() > (size_t)params.n_draft) {
-            result.resize(params.n_draft);
-        }
-    }
-
-    return result;
-}
-
-/**
- * Perform speculative generation using a 3-tier n-gram cache.
- *
- * @param state     Current state of this implementation
- * @param tokens    Token history to search in
- * @param sampled   Last sampled token
- * @return Vector of draft tokens, empty if draft is found
- */
-static llama_tokens common_speculative_gen_ngram_cache(
-        common_speculative_state_ngram_cache & state,
-        const llama_tokens & tokens, llama_token sampled) {
-    if (state.cache_size < tokens.size() + 1) {
-        llama_tokens tokens_new;
-        tokens_new.reserve(tokens.size() + 1 - state.cache_size);
-        for (size_t j = state.cache_size; j < tokens.size(); ++j) {
-            tokens_new.push_back(tokens[j]);
-        }
-        tokens_new.push_back(sampled); // add the last token
-
-        // Update context ngram cache with new tokens:
-        common_ngram_cache_update(state.ngram_cache_context, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
-                tokens_new, tokens_new.size(), false);
-        state.cache_size = tokens.size() + 1;
-    }
-
-    llama_tokens inp;
-    inp.reserve(tokens.size() + 1);
-    for (size_t j = 0; j < tokens.size(); ++j) {
-        inp.push_back(tokens[j]);
-    }
-    inp.push_back(sampled);
-
-    llama_tokens draft;
-    draft.push_back(sampled);
-
-    common_ngram_cache_draft(inp, draft, state.n_draft, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX,
-            state.ngram_cache_context,
-            state.ngram_cache_dynamic,
-            state.ngram_cache_static);
-
-    if (draft.size() > 0) {
-        // delete first token in draft (which is the sampled token)
-        draft.erase(draft.begin());
-    }
-
-    return draft;
-}
-llama_tokens common_speculative_gen_draft(
-        struct common_speculative * spec,
-        struct common_speculative_params params,
-        const llama_tokens & prompt_tgt, // specified in target model vocab
-        llama_token id_last) {
-    llama_tokens result = {};
 
     spec->curr_impl = nullptr; // reset current implementation
 
-    // TODO: avoid dynamic casts
     for (auto & impl : spec->impls) {
-        impl->drafts_call_count++;
-        const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
+        {
+            const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
 
-        switch (impl->type) {
-            case COMMON_SPECULATIVE_TYPE_NONE:
-            {
-            } break;
-            case COMMON_SPECULATIVE_TYPE_DRAFT:
-            {
-                // Create a draft using a draft model.
-                auto * draft_impl = dynamic_cast<struct common_speculative_state_draft *>(impl.get());
-                if (draft_impl) {
-                    result = common_speculative_use_draft_model(draft_impl, params, prompt_tgt, id_last);
-                } else {
-                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
-                }
-            } break;
-            case COMMON_SPECULATIVE_TYPE_EAGLE3:
-            {
-                // Work in progress: https://github.com/ggml-org/llama.cpp/pull/18039
-            } break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
-            {
-                // Use common_ngram_map_draft to generate a draft from the current context.
-                auto * state = dynamic_cast<struct common_speculative_state_ngram_simple *>(impl.get());
-                if (state) {
-                    result = common_ngram_simple_draft(state->state, prompt_tgt, id_last);
-                } else {
-                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
-                }
-            } break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
-            {
-                // Use common_ngram_map_draft to generate a draft from the current context.
-                auto * state = dynamic_cast<common_speculative_state_ngram_map_k *>(impl.get());
-                if (state) {
-                    common_ngram_map_draft(state->map, prompt_tgt, id_last, result);
-                } else {
-                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
-                }
-            } break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
-            {
-                // Use common_ngram_map_draft to generate a draft from the current context.
-                auto * state = dynamic_cast<common_speculative_state_ngram_map_k *>(impl.get());
-                if (state) {
-                    common_ngram_map_draft(state->map, prompt_tgt, id_last, result);
-                } else {
-                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
-                }
-            } break;
-            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
-            {
-                auto * state = dynamic_cast<common_speculative_state_ngram_cache *>(impl.get());
-                if (state) {
-                    result = common_speculative_gen_ngram_cache(*state, prompt_tgt, id_last);
-                } else {
-                    GGML_ABORT("unexpected implementation in type %d", impl.get()->type);
-                }
-            } break;
-            case COMMON_SPECULATIVE_TYPE_COUNT:
-            {
-                GGML_ABORT("invalid speculative type COUNT");
-            }
+            impl->draft(params, prompt_tgt, id_last, result);
+
+            const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
+
+            impl->drafts_call_count++;
+            impl->gen_duration_us += t_now_us - t_start_us; // accumulate duration for this implementation
         }
-
-        const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
-        impl->gen_duration_us += t_now_us - t_start_us; // accumulate duration for this implementation
 
         if (!result.empty()) {
             LOG_DBG("%s: called impl %s, hist size = %zu, call_count = %zu, gen = %zu\n", __func__,
                     common_speculative_type_to_str(impl.get()->type).c_str(),
                     prompt_tgt.size(),
                     impl.get()->drafts_call_count, result.size());
+
             spec->curr_impl = impl.get(); // set current implementation for stats
             impl->drafts_generated_count++;
             impl->drafts_generated_tokens += result.size();
@@ -857,7 +840,7 @@ llama_tokens common_speculative_gen_draft(
     return result;
 }
 
-void common_speculative_accept(struct common_speculative * spec, uint16_t n_accepted) {
+void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
     if (n_accepted == 0) {
         return;
     }
@@ -874,7 +857,7 @@ void common_speculative_accept(struct common_speculative * spec, uint16_t n_acce
     impl->accept(n_accepted);
 }
 
-void common_speculative_print_stats(const struct common_speculative * spec) {
+void common_speculative_print_stats(const common_speculative * spec) {
     if (spec == nullptr) {
         return;
     }

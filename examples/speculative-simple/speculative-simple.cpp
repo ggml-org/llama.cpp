@@ -141,7 +141,7 @@ int main(int argc, char ** argv) {
         // offloaded to a remote device. it doesn't even have to be based on an LLM. instead, it can provide tokens
         // from a cache or lookup tables.
         //
-        llama_tokens draft = common_speculative_gen_draft(spec, params_spec, prompt_tgt, id_last);
+        llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
