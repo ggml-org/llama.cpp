@@ -11,6 +11,7 @@
 //
 
 #include "llama.h"
+#include "common.h"
 
 #include <vector>
 
@@ -103,3 +104,40 @@ void common_ngram_map_draft(
 
 // Update the statistics of a value after a draft was processed.
 void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted);
+
+//
+// n-gram mod
+//
+
+#define COMMON_NGRAM_MOD_MAX_CHOICES 4
+
+struct common_ngram_mod_entry {
+    uint32_t head = 0;
+    uint32_t n_choices = 0;
+
+    llama_token choices[COMMON_NGRAM_MOD_MAX_CHOICES];
+};
+
+struct common_ngram_mod {
+    common_ngram_mod(uint16_t m);
+
+    void        add(const llama_token * tokens);
+    llama_token get(const llama_token * tokens, int32_t offs) const;
+
+    uint64_t n_calls = 0;
+
+    uint16_t m;
+
+    std::vector<common_ngram_mod_entry> entries;
+
+    static constexpr int32_t N_MODS = 17;
+    static constexpr int32_t mods[N_MODS] = { 2, 1, 1, 1, 8, 1, 1, 1, 16, 1, 1, 1, 32, 1, 1, 1, 64, };
+
+    static uint64_t idx(const llama_token * tokens);
+};
+
+void common_ngram_mod_draft(
+    common_ngram_mod & mod,
+    const llama_tokens & inp,
+    llama_token sampled,
+    llama_tokens & draft);

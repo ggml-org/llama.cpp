@@ -7,6 +7,21 @@
 #include <cstdio>
 #include <sstream>
 
+// Print the values of a sublist of `llama_tokens & inp` to a string in the form [v0, v1, v2, ...].
+static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length) {
+    std::ostringstream oss;
+    oss << '[';
+    for (size_t i = 0; i < length; ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << inp[start + i];
+    }
+    oss << ']';
+    return oss.str();
+}
+
+
 // n-gram simple
 //
 
@@ -99,8 +114,6 @@ llama_tokens common_ngram_simple_draft(
 
 // maximum number of counted values of a ngram map value.
 #define COMMON_NGRAM_MAX_VALUE_COUNT 16380
-
-static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length);
 
 void common_ngram_map_draft(common_ngram_map & map,
         const llama_tokens & inp, llama_token sampled,
@@ -348,20 +361,97 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
     curr_value.n_accepted = n_accepted;
 }
 
-// Helper functions.
+//
+// n-gram mod
 //
 
-// Print the values of a sublist of `llama_tokens & inp` to a string in the form [v0, v1, v2, ...].
-std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length) {
-    std::ostringstream oss;
-    oss << '[';
-    for (size_t i = 0; i < length; ++i) {
-        if (i > 0) {
-            oss << ", ";
-        }
-        oss << inp[start + i];
+common_ngram_mod::common_ngram_mod(uint16_t m) : m(m) {
+    int64_t n = 1;
+    for (int32_t i = 0; i < N_MODS; ++i) {
+        n *= mods[i];
     }
-    oss << ']';
-    return oss.str();
+
+    entries.resize(n);
+
+    const size_t size_bytes = entries.size() * sizeof(common_ngram_mod_entry);
+
+    LOG_INF("%s: size = %.3f MB\n", __func__, size_bytes / (1024.0 * 1024.0));
 }
 
+void common_ngram_mod::add(const llama_token * tokens) {
+    const uint64_t i = idx(tokens);
+
+    common_ngram_mod_entry & entry = entries[i];
+
+    if (entry.n_choices < COMMON_NGRAM_MOD_MAX_CHOICES) {
+        entry.n_choices++;
+    }
+
+    entry.choices[entry.head] = tokens[N_MODS];
+    entry.head = (entry.head + 1) % COMMON_NGRAM_MOD_MAX_CHOICES;
+}
+
+llama_token common_ngram_mod::get(const llama_token * tokens, int32_t offs) const {
+    const uint64_t i = idx(tokens);
+
+    const common_ngram_mod_entry & entry = entries[i];
+
+    if (entry.n_choices == 0) {
+        return LLAMA_TOKEN_NULL;
+    }
+
+    const int32_t k = (offs + entry.head) % entry.n_choices;
+
+    return entry.choices[k];
+}
+
+uint64_t common_ngram_mod::idx(const llama_token * tokens) {
+    uint64_t rh = 0;
+    uint64_t res = 0;
+    for (uint64_t i = 0; i < N_MODS; ++i) {
+        rh = rh * 31 + tokens[i];
+        res = res * mods[i] + (rh % mods[i]);
+    }
+    return res;
+}
+
+void common_ngram_mod_draft(
+        common_ngram_mod & mod,
+        const llama_tokens & inp,
+        llama_token sampled,
+        llama_tokens & draft) {
+    const size_t N_MODS = common_ngram_mod::N_MODS;
+
+    const size_t cur_len = inp.size();
+    if (cur_len < N_MODS) {
+        return;
+    }
+
+    if (mod.n_calls++ % 64 == 0) {
+        const size_t n_start = (256*(mod.n_calls/64)) % GGML_PAD(cur_len, 256);
+        for (size_t i = 0; i < 256 && n_start + i < cur_len - N_MODS; ++i) {
+            mod.add(inp.data() + n_start + i);
+        }
+    }
+
+    draft.resize(N_MODS + mod.m);
+    for (size_t i = 0; i < N_MODS - 1; ++i) {
+        draft[i] = inp[cur_len - N_MODS + 1 + i];
+    }
+    draft[N_MODS - 1] = sampled;
+
+    for (size_t i = 0; i < mod.m; ++i) {
+        const llama_token token = mod.get(draft.data() + i, cur_len + i);
+        if (token == LLAMA_TOKEN_NULL) {
+            draft.clear();
+            return;
+        }
+        draft[N_MODS + i] = token;
+    }
+
+    // only return the m tokens that were drafted
+    for (size_t i = 0; i < mod.m; ++i) {
+        draft[i] = draft[N_MODS + i];
+    }
+    draft.resize(mod.m);
+}

@@ -2039,8 +2039,14 @@ private:
                     /*.params_spec.n_draft =*/ n_draft_max,
                     /*.params_spec.p_min   =*/ slot.task->params.speculative.p_min,
                 };
+
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+                if (draft.size() > 0) {
+                    std::string tmp = common_detokenize(slot.ctx, draft);
+                    //LOG_WRN("XXXXXX: draft: '%s'\n", tmp.c_str());
+                }
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
