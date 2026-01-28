@@ -128,7 +128,7 @@ struct common_speculative_state {
     virtual void begin(const llama_tokens & prompt) = 0;
 
     virtual void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) = 0;
@@ -214,7 +214,7 @@ struct common_speculative_state_draft : public common_speculative_state {
     }
 
     void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
@@ -231,7 +231,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         int reuse_i = 0;
         int reuse_n = 0;
 
-        const int n_ctx = llama_n_ctx(ctx_dft) - params.n_draft;
+        const int n_ctx = llama_n_ctx(ctx_dft) - params.n_max;
 
         llama_tokens prompt_cnv;
         if (!spec->vocab_cmpt) {
@@ -282,7 +282,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt_dft.size());
 
         result.clear();
-        result.reserve(params.n_draft);
+        result.reserve(params.n_max);
 
         if (reuse_n == 0) {
             llama_memory_clear(mem_dft, false);
@@ -294,7 +294,7 @@ struct common_speculative_state_draft : public common_speculative_state {
                 for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
                     result.push_back(prompt_dft[i]);
 
-                    if (params.n_draft <= (int) result.size()) {
+                    if (params.n_max <= (int) result.size()) {
                         break;
                     }
                 }
@@ -348,7 +348,7 @@ struct common_speculative_state_draft : public common_speculative_state {
         common_sampler_reset(smpl);
 
         // sample n_draft tokens from the draft model
-        for (int i = 0; i < params.n_draft; ++i) {
+        for (int i = 0; i < params.n_max; ++i) {
             common_batch_clear(batch);
 
             common_sampler_sample(smpl, ctx_dft, 0, true);
@@ -367,7 +367,7 @@ struct common_speculative_state_draft : public common_speculative_state {
 
             result.push_back(id);
 
-            if (params.n_draft <= (int) result.size()) {
+            if (params.n_max <= (int) result.size()) {
                 break;
             }
 
@@ -389,8 +389,8 @@ struct common_speculative_state_draft : public common_speculative_state {
             detokenized = replace_to_tgt(detokenized);
             LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
             result = common_tokenize(ctx_tgt, detokenized, false, true);
-            if (result.size() > (size_t)params.n_draft) {
-                result.resize(params.n_draft);
+            if (result.size() > (size_t)params.n_max) {
+                result.resize(params.n_max);
             }
         }
     }
@@ -437,7 +437,7 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
     }
 
     void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & draft_tokens) override {
@@ -468,7 +468,7 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
     }
 
     void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
@@ -496,7 +496,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
     }
 
     void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
@@ -556,7 +556,7 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
     }
 
     void draft(
-            const common_speculative_params & params,
+            const common_params_speculative & params,
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
@@ -667,12 +667,10 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 //
 common_speculative * common_speculative_init(
         const common_params_speculative & params,
-              llama_context             * ctx_tgt,
-        const llama_context_params      & cparams_dft,
-              llama_model               * model_dft) {
+              llama_context             * ctx_tgt) {
     llama_context * ctx_dft = nullptr;
-    if (model_dft) {
-        ctx_dft = llama_init_from_model(model_dft, cparams_dft);
+    if (params.model_dft) {
+        ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);
         if (ctx_dft == nullptr) {
             LOG_ERR("%s", "failed to create draft context\n");
             return nullptr;
@@ -682,7 +680,7 @@ common_speculative * common_speculative_init(
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
-        bool has_draft = !params.model.path.empty();
+        bool has_draft = !params.mparams_dft.path.empty();
         bool has_draft_eagle3 = false; // TODO PR-18039: if params.speculative.eagle3
 
         bool has_ngram_cache   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
@@ -714,7 +712,7 @@ common_speculative * common_speculative_init(
         }
     }
 
-    std::vector<std::unique_ptr<common_speculative_state>> implementations = {};
+    std::vector<std::unique_ptr<common_speculative_state>> impls = {};
 
     for (const common_speculative_config & config : configs) {
         LOG_DBG("%s: adding implementation %s\n", __func__, common_speculative_type_to_str(config.type).c_str());
@@ -722,7 +720,7 @@ common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NONE:
                 break;
             case COMMON_SPECULATIVE_TYPE_DRAFT: {
-                implementations.push_back(std::make_unique<common_speculative_state_draft>(config.type,
+                impls.push_back(std::make_unique<common_speculative_state_draft>(config.type,
                     /* .ctx_tgt      = */ ctx_tgt,
                     /* .ctx_dft      = */ ctx_dft,
                     /* .replacements = */ params.replacements
@@ -730,7 +728,7 @@ common_speculative * common_speculative_init(
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_EAGLE3: {
-                implementations.push_back(std::make_unique<common_speculative_state_eagle3>(config.type));
+                impls.push_back(std::make_unique<common_speculative_state_eagle3>(config.type));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
@@ -749,12 +747,12 @@ common_speculative * common_speculative_init(
                     /* .type            = */ config.type,
                     /* .state           = */ common_ngram_simple_state(config_simple)
                 );
-                implementations.push_back(std::move(state));
+                impls.push_back(std::move(state));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: {
-                implementations.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
+                impls.push_back(std::make_unique<common_speculative_state_ngram_map_k>(
                     (config.type),
                     get_common_ngram_map(config)
                 ));
@@ -763,8 +761,7 @@ common_speculative * common_speculative_init(
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE: {
                 auto state = create_state_ngram_cache(
                         params.lookup_cache_static, params.lookup_cache_dynamic, config);
-                implementations.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
-
+                impls.push_back(std::make_unique<common_speculative_state_ngram_cache>(state));
                 break;
             }
             default:
@@ -772,13 +769,13 @@ common_speculative * common_speculative_init(
         }
     }
 
-    if (implementations.empty()) {
+    if (impls.empty()) {
         LOG_WRN("%s", "no implementations specified for speculative decoding\n");
         return nullptr;
     }
 
     auto * result = new common_speculative {
-        /* .impls = */ std::move(implementations)
+        /* .impls = */ std::move(impls)
     };
 
     return result;
@@ -804,7 +801,7 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
 
 llama_tokens common_speculative_draft(
         common_speculative * spec,
-        const common_speculative_params & params,
+        const common_params_speculative & params,
         const llama_tokens & prompt_tgt, // specified in target model vocab
         llama_token id_last) {
     llama_tokens result;

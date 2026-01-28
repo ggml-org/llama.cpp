@@ -292,6 +292,7 @@ struct server_slot {
             SLT_DBG(*this, "the max possible draft is too small: %d < %d - skipping speculative decoding\n", n_draft_max, task->params.speculative.n_min);
             n_draft_max = 0;
         }
+
         return n_draft_max;
     }
 
@@ -638,15 +639,25 @@ private:
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
         if (params_base.speculative.has_dft()) {
-            SRV_INF("loading draft model '%s'\n", params_base.speculative.model.path.c_str());
+            SRV_INF("loading draft model '%s'\n", params_base.speculative.mparams_dft.path.c_str());
 
             const auto & params_spec = params_base.speculative;
 
             auto params_dft = params_base;
 
+            params_dft.n_parallel   = 1;
+            params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
+            params_dft.n_batch      = llama_n_ctx_seq(ctx);
             params_dft.devices      = params_spec.devices;
-            params_dft.model        = params_spec.model;
+            params_dft.model        = params_spec.mparams_dft;
             params_dft.n_gpu_layers = params_spec.n_gpu_layers;
+            params_dft.cache_type_k = params_spec.cache_type_k;
+            params_dft.cache_type_v = params_spec.cache_type_v;
+
+            if (params_spec.cpuparams.n_threads > 0) {
+                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
+                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
+            }
 
             params_dft.tensor_buft_overrides = params_spec.tensor_buft_overrides;
 
@@ -654,9 +665,12 @@ private:
 
             model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
             if (model_dft == nullptr) {
-                SRV_ERR("failed to load draft model, '%s'\n", params_spec.model.path.c_str());
+                SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
                 return false;
             }
+
+            params_base.speculative.model_dft = model_dft.get();
+            params_base.speculative.cparams_dft = common_context_params_to_llama(params_dft);
         }
 
         std::string & mmproj_path = params_base.mmproj.path;
@@ -734,22 +748,7 @@ private:
 
             // try speculative decoding
             {
-                const auto & params_spec = params_base.speculative;
-
-                auto params_dft = params_base;
-
-                params_dft.n_parallel   = 1;
-                params_dft.n_ctx        = params_spec.n_ctx == 0 ? llama_n_ctx_seq(ctx) : params_spec.n_ctx;
-                params_dft.n_batch      = llama_n_ctx_seq(ctx);
-                params_dft.cache_type_k = params_spec.cache_type_k;
-                params_dft.cache_type_v = params_spec.cache_type_v;
-
-                params_dft.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
-                params_dft.cpuparams_batch.n_threads = params_spec.cpuparams_batch.n_threads;
-
-                auto cparams_dft = common_context_params_to_llama(params_dft);
-
-                slot.spec = common_speculative_init(params_base.speculative, slot.ctx, cparams_dft, model_dft.get());
+                slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {
                         SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
@@ -2029,19 +2028,23 @@ private:
             // generate draft tokens in speculative decoding mode
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
             //       perform the speculative drafting for all sequences at the same time in a single batch
-            int n_draft_max = slot.get_n_draft_max();
+            const int n_draft_max = slot.get_n_draft_max();
             if (n_draft_max > 0) {
                 if (mctx) {
                     // we should never reach this, as speculative is automatically disabled if mmproj is loaded
                     GGML_ABORT("not supported by multimodal");
                 }
 
-                struct common_speculative_params params_spec = {
-                    /*.params_spec.n_draft =*/ n_draft_max,
-                    /*.params_spec.p_min   =*/ slot.task->params.speculative.p_min,
-                };
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+
+                const auto & params_spec = slot.task->params.speculative;
+
                 llama_tokens draft = common_speculative_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+
+                if (draft.size() > (size_t) n_draft_max) {
+                    SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
+                    draft.resize(n_draft_max);
+                }
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
