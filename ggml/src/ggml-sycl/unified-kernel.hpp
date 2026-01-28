@@ -46,6 +46,16 @@
 // =============================================================================
 // Check for ESIMD extension availability for low-level dpas access.
 // ESIMD provides explicit SIMD control for XMX instructions.
+//
+// ESIMD dpas Layout Requirements (FP16):
+// - A operand: Row-major [M x K] where M=Repeat=8, K=16
+//   Layout: a[m * K + k] for m=0..7, k=0..15
+// - B operand: VNNI-packed [K x N] where K=16, N=ExecSize=16
+//   Layout: b[(k/2) * N * 2 + n * 2 + (k%2)] for k=0..15, n=0..15
+//   This groups consecutive K values together for efficient systolic array processing.
+// - Accumulator: Row-major [M x N] where M=8, N=16
+//   Layout: acc[m * N + n] for m=0..7, n=0..15
+//
 // NOTE: These includes MUST be before any namespace declaration to avoid
 // namespace collision issues with SYCL internal headers.
 
