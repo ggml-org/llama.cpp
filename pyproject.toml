@@ -1,31 +1,37 @@
-[tool.poetry]
+[project]
 name = "llama-cpp-scripts"
 version = "0.0.0"
 description = "Scripts that ship with llama.cpp"
-authors = ["GGML <ggml@ggml.ai>"]
+authors = [{ name = "GGML", email = "ggml@ggml.ai" }]
+requires-python = ">=3.9"
 readme = "README.md"
-homepage = "https://ggml.ai"
-repository = "https://github.com/ggml-org/llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
-packages = [{ include = "*.py", from = "." }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+dependencies = [
+    "numpy>=1.25.0,<2",
+    "sentencepiece>=0.1.98,<=0.2.0",
+    "transformers>=4.35.2,<5.0.0",
+    "protobuf>=4.21.0,<5.0.0",
+    "gguf",
+    "torch>=2.2.0,<3",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.9"
-numpy = "^1.25.0"
-sentencepiece = ">=0.1.98,<=0.2.0"
-transformers = ">=4.35.2,<5.0.0"
-protobuf = ">=4.21.0,<5.0.0"
-gguf = { path = "./gguf-py" }
-torch = { version = "^2.2.0", source = "pytorch" }
+[project.urls]
+Homepage = "https://ggml.ai"
+Repository = "https://github.com/ggml-org/llama.cpp"
 
-[tool.poetry.dev-dependencies]
-pytest = "^5.2"
+[project.scripts]
+llama-convert-hf-to-gguf = "convert_hf_to_gguf:main"
+llama-convert-lora-to-gguf = "convert_lora_to_gguf:main"
+llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
+llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
 
+[dependency-groups]
+dev = ["pytest~=5.2"]
 
 # Force wheel + cpu
 # For discussion and context see https://github.com/python-poetry/poetry#6409
@@ -38,8 +44,27 @@ priority = "explicit"
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[tool.poetry.scripts]
-llama-convert-hf-to-gguf = "convert_hf_to_gguf:main"
-llama-convert-lora-to-gguf = "convert_lora_to_gguf:main"
-llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
-llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"
+[tool.uv]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+gguf = { path = "./gguf-py" }
+torch = { index = "pytorch" }
+
+[tool.hatch.build.targets.sdist]
+include = ["./*.py"]
+
+[tool.hatch.build.targets.wheel]
+include = ["./*.py"]
+
+[tool.hatch.build.targets.wheel.sources]
+"./*.py" = "*.py"
+
+# as set by migrate-to-uv
+# [build-system]
+# requires = ["hatchling"]
+# build-backend = "hatchling.build"
