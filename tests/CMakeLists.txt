@@ -806,6 +806,19 @@ if(GGML_SYCL)
     add_test(NAME test-sycl-xmx-unified-correctness COMMAND $<TARGET_FILE:test-sycl-xmx-unified-correctness>)
 endif()
 
+# test-sycl-esimd-cooperative: cooperative ESIMD kernel correctness
+if(GGML_SYCL)
+    add_executable(test-sycl-esimd-cooperative test-sycl-esimd-cooperative.cpp)
+    target_link_libraries(test-sycl-esimd-cooperative PRIVATE ggml ggml-cpu)
+    target_include_directories(test-sycl-esimd-cooperative PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-esimd-cooperative PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-esimd-cooperative PRIVATE "-fsycl")
+    install(TARGETS test-sycl-esimd-cooperative RUNTIME)
+    add_test(NAME test-sycl-esimd-cooperative COMMAND $<TARGET_FILE:test-sycl-esimd-cooperative>)
+endif()
+
 # test-layout-cache: layout selection + unified cache AoS drop
 if(GGML_SYCL)
     add_executable(test-layout-cache test-layout-cache.cpp)

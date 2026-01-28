@@ -424,6 +424,10 @@ class esimd_fp16_double_buffered_kernel;
 template <int TILE_M, int TILE_N>
 class esimd_int8_kernel;
 
+// Cooperative ESIMD kernel: multi-work-item with named barriers
+template <int WG_SIZE>
+class esimd_fp16_cooperative_kernel;
+
 // =============================================================================
 // ESIMD dpas Constants - FP16
 // =============================================================================
@@ -485,6 +489,144 @@ constexpr uint32_t ESIMD_SLM_BUF0_ACTS = ESIMD_SLM_WEIGHTS_SIZE * sizeof(sycl::h
 constexpr uint32_t ESIMD_SLM_BUF1_WEIGHTS = ESIMD_SLM_BUFFER_SIZE * sizeof(sycl::half);                        // 768 bytes
 constexpr uint32_t ESIMD_SLM_BUF1_ACTS = (ESIMD_SLM_BUFFER_SIZE + ESIMD_SLM_WEIGHTS_SIZE) * sizeof(sycl::half); // 1280 bytes
 constexpr uint32_t ESIMD_SLM_TOTAL_BYTES = ESIMD_SLM_TOTAL_SIZE * sizeof(sycl::half);                          // 1536 bytes
+
+// =============================================================================
+// Cooperative ESIMD Constants (Multi-work-item with named barriers)
+// =============================================================================
+// Work-group configuration for cooperative loading:
+// - Default 32 work-items per work-group (2 sub-groups of 16)
+// - Configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
+// - Each sub-group owns one 8x16 output tile
+// - All work-items cooperate on loading larger tiles to SLM
+//
+// SLM layout for cooperative kernel:
+// - Weights: [WG_TILES_N * 16] x [K_TILE] half values (raw, row-major)
+// - Activations: [WG_TILES_M * 8] x [K_TILE] half values (raw, row-major)
+// - Each sub-group reads its portion and packs to VNNI in registers
+//
+// Work-group size constraints:
+// - Must be multiple of 16 (sub-group size for XMX)
+// - Supported values: 32 (default), 64
+// - 256 is not currently supported (requires more complex SLM management)
+
+constexpr int COOP_SUBGROUP_SIZE = 16;       // Sub-group size for XMX (fixed by hardware)
+
+// Default constants for WG_SIZE=32 (compile-time constants for kernel instantiation)
+constexpr int COOP_WG_SIZE_DEFAULT = 32;     // Default work-group size
+constexpr int COOP_NUM_SUBGROUPS_DEFAULT = COOP_WG_SIZE_DEFAULT / COOP_SUBGROUP_SIZE;  // 2 sub-groups
+
+// Output tile dimensions per work-group (for WG_SIZE=32)
+constexpr int COOP_WG_TILES_M = 2;           // 2 M-tiles per work-group
+constexpr int COOP_WG_TILES_N = 1;           // 1 N-tile per work-group
+constexpr int COOP_WG_M = COOP_WG_TILES_M * ESIMD_REPEAT_COUNT;   // 16 output rows
+constexpr int COOP_WG_N = COOP_WG_TILES_N * ESIMD_EXEC_SIZE;      // 16 output columns
+
+// SLM sizes for cooperative kernel (single buffer for simplicity)
+// Note: SLM usage stays under 64KB (actual: 1024 bytes) for all supported WG sizes
+constexpr int COOP_SLM_WEIGHTS_SIZE = COOP_WG_N * ESIMD_K_PER_DPAS;  // 16 * 16 = 256 half
+constexpr int COOP_SLM_ACTS_SIZE = COOP_WG_M * ESIMD_K_PER_DPAS;     // 16 * 16 = 256 half
+constexpr int COOP_SLM_TOTAL_HALF = COOP_SLM_WEIGHTS_SIZE + COOP_SLM_ACTS_SIZE;  // 512 half
+constexpr uint32_t COOP_SLM_TOTAL_BYTES = COOP_SLM_TOTAL_HALF * sizeof(sycl::half);  // 1024 bytes
+
+// SLM byte offsets for cooperative kernel
+constexpr uint32_t COOP_SLM_WEIGHTS_OFFSET = 0;
+constexpr uint32_t COOP_SLM_ACTS_OFFSET = COOP_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 512 bytes
+
+// Legacy constant for backwards compatibility
+constexpr int COOP_WG_SIZE = COOP_WG_SIZE_DEFAULT;
+
+/**
+ * Check if cooperative ESIMD dpas path is enabled via environment.
+ *
+ * Cooperative path uses multiple work-items with named barriers for
+ * work-group level loading. Enabled via GGML_SYCL_XMX_COOPERATIVE=1.
+ *
+ * @return true if cooperative ESIMD path is enabled
+ */
+inline bool use_cooperative_esimd() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_XMX_COOPERATIVE");
+        enabled          = (env && std::string(env) == "1") ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+/**
+ * Get the configured work-group size for cooperative ESIMD kernel.
+ *
+ * Work-group size can be configured via GGML_SYCL_ESIMD_WG_SIZE environment variable.
+ * Currently only WG_SIZE=32 is fully implemented and tested.
+ *
+ * Valid values: 32 (default)
+ * Reserved for future: 64 (requires larger SLM tiles, not yet implemented)
+ *
+ * Work-group size constraints:
+ * - Must be multiple of 16 (sub-group size for XMX)
+ * - SLM layout currently supports 2 sub-groups (16 M-rows, 16 N-cols output per WG)
+ * - WG_SIZE=64 would require 4 sub-groups with 32 M-rows per WG (TODO: implement)
+ *
+ * @return Configured work-group size (currently always 32)
+ */
+inline int get_cooperative_wg_size() {
+    static int wg_size = -1;
+    if (wg_size < 0) {
+        const char * env = std::getenv("GGML_SYCL_ESIMD_WG_SIZE");
+        if (env) {
+            int val = std::atoi(env);
+            // Currently only 32 is fully implemented
+            // WG_SIZE=64 requires 4 sub-groups with larger SLM tiles (TODO)
+            if (val == 32) {
+                wg_size = val;
+            } else if (val == 64) {
+                // WG_SIZE=64 is documented but not yet fully implemented
+                // Fall back to 32 with a warning
+                fprintf(stderr, "[unified-kernel] GGML_SYCL_ESIMD_WG_SIZE=64 not yet "
+                                "implemented, using 32 (2 sub-groups)\n");
+                wg_size = 32;
+            } else {
+                // Invalid value, fall back to default
+                if (val != 0) {
+                    fprintf(stderr, "[unified-kernel] GGML_SYCL_ESIMD_WG_SIZE=%d invalid "
+                                    "(must be 32), using default\n", val);
+                }
+                wg_size = 32;
+            }
+        } else {
+            wg_size = 32;  // Default
+        }
+    }
+    return wg_size;
+}
+
+/**
+ * Check if cooperative ESIMD dpas path can be used for given dimensions.
+ *
+ * Cooperative ESIMD dpas requires:
+ * - ESIMD enabled via GGML_SYCL_XMX_ESIMD=1
+ * - Cooperative enabled via GGML_SYCL_XMX_COOPERATIVE=1
+ * - M >= 8 (at least one dpas M-tile)
+ * - N >= 16 (at least one dpas N-tile)
+ * - K aligned to Q4_0 block size (32)
+ *
+ * @param M  Output rows
+ * @param N  Output columns
+ * @param K  Reduction dimension
+ * @return true if cooperative ESIMD dpas can be used
+ */
+inline bool can_use_cooperative_esimd(int64_t M, int64_t N, int64_t K) {
+    // Both ESIMD and cooperative must be enabled
+    if (!use_esimd_dpas() || !use_cooperative_esimd()) {
+        return false;
+    }
+    // K must be multiple of Q4_0 block size for proper dequantization
+    if (K % UNIFIED_QK4_0 != 0) {
+        return false;
+    }
+    // Need enough work for cooperative loading to be beneficial
+    // At least 8 M-rows for one dpas tile per sub-group
+    return M >= ESIMD_REPEAT_COUNT && N >= ESIMD_EXEC_SIZE;
+}
 
 /**
  * Load weights for a K-tile to SLM with VNNI packing for ESIMD dpas.
@@ -1149,6 +1291,251 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     }
 }
 
+// =============================================================================
+// Cooperative ESIMD FP16 Kernel Implementation
+// =============================================================================
+// Uses multiple work-items with named barriers for work-group level loading.
+// Each sub-group (16 work-items) owns one 8x16 output tile.
+// All work-items cooperate on loading data to SLM using strided pattern.
+//
+// Key differences from single work-item kernel:
+// 1. Work-group size: 32 (2 sub-groups) vs 1
+// 2. Cooperative loading: All work-items load together, then barrier
+// 3. Each sub-group computes its own output tile after loading
+// 4. Uses esimd::named_barrier for work-group synchronization
+
+/**
+ * Cooperative ESIMD FP16 matmul kernel using xmx::dpas with work-group level loading.
+ *
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * Work distribution:
+ * - 2D grid of work-groups, each handles COOP_WG_M x COOP_WG_N output region
+ * - Each work-group has 32 work-items (2 sub-groups of 16)
+ * - Sub-group 0: handles M-rows [0..7], sub-group 1: handles M-rows [8..15]
+ * - All work-items cooperate on loading weights [16 x K_TILE] and activations [16 x K_TILE]
+ *
+ * Named barrier usage:
+ * - barrier 0: Synchronize after cooperative loading
+ * - esimd::fence ensures memory visibility before barrier
+ *
+ * @param item        ND-item for work distribution
+ * @param args        Kernel arguments
+ * @param local_id    Linear work-item ID within work-group [0..31]
+ * @param sg_id       Sub-group ID within work-group [0..1]
+ * @param lane        Lane ID within sub-group [0..15]
+ */
+template <int WG_SIZE>
+SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
+    sycl::nd_item<2>            item,
+    const UnifiedKernelArgs     args,
+    int                         local_id,
+    int                         sg_id,
+    int                         lane) {
+
+    // Work-group coordinates (each work-group handles COOP_WG_M x COOP_WG_N output)
+    const int wg_row = item.get_group(0);  // M dimension
+    const int wg_col = item.get_group(1);  // N dimension
+
+    // Global output coordinates for this work-group
+    const int64_t m_wg_start = wg_row * COOP_WG_M;  // Starting output row for work-group
+    const int64_t n_wg_start = wg_col * COOP_WG_N;  // Starting output column for work-group
+
+    // Boundary check: skip if entire work-group is out of bounds
+    if (m_wg_start >= args.M || n_wg_start >= args.N) {
+        return;
+    }
+
+    // This sub-group's output tile coordinates
+    // Sub-group 0: M-rows [0..7], Sub-group 1: M-rows [8..15]
+    const int64_t m_sg_start = m_wg_start + sg_id * ESIMD_REPEAT_COUNT;
+    const int64_t n_sg_start = n_wg_start;  // All sub-groups handle same N range
+
+    // Check if this sub-group has work (boundary check)
+    const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
+
+    // Number of Q4_0 blocks per weight row
+    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+
+    // Cast weight pointer
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+
+    // Initialize SLM for this work-group
+    // Layout: [weights: 16 x 16 half][activations: 16 x 16 half]
+    esimd::slm_init<COOP_SLM_TOTAL_BYTES>();
+
+    // Initialize accumulator for this sub-group's output tile: [8 x 16] float
+    esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
+
+    // Initialize named barrier 0 for work-group synchronization
+    // All WG_SIZE work-items participate
+    esimd::named_barrier_init<1>();  // 1 barrier with ID 0
+
+    // Number of K tiles
+    const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS - 1) / ESIMD_K_PER_DPAS;
+
+    // K-loop: iterate over K dimension in tiles of 16
+    for (int64_t kt = 0; kt < k_tiles; kt++) {
+        const int64_t k_start = kt * ESIMD_K_PER_DPAS;
+        const int64_t k_remaining = args.K - k_start;
+        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+
+        // ================================================================
+        // Phase 1: Cooperative Loading (all work-items participate)
+        // ================================================================
+        // Load weights [COOP_WG_N x k_len] = [16 x 16] to SLM (raw, row-major)
+        // Load activations [COOP_WG_M x k_len] = [16 x 16] to SLM (raw, row-major)
+        //
+        // Total elements to load: 16*16 + 16*16 = 512 half values
+        // With 32 work-items: 512/32 = 16 elements per work-item
+
+        // Cooperative weight loading: strided pattern
+        // SLM layout: weights[n * k_len + k] for n in [0..15], k in [0..15]
+        {
+            const int total_weight_elems = COOP_WG_N * k_len;  // 16 * k_len
+            for (int idx = local_id; idx < total_weight_elems; idx += WG_SIZE) {
+                const int n_off = idx / k_len;
+                const int k_off = idx % k_len;
+                const int64_t n_global = n_wg_start + n_off;
+                const int64_t k_global = k_start + k_off;
+
+                sycl::half w_val = sycl::half(0.0f);
+                if (n_global < args.N && k_global < args.K) {
+                    // Dequantize Q4_0 weight
+                    const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                    const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+                    const block_q4_0_unified * blk = &weights[block_idx];
+                    const sycl::half d = blk->d;
+                    int qs_val;
+                    if (idx_in_block < 16) {
+                        qs_val = blk->qs[idx_in_block] & 0x0F;
+                    } else {
+                        qs_val = blk->qs[idx_in_block - 16] >> 4;
+                    }
+                    w_val = static_cast<sycl::half>(qs_val - 8) * d;
+                }
+
+                // Store to SLM: raw row-major layout
+                const uint32_t slm_off = COOP_SLM_WEIGHTS_OFFSET +
+                                         (n_off * ESIMD_K_PER_DPAS + k_off) * sizeof(sycl::half);
+                esimd::slm_scalar_store<sycl::half>(slm_off, w_val);
+            }
+        }
+
+        // Cooperative activation loading: strided pattern
+        // SLM layout: acts[m * k_len + k] for m in [0..15], k in [0..15]
+        {
+            const int total_act_elems = COOP_WG_M * k_len;  // 16 * k_len
+            for (int idx = local_id; idx < total_act_elems; idx += WG_SIZE) {
+                const int m_off = idx / k_len;
+                const int k_off = idx % k_len;
+                const int64_t m_global = m_wg_start + m_off;
+                const int64_t k_global = k_start + k_off;
+
+                sycl::half a_val = sycl::half(0.0f);
+                if (m_global < args.M && k_global < args.K) {
+                    a_val = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
+                }
+
+                // Store to SLM: raw row-major layout
+                const uint32_t slm_off = COOP_SLM_ACTS_OFFSET +
+                                         (m_off * ESIMD_K_PER_DPAS + k_off) * sizeof(sycl::half);
+                esimd::slm_scalar_store<sycl::half>(slm_off, a_val);
+            }
+        }
+
+        // Fence and barrier to ensure all loading is complete
+        // named_barrier_signal(barrier_id, producer_consumer_mode, num_producers, num_consumers)
+        // Mode: 0 = both producer and consumer
+        esimd::fence<esimd::fence_mask::local_barrier>();
+        esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
+        esimd::named_barrier_wait(0);
+
+        // ================================================================
+        // Phase 2: Compute (each sub-group processes its tile)
+        // ================================================================
+        if (sg_has_work) {
+            // Load this sub-group's data from SLM and pack to registers
+
+            // Load activations for this sub-group's M-rows [sg_id*8 .. sg_id*8+7]
+            // A layout for dpas: a[m * K_per + k] for m in [0..7], k in [0..15]
+            esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec = sycl::half(0.0f);
+            {
+                const int m_base = sg_id * ESIMD_REPEAT_COUNT;  // 0 or 8
+                #pragma unroll
+                for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+                    const int64_t m_global = m_wg_start + m_base + m;
+                    if (m_global >= args.M) continue;
+
+                    #pragma unroll
+                    for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                        if (k >= k_len) break;
+                        // Read from SLM
+                        const uint32_t slm_off = COOP_SLM_ACTS_OFFSET +
+                                                 ((m_base + m) * ESIMD_K_PER_DPAS + k) * sizeof(sycl::half);
+                        a_vec[m * ESIMD_K_PER_DPAS + k] = esimd::slm_scalar_load<sycl::half>(slm_off);
+                    }
+                }
+            }
+
+            // Load weights and pack to VNNI format
+            // VNNI layout for FP16: b[(k/2) * N * 2 + n * 2 + (k%2)]
+            esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec = sycl::half(0.0f);
+            {
+                #pragma unroll
+                for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                    const int64_t n_global = n_wg_start + n;
+                    if (n_global >= args.N) continue;
+
+                    #pragma unroll
+                    for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                        if (k >= k_len) break;
+                        // Read from SLM
+                        const uint32_t slm_off = COOP_SLM_WEIGHTS_OFFSET +
+                                                 (n * ESIMD_K_PER_DPAS + k) * sizeof(sycl::half);
+                        sycl::half w_val = esimd::slm_scalar_load<sycl::half>(slm_off);
+
+                        // Pack to VNNI format
+                        const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
+                        b_vec[vnni_idx] = w_val;
+                    }
+                }
+            }
+
+            // Execute dpas: acc += A @ B
+            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                            float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+        }
+
+        // Barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
+        if (kt + 1 < k_tiles) {
+            esimd::fence<esimd::fence_mask::local_barrier>();
+            esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
+            esimd::named_barrier_wait(0);
+        }
+    }
+
+    // ================================================================
+    // Phase 3: Write output (each sub-group writes its tile)
+    // ================================================================
+    if (sg_has_work) {
+        #pragma unroll
+        for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+            const int64_t m_global = m_sg_start + m;
+            if (m_global >= args.M) continue;
+
+            #pragma unroll
+            for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                const int64_t n_global = n_sg_start + n;
+                if (n_global >= args.N) continue;
+
+                args.output[m_global * args.N + n_global] = acc[m * ESIMD_EXEC_SIZE + n];
+            }
+        }
+    }
+}
+
 /**
  * Check if INT8 ESIMD dpas path can be used for given dimensions.
  *
@@ -1503,6 +1890,49 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
 
                     // Call ESIMD INT8 kernel implementation
                     esimd_matmul_int8_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
+                }
+            );
+        });
+        return;
+    }
+
+    // Cooperative ESIMD FP16 path (multi-work-item with named barriers)
+    // Enabled via GGML_SYCL_XMX_COOPERATIVE=1 in addition to GGML_SYCL_XMX_ESIMD=1
+    // Work-group size configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
+    if (can_use_cooperative_esimd(args.M, args.N, args.K)) {
+        // Get configured work-group size (default: 32)
+        const int wg_size = get_cooperative_wg_size();
+
+        // Grid dimensions: each work-group handles COOP_WG_M x COOP_WG_N output
+        const int coop_grid_m = (static_cast<int>(args.M) + COOP_WG_M - 1) / COOP_WG_M;
+        const int coop_grid_n = (static_cast<int>(args.N) + COOP_WG_N - 1) / COOP_WG_N;
+
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] Cooperative ESIMD FP16 path: M=%lld N=%lld K=%lld "
+                    "grid=(%d,%d) wg_size=%d\n",
+                    static_cast<long long>(args.M), static_cast<long long>(args.N),
+                    static_cast<long long>(args.K), coop_grid_m, coop_grid_n, wg_size);
+            fflush(stderr);
+        }
+
+        // Currently only WG_SIZE=32 is fully implemented
+        // WG_SIZE=64 requires larger SLM tiles (TODO: implement in future)
+        // The wg_size variable is checked but always returns 32 for now
+        (void)wg_size;  // Suppress unused variable warning
+
+        q.submit([&](sycl::handler & cgh) {
+            constexpr int WG_SIZE = 32;
+            sycl::range<2> global(coop_grid_m * WG_SIZE, coop_grid_n);
+            sycl::range<2> local(WG_SIZE, 1);
+
+            cgh.parallel_for<esimd_fp16_cooperative_kernel<WG_SIZE>>(
+                sycl::nd_range<2>(global, local),
+                [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                    const int local_id = item.get_local_id(0);
+                    const int sg_id = local_id / COOP_SUBGROUP_SIZE;
+                    const int lane = local_id % COOP_SUBGROUP_SIZE;
+                    esimd_matmul_fp16_cooperative_impl<WG_SIZE>(
+                        item, args, local_id, sg_id, lane);
                 }
             );
         });
