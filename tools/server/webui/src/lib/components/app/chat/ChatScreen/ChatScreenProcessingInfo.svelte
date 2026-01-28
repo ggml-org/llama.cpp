@@ -11,7 +11,7 @@
 	let isCurrentConversationLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasProcessingData = $derived(processingState.processingState !== null);
-	let processingDetails = $derived(processingState.getProcessingDetails());
+	let processingDetails = $derived(processingState.getTechnicalDetails());
 
 	let showProcessingInfo = $derived(
 		isCurrentConversationLoading || isStreaming || config().keepStatsVisible || hasProcessingData
