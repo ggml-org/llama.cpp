@@ -267,14 +267,31 @@ struct webgpu_command {
 #endif
 };
 
-struct webgpu_capabilities {
-    wgpu::Limits               limits;
-    bool                       supports_subgroup_matrix = false;
-    wgpu::SubgroupMatrixConfig subgroup_matrix_config{};
-    uint32_t                   subgroup_size     = 0;
-    uint32_t                   max_subgroup_size = 0;
-    size_t                     memset_bytes_per_thread;
+// #ifdef __EMSCRIPTEN__
+// struct ggml_wgpu_subgroup_matrix_config_stub { };
+// using ggml_wgpu_subgroup_matrix_config = ggml_wgpu_subgroup_matrix_config_stub;
+// #else
+// using ggml_wgpu_subgroup_matrix_config = wgpu::SubgroupMatrixConfig;
+// #endif
+
+struct webgpu_capabilities_base {
+    wgpu::Limits limits;
+    bool         supports_subgroup_matrix = false;
+
+    uint32_t sg_mat_m = 0;
+    uint32_t sg_mat_n = 0;
+    uint32_t sg_mat_k = 0;
+
+    uint32_t subgroup_size     = 0;
+    uint32_t max_subgroup_size = 0;
+    size_t   memset_bytes_per_thread;
 };
+
+#ifndef __EMSCRIPTEN__
+struct webgpu_capabilities_native {
+    wgpu::SubgroupMatrixConfig subgroup_matrix_config{};
+};
+#endif
 
 // Stores global webgpu members
 struct webgpu_global_context_struct {
@@ -283,8 +300,10 @@ struct webgpu_global_context_struct {
     wgpu::Device   device;
     wgpu::Queue    queue;
 
-    webgpu_capabilities capabilities;
-
+    webgpu_capabilities_base capabilities;
+#ifndef __EMSCRIPTEN__
+    webgpu_capabilities_native capabilities_native;
+#endif
     // Shared buffer to move data from device to host
     wgpu::Buffer         get_tensor_staging_buf;
     // Global mutex for pipeline and staging buffer, will be refactored to exclude pipeline caches.
@@ -1141,10 +1160,10 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
             if (ctx->global_ctx->capabilities.supports_subgroup_matrix) {
                 // The total number of subgroups/workgroups needed per matrix.
                 uint32_t wg_m_sg_tile = WEBGPU_MUL_MAT_SUBGROUP_M * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M *
-                                        ctx->global_ctx->capabilities.subgroup_matrix_config.M;
+                                        ctx->global_ctx->capabilities_native.subgroup_matrix_config.M;
                 wg_m                  = CEIL_DIV(dst->ne[0], wg_m_sg_tile);
                 uint32_t wg_n_sg_tile = WEBGPU_MUL_MAT_SUBGROUP_N * WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N *
-                                        ctx->global_ctx->capabilities.subgroup_matrix_config.N;
+                                        ctx->global_ctx->capabilities_native.subgroup_matrix_config.N;
                 wg_n = CEIL_DIV(dst->ne[1], wg_n_sg_tile);
             } else {
 #endif
@@ -1162,6 +1181,7 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, wg_y);
 }
 
+#ifndef __EMSCRIPTEN__
 static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                                              ggml_tensor *    Q,
                                              ggml_tensor *    K,
@@ -1246,7 +1266,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
 
     bool kv_direct = (K->type == GGML_TYPE_F16) &&
-                     (Q->ne[0] % ctx->global_ctx->capabilities.subgroup_matrix_config.K == 0) &&
+                     (Q->ne[0] % ctx->global_ctx->capabilities_native.subgroup_matrix_config.K == 0) &&
                      (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
     ggml_webgpu_flash_attn_pipeline_key key = {
@@ -1269,9 +1289,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         } else {
             ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
                 .key                = key,
-                .sg_mat_m           = ctx->global_ctx->capabilities.subgroup_matrix_config.M,
-                .sg_mat_n           = ctx->global_ctx->capabilities.subgroup_matrix_config.N,
-                .sg_mat_k           = ctx->global_ctx->capabilities.subgroup_matrix_config.K,
+                .sg_mat_m           = ctx->global_ctx->capabilities_native.subgroup_matrix_config.M,
+                .sg_mat_n           = ctx->global_ctx->capabilities_native.subgroup_matrix_config.N,
+                .sg_mat_k           = ctx->global_ctx->capabilities_native.subgroup_matrix_config.K,
                 .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
                 .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
             };
@@ -1292,6 +1312,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
+#endif
 
 static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     bool is_unary = dst->op == GGML_OP_UNARY;
@@ -2057,7 +2078,11 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
         case GGML_OP_MUL_MAT:
             return ggml_webgpu_mul_mat(ctx, src0, src1, node);
         case GGML_OP_FLASH_ATTN_EXT:
+#ifndef __EMSCRIPTEN__
             return ggml_webgpu_flash_attn(ctx, src0, src1, src2, node->src[3], node->src[4], node);
+#else
+            return std::nullopt;
+#endif
         case GGML_OP_ADD:
             {
                 int inplace = ggml_webgpu_tensor_equal(src0, node);
@@ -2541,11 +2566,11 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         sg_matrix_repls["WEBGPU_SUBGROUP_MATRIX_M"] = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M);
         sg_matrix_repls["WEBGPU_SUBGROUP_MATRIX_N"] = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N);
         sg_matrix_repls["WEBGPU_SG_MAT_M_SIZE"] =
-            std::to_string(webgpu_ctx->global_ctx->capabilities.subgroup_matrix_config.M);
+            std::to_string(webgpu_ctx->global_ctx->capabilities_native.subgroup_matrix_config.M);
         sg_matrix_repls["WEBGPU_SG_MAT_N_SIZE"] =
-            std::to_string(webgpu_ctx->global_ctx->capabilities.subgroup_matrix_config.N);
+            std::to_string(webgpu_ctx->global_ctx->capabilities_native.subgroup_matrix_config.N);
         sg_matrix_repls["WEBGPU_SG_MAT_K_SIZE"] =
-            std::to_string(webgpu_ctx->global_ctx->capabilities.subgroup_matrix_config.K);
+            std::to_string(webgpu_ctx->global_ctx->capabilities_native.subgroup_matrix_config.K);
 
         proc_mul_mat_f32_f32 = ggml_webgpu_process_shader_repls(wgsl_mul_mat_subgroup_matrix_f32_f32, sg_matrix_repls);
         proc_mul_mat_f32_f32_vec =
@@ -2930,8 +2955,8 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
             if (config.M == config.N && config.N == config.K && (config.K == 8 || config.K == 16) &&
                 config.componentType == wgpu::SubgroupMatrixComponentType::F16 &&
                 config.resultComponentType == wgpu::SubgroupMatrixComponentType::F16) {
-                ctx->wgpu_global_ctx->capabilities.subgroup_matrix_config = config;
-                valid_subgroup_matrix_config                              = true;
+                ctx->wgpu_global_ctx->capabilities_native.subgroup_matrix_config = config;
+                valid_subgroup_matrix_config                                     = true;
                 break;
             }
         }
@@ -3232,6 +3257,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
+#ifndef __EMSCRIPTEN__
                 if (!ctx->reg_context->wgpu_global_ctx->capabilities.supports_subgroup_matrix) {
                     break;
                 }
@@ -3241,12 +3267,13 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 const bool has_mask = op->src[3] != nullptr;
                 const bool kv_direct =
                     src1->type == GGML_TYPE_F16 &&
-                    (src0->ne[0] % ctx->reg_context->wgpu_global_ctx->capabilities.subgroup_matrix_config.K) == 0 &&
+                    (src0->ne[0] % ctx->reg_context->wgpu_global_ctx->capabilities_native.subgroup_matrix_config.K) ==
+                        0 &&
                     (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
                 const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
-                    ctx->reg_context->wgpu_global_ctx->capabilities.subgroup_matrix_config.M,
-                    ctx->reg_context->wgpu_global_ctx->capabilities.subgroup_matrix_config.N, (uint32_t) src0->ne[0],
-                    (uint32_t) src2->ne[0], has_mask, kv_direct);
+                    ctx->reg_context->wgpu_global_ctx->capabilities_native.subgroup_matrix_config.M,
+                    ctx->reg_context->wgpu_global_ctx->capabilities_native.subgroup_matrix_config.N,
+                    (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], has_mask, kv_direct);
                 if (min_bytes > limit_bytes) {
                     break;
                 }
@@ -3255,6 +3282,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                               (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 ||
                                src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0) &&
                               src2->type == src1->type && op->type == GGML_TYPE_F32;
+#endif
                 break;
             }
         case GGML_OP_RMS_NORM:
@@ -3468,7 +3496,7 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
 #endif
 
     wgpu::Instance inst           = wgpu::CreateInstance(&instance_descriptor);
-    ctx.wgpu_global_ctx           = std::make_shared<webgpu_global_context_struct>();
+    ctx.wgpu_global_ctx           = webgpu_global_context(new webgpu_global_context_struct());
     ctx.wgpu_global_ctx->instance = std::move(inst);
 
 #ifdef __EMSCRIPTEN__
