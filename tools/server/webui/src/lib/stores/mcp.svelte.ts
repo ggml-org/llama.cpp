@@ -22,6 +22,7 @@
 import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { parseMcpServerSettings, detectMcpTransportFromUrl } from '$lib/utils';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
@@ -40,7 +41,6 @@ import type {
 	MCPPromptInfo,
 	GetPromptResult,
 	Tool,
-	Prompt,
 	HealthCheckState,
 	MCPServerSettingsEntry,
 	MCPServerConfig
@@ -256,6 +256,14 @@ class MCPStore {
 		return parseMcpServerSettings(config().mcpServers);
 	}
 
+	/**
+	 * Get all active MCP connections.
+	 * @returns Map of server names to connections
+	 */
+	getConnections(): Map<string, MCPConnection> {
+		return this.connections;
+	}
+
 	getServerLabel(server: MCPServerSettingsEntry): string {
 		const healthState = this.getHealthCheckState(server.id);
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
@@ -263,6 +271,10 @@ class MCPStore {
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
 		return server.url;
+	}
+
+	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
+		return this.getServers().find((s) => s.id === serverId);
 	}
 
 	isAnyServerLoading(): boolean {
@@ -346,12 +358,10 @@ class MCPStore {
 	}
 
 	private async initialize(signature: string, mcpConfig: MCPClientConfig): Promise<boolean> {
-		console.log('[MCPStore] Starting initialization...');
 		this.updateState({ isInitializing: true, error: null });
 		this.configSignature = signature;
 		const serverEntries = Object.entries(mcpConfig.servers);
 		if (serverEntries.length === 0) {
-			console.log('[MCPStore] No servers configured');
 			this.updateState({ isInitializing: false, toolCount: 0, connectedServers: [] });
 			return false;
 		}
@@ -381,7 +391,6 @@ class MCPStore {
 			})
 		);
 		if (this.configSignature !== signature) {
-			console.log('[MCPStore] Config changed during init, aborting');
 			for (const result of results) {
 				if (result.status === 'fulfilled')
 					await MCPService.disconnect(result.value.connection).catch(console.warn);
@@ -420,9 +429,6 @@ class MCPStore {
 			toolCount: this.toolsIndex.size,
 			connectedServers: Array.from(this.connections.keys())
 		});
-		console.log(
-			`[MCPStore] Initialization complete: ${successCount}/${serverEntries.length} servers, ${this.toolsIndex.size} tools`
-		);
 		this.initPromise = null;
 		return true;
 	}
@@ -435,19 +441,15 @@ class MCPStore {
 						console.warn(`[MCPStore][${serverName}] Tools list changed error:`, error);
 						return;
 					}
-					console.log(`[MCPStore][${serverName}] Tools list changed, ${tools?.length ?? 0} tools`);
 					this.handleToolsListChanged(serverName, tools ?? []);
 				}
 			},
 			prompts: {
-				onChanged: (error: Error | null, prompts: Prompt[] | null) => {
+				onChanged: (error: Error | null) => {
 					if (error) {
 						console.warn(`[MCPStore][${serverName}] Prompts list changed error:`, error);
 						return;
 					}
-					console.log(
-						`[MCPStore][${serverName}] Prompts list changed, ${prompts?.length ?? 0} prompts`
-					);
 				}
 			}
 		};
@@ -472,7 +474,6 @@ class MCPStore {
 
 	acquireConnection(): void {
 		this.activeFlowCount++;
-		console.log(`[MCPStore] Connection acquired (active flows: ${this.activeFlowCount})`);
 	}
 
 	/**
@@ -482,9 +483,7 @@ class MCPStore {
 	 */
 	async releaseConnection(shutdownIfUnused = false): Promise<void> {
 		this.activeFlowCount = Math.max(0, this.activeFlowCount - 1);
-		console.log(`[MCPStore] Connection released (active flows: ${this.activeFlowCount})`);
 		if (shutdownIfUnused && this.activeFlowCount === 0) {
-			console.log('[MCPStore] No active flows, initiating lazy disconnect...');
 			await this.shutdown();
 		}
 	}
@@ -499,7 +498,6 @@ class MCPStore {
 			this.initPromise = null;
 		}
 		if (this.connections.size === 0) return;
-		console.log(`[MCPStore] Shutting down ${this.connections.size} connections...`);
 		await Promise.all(
 			Array.from(this.connections.values()).map((conn) =>
 				MCPService.disconnect(conn).catch((error) =>
@@ -511,7 +509,6 @@ class MCPStore {
 		this.toolsIndex.clear();
 		this.configSignature = null;
 		this.updateState({ isInitializing: false, error: null, toolCount: 0, connectedServers: [] });
-		console.log('[MCPStore] Shutdown complete');
 	}
 
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
@@ -713,7 +710,7 @@ class MCPStore {
 		const BATCH_SIZE = 5;
 		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
 			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-			await Promise.all(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
+			await Promise.allSettled(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
 		}
 	}
 
@@ -757,7 +754,6 @@ class MCPStore {
 					connectionTimeMs: existingConnection.connectionTimeMs,
 					logs: []
 				});
-				console.log(`[MCPStore] Reused existing connection for health check: ${server.id}`);
 				return;
 			} catch (error) {
 				console.warn(
@@ -786,6 +782,7 @@ class MCPStore {
 		});
 		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
 		const headers = this.parseHeaders(server.headers);
+
 		try {
 			const connection = await MCPService.connect(
 				server.id,
@@ -828,7 +825,13 @@ class MCPStore {
 				connectionTimeMs: connection.connectionTimeMs,
 				logs
 			});
-			await MCPService.disconnect(connection);
+
+			// Promote to active connection or disconnect
+			if (promoteToActive && server.enabled) {
+				this.promoteHealthCheckToConnection(server.id, connection);
+			} else {
+				await MCPService.disconnect(connection);
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown error occurred';
 			logs.push({
@@ -883,6 +886,340 @@ class MCPStore {
 		}
 		return statuses;
 	}
+
+	/**
+	 * Get aggregated server instructions from all connected servers.
+	 * Returns an array of { serverName, serverTitle, instructions } objects.
+	 */
+	getServerInstructions(): Array<{
+		serverName: string;
+		serverTitle?: string;
+		instructions: string;
+	}> {
+		const results: Array<{ serverName: string; serverTitle?: string; instructions: string }> = [];
+		for (const [serverName, connection] of this.connections) {
+			if (connection.instructions) {
+				results.push({
+					serverName,
+					serverTitle: connection.serverInfo?.title || connection.serverInfo?.name,
+					instructions: connection.instructions
+				});
+			}
+		}
+		return results;
+	}
+
+	/**
+	 * Get server instructions from health check results (for display before active connection).
+	 * Useful for showing instructions in settings UI.
+	 */
+	getHealthCheckInstructions(): Array<{
+		serverId: string;
+		serverTitle?: string;
+		instructions: string;
+	}> {
+		const results: Array<{ serverId: string; serverTitle?: string; instructions: string }> = [];
+		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+			if (state.status === HealthCheckStatus.SUCCESS && state.instructions) {
+				results.push({
+					serverId,
+					serverTitle: state.serverInfo?.title || state.serverInfo?.name,
+					instructions: state.instructions
+				});
+			}
+		}
+		return results;
+	}
+
+	/**
+	 * Check if any connected server has instructions.
+	 */
+	hasServerInstructions(): boolean {
+		for (const connection of this.connections.values()) {
+			if (connection.instructions) return true;
+		}
+		return false;
+	}
+
+	/**
+	 *
+	 *
+	 * Resources Operations
+	 *
+	 *
+	 */
+
+	/**
+	 * Check if any enabled server with successful health check supports resources.
+	 * Uses health check state since servers may not have active connections until
+	 * the user actually sends a message or uses prompts.
+	 */
+	hasResourcesCapability(): boolean {
+		// Check health check states for servers with resources capability
+		for (const state of Object.values(this._healthChecks)) {
+			if (
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.resources !== undefined
+			) {
+				return true;
+			}
+		}
+		// Also check active connections as fallback
+		for (const connection of this.connections.values()) {
+			if (MCPService.supportsResources(connection)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Get list of servers that support resources.
+	 * Checks active connections first, then health check state as fallback.
+	 */
+	getServersWithResources(): string[] {
+		const servers: string[] = [];
+
+		// Check active connections
+		for (const [name, connection] of this.connections) {
+			if (MCPService.supportsResources(connection) && !servers.includes(name)) {
+				servers.push(name);
+			}
+		}
+
+		// Also check health check states for servers not yet connected
+		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+			if (
+				!servers.includes(serverId) &&
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.resources !== undefined
+			) {
+				servers.push(serverId);
+			}
+		}
+
+		return servers;
+	}
+
+	/**
+	 * Fetch resources from all connected servers that support them.
+	 * Updates mcpResourceStore with the results.
+	 * @param forceRefresh - If true, bypass cache and fetch fresh data
+	 */
+	async fetchAllResources(forceRefresh: boolean = false): Promise<void> {
+		const serversWithResources = this.getServersWithResources();
+		if (serversWithResources.length === 0) {
+			return;
+		}
+
+		// Check if we have cached resources and they're recent (unless force refresh)
+		if (!forceRefresh) {
+			const allServersCached = serversWithResources.every((serverName) => {
+				const serverRes = mcpResourceStore.getServerResources(serverName);
+				if (!serverRes || !serverRes.lastFetched) return false;
+				// Cache is valid for 5 minutes
+				const age = Date.now() - serverRes.lastFetched.getTime();
+				return age < 5 * 60 * 1000;
+			});
+
+			if (allServersCached) {
+				console.log('[MCPStore] Using cached resources');
+				return;
+			}
+		}
+
+		mcpResourceStore.setLoading(true);
+
+		try {
+			await Promise.all(
+				serversWithResources.map((serverName) => this.fetchServerResources(serverName))
+			);
+		} finally {
+			mcpResourceStore.setLoading(false);
+		}
+	}
+
+	/**
+	 * Fetch resources from a specific server.
+	 * Updates mcpResourceStore with the results.
+	 */
+	async fetchServerResources(serverName: string): Promise<void> {
+		const connection = this.connections.get(serverName);
+		if (!connection) {
+			console.warn(`[MCPStore] No connection found for server: ${serverName}`);
+			return;
+		}
+
+		if (!MCPService.supportsResources(connection)) {
+			return;
+		}
+
+		mcpResourceStore.setServerLoading(serverName, true);
+
+		try {
+			const [resources, templates] = await Promise.all([
+				MCPService.listAllResources(connection),
+				MCPService.listAllResourceTemplates(connection)
+			]);
+
+			mcpResourceStore.setServerResources(serverName, resources, templates);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			mcpResourceStore.setServerError(serverName, message);
+			console.error(`[MCPStore][${serverName}] Failed to fetch resources:`, error);
+		}
+	}
+
+	/**
+	 * Read resource content from a server.
+	 * Caches the result in mcpResourceStore.
+	 */
+	async readResource(uri: string): Promise<import('$lib/types').MCPResourceContent[] | null> {
+		// Check cache first
+		const cached = mcpResourceStore.getCachedContent(uri);
+		if (cached) {
+			return cached.content;
+		}
+
+		// Find which server has this resource
+		const serverName = mcpResourceStore.findServerForUri(uri);
+		if (!serverName) {
+			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
+			return null;
+		}
+
+		const connection = this.connections.get(serverName);
+		if (!connection) {
+			console.error(`[MCPStore] No connection found for server: ${serverName}`);
+			return null;
+		}
+
+		try {
+			const result = await MCPService.readResource(connection, uri);
+			const resourceInfo = mcpResourceStore.findResourceByUri(uri);
+
+			if (resourceInfo) {
+				mcpResourceStore.cacheResourceContent(resourceInfo, result.contents);
+			}
+
+			return result.contents;
+		} catch (error) {
+			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
+			return null;
+		}
+	}
+
+	/**
+	 * Subscribe to resource updates.
+	 */
+	async subscribeToResource(uri: string): Promise<boolean> {
+		const serverName = mcpResourceStore.findServerForUri(uri);
+		if (!serverName) {
+			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
+			return false;
+		}
+
+		const connection = this.connections.get(serverName);
+		if (!connection) {
+			console.error(`[MCPStore] No connection found for server: ${serverName}`);
+			return false;
+		}
+
+		if (!MCPService.supportsResourceSubscriptions(connection)) {
+			return false;
+		}
+
+		try {
+			await MCPService.subscribeResource(connection, uri);
+			mcpResourceStore.addSubscription(uri, serverName);
+			return true;
+		} catch (error) {
+			console.error(`[MCPStore] Failed to subscribe to resource ${uri}:`, error);
+			return false;
+		}
+	}
+
+	/**
+	 * Unsubscribe from resource updates.
+	 */
+	async unsubscribeFromResource(uri: string): Promise<boolean> {
+		const serverName = mcpResourceStore.findServerForUri(uri);
+		if (!serverName) {
+			console.error(`[MCPStore] No server found for resource URI: ${uri}`);
+			return false;
+		}
+
+		const connection = this.connections.get(serverName);
+		if (!connection) {
+			console.error(`[MCPStore] No connection found for server: ${serverName}`);
+			return false;
+		}
+
+		try {
+			await MCPService.unsubscribeResource(connection, uri);
+			mcpResourceStore.removeSubscription(uri);
+			return true;
+		} catch (error) {
+			console.error(`[MCPStore] Failed to unsubscribe from resource ${uri}:`, error);
+			return false;
+		}
+	}
+
+	/**
+	 * Add a resource as attachment to chat context.
+	 * Automatically fetches content if not cached.
+	 */
+	async attachResource(uri: string): Promise<import('$lib/types').MCPResourceAttachment | null> {
+		const resourceInfo = mcpResourceStore.findResourceByUri(uri);
+		if (!resourceInfo) {
+			console.error(`[MCPStore] Resource not found: ${uri}`);
+			return null;
+		}
+
+		// Check if already attached
+		if (mcpResourceStore.isAttached(uri)) {
+			return null;
+		}
+
+		// Add attachment (initially loading)
+		const attachment = mcpResourceStore.addAttachment(resourceInfo);
+
+		// Fetch content
+		try {
+			const content = await this.readResource(uri);
+			if (content) {
+				mcpResourceStore.updateAttachmentContent(attachment.id, content);
+			} else {
+				mcpResourceStore.updateAttachmentError(attachment.id, 'Failed to read resource');
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			mcpResourceStore.updateAttachmentError(attachment.id, message);
+		}
+
+		return mcpResourceStore.getAttachment(attachment.id) ?? null;
+	}
+
+	/**
+	 * Remove a resource attachment from chat context.
+	 */
+	removeResourceAttachment(attachmentId: string): void {
+		mcpResourceStore.removeAttachment(attachmentId);
+	}
+
+	/**
+	 * Clear all resource attachments.
+	 */
+	clearResourceAttachments(): void {
+		mcpResourceStore.clearAttachments();
+	}
+
+	/**
+	 * Get formatted resource context for chat.
+	 */
+	getResourceContextForChat(): string {
+		return mcpResourceStore.formatAttachmentsForContext();
+	}
 }
 
 export const mcpStore = new MCPStore();
@@ -895,3 +1232,10 @@ export const mcpAvailableTools = () => mcpStore.availableTools;
 export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
 export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
 export const mcpToolCount = () => mcpStore.toolCount;
+export const mcpServerInstructions = () => mcpStore.getServerInstructions();
+export const mcpHasServerInstructions = () => mcpStore.hasServerInstructions();
+
+// Resources exports
+export const mcpHasResourcesCapability = () => mcpStore.hasResourcesCapability();
+export const mcpServersWithResources = () => mcpStore.getServersWithResources();
+export const mcpResourceContext = () => mcpStore.getResourceContextForChat();
