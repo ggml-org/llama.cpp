@@ -832,6 +832,34 @@ static void mul_mat_f_switch_cols_per_block(
     }
 }
 
+template <typename T>
+static void mul_mat_f_switch_rows_per_block(
+        const int rows_per_block, const T * x, const float * y, const int32_t * ids, float * dst,
+        const int64_t ncols_x, const int64_t nrows_x, const int64_t ncols_dst,
+        const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+        const int64_t stride_col_id, const int stride_row_id,
+        const int64_t nchannels_x, const int64_t nchannels_y, const int64_t nchannels_dst,
+        const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst, const int64_t nsamples_x,
+        const int64_t nsamples_dst, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
+        cudaStream_t stream, const mmf_ids_data * ids_data) {
+    switch (rows_per_block) {
+        case MMF_ROWS_PER_BLOCK: {
+            mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK>(
+                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+        } break;
+        case MMF_ROWS_PER_BLOCK_CDNA: {
+            mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK_CDNA>(
+                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+        } break;
+        default:
+            GGML_ABORT("unsupported rows_per_block: %i", rows_per_block);
+    }
+}
+
 #define DECL_MMF_CASE_HELPER(T, nrows_dst, ncols_dst) \
     template void mul_mat_f_cuda<T, nrows_dst, ncols_dst>( \
         const T * x, const float * y, const int32_t * ids, float * dst, \
