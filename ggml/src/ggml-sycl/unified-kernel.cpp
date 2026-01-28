@@ -606,35 +606,29 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_kernel_impl(
 // =============================================================================
 // ESIMD dpas Kernel - INT8 Path (Phase 3)
 // =============================================================================
-// Uses INT8 dpas with dynamic activation quantization.
-// Q4_0 weights are unpacked to INT8 (nibble - 8 for signed [-8, +7]).
-// Activations are dynamically quantized per-row using max-abs scaling.
+// Uses INT8 dpas with dynamic quantization for both weights and activations.
+//
+// Quantization approach:
+// 1. Dequantize Q4_0 weights to FP values: w_fp = (nibble - 8) * d
+// 2. Find max-abs per N column per K-tile for weights
+// 3. Quantize weights to INT8: w_int8 = w_fp * 127 / w_max_abs
+// 4. Find max-abs per M row for activations (across all K)
+// 5. Quantize activations to INT8: a_int8 = a * 127 / a_max_abs
+// 6. Execute dpas: int32_acc = sum_k(w_int8 * a_int8)
+// 7. Dequantize result: fp_result = int32_acc * w_scale * a_scale / (127 * 127)
 //
 // Key differences from FP16:
 // - K-tile = 32 (not 16)
-// - dpas outputs INT32 accumulator (scaled back to FP32)
-// - Requires per-row activation quantization
-// - Weight scales stored per N column, activation scales per M row
+// - dpas outputs INT32 accumulator
+// - Both weights and activations dynamically quantized
 //
 // IMPORTANT: INT8 is LOSSY - not bit-exact with FP16/FP32 path!
-// The dynamic quantization introduces noise. Test for coherent output,
-// not exact numerical match.
 
 /**
  * ESIMD INT8 matmul kernel using xmx::dpas instruction.
  *
  * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
  * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
- *
- * Uses INT8 dpas with dynamic activation quantization:
- * - Q4_0 weights unpacked to INT8: (nibble - 8) for signed range [-8, +7]
- * - Activations quantized per-row: scale = max_abs, qact = act * (127 / scale)
- * - Final result: result_fp32 = int32_acc * weight_scale * act_scale / 127
- *
- * dpas layout requirements for INT8:
- * - A matrix (activations): [Repeat x K] = [8 x 32] int8, row-major packed
- * - B matrix (weights): [K x ExecSize] = [32 x 16] int8, VNNI-like layout
- * - Output: [Repeat x ExecSize] = [8 x 16] int32 accumulator
  *
  * Work distribution:
  * - 2D grid: [ceil(M/8), ceil(N/16)]
@@ -664,12 +658,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     // Cast weight pointer
     const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
 
-    // Initialize INT32 accumulator: [8 x 16]
-    esimd::simd<int32_t, ESIMD_ACC_SIZE_INT8> acc = 0;
-
-    // Store weight scales per N column for this tile
-    // Will be accumulated across K tiles
-    esimd::simd<float, TILE_N> weight_scale_accum = 0.0f;
+    // Initialize FP32 accumulator for final result: [8 x 16]
+    // We accumulate in FP32 because each K-tile has different scales
+    esimd::simd<float, ESIMD_ACC_SIZE> fp_acc = 0.0f;
 
     // Number of K tiles (each dpas processes 32 K elements for INT8)
     const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS_INT8 - 1) / ESIMD_K_PER_DPAS_INT8;
@@ -678,19 +669,17 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     // Step 1: Compute per-row activation scales (max-abs for each M row)
     // This needs to scan all K elements for each of the 8 rows in this tile
     // ========================================================================
-    esimd::simd<float, TILE_M> act_scales = 0.0f;
+    esimd::simd<float, TILE_M> act_max_abs = 0.0f;
 
-    // Scan activations to find max-abs per row
     #pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
         if (m_global >= args.M) {
-            act_scales[m] = 1.0f;  // Dummy scale for out-of-bounds rows
+            act_max_abs[m] = 1.0f;  // Dummy scale for out-of-bounds rows
             continue;
         }
 
         float max_abs = 0.0f;
-        // Scan all K elements for this row
         for (int64_t k = 0; k < args.K; k++) {
             float val = args.activations[m_global * args.K + k];
             float abs_val = (val >= 0.0f) ? val : -val;
@@ -698,69 +687,84 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
                 max_abs = abs_val;
             }
         }
-
-        // Edge case: All zeros - avoid division by zero
-        // Use scale_inv = 0 if scale is too small (results in 0 quantized values)
-        if (max_abs > 1e-10f) {
-            act_scales[m] = max_abs / 127.0f;  // scale to convert back
-        } else {
-            act_scales[m] = 1.0f;  // Dummy scale (will produce zeros anyway)
-        }
+        act_max_abs[m] = (max_abs > 1e-10f) ? max_abs : 1.0f;
     }
 
     // ========================================================================
     // K-loop: iterate over K dimension in tiles of 32
     // ========================================================================
     for (int64_t kt = 0; kt < k_tiles; kt++) {
-        const int64_t k_start = kt * ESIMD_K_PER_DPAS_INT8;
-        const int64_t k_remaining = args.K - k_start;
+        const int64_t k_start_local = kt * ESIMD_K_PER_DPAS_INT8;
+        const int64_t k_remaining = args.K - k_start_local;
         const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS_INT8 ? k_remaining : ESIMD_K_PER_DPAS_INT8);
 
         // ====================================================================
-        // Load and dequantize weights into B matrix as INT8 with VNNI packing
-        // Q4_0 unpacking: (nibble - 8) for signed range [-8, +7]
-        //
-        // For INT8 dpas, B matrix needs VNNI-like layout:
-        // B_vnni[k/4 * N * 4 + n * 4 + k%4] = B[k,n]
-        // This groups 4 consecutive K values together for systolic array
+        // Step 2a: Dequantize Q4_0 weights to FP and find max-abs per N column
         // ====================================================================
-        esimd::simd<int8_t, ESIMD_B_SIZE_INT8> b_vec = 0;
+        // Temporary storage for dequantized weights [TILE_N x K_TILE]
+        float w_fp[TILE_N][ESIMD_K_PER_DPAS_INT8];
+        esimd::simd<float, TILE_N> w_max_abs = 0.0f;
 
-        // Track weight scales for this K-tile (per N column)
-        esimd::simd<float, TILE_N> weight_scales_tile = 0.0f;
-        esimd::simd<int, TILE_N> weight_scale_count = 0;
-
-        // Iterate n first, then k for VNNI packing
         #pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
-            if (n_global >= args.N) continue;
 
             #pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
-                if (k >= k_len) break;
-                const int64_t k_global = k_start + k;
-                const int k_block_idx_part = static_cast<int>(k_global / UNIFIED_QK4_0);
-                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
-
-                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx_part);
-                const block_q4_0_unified * blk = &weights[block_idx];
-
-                // Accumulate scale (we'll average later)
-                // Only count unique blocks
-                if (idx_in_block == 0) {
-                    weight_scales_tile[n] += static_cast<float>(blk->d);
-                    weight_scale_count[n] += 1;
+                if (n_global >= args.N || k >= k_len) {
+                    w_fp[n][k] = 0.0f;
+                    continue;
                 }
 
-                // Unpack Q4_0 nibble to signed INT8: (nibble - 8) gives [-8, +7]
+                const int64_t k_global = k_start_local + k;
+                const int k_block_idx = static_cast<int>(k_global / UNIFIED_QK4_0);
+                const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+
+                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
+                const block_q4_0_unified * blk = &weights[block_idx];
+                const float d = static_cast<float>(blk->d);
+
                 int qs_val;
                 if (idx_in_block < 16) {
                     qs_val = blk->qs[idx_in_block] & 0x0F;
                 } else {
                     qs_val = blk->qs[idx_in_block - 16] >> 4;
                 }
-                const int8_t w_int8 = static_cast<int8_t>(qs_val - 8);
+
+                // Dequantize to FP: w = (nibble - 8) * d
+                const float w_val = static_cast<float>(qs_val - 8) * d;
+                w_fp[n][k] = w_val;
+
+                // Track max-abs for this column
+                float abs_w = (w_val >= 0.0f) ? w_val : -w_val;
+                if (abs_w > w_max_abs[n]) {
+                    w_max_abs[n] = abs_w;
+                }
+            }
+        }
+
+        // Ensure no divide by zero
+        #pragma unroll
+        for (int n = 0; n < TILE_N; n++) {
+            if (w_max_abs[n] < 1e-10f) {
+                w_max_abs[n] = 1.0f;
+            }
+        }
+
+        // ====================================================================
+        // Step 2b: Quantize weights to INT8 with VNNI packing
+        // ====================================================================
+        esimd::simd<int8_t, ESIMD_B_SIZE_INT8> b_vec = 0;
+
+        #pragma unroll
+        for (int n = 0; n < TILE_N; n++) {
+            #pragma unroll
+            for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
+                // Quantize: w_int8 = w_fp * 127 / max_abs
+                float qval = w_fp[n][k] * 127.0f / w_max_abs[n];
+                if (qval > 127.0f) qval = 127.0f;
+                if (qval < -127.0f) qval = -127.0f;
+                const int8_t w_int8 = static_cast<int8_t>(qval);
 
                 // VNNI layout for INT8: b[(k/4) * N * 4 + n * 4 + (k%4)]
                 const int vnni_idx = (k / 4) * (TILE_N * 4) + n * 4 + (k % 4);
@@ -768,17 +772,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
             }
         }
 
-        // Average weight scales for this tile (per column)
-        #pragma unroll
-        for (int n = 0; n < TILE_N; n++) {
-            if (weight_scale_count[n] > 0) {
-                weight_scale_accum[n] += weight_scales_tile[n];
-            }
-        }
-
         // ====================================================================
-        // Load and quantize activations into A matrix as INT8 [Repeat x K] = [8 x 32]
-        // Dynamic quantization: qact = act * (127 / max_abs)
+        // Step 3: Quantize activations to INT8
         // ====================================================================
         esimd::simd<int8_t, ESIMD_A_SIZE_INT8> a_vec = 0;
 
@@ -787,82 +782,67 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
             const int64_t m_global = m_start + m;
             if (m_global >= args.M) continue;
 
-            // Recover max_abs from act_scale (act_scale = max_abs / 127)
-            const float max_abs = act_scales[m] * 127.0f;
+            const float scale_inv = 127.0f / act_max_abs[m];
 
             #pragma unroll
             for (int k = 0; k < ESIMD_K_PER_DPAS_INT8; k++) {
                 if (k >= k_len) break;
 
-                const int64_t k_global = k_start + k;
+                const int64_t k_global = k_start_local + k;
                 const float act_f32 = args.activations[m_global * args.K + k_global];
 
-                // Quantize to INT8: qval = act * 127 / max_abs
-                // Clamp to [-127, 127]
-                float qval = (max_abs > 1e-10f) ? (act_f32 * 127.0f / max_abs) : 0.0f;
+                float qval = act_f32 * scale_inv;
                 if (qval > 127.0f) qval = 127.0f;
                 if (qval < -127.0f) qval = -127.0f;
 
                 const int8_t a_int8 = static_cast<int8_t>(qval);
-
-                // A layout for dpas: a[m * K_per + k]
                 a_vec[m * ESIMD_K_PER_DPAS_INT8 + k] = a_int8;
             }
         }
 
         // ====================================================================
-        // Execute dpas: acc += A @ B (INT8 x INT8 -> INT32)
-        //
-        // dpas<SystolicDepth, RepeatCount, AccType, CType, BType, AType>
-        // Note: operand order is dpas(acc, B, A) - B before A!
-        //
-        // For INT8: SystolicDepth=8, RepeatCount=8, K=32
+        // Step 4: Execute dpas: int32_acc = sum_k(w_int8 * a_int8)
         // ====================================================================
-        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
-                        int32_t, int32_t, int8_t, int8_t>(acc, b_vec, a_vec);
+        esimd::simd<int32_t, ESIMD_ACC_SIZE_INT8> int32_acc = 0;
+        int32_acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                              int32_t, int32_t, int8_t, int8_t>(int32_acc, b_vec, a_vec);
+
+        // ====================================================================
+        // Step 5: Dequantize and accumulate to FP32
+        // fp_result += int32_acc * (w_max_abs / 127) * (a_max_abs / 127)
+        //            = int32_acc * w_max_abs * a_max_abs / (127 * 127)
+        // ====================================================================
+        constexpr float scale_denom = 127.0f * 127.0f;
+
+        #pragma unroll
+        for (int m = 0; m < TILE_M; m++) {
+            const float a_scale = act_max_abs[m] / scale_denom;
+
+            #pragma unroll
+            for (int n = 0; n < TILE_N; n++) {
+                const int idx = m * TILE_N + n;
+                const float w_scale = w_max_abs[n];
+                const float combined_scale = w_scale * a_scale;
+
+                fp_acc[idx] += static_cast<float>(int32_acc[idx]) * combined_scale;
+            }
+        }
     }
 
     // ========================================================================
-    // Step 3: Convert INT32 accumulator to FP32 and apply scales
-    // result_fp32 = int32_acc * weight_scale * act_scale / 127
-    //
-    // The INT32 accumulator contains: sum_k(q_weight * q_act)
-    // where q_weight = (nibble - 8) and q_act = act * 127 / max_abs
-    //
-    // To recover FP32: result = int32_acc * weight_scale * (max_abs / 127)
-    //                        = int32_acc * weight_scale * act_scale
-    // ========================================================================
-
-    // Average weight scales per column (across all K tiles)
-    // For Q4_0, each block covers 32 elements, so we have K/32 blocks per K-tile
-    const int total_k_blocks = static_cast<int>(args.K / UNIFIED_QK4_0);
-    esimd::simd<float, TILE_N> avg_weight_scales = weight_scale_accum / static_cast<float>(total_k_blocks);
-
     // Write output with boundary checking
-    // Apply combined scales: result = int32_acc * weight_scale * act_scale
+    // ========================================================================
     #pragma unroll
     for (int m = 0; m < TILE_M; m++) {
         const int64_t m_global = m_start + m;
         if (m_global >= args.M) continue;
-
-        const float act_scale = act_scales[m];
 
         #pragma unroll
         for (int n = 0; n < TILE_N; n++) {
             const int64_t n_global = n_start + n;
             if (n_global >= args.N) continue;
 
-            // Get INT32 accumulator value
-            const int32_t int32_val = acc[m * TILE_N + n];
-
-            // Convert to FP32 and apply scales
-            // int32_val = sum_k((nibble-8) * (act*127/max_abs))
-            // result = int32_val * weight_scale * max_abs / 127
-            //        = int32_val * weight_scale * act_scale
-            const float weight_scale = avg_weight_scales[n];
-            const float result = static_cast<float>(int32_val) * weight_scale * act_scale;
-
-            args.output[m_global * args.N + n_global] = result;
+            args.output[m_global * args.N + n_global] = fp_acc[m * TILE_N + n];
         }
     }
 }
