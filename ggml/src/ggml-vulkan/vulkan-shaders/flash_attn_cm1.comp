@@ -362,8 +362,8 @@ void main() {
                 if (KV_bounds_check && j * Bc + col >= KV) {
                     Psh[col * psh_stride + row / 4] = f16vec4(0.0f);
                 } else {
-                    const f16vec4 mfvec = f16vec4(Mf[r], Mf[r + 1], Mf[r + 2], Mf[r + 3]);
-                    const f16vec4 Pf = f16vec4(exp(sfsh[row / 4 + col * sfshstride] - mfvec));
+                    const vec4 mfvec = vec4(Mf[r], Mf[r + 1], Mf[r + 2], Mf[r + 3]);
+                    const f16vec4 Pf = f16vec4(exp(vec4(sfsh[row / 4 + col * sfshstride]) - mfvec));
                     [[unroll]] for (uint32_t vec_idx = 0; vec_idx < 4; ++vec_idx) {
                         Lf[r + vec_idx] += Pf[vec_idx];
                     }
