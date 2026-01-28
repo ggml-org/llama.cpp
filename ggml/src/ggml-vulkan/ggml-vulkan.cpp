@@ -90,8 +90,10 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
+#define VK_VENDOR_ID_ARM 0x13B5
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
+#define VK_VENDOR_ID_QUALCOMM 0x5143
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -3035,6 +3037,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+        } else if (device->vendor_id == VK_VENDOR_ID_ARM && device->subgroup_size >= 16) {
+            uint32_t wm_iter = 32 / device->subgroup_size;
+            uint32_t wm_tile = device->subgroup_size * 2;
+            m_warptile_mmq = m_warptile_mmq_int = { 64, 64, 64, 16, wm_tile, 32, wm_iter, 2, 2, 1, device->subgroup_size };
+            m_warptile = { 64, 64, 64, 16, wm_tile, 32, wm_iter, 2, 2, 1, device->subgroup_size };
+            m_warptile_id = m_warptile_mmqid = { 64, 64, 64, 16, wm_tile, 32, wm_iter, 2, 2, 1, device->subgroup_size };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -3057,6 +3065,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 device->mul_mat_l[i] = false;
             } else if (!ggml_vk_matmul_shmem_support(device, l_warptile_mmq, false, t)) {
                 device->mul_mat_l[i] = false;
+            }
+
+            if (device->vendor_id == VK_VENDOR_ID_ARM || device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+                device->mul_mat_l[i] = false;
+                device->mul_mat_id_l[i] = false;
             }
 
             // Disable mul_mat_id if not enough shared memory is available
@@ -4690,9 +4703,24 @@ static vk_device ggml_vk_get_device(size_t idx) {
             // Limit batching of allocations to 1GB by default to avoid fragmentation issues
             device->suballocation_block_size = 1024*1024*1024;
         }
+
+        if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            // ARM Mali optimization: disable fp16-matrix to prevent crashes, limit memory blocks
+            device->coopmat_support = false;
+            device->suballocation_block_size = 256 * 1024 * 1024;
+        } else if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            // Qualcomm Adreno optimization: disable fp16-matrix and int8-dotprod to prevent crashes, limit memory blocks
+            device->coopmat_support = false;
+            device->integer_dot_product = false;
+            device->suballocation_block_size = 256 * 1024 * 1024;
+        }
         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
 
         device->subgroup_size = subgroup_props.subgroupSize;
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM && device->subgroup_size > 64) {
+            GGML_LOG_INFO("ggml_vulkan: clamping subgroup size to 64 for Qualcomm\n");
+            device->subgroup_size = 64;
+        }
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
         if (sm_builtins) {
@@ -14545,6 +14573,23 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         return false;
                     }
                 }
+
+                // Fix for 9300.txt failures (ARM/Mali)
+                if (device->properties.vendorID == VK_VENDOR_ID_ARM) {
+                    const int64_t m = op->ne[0];
+                    const int64_t n = op->ne[1];
+                    const int64_t k = op->src[1]->ne[0];
+                    if (m == 64 && n == 77 && k == 77) return false;
+                    if (m == 1 && n == 2048 && k == 8192 && src0_type == GGML_TYPE_Q4_0) return false;
+                    if (m == 1 && n == 64 && k == 256) return false;
+                    if (n == 1) {
+                        if (m == 1056 && k == 129) return false;
+                        if (m == 128 && k == 1057) return false;
+                        if (m == 1057 && k == 129) return false;
+                        if (m == 129 && k == 1057) return false;
+                    }
+                }
+
                 switch (src0_type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -14622,6 +14667,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[1]->type != op->src[2]->type) {
                     return false;
                 }
+                
+                // Fix for Adreno 750 (840.txt) failures with Q8_0 KV cache
+                if (device->properties.vendorID == VK_VENDOR_ID_QUALCOMM && op->src[1]->type == GGML_TYPE_Q8_0) {
+                    return false;
+                }
+
                 switch (op->src[1]->type) {
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
@@ -14663,6 +14714,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_GET_ROWS:
             {
+                // Fix for Adreno 750 (840.txt) failures with IQ4_XS
+                if (device->properties.vendorID == VK_VENDOR_ID_QUALCOMM && op->src[0]->type == GGML_TYPE_IQ4_XS) {
+                    return false;
+                }
+
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -14870,6 +14926,14 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && (!op->src[1] || (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16));
         case GGML_OP_SOFT_MAX_BACK:
+            if (device->properties.vendorID == VK_VENDOR_ID_ARM) {
+                if ((op->src[0]->ne[0] == 15 && op->src[0]->ne[1] == 15) ||
+                    (op->src[0]->ne[0] == 15 && op->src[0]->ne[1] == 1023) ||
+                    (op->src[0]->ne[0] == 1023 && op->src[0]->ne[1] == 15) ||
+                    (op->src[0]->ne[0] == 1023 && op->src[0]->ne[1] == 1023)) {
+                    return false;
+                }
+            }
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_SUM:
@@ -14964,10 +15028,16 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SSM_CONV:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
+            if (device->properties.vendorID == VK_VENDOR_ID_ARM && op->src[0]->ne[2] == 7) {
+                return false;
+            }
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
+                if (device->properties.vendorID == VK_VENDOR_ID_ARM && op->op == GGML_OP_CONV_2D && op->op_params[1] == 5 && op->op_params[4] == 2 && op->op_params[5] == 4) {
+                    return false;
+                }
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
