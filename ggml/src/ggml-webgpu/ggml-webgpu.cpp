@@ -267,12 +267,6 @@ struct webgpu_command {
 #endif
 };
 
-// #ifdef __EMSCRIPTEN__
-// struct ggml_wgpu_subgroup_matrix_config_stub { };
-// using ggml_wgpu_subgroup_matrix_config = ggml_wgpu_subgroup_matrix_config_stub;
-// #else
-// using ggml_wgpu_subgroup_matrix_config = wgpu::SubgroupMatrixConfig;
-// #endif
 
 struct webgpu_capabilities_base {
     wgpu::Limits limits;
