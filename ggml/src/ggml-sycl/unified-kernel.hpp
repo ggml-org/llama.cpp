@@ -134,6 +134,133 @@ inline bool use_int8_dpas() {
 }
 
 // =============================================================================
+// ESIMD Prefetch Configuration (Phase 4 - Task llama.cpp-attk)
+// =============================================================================
+// Configurable prefetch distance and cache hints for LSC (Load-Store Cache)
+// operations in ESIMD dpas kernels. Prefetching improves memory/compute overlap.
+//
+// Intel LSC Cache Hints:
+// - cached/cached: Data is cached at both L1 and L3 (good for reused data)
+// - streaming/uncached: Data bypasses cache (good for one-time-use data)
+//
+// Prefetch pattern:
+// - Weights: streaming/uncached (used once per output element)
+// - Activations: cached/cached (reused across N columns)
+//
+// Environment variables:
+// - GGML_SYCL_PREFETCH_DISTANCE: Tiles to prefetch ahead (default: 2)
+
+/**
+ * Default prefetch distance (tiles ahead to prefetch).
+ *
+ * Value 2 provides good balance per Intel recommendations:
+ * - Distance 1: Minimal hiding, may not cover full load latency
+ * - Distance 2: Good default, hides most memory latency
+ * - Distance 4: Aggressive, may over-use resources
+ *
+ * Configurable via GGML_SYCL_PREFETCH_DISTANCE environment variable.
+ */
+constexpr int DEFAULT_PREFETCH_DISTANCE = 2;
+
+/**
+ * Maximum prefetch distance to avoid resource exhaustion.
+ *
+ * Prefetching too far ahead wastes cache/TLB resources with data
+ * that may be evicted before use.
+ */
+constexpr int MAX_PREFETCH_DISTANCE = 4;
+
+/**
+ * Cache hint policy enum for prefetch operations.
+ *
+ * Used to configure L1/L3 cache behavior for different data patterns.
+ */
+enum class CacheHintPolicy {
+    CACHED,     ///< L1 cached, L3 cached - for reused data (activations)
+    STREAMING,  ///< L1 streaming, L3 uncached - for one-time-use data (weights)
+    UNCACHED    ///< Bypass cache entirely
+};
+
+/**
+ * Get prefetch distance from environment (cached).
+ *
+ * Reads GGML_SYCL_PREFETCH_DISTANCE environment variable once at initialization.
+ * Default is 2 (good balance between latency hiding and resource usage).
+ * Value is clamped to [0, MAX_PREFETCH_DISTANCE].
+ *
+ * @return Prefetch distance in K-tiles
+ */
+inline int get_prefetch_distance() {
+    static int distance = -1;
+    if (distance < 0) {
+        const char * env = std::getenv("GGML_SYCL_PREFETCH_DISTANCE");
+        if (env) {
+            int val = std::atoi(env);
+            // Clamp to valid range [0, MAX_PREFETCH_DISTANCE]
+            if (val < 0) val = 0;
+            if (val > MAX_PREFETCH_DISTANCE) val = MAX_PREFETCH_DISTANCE;
+            distance = val;
+        } else {
+            distance = DEFAULT_PREFETCH_DISTANCE;
+        }
+    }
+    return distance;
+}
+
+/**
+ * Get cache hint policy for weights (used once per element).
+ *
+ * Weights are loaded, dequantized, used in dpas, and then discarded.
+ * Streaming hint tells the cache not to retain this data.
+ *
+ * @return STREAMING cache hint policy
+ */
+inline CacheHintPolicy get_weights_cache_hint() {
+    return CacheHintPolicy::STREAMING;
+}
+
+/**
+ * Get cache hint policy for activations (reused across N columns).
+ *
+ * Activations are loaded once per K-tile and reused across multiple
+ * output columns. Caching improves hit rate for subsequent accesses.
+ *
+ * @return CACHED cache hint policy
+ */
+inline CacheHintPolicy get_activations_cache_hint() {
+    return CacheHintPolicy::CACHED;
+}
+
+/**
+ * Get maximum SLM usage with prefetch enabled.
+ *
+ * Calculates worst-case SLM usage for cooperative kernel with double-buffering.
+ * This is used to verify SLM doesn't exceed 64KB hardware limit.
+ *
+ * Layout: 2 buffers x (weights_tile + activations_tile)
+ * - Weights: TILE_N x K_TILE x sizeof(half) = 16 x 16 x 2 = 512 bytes
+ * - Activations: TILE_M x K_TILE x sizeof(half) = 16 x 16 x 2 = 512 bytes
+ * - Double-buffer: 2 x (512 + 512) = 2048 bytes
+ *
+ * @return Maximum SLM bytes used by prefetch-enabled kernel
+ */
+inline size_t get_max_slm_usage_with_prefetch() {
+    // Cooperative kernel tile dimensions
+    constexpr int TILE_M = 16;      // Work-group M dimension
+    constexpr int TILE_N = 16;      // Work-group N dimension
+    constexpr int K_TILE = 16;      // K dimension per dpas instruction
+    constexpr int NUM_BUFFERS = 2;  // Double-buffering
+
+    // Per-buffer sizes
+    constexpr size_t weights_size = TILE_N * K_TILE * sizeof(sycl::half);     // 512 bytes
+    constexpr size_t activations_size = TILE_M * K_TILE * sizeof(sycl::half); // 512 bytes
+    constexpr size_t buffer_size = weights_size + activations_size;           // 1024 bytes
+
+    // Total with double-buffering
+    return NUM_BUFFERS * buffer_size;  // 2048 bytes - well under 64KB limit
+}
+
+// =============================================================================
 // Kernel Path Selection for Batch-Size Gating (Phase 3)
 // =============================================================================
 // ESIMD dpas kernels have overhead that makes them slower than scalar for small

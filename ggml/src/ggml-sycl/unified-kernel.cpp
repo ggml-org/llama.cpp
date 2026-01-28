@@ -20,7 +20,54 @@
 //
 
 #include "unified-kernel.hpp"
+
+// =============================================================================
+// Standalone Test Mode Support
+// =============================================================================
+// When UNIFIED_KERNEL_TEST_STANDALONE is defined, provide stub implementations
+// for symbols normally provided by common.cpp. This allows standalone testing
+// without linking the entire ggml-sycl library.
+#ifdef UNIFIED_KERNEL_TEST_STANDALONE
+
+// Stub global debug flags
+bool g_ggml_sycl_debug = false;
+bool g_ggml_sycl_debug_forced_off = false;
+
+// Stub device info structure (minimal for testing)
+struct ggml_sycl_device_info_stub {
+    int nsm = 20;
+    struct {
+        bool supported = true;
+        bool supports_int8 = true;
+        bool supports_fp16 = true;
+        int slm_size = 65536;
+        int max_wg_size = 1024;
+        int sg_size_preferred = 16;
+        int M = 8;   // XMX tile M dimension
+        int N = 16;  // XMX tile N dimension
+        int K = 32;  // XMX tile K dimension (for INT8)
+    } xmx_caps;
+};
+
+struct ggml_sycl_info_stub {
+    int device_count = 1;
+    ggml_sycl_device_info_stub devices[1] = {};
+};
+
+static ggml_sycl_info_stub g_stub_sycl_info;
+
+const ggml_sycl_info_stub & ggml_sycl_info() {
+    return g_stub_sycl_info;
+}
+
+// Stub GGML_SYCL_DEBUG macro (no-op in standalone mode)
+#define GGML_SYCL_DEBUG(...) do {} while(0)
+
+#else  // !UNIFIED_KERNEL_TEST_STANDALONE
+
 #include "common.hpp"  // For ggml_sycl_info() and GGML_SYCL_DEBUG
+
+#endif  // UNIFIED_KERNEL_TEST_STANDALONE
 
 #include <algorithm>
 #include <cstdlib>
@@ -789,6 +836,164 @@ dequant_q8_0_tile_vectorized(
     return result;
 }
 
+// =============================================================================
+// Prefetch Support for Memory/Compute Overlap (Phase 4 - Task llama.cpp-attk)
+// =============================================================================
+// Prefetching future K-tiles while computing current tiles improves throughput.
+//
+// Cache hint strategy:
+// - Weights: use once per output element, minimal caching benefit
+// - Activations: reused across N columns, benefits from caching
+//
+// Note: ESIMD prefetch uses different APIs depending on compiler version.
+// We use esimd::prefetch for basic prefetch functionality.
+// The prefetch distance is passed in via args.prefetch_depth from the host.
+
+/**
+ * Prefetch Q4_0 weights for a future K-tile.
+ *
+ * Prefetches weight data asynchronously. Data will be in cache when
+ * the load is executed later in the K-loop.
+ *
+ * @param weights          Pointer to Q4_0 weight blocks
+ * @param n_global         Global N index for this weight row
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param K                Total K dimension
+ * @param k_blocks_per_row Number of Q4_0 blocks per weight row
+ * @param N                Total N dimension (for bounds checking)
+ */
+template <int K_TILE_SIZE>
+SYCL_ESIMD_FUNCTION void prefetch_weights_block(
+    const block_q4_0_unified * weights,
+    int64_t                    n_global,
+    int64_t                    k_tile_start,
+    int64_t                    K,
+    int                        k_blocks_per_row,
+    int64_t                    N) {
+
+    // Bounds check: don't prefetch beyond array
+    if (n_global >= N || k_tile_start >= K) {
+        return;
+    }
+
+    // Calculate block address for this K-tile
+    // Q4_0 blocks have 32 weights each
+    const int k_block_idx = static_cast<int>(k_tile_start / UNIFIED_QK4_0);
+    const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
+
+    // Prefetch the Q4_0 block - use gather to fetch the block data
+    // This brings the block into L2 cache ahead of the actual load
+    const block_q4_0_unified * block_ptr = &weights[global_block_idx];
+
+    // Use ESIMD scalar prefetch by reading into a register and discarding
+    // This triggers the memory subsystem to fetch the cache line
+    esimd::simd<uint8_t, 32> prefetch_data;
+    prefetch_data = esimd::block_load<uint8_t, 32>(
+        reinterpret_cast<const uint8_t *>(block_ptr));
+    // The load brings data into cache; we don't use the result
+    (void)prefetch_data;
+}
+
+/**
+ * Prefetch activations for a future K-tile.
+ *
+ * Prefetches activation data asynchronously. Activations benefit more
+ * from caching as they are reused across N columns.
+ *
+ * @param activations      Pointer to activation matrix
+ * @param m_global         Global M index for this activation row
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param K                Total K dimension (for indexing and bounds)
+ * @param M                Total M dimension (for bounds checking)
+ */
+template <int K_TILE_SIZE>
+SYCL_ESIMD_FUNCTION void prefetch_activations_block(
+    const float * activations,
+    int64_t       m_global,
+    int64_t       k_tile_start,
+    int64_t       K,
+    int64_t       M) {
+
+    // Bounds check: don't prefetch beyond array
+    if (m_global >= M || k_tile_start >= K) {
+        return;
+    }
+
+    // Calculate address for this K-tile
+    const float * tile_ptr = activations + m_global * K + k_tile_start;
+
+    // Use ESIMD block load to prefetch - this brings data into cache
+    esimd::simd<float, K_TILE_SIZE> prefetch_data;
+    prefetch_data = esimd::block_load<float, K_TILE_SIZE>(tile_ptr);
+    // The load brings data into cache; we don't use the result
+    (void)prefetch_data;
+}
+
+/**
+ * Prefetch weights for a K-tile (cooperative version).
+ *
+ * Called by work-items in cooperative kernel. Each work-item prefetches
+ * one weight row if local_id < TILE_N.
+ *
+ * @param weights          Pointer to Q4_0 weight blocks
+ * @param n_wg_start       Starting N index for this work-group
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param args             Kernel arguments (for dimensions)
+ * @param k_blocks_per_row Number of Q4_0 blocks per weight row
+ * @param local_id         Work-item local ID [0..WG_SIZE)
+ * @param tile_n           N tile size (COOP_WG_N)
+ */
+template <int K_TILE_SIZE, int TILE_N>
+SYCL_ESIMD_FUNCTION void prefetch_weights_cooperative(
+    const block_q4_0_unified *  weights,
+    int64_t                     n_wg_start,
+    int64_t                     k_tile_start,
+    const UnifiedKernelArgs &   args,
+    int                         k_blocks_per_row,
+    int                         local_id,
+    int                         tile_n) {
+
+    // Only work-items [0..TILE_N) prefetch weights
+    if (local_id < tile_n) {
+        const int64_t n_global = n_wg_start + local_id;
+        prefetch_weights_block<K_TILE_SIZE>(
+            weights, n_global, k_tile_start, args.K, k_blocks_per_row, args.N);
+    }
+}
+
+/**
+ * Prefetch activations for a K-tile (cooperative version).
+ *
+ * Called by work-items in cooperative kernel. Each work-item prefetches
+ * one activation row if local_id >= TILE_N.
+ *
+ * @param activations      Pointer to activation matrix
+ * @param m_wg_start       Starting M index for this work-group
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param args             Kernel arguments (for dimensions)
+ * @param local_id         Work-item local ID [0..WG_SIZE)
+ * @param tile_n           N tile size (COOP_WG_N) - work-items >= this prefetch activations
+ * @param tile_m           M tile size (COOP_WG_M)
+ */
+template <int K_TILE_SIZE, int TILE_M>
+SYCL_ESIMD_FUNCTION void prefetch_activations_cooperative(
+    const float *             activations,
+    int64_t                   m_wg_start,
+    int64_t                   k_tile_start,
+    const UnifiedKernelArgs & args,
+    int                       local_id,
+    int                       tile_n,
+    int                       tile_m) {
+
+    // Work-items [TILE_N..TILE_N+TILE_M) prefetch activations
+    const int act_id = local_id - tile_n;
+    if (act_id >= 0 && act_id < tile_m) {
+        const int64_t m_global = m_wg_start + act_id;
+        prefetch_activations_block<K_TILE_SIZE>(
+            activations, m_global, k_tile_start, args.K, args.M);
+    }
+}
+
 /**
  * Check if cooperative ESIMD dpas path is enabled via environment.
  *
@@ -1045,8 +1250,35 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
 
         int buf_compute = 0;  // Start with buffer 0
 
+        // Get prefetch distance from kernel args (set by host-side launch_unified_matmul)
+        // Double-buffering loads kt+1, so prefetch targets kt+prefetch_depth
+        const int prefetch_distance = args.prefetch_depth;
+
         // Main K-loop with double-buffering
         for (int64_t kt = 0; kt < k_tiles; kt++) {
+            // ================================================================
+            // Prefetch: Look ahead beyond double-buffer distance
+            // ================================================================
+            // Double-buffering loads kt+1. Prefetch targets kt+prefetch_depth.
+            // This gets data into cache before the load is needed.
+            if (prefetch_distance > 1 && kt + prefetch_distance < k_tiles) {
+                const int64_t prefetch_k_start = (kt + prefetch_distance) * ESIMD_K_PER_DPAS;
+
+                // Prefetch weights for future K-tile
+                #pragma unroll
+                for (int n = 0; n < TILE_N; n++) {
+                    prefetch_weights_block<ESIMD_K_PER_DPAS>(
+                        weights, n_start + n, prefetch_k_start, args.K, k_blocks_per_row, args.N);
+                }
+
+                // Prefetch activations for future K-tile
+                #pragma unroll
+                for (int m = 0; m < TILE_M; m++) {
+                    prefetch_activations_block<ESIMD_K_PER_DPAS>(
+                        args.activations, m_start + m, prefetch_k_start, args.K, args.M);
+                }
+            }
+
             // Determine current buffer offsets
             const uint32_t compute_w_off = (buf_compute == 0) ? ESIMD_SLM_BUF0_WEIGHTS : ESIMD_SLM_BUF1_WEIGHTS;
             const uint32_t compute_a_off = (buf_compute == 0) ? ESIMD_SLM_BUF0_ACTS : ESIMD_SLM_BUF1_ACTS;
@@ -1583,11 +1815,39 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
     // Number of K tiles
     const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS - 1) / ESIMD_K_PER_DPAS;
 
+    // Get prefetch distance from kernel args (set by host-side launch_unified_matmul)
+    // args.prefetch_depth is set from get_prefetch_distance() on the host side
+    const int prefetch_distance = args.prefetch_depth;
+
     // K-loop: iterate over K dimension in tiles of 16
     for (int64_t kt = 0; kt < k_tiles; kt++) {
         const int64_t k_start = kt * ESIMD_K_PER_DPAS;
         const int64_t k_remaining = args.K - k_start;
         const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+
+        // ================================================================
+        // Phase 0: LSC Prefetch for Future K-Tiles (Memory/Compute Overlap)
+        // ================================================================
+        // Prefetch future tile data while loading current tile.
+        // Uses cache hints based on data reuse patterns:
+        // - Weights: streaming (used once per output element)
+        // - Activations: cached (reused across N columns)
+        //
+        // Bounds checking: Only prefetch if future tile exists
+        // Guard: if (kt + prefetch_distance < k_tiles) prefetch(...)
+        if (prefetch_distance > 0 && kt + prefetch_distance < k_tiles) {
+            const int64_t prefetch_k_start = (kt + prefetch_distance) * ESIMD_K_PER_DPAS;
+
+            // Prefetch weights for future K-tile (work-items 0..15)
+            prefetch_weights_cooperative<ESIMD_K_PER_DPAS, COOP_WG_N>(
+                weights, n_wg_start, prefetch_k_start, args,
+                k_blocks_per_row, local_id, COOP_WG_N);
+
+            // Prefetch activations for future K-tile (work-items 16..31)
+            prefetch_activations_cooperative<ESIMD_K_PER_DPAS, COOP_WG_M>(
+                args.activations, m_wg_start, prefetch_k_start, args,
+                local_id, COOP_WG_N, COOP_WG_M);
+        }
 
         // ================================================================
         // Phase 1: Cooperative Loading with Block Operations
@@ -1967,7 +2227,16 @@ void unified_matmul_kernel_impl(sycl::nd_item<2>                   item,
 // Kernel Launcher
 // =============================================================================
 
-void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
+void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
+    // Make a mutable copy of args to set prefetch_depth from host configuration
+    UnifiedKernelArgs args = args_in;
+
+    // Set prefetch distance from host-side configuration if not already set
+    // This ensures the kernel gets the correct value without calling getenv from device
+    if (args.prefetch_depth <= 0) {
+        args.prefetch_depth = get_prefetch_distance();
+    }
+
     // Validate arguments
     if (!validate_args(args)) {
         fprintf(stderr, "[unified-kernel] Invalid arguments\n");

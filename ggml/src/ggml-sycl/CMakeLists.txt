@@ -685,4 +685,32 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;dispatch;gating"
         TIMEOUT 60
     )
+
+    # Test 15: ESIMD SLM Prefetch Optimization Tests (Task llama.cpp-attk)
+    # Tests LSC prefetch with cache hints for memory/compute overlap
+    add_executable(test-esimd-prefetch
+        tests/test-esimd-prefetch.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-esimd-prefetch PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-esimd-prefetch PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-esimd-prefetch PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-esimd-prefetch PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        XMX_TEST_STANDALONE=1
+        UNIFIED_KERNEL_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-esimd-prefetch PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME esimd-prefetch COMMAND test-esimd-prefetch)
+    set_tests_properties(esimd-prefetch PROPERTIES
+        LABELS "sycl;xmx;esimd;prefetch;lsc"
+        TIMEOUT 180
+    )
 endif()
