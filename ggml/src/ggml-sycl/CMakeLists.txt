@@ -637,4 +637,30 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;xmx;unified;config"
         TIMEOUT 60
     )
+
+    # Test 13: ESIMD Vectorized Dequantization Tests
+    # Tests vectorized Q4_0 and Q8_0 dequantization for ESIMD dpas kernels
+    add_executable(test-esimd-vectorized-dequant
+        tests/test-esimd-vectorized-dequant.cpp
+    )
+    target_include_directories(test-esimd-vectorized-dequant PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-esimd-vectorized-dequant PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-esimd-vectorized-dequant PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-esimd-vectorized-dequant PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        XMX_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-esimd-vectorized-dequant PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME esimd-vectorized-dequant COMMAND test-esimd-vectorized-dequant)
+    set_tests_properties(esimd-vectorized-dequant PROPERTIES
+        LABELS "sycl;xmx;esimd;dequant"
+        TIMEOUT 120
+    )
 endif()
