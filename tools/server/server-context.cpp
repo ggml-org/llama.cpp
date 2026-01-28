@@ -11,6 +11,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "ngram-mod.h"
 
 #include <cstddef>
 #include <cinttypes>
@@ -560,6 +561,8 @@ private:
 
     llama_model_ptr model_dft;
 
+    common_ngram_mod_ptr ngram_mod;
+
     bool add_bos_token  = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -705,6 +708,11 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+
+            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+                params_base.speculative.type =  COMMON_SPECULATIVE_TYPE_NONE;
+                SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
+            }
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx))) {
@@ -748,6 +756,18 @@ private:
 
             // try speculative decoding
             {
+                // initialize a shared ngram_mod instance for all speculative contexts
+                if (!ngram_mod && params_base.speculative.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD) {
+                    ngram_mod = std::make_unique<common_ngram_mod>(params_base.speculative.ngram_size_n, 1024*1024);
+
+                    params_base.speculative.ngram_mod = ngram_mod.get();
+
+                    SRV_INF("initialized ngram_mod with n=%d, size=%d (%.3f MB)\n",
+                        params_base.speculative.ngram_size_n, 1024*1024,
+                        (float)(1024*1024*sizeof(common_ngram_mod_entry))/1024/1024
+                    );
+                }
+
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {
@@ -2044,6 +2064,11 @@ private:
                 if (draft.size() > (size_t) n_draft_max) {
                     SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
                     draft.resize(n_draft_max);
+                }
+
+                if (draft.size() > 0) {
+                    std::string tmp = common_detokenize(slot.ctx, draft);
+                    //LOG_WRN("XXXXXX: draft: '%s'\n", tmp.c_str());
                 }
 
                 // add the sampled token to the batch
