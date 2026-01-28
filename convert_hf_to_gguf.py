@@ -8912,7 +8912,8 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             name.endswith("block_sparse_moe.input_linear.weight")
             or "shared_mlp" in name
         ):
-            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            yield from return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            return
 
         # Determine whether this is a mamba layer or an attention layer
         if bid in self._ssm_layers:
