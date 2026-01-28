@@ -28,16 +28,17 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
             });
-            console.log("Latest release:", releases[0].tag_name);
-            return releases[0].tag_name;
+            const { tag_name: version, assets: assets } = releases.find(({assets}) => assets.find(asset => asset.name.includes('win-vulkan')));
+            const { browser_download_url: asset_url } = assets.find(asset => asset.name.includes('win-vulkan'));
+            console.log("Latest release:", version);
+            core.setOutput('VERSION', version);
+            core.setOutput('ASSETURL', asset_url);
 
       - name: Update manifest
-        env:
-          VERSION: ${{ steps.find_latest_release.outputs.result }}
         run: |
           echo "Updating manifest..."
-          komac update --version ${{ env.VERSION }} \
-            --urls "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.VERSION }}/llama-${{ env.VERSION }}-bin-win-vulkan-x64.zip" \
+          komac update --version ${{ steps.find_latest_release.outputs.VERSION }} \
+            --urls "${{ steps.find_latest_release.outputs.ASSETURL }}" \
             --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
             --submit \
             ggml.llamacpp
