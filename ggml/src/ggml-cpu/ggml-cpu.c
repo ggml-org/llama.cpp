@@ -1401,14 +1401,12 @@ void ggml_compute_forward_mul_mat(
                 const float * act_f32            = (const float *) src1->data;
                 const int64_t act_f32_col_stride = (int64_t) (nb11 / sizeof(float));
 
+                const bool lut_c_impl = impl == GGML_IFAIRY_LUT_IMPL_LUT_C;
                 void (*quantize_act)(const float * GGML_RESTRICT, void * GGML_RESTRICT, int64_t) =
-                    quantize_row_ifairy_q16;
-                if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
-                    quantize_act = quantize_row_ifairy_q16_lut_c;
-                }
+                    lut_c_impl ? quantize_row_ifairy_q16_lut_c : quantize_row_ifairy_q16_tensor;
 
-                if (N >= nth) {
-                    // Shard by columns.
+                if (N >= nth || !lut_c_impl) {
+                    // Shard by columns. For tensor-scale quantization, avoid partial K ranges.
                     for (int64_t c = ith; c < N; c += nth) {
                         quantize_act(act_f32 + c * act_f32_col_stride, act_q + c * blocks_per_col, K);
                     }
