@@ -62,25 +62,6 @@ size_t apir_buffer_type_get_max_size(virtgpu * gpu, ggml_backend_buffer_type_t b
     return max_size;
 }
 
-bool apir_buffer_type_is_host(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
-    apir_encoder *        encoder;
-    apir_decoder *        decoder;
-    ApirForwardReturnCode ret;
-
-    REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST);
-
-    apir_encode_ggml_buffer_type(encoder, buft);
-
-    REMOTE_CALL(gpu, encoder, decoder, ret);
-
-    bool is_host;
-    apir_decode_bool_t(decoder, &is_host);
-
-    remote_call_finish(gpu, encoder, decoder);
-
-    return is_host;
-}
-
 apir_buffer_context_t apir_buffer_type_alloc_buffer(virtgpu * gpu, ggml_backend_buffer_type_t buft, size_t size) {
     apir_encoder *        encoder;
     apir_decoder *        decoder;

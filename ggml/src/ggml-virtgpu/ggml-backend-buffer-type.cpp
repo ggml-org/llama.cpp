@@ -60,12 +60,6 @@ static size_t ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer
     return max_size;
 }
 
-static bool ggml_backend_remoting_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    virtgpu * gpu = BUFT_TO_GPU(buft);
-
-    return apir_buffer_type_is_host(gpu, buft);
-}
-
 static size_t ggml_backend_remoting_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
                                                                const ggml_tensor *        tensor) {
     virtgpu * gpu = BUFT_TO_GPU(buft);

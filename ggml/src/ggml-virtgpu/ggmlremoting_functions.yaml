@@ -79,9 +79,7 @@ functions:
         - "ggml_backend_buffer_type_t buft"
 
       is_host:
-        frontend_return: "bool"
-        frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        deprecated: true
 
       alloc_buffer:
         frontend_return: "apir_buffer_context_t"
