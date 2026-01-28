@@ -121,9 +121,11 @@ struct common_speculative_state {
 
     int64_t gen_duration_us = 0; // total time spent in this implementation in microseconds.
 
+    common_speculative_state(enum common_speculative_type type) : type(type) {}
+
     virtual ~common_speculative_state() = default;
 
-    common_speculative_state(enum common_speculative_type type) : type(type) {}
+    virtual void accept(uint16_t n_accepted) = 0;
 };
 
 struct common_speculative_state_draft : public common_speculative_state {
@@ -198,21 +200,35 @@ struct common_speculative_state_draft : public common_speculative_state {
 
         llama_batch_free(batch);
     }
+
+    void accept(uint16_t n_accepted) override {
+        // noop
+        GGML_UNUSED(n_accepted);
+    }
 };
 
 struct common_speculative_state_eagle3 : public common_speculative_state {
     common_speculative_state_eagle3(enum common_speculative_type type) : common_speculative_state(type) {}
+
+    void accept(uint16_t n_accepted) override {
+        // noop
+        GGML_UNUSED(n_accepted);
+    }
 };
 
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
-
     common_ngram_simple_state state;
 
     common_speculative_state_ngram_simple(
             enum common_speculative_type type,
             common_ngram_simple_state state)
         : common_speculative_state(type), state(state) {}
+
+    void accept(uint16_t n_accepted) override {
+        // noop
+        GGML_UNUSED(n_accepted);
+    }
 };
 
 struct common_speculative_state_ngram_map_k : public common_speculative_state {
@@ -223,6 +239,10 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
             enum common_speculative_type type,
             common_ngram_map map)
         : common_speculative_state(type), map(std::move(map)) {}
+
+    void accept(uint16_t n_accepted) override {
+        common_ngram_map_accept(map, n_accepted);
+    }
 };
 
 struct common_speculative_state_ngram_map_k4v : public common_speculative_state_ngram_map_k {
@@ -230,6 +250,10 @@ struct common_speculative_state_ngram_map_k4v : public common_speculative_state_
             enum common_speculative_type type,
             common_ngram_map map)
         : common_speculative_state_ngram_map_k(type, std::move(map)) {}
+
+    void accept(uint16_t n_accepted) override {
+        common_ngram_map_accept(map, n_accepted);
+    }
 };
 
 struct common_speculative_state_ngram_cache : public common_speculative_state {
@@ -272,6 +296,11 @@ struct common_speculative_state_ngram_cache : public common_speculative_state {
                 GGML_ABORT("Couldn't read dynamic lookup cache");
             }
         }
+    }
+
+    void accept(uint16_t n_accepted) override {
+        // TODO: noop
+        GGML_UNUSED(n_accepted);
     }
 };
 
@@ -842,15 +871,7 @@ void common_speculative_accept(struct common_speculative * spec, uint16_t n_acce
         impl->drafts_accepted_tokens += n_accepted;
     }
 
-    if (impl->type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K ||
-        impl->type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V) {
-
-        // TODO: add common_speculative_state::accept() to base class and remove this dynamic cast
-        auto * state = dynamic_cast<struct common_speculative_state_ngram_map_k *>(impl);
-        if (state) {
-            common_ngram_map_accept(state->map, n_accepted);
-        }
-    }
+    impl->accept(n_accepted);
 }
 
 void common_speculative_print_stats(const struct common_speculative * spec) {
