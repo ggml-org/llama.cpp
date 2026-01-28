@@ -105,11 +105,17 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json{nullptr};
         },
-        [&](bool, value & messages, value &) {
+        [&](bool success, value & messages, value &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (has_op(content, "selectattr") || has_op(content, "array_access")) {
                 // accessed as an array
+                result.requires_typed_content = true;
+            }
+
+            // If the template uses content and fails with a string, it likely expects an array
+            if (!success && content->stats.used) {
+                JJ_DEBUG("%s", "Template failed with string content, likely expects typed content array");
                 result.requires_typed_content = true;
             }
         }

@@ -2877,7 +2877,19 @@ static common_chat_params common_chat_templates_apply_jinja(
         : *tmpls->template_default;
     const auto & src = tmpl.source();
     const auto & caps = tmpl.original_caps();
-    params.messages = common_chat_msgs_to_json_oaicompat(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
+    params.messages = common_chat_msgs_to_json_oaicompat(inputs.messages, /* concat_text= */ !caps.requires_typed_content);
+
+    // If template requires typed content, ensure all string contents are converted into json arrays
+    if (caps.requires_typed_content) {
+        for (auto & msg : params.messages) {
+            if (msg.contains("content") && msg.at("content").is_string()) {
+                const auto text = msg.at("content").get<std::string>();
+                json content_arr = json::array();
+                content_arr.push_back(json::object({ {"type", "text"}, {"text", text} }));
+                msg["content"] = std::move(content_arr);
+            }
+        }
+    }
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.tool_choice = inputs.tool_choice;
     params.reasoning_format = inputs.reasoning_format;
