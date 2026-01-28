@@ -16,6 +16,7 @@ import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -124,6 +125,7 @@ class ChatStore {
 	clearUIState(): void {
 		this.isLoading = false;
 		this.currentResponse = '';
+		this.isStreamingActive = false;
 	}
 	setActiveProcessingConversation(conversationId: string | null): void {
 		this.activeConversationId = conversationId;
@@ -515,11 +517,18 @@ class ChatStore {
 		onError?: (error: Error) => void,
 		modelOverride?: string | null
 	): Promise<void> {
-		if (isRouterMode()) {
-			const modelName = modelOverride || selectedModelName();
-			if (modelName && !modelsStore.getModelProps(modelName))
-				await modelsStore.fetchModelProps(modelName);
+		let effectiveModel = modelOverride;
+
+		if (isRouterMode() && !effectiveModel) {
+			const conversationModel = this.getConversationModel(allMessages);
+			effectiveModel = selectedModelName() || conversationModel;
 		}
+
+		if (isRouterMode() && effectiveModel) {
+			if (!modelsStore.getModelProps(effectiveModel))
+				await modelsStore.fetchModelProps(effectiveModel);
+		}
+
 		let streamedContent = '',
 			streamedToolCallContent = '',
 			isReasoningOpen = false,
@@ -682,18 +691,34 @@ class ChatStore {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				conversationId: assistantMessage.convId,
 				messages: allMessages,
-				options: { ...this.getApiOptions(), ...(modelOverride ? { model: modelOverride } : {}) },
+				options: { ...this.getApiOptions(), ...(effectiveModel ? { model: effectiveModel } : {}) },
 				callbacks: streamCallbacks,
 				signal: abortController.signal,
 				perChatOverrides
 			});
 			if (agenticResult.handled) return;
 		}
+		const resourceContext = mcpStore.getResourceContextForChat();
+		let messagesWithResources = allMessages;
+
+		if (resourceContext) {
+			messagesWithResources = allMessages.map((msg, idx) => {
+				if (idx === allMessages.length - 1 && msg.role === MessageRole.USER) {
+					return {
+						...msg,
+						content: resourceContext + '\n\n' + msg.content
+					};
+				}
+				return msg;
+			});
+			mcpStore.clearResourceAttachments();
+		}
+
 		await ChatService.sendMessage(
-			allMessages,
+			messagesWithResources,
 			{
 				...this.getApiOptions(),
-				...(modelOverride ? { model: modelOverride } : {}),
+				...(effectiveModel ? { model: effectiveModel } : {}),
 				...streamCallbacks
 			},
 			assistantMessage.convId,
@@ -744,10 +769,10 @@ class ChatStore {
 					};
 				}
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
-				lastMessage.content = this.currentResponse;
+				lastMessage.content = streamingState.response;
 				if (updateData.timings) lastMessage.timings = updateData.timings;
 			} catch (error) {
-				lastMessage.content = this.currentResponse;
+				lastMessage.content = streamingState.response;
 				console.error('Failed to save partial response:', error);
 			}
 		}
