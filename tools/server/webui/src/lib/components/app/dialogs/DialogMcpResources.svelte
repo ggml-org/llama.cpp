@@ -7,6 +7,7 @@
 	import { mcpResources, mcpTotalResourceCount } from '$lib/stores/mcp-resources.svelte';
 	import { McpResourceBrowser, McpResourcePreview } from '$lib/components/app';
 	import type { MCPResourceInfo } from '$lib/types';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		open?: boolean;
@@ -17,7 +18,7 @@
 
 	let { open = $bindable(false), onOpenChange, onAttach, preSelectedUri }: Props = $props();
 
-	let selectedResources = $state<Set<string>>(new Set());
+	let selectedResources = new SvelteSet<string>();
 	let lastSelectedUri = $state<string | null>(null);
 	let isAttaching = $state(false);
 
@@ -28,7 +29,7 @@
 			loadResources();
 
 			if (preSelectedUri) {
-				selectedResources = new Set([preSelectedUri]);
+				selectedResources = new SvelteSet([preSelectedUri]);
 				lastSelectedUri = preSelectedUri;
 			}
 		}
@@ -46,7 +47,7 @@
 		open = newOpen;
 		onOpenChange?.(newOpen);
 		if (!newOpen) {
-			selectedResources = new Set();
+			selectedResources = new SvelteSet();
 			lastSelectedUri = null;
 		}
 	}
@@ -60,7 +61,7 @@
 			if (lastIndex !== -1 && currentIndex !== -1) {
 				const start = Math.min(lastIndex, currentIndex);
 				const end = Math.max(lastIndex, currentIndex);
-				const newSelection = new Set(selectedResources);
+				const newSelection = new SvelteSet(selectedResources);
 
 				for (let i = start; i <= end; i++) {
 					newSelection.add(allResources[i].uri);
@@ -69,13 +70,13 @@
 				selectedResources = newSelection;
 			}
 		} else {
-			selectedResources = new Set([resource.uri]);
+			selectedResources = new SvelteSet([resource.uri]);
 			lastSelectedUri = resource.uri;
 		}
 	}
 
 	function handleResourceToggle(resource: MCPResourceInfo, checked: boolean) {
-		const newSelection = new Set(selectedResources);
+		const newSelection = new SvelteSet(selectedResources);
 		if (checked) {
 			newSelection.add(resource.uri);
 		} else {

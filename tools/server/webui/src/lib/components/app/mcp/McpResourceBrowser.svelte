@@ -16,15 +16,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		mcpResources,
-		mcpTotalResourceCount,
-		mcpResourcesLoading
-	} from '$lib/stores/mcp-resources.svelte';
+	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
 	import { getFaviconUrl } from '$lib/utils';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { MCPResource, MCPResourceInfo, MCPServerResources } from '$lib/types';
+	import type { MCPResource, MCPResourceInfo } from '$lib/types';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
@@ -44,8 +41,8 @@
 		class: className
 	}: Props = $props();
 
-	let expandedServers = $state<Set<string>>(new Set());
-	let expandedFolders = $state<Set<string>>(new Set());
+	let expandedServers = new SvelteSet<string>();
+	let expandedFolders = new SvelteSet<string>();
 	let hasAutoExpanded = $state(false);
 
 	const resources = $derived(mcpResources());
@@ -62,13 +59,13 @@
 		for (const [serverName, serverRes] of resources.entries()) {
 			const resource = serverRes.resources.find((r) => r.uri === uri);
 			if (resource) {
-				const newExpandedServers = new Set(expandedServers);
+				const newExpandedServers = new SvelteSet(expandedServers);
 				newExpandedServers.add(serverName);
 				expandedServers = newExpandedServers;
 
 				const pathParts = parseResourcePath(uri);
 				if (pathParts.length > 1) {
-					const newExpandedFolders = new Set(expandedFolders);
+					const newExpandedFolders = new SvelteSet(expandedFolders);
 					let currentPath = '';
 					for (let i = 0; i < pathParts.length - 1; i++) {
 						currentPath = `${currentPath}/${pathParts[i]}`;
@@ -83,7 +80,7 @@
 	}
 
 	function toggleServer(serverName: string) {
-		const newSet = new Set(expandedServers);
+		const newSet = new SvelteSet(expandedServers);
 		if (newSet.has(serverName)) {
 			newSet.delete(serverName);
 		} else {
@@ -93,7 +90,7 @@
 	}
 
 	function toggleFolder(folderId: string) {
-		const newSet = new Set(expandedFolders);
+		const newSet = new SvelteSet(expandedFolders);
 		if (newSet.has(folderId)) {
 			newSet.delete(folderId);
 		} else {
@@ -257,7 +254,7 @@
 						if (aIsFolder && !bIsFolder) return -1;
 						if (!aIsFolder && bIsFolder) return 1;
 						return a.name.localeCompare(b.name);
-					}) as child}
+					}) as child (child.resource?.uri || `${serverName}:${parentPath}/${node.name}/${child.name}`)}
 						{@render renderTreeNode(child, serverName, depth + 1, `${parentPath}/${node.name}`)}
 					{/each}
 				</div>
@@ -338,7 +335,7 @@
 				{/if}
 			</div>
 		{:else}
-			{#each [...resources.entries()] as [serverName, serverRes]}
+			{#each [...resources.entries()] as [serverName, serverRes] (serverName)}
 				{@const isExpanded = expandedServers.has(serverName)}
 				{@const hasResources = serverRes.resources.length > 0}
 				{@const displayName = getServerDisplayName(serverName)}
@@ -389,7 +386,7 @@
 									if (!aIsFolder && bIsFolder) return 1;
 
 									return a.name.localeCompare(b.name);
-								}) as child}
+								}) as child (child.resource?.uri || `${serverName}:${child.name}`)}
 									{@render renderTreeNode(child, serverName, 1, '')}
 								{/each}
 							{/if}
