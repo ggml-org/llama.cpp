@@ -149,6 +149,13 @@ virtgpu * create_virtgpu() {
     gpu->use_apir_capset = getenv("GGML_REMOTING_USE_APIR_CAPSET") != nullptr;
     util_sparse_array_init(&gpu->shmem_array, sizeof(virtgpu_shmem), 1024);
 
+    // Initialize mutex to protect shared data_shmem buffer
+    if (mtx_init(&gpu->data_shmem_mutex, mtx_plain) != thrd_success) {
+        delete gpu;
+        GGML_ABORT("%s: failed to initialize data_shmem mutex", __func__);
+        return NULL;
+    }
+
     if (virtgpu_open(gpu) != APIR_SUCCESS) {
         GGML_ABORT("%s: failed to open the virtgpu device", __func__);
         return NULL;

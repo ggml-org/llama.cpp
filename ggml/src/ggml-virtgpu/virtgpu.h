@@ -74,6 +74,9 @@ struct virtgpu {
     virtgpu_shmem reply_shmem;
     virtgpu_shmem data_shmem;
 
+    /* Mutex to protect shared data_shmem buffer from concurrent access */
+    mtx_t data_shmem_mutex;
+
     /* Cached device information to prevent memory leaks and race conditions */
     struct {
         char *   description;
