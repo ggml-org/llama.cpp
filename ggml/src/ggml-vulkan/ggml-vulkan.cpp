@@ -5522,22 +5522,32 @@ static void ggml_vk_instance_init() {
 
             if ((new_props.properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu || new_props.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu) && ggml_vk_device_is_supported(devices[i])) {
                 // Check if there are two physical devices corresponding to the same GPU
+                // This handles the case where the same GPU appears with different drivers (e.g., RADV + AMDVLK on Linux),
+                // see https://github.com/ggml-org/llama.cpp/pull/7582 for original deduplication.
+                // However, for MoltenVK on macOS, multiple GPUs on the same card may report the same UUID,
+                // see https://github.com/KhronosGroup/MoltenVK/issues/2683. Until this is fixed, we'll only deduplicate
+                // when drivers differ (same driver + same UUID = likely different GPUs)
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
                     vk_instance.device_indices.end(),
-                    [&devices, &new_id](const size_t k){
+                    [&devices, &new_id, &new_driver](const size_t k){
                         vk::PhysicalDeviceProperties2 old_props;
+                        vk::PhysicalDeviceDriverProperties old_driver;
                         vk::PhysicalDeviceIDProperties old_id;
-                        old_props.pNext = &old_id;
+                        old_props.pNext = &old_driver;
+                        old_driver.pNext = &old_id;
                         devices[k].getProperties2(&old_props);
 
-                        bool equals = std::equal(std::begin(old_id.deviceUUID), std::end(old_id.deviceUUID), std::begin(new_id.deviceUUID));
-                        equals = equals || (
+                        bool same_uuid = std::equal(std::begin(old_id.deviceUUID), std::end(old_id.deviceUUID), std::begin(new_id.deviceUUID));
+                        same_uuid = same_uuid || (
                             old_id.deviceLUIDValid && new_id.deviceLUIDValid &&
                             std::equal(std::begin(old_id.deviceLUID), std::end(old_id.deviceLUID), std::begin(new_id.deviceLUID))
                         );
 
-                        return equals;
+                        // Only deduplicate if same UUID AND different drivers
+                        // (same driver + same UUID on MoltenVK = likely different GPUs on multi-GPU card)
+                        bool different_driver = (old_driver.driverID != new_driver.driverID);
+                        return same_uuid && different_driver;
                     }
                 );
                 if (old_device == vk_instance.device_indices.end()) {
