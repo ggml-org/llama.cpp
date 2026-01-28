@@ -394,6 +394,7 @@ struct server_slot {
                     draft_ratio, n_draft_accepted, n_draft_total
             );
         }
+
         common_speculative_print_stats(spec);
     }
 
@@ -2712,7 +2713,9 @@ private:
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
 
-                    common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                    if (slot.can_speculate()) {
+                        common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                    }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
                 }

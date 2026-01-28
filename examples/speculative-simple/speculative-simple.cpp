@@ -127,6 +127,8 @@ int main(int argc, char ** argv) {
 
     struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt, common_context_params_to_llama(params), model_dft);
 
+    common_speculative_begin(spec, prompt_tgt);
+
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
     const auto t_enc_end = ggml_time_us();
