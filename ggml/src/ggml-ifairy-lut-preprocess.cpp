@@ -213,3 +213,16 @@ void ggml_ifairy_lut_preprocess_ex_lut16(int          m,
                                          int          nth) {
     ggml_ifairy_lut_preprocess_lut16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
 }
+
+void ggml_ifairy_lut_preprocess_ex_lut_c(int          m,
+                                         int          k,
+                                         int          n,
+                                         const void * act,
+                                         size_t       act_stride,
+                                         void *       lut_scales,
+                                         void *       lut_buf,
+                                         int          ith,
+                                         int          nth) {
+    // lut_c backend uses the same 16-entry LUT layout; scaling differences are handled at activation quantization.
+    ggml_ifairy_lut_preprocess_lut16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
+}

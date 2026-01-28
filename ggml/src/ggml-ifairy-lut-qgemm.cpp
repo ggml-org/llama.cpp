@@ -465,6 +465,22 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
     }
 }
 
+void ggml_ifairy_lut_qgemm_lut_c(int          m,
+                                 int          k,
+                                 int          n,
+                                 const void * packed_wtiles,
+                                 const void * lut,
+                                 const void * lut_scales,
+                                 float *      dst,
+                                 size_t       dst_col_stride,
+                                 size_t       dst_row_stride,
+                                 bool         pack_bf16,
+                                 bool         add) {
+    // lut_c backend reuses the same packed weights + 16-entry LUT kernel. Activation scaling is handled upstream.
+    ggml_ifairy_lut_qgemm_lut16(m, k, n, packed_wtiles, lut, lut_scales, dst, dst_col_stride, dst_row_stride, pack_bf16,
+                                add);
+}
+
 void ggml_ifairy_lut_mul_mat_scalar(int          m,
                                     int          k,
                                     int          n,

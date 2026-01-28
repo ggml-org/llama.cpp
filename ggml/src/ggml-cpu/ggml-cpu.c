@@ -1331,6 +1331,14 @@ void ggml_compute_forward_mul_mat(
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
         src0->ne[0] % QK_K == 0 && src1->ne[0] == src0->ne[0]) {
+        enum ggml_ifairy_lut_impl impl = cfg->impl;
+        if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C && src1->type != GGML_TYPE_F32) {
+            if (cfg->dbg) {
+                GGML_LOG_WARN("ifairy_lut: lut_c requires src1=F32, falling back to lut16\n");
+            }
+            impl = GGML_IFAIRY_LUT_IMPL_LUT16;
+        }
+
         // NOTE: packed weights are prepared up-front in ggml_graph_compute(); this is a cheap cache check.
         const bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->packed_w;
 
@@ -1395,7 +1403,7 @@ void ggml_compute_forward_mul_mat(
 
                 void (*quantize_act)(const float * GGML_RESTRICT, void * GGML_RESTRICT, int64_t) =
                     quantize_row_ifairy_q16;
-                if (cfg->impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
                     quantize_act = quantize_row_ifairy_q16_lut_c;
                 }
 
@@ -1424,7 +1432,13 @@ void ggml_compute_forward_mul_mat(
 
             uint8_t * dst_base = (uint8_t *) dst->data;
             // V2 core path: build LUT once, shared across all threads (parallelize preprocess across threads)
-            ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith, nth);
+            if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                ggml_ifairy_lut_preprocess_ex_lut_c((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith,
+                                                    nth);
+            } else {
+                ggml_ifairy_lut_preprocess_ex_lut16((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith,
+                                                    nth);
+            }
             ggml_barrier(params->threadpool);
 
             const int64_t tiles_total = (M + 15) / 16;
@@ -1439,8 +1453,13 @@ void ggml_compute_forward_mul_mat(
                 const struct ifairy_lut_wtile_16 * w_tile = packed_w + (size_t) tile0 * (size_t) blocks_per_col;
                 float *                            dst_f  = (float *) (dst_base + (size_t) row0 * nb0);
 
-                ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
-                                            /*pack_bf16*/ true, /*add*/ false);
+                if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C) {
+                    ggml_ifairy_lut_qgemm_lut_c((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
+                                                /*pack_bf16*/ true, /*add*/ false);
+                } else {
+                    ggml_ifairy_lut_qgemm_lut16((int) nrows, (int) K, (int) N, w_tile, lut, scales, dst_f, nb1, nb0,
+                                                /*pack_bf16*/ true, /*add*/ false);
+                }
             }
             return;
         }
