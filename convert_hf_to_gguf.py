@@ -522,28 +522,23 @@ class ModelBase:
         if self.fuse_gate_up_exps and bid is not None:
             if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid):
                 self._gate_exp_buffer[bid] = data_torch
-                # Check if up_exps is already buffered for this layer
-                if bid in self._up_exp_buffer:
-                    gate_data = self._gate_exp_buffer.pop(bid)
-                    up_data = self._up_exp_buffer.pop(bid)
-                    # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
-                    fused_data = torch.cat([gate_data, up_data], dim=1)
-                    fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
-                    logger.info(f"Fused gate_exps and up_exps for layer {bid}")
-                    return [(fused_name, fused_data)]
-                return []  # Wait for up_exps
             elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
                 self._up_exp_buffer[bid] = data_torch
-                # Check if gate_exps is already buffered for this layer
-                if bid in self._gate_exp_buffer:
-                    gate_data = self._gate_exp_buffer.pop(bid)
-                    up_data = self._up_exp_buffer.pop(bid)
-                    # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
-                    fused_data = torch.cat([gate_data, up_data], dim=1)
-                    fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
-                    logger.info(f"Fused gate_exps and up_exps for layer {bid}")
-                    return [(fused_name, fused_data)]
-                return []  # Wait for gate_exps
+
+            # Check if both gate and up are buffered for this layer
+            if bid in self._gate_exp_buffer and bid in self._up_exp_buffer:
+                gate_data = self._gate_exp_buffer.pop(bid)
+                up_data = self._up_exp_buffer.pop(bid)
+                # gate/up shape: (n_expert, n_ff, n_embd), concatenate to (n_expert, n_ff*2, n_embd)
+                fused_data = torch.cat([gate_data, up_data], dim=1)
+                fused_name = self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid)
+                logger.info(f"Fused gate_exps and up_exps for layer {bid}")
+                return [(fused_name, fused_data)]
+
+            # If we buffered a gate/up tensor, wait for the other
+            if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_GATE_EXP, bid) or \
+               self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.FFN_UP_EXP, bid):
+                return []
 
         return [(new_name, data_torch)]
 
