@@ -912,7 +912,8 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
     const bool add_bos = llama_vocab_get_add_bos(vocab);
 
-    GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
+    // Note: removed assertion for add_eos=false to support embedding models
+    // that use last-token pooling (which require EOS for inference)
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);

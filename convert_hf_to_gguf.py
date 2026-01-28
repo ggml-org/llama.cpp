@@ -1088,6 +1088,9 @@ class TextModel(ModelBase):
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
+        if chkhsh == "a023e9fdc5a11f034d3ef515b92350e56fb2af1f66c6b6811a4444ea9bf8763d":
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v5-text-0.2B (EuroBert)
+            res = "llama-bpe"
         if chkhsh == "049ecf7629871e3041641907f3de7c733e4dbfdc736f57d882ba0b0845599754":
             # ref: https://huggingface.co/deepseek-ai/deepseek-llm-7b-base
             res = "deepseek-llm"
@@ -6123,6 +6126,50 @@ class NeoBert(BertModel):
             name = name[6:]
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("EuroBertModel", "EuroBertForMaskedLM", "EuroBertForSequenceClassification")
+class EuroBertModel(TextModel):
+    """EuroBert - a bidirectional encoder with Llama-style architecture (RoPE, RMSNorm, SwiGLU)."""
+    model_arch = gguf.MODEL_ARCH.EUROBERT
+
+    def set_vocab(self):
+        # EuroBert uses Llama-style BPE tokenizer
+        self._set_vocab_gpt2()
+        # Match HuggingFace tokenizer: no BOS, but add EOS for last-token pooling
+        self.gguf_writer.add_add_bos_token(False)
+        self.gguf_writer.add_add_eos_token(True)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # EuroBert is bidirectional (encoder)
+        self.gguf_writer.add_causal_attention(False)
+
+        # RoPE parameters
+        rope_theta = self.hparams.get("rope_theta", 250000.0)
+        self.gguf_writer.add_rope_freq_base(rope_theta)
+        logger.info(f"gguf: rope theta = {rope_theta}")
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        # RMSNorm epsilon
+        rms_eps = self.hparams.get("rms_norm_eps", 1e-5)
+        self.gguf_writer.add_layer_norm_rms_eps(rms_eps)
+        logger.info(f"gguf: rms norm epsilon = {rms_eps}")
+
+        # Pooling type - last token pooling (EOS token aggregates sequence info)
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip MLM head layers
+        if name.startswith("lm_head"):
+            return []
+
+        # Strip "model." prefix from tensor names
+        if name.startswith("model."):
+            name = name[6:]
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")

@@ -104,6 +104,7 @@ add_library(llama
             models/nemotron-h.cpp
             models/nemotron.cpp
             models/neo-bert.cpp
+            models/eurobert.cpp
             models/olmo.cpp
             models/olmo2.cpp
             models/olmoe.cpp

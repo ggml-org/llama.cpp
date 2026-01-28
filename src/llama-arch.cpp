@@ -26,6 +26,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_NEO_BERT,         "neo-bert"         },
     { LLM_ARCH_JINA_BERT_V2,     "jina-bert-v2"     },
     { LLM_ARCH_JINA_BERT_V3,     "jina-bert-v3"     },
+    { LLM_ARCH_EUROBERT,         "eurobert"         },
     { LLM_ARCH_BLOOM,            "bloom"            },
     { LLM_ARCH_STABLELM,         "stablelm"         },
     { LLM_ARCH_QWEN,             "qwen"             },
@@ -818,6 +819,20 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ENC_OUTPUT_NORM,
                 LLM_TENSOR_CLS,
                 LLM_TENSOR_CLS_OUT,
+            };
+        case LLM_ARCH_EUROBERT:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_FFN_DOWN,
             };
         case LLM_ARCH_MODERN_BERT:
             return {
