@@ -28,3 +28,10 @@ export { default as TruncatedText } from './TruncatedText.svelte';
  * - Mode-specific UI (export vs import)
  */
 export { default as ConversationSelection } from './ConversationSelection.svelte';
+
+/**
+ * Horizontal scrollable carousel with navigation arrows.
+ * Used for displaying items in a horizontally scrollable container
+ * with left/right navigation buttons that appear on hover.
+ */
+export { default as HorizontalScrollCarousel } from './HorizontalScrollCarousel.svelte';
