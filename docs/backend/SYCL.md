@@ -111,7 +111,7 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 |-------------------------------|---------|---------------------------------------|
 | Intel Data Center Max Series  | Support | Max 1550, 1100                        |
 | Intel Data Center Flex Series | Support | Flex 170                              |
-| Intel Arc Series              | Support | Arc 770, 730M, Arc A750, B580         |
+| Intel Arc Series              | Support | Arc A770, Arc A730M, Arc A750, Arc B580         |
 | Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake, Lunar Lake |
 | Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7  |
 
