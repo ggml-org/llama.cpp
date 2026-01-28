@@ -419,6 +419,9 @@ template <int TILE_M, int TILE_N>
 class esimd_fp16_kernel;
 
 template <int TILE_M, int TILE_N>
+class esimd_fp16_double_buffered_kernel;
+
+template <int TILE_M, int TILE_N>
 class esimd_int8_kernel;
 
 // =============================================================================
@@ -452,6 +455,305 @@ constexpr int ESIMD_K_PER_DPAS_INT8 = 32;  // K elements per dpas for INT8
 constexpr int ESIMD_A_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS_INT8;   // 256
 constexpr int ESIMD_B_SIZE_INT8 = ESIMD_K_PER_DPAS_INT8 * ESIMD_EXEC_SIZE;     // 512
 constexpr int ESIMD_ACC_SIZE_INT8 = ESIMD_REPEAT_COUNT * ESIMD_EXEC_SIZE;      // 128
+
+// =============================================================================
+// SLM Double-Buffering Constants for ESIMD FP16 Path (Phase 4)
+// =============================================================================
+// SLM layout for double-buffering memory/compute overlap.
+// Each buffer holds one K-tile of weights and activations in FP16.
+//
+// Buffer sizes (FP16):
+// - Weights: TILE_N × K_TILE × sizeof(half) = 16 × 16 × 2 = 512 bytes
+// - Activations: TILE_M × K_TILE × sizeof(half) = 8 × 16 × 2 = 256 bytes
+// - Total per buffer: 768 bytes
+// - Double-buffer total: 1536 bytes
+//
+// Layout in SLM:
+// Buffer 0: [0, 512): weights_0 [16×16 half]
+//           [512, 768): activations_0 [8×16 half]
+// Buffer 1: [768, 1280): weights_1 [16×16 half]
+//           [1280, 1536): activations_1 [8×16 half]
+
+constexpr int ESIMD_SLM_WEIGHTS_SIZE = ESIMD_EXEC_SIZE * ESIMD_K_PER_DPAS;      // 16 × 16 = 256 half elements
+constexpr int ESIMD_SLM_ACTS_SIZE = ESIMD_REPEAT_COUNT * ESIMD_K_PER_DPAS;      // 8 × 16 = 128 half elements
+constexpr int ESIMD_SLM_BUFFER_SIZE = ESIMD_SLM_WEIGHTS_SIZE + ESIMD_SLM_ACTS_SIZE;  // 384 half elements
+constexpr int ESIMD_SLM_TOTAL_SIZE = 2 * ESIMD_SLM_BUFFER_SIZE;                 // 768 half elements for double-buffer
+
+// SLM byte offsets for double-buffering
+constexpr uint32_t ESIMD_SLM_BUF0_WEIGHTS = 0;
+constexpr uint32_t ESIMD_SLM_BUF0_ACTS = ESIMD_SLM_WEIGHTS_SIZE * sizeof(sycl::half);                          // 512 bytes
+constexpr uint32_t ESIMD_SLM_BUF1_WEIGHTS = ESIMD_SLM_BUFFER_SIZE * sizeof(sycl::half);                        // 768 bytes
+constexpr uint32_t ESIMD_SLM_BUF1_ACTS = (ESIMD_SLM_BUFFER_SIZE + ESIMD_SLM_WEIGHTS_SIZE) * sizeof(sycl::half); // 1280 bytes
+constexpr uint32_t ESIMD_SLM_TOTAL_BYTES = ESIMD_SLM_TOTAL_SIZE * sizeof(sycl::half);                          // 1536 bytes
+
+/**
+ * Load weights for a K-tile to SLM with VNNI packing for ESIMD dpas.
+ *
+ * Loads and dequantizes Q4_0 weights from global memory to SLM in VNNI format.
+ * VNNI layout for FP16: b[(k/2) * N * 2 + n * 2 + (k%2)]
+ *
+ * @param weights       Pointer to Q4_0 weight blocks
+ * @param slm_offset    SLM byte offset for weights buffer
+ * @param n_start       Starting N index
+ * @param k_start       Starting K index for this tile
+ * @param N             Total N dimension
+ * @param K             Total K dimension
+ * @param k_blocks_per_row Number of Q4_0 blocks per weight row
+ * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni(
+    const block_q4_0_unified * weights,
+    uint32_t                   slm_offset,
+    int64_t                    n_start,
+    int64_t                    k_start,
+    int64_t                    N,
+    int64_t                    K,
+    int                        k_blocks_per_row,
+    int                        k_len) {
+
+    // Load and dequantize weights with VNNI packing
+    esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
+
+    #pragma unroll
+    for (int n = 0; n < TILE_N; n++) {
+        const int64_t n_global = n_start + n;
+        if (n_global >= N) continue;
+
+        #pragma unroll
+        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+            if (k >= k_len) break;
+            const int64_t k_global = k_start + k;
+            const int k_block_idx_part = static_cast<int>(k_global / UNIFIED_QK4_0);
+            const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+
+            const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx_part);
+            const block_q4_0_unified * blk = &weights[block_idx];
+            const sycl::half d = blk->d;
+            int qs_val;
+            if (idx_in_block < 16) {
+                qs_val = blk->qs[idx_in_block] & 0x0F;
+            } else {
+                qs_val = blk->qs[idx_in_block - 16] >> 4;
+            }
+
+            // VNNI layout for FP16: b[(k/2) * N * 2 + n * 2 + (k%2)]
+            const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
+            w_vec[vnni_idx] = static_cast<sycl::half>(qs_val - 8) * d;
+        }
+    }
+
+    // Store to SLM
+    esimd::slm_block_store<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(slm_offset, w_vec);
+}
+
+/**
+ * Load activations for a K-tile to SLM in row-major format.
+ *
+ * @param activations   Pointer to activation matrix
+ * @param slm_offset    SLM byte offset for activations buffer
+ * @param m_start       Starting M index
+ * @param k_start       Starting K index for this tile
+ * @param M             Total M dimension
+ * @param K             Total K dimension
+ * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void load_activations_to_slm(
+    const float * activations,
+    uint32_t      slm_offset,
+    int64_t       m_start,
+    int64_t       k_start,
+    int64_t       M,
+    int64_t       K,   // Total K dimension (used to index activations)
+    int           k_len) {
+
+    esimd::simd<sycl::half, ESIMD_SLM_ACTS_SIZE> a_vec = sycl::half(0.0f);
+
+    #pragma unroll
+    for (int m = 0; m < TILE_M; m++) {
+        const int64_t m_global = m_start + m;
+        if (m_global >= M) continue;
+
+        #pragma unroll
+        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+            if (k >= k_len) break;
+
+            const int64_t k_global = k_start + k;
+            const float act_f32 = activations[m_global * K + k_global];
+            // Row-major: a[m * K_per + k]
+            a_vec[m * ESIMD_K_PER_DPAS + k] = static_cast<sycl::half>(act_f32);
+        }
+    }
+
+    // Store to SLM
+    esimd::slm_block_store<sycl::half, ESIMD_SLM_ACTS_SIZE>(slm_offset, a_vec);
+}
+
+/**
+ * ESIMD FP16 matmul kernel with double-buffering (Phase 4).
+ *
+ * GGML Convention: dst[m,n] = sum_k(src0[n,k] * src1[m,k])
+ * Computes: output[M,N] = activations[M,K] @ weights[N,K]^T
+ *
+ * Uses double-buffering to overlap memory loads with compute:
+ * 1. Pre-load first K-tile into buffer 0
+ * 2. For each K-tile:
+ *    - Load next K-tile into alternate buffer (if not last)
+ *    - Execute dpas on current buffer
+ *    - Swap buffers
+ * 3. Write final accumulator to output
+ *
+ * @tparam TILE_M  M tile size (must be 8 for dpas)
+ * @tparam TILE_N  N tile size (must be 16 for dpas)
+ * @param args     Kernel arguments
+ * @param m_start  Starting M index for this work-item's tile
+ * @param n_start  Starting N index for this work-item's tile
+ * @param cfg      XMX configuration (use_double_buffer flag)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
+    const UnifiedKernelArgs args,
+    int64_t                 m_start,
+    int64_t                 n_start,
+    const XMXConfig &       /* cfg - reserved for future tuning */) {
+
+    // Validate tile sizes match dpas requirements
+    static_assert(TILE_M == ESIMD_REPEAT_COUNT, "TILE_M must be 8 for dpas");
+    static_assert(TILE_N == ESIMD_EXEC_SIZE, "TILE_N must be 16 for dpas");
+
+    // Boundary checking: return early if entire tile is out of bounds
+    if (m_start >= args.M || n_start >= args.N) {
+        return;
+    }
+
+    // Number of Q4_0 blocks per weight row
+    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+
+    // Cast weight pointer
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+
+    // Initialize SLM for double-buffering
+    esimd::slm_init<ESIMD_SLM_TOTAL_BYTES>();
+
+    // Initialize accumulator: [8 x 16] float
+    esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
+
+    // Number of K tiles (each dpas processes 16 K elements)
+    const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS - 1) / ESIMD_K_PER_DPAS;
+
+    // Edge case: Single K-tile (K <= K_TILE)
+    // No overlap opportunity, but still works correctly
+    if (k_tiles <= 1) {
+        // Just load and compute directly without double-buffering
+        const int64_t k_start = 0;
+        const int64_t k_remaining = args.K;
+        const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+
+        // Load weights and activations to buffer 0
+        load_weights_to_slm_vnni<TILE_M, TILE_N>(
+            weights, ESIMD_SLM_BUF0_WEIGHTS,
+            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len);
+        load_activations_to_slm<TILE_M, TILE_N>(
+            args.activations, ESIMD_SLM_BUF0_ACTS,
+            m_start, k_start, args.M, args.K, k_len);
+
+        // Fence to ensure SLM writes complete before reads
+        esimd::fence<esimd::fence_mask::local_barrier>();
+
+        // Load from SLM to registers
+        esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> b_vec =
+            esimd::slm_block_load<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(ESIMD_SLM_BUF0_WEIGHTS);
+        esimd::simd<sycl::half, ESIMD_SLM_ACTS_SIZE> a_vec =
+            esimd::slm_block_load<sycl::half, ESIMD_SLM_ACTS_SIZE>(ESIMD_SLM_BUF0_ACTS);
+
+        // Execute dpas
+        acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                        float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+    } else {
+        // ========================================================================
+        // Double-buffered K-loop for memory/compute overlap
+        // ========================================================================
+
+        // Pre-load first K-tile into buffer 0
+        {
+            const int64_t k_start = 0;
+            const int64_t k_remaining = args.K;
+            const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
+
+            load_weights_to_slm_vnni<TILE_M, TILE_N>(
+                weights, ESIMD_SLM_BUF0_WEIGHTS,
+                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len);
+            load_activations_to_slm<TILE_M, TILE_N>(
+                args.activations, ESIMD_SLM_BUF0_ACTS,
+                m_start, k_start, args.M, args.K, k_len);
+        }
+
+        // Fence after pre-loading buffer 0
+        esimd::fence<esimd::fence_mask::local_barrier>();
+
+        int buf_compute = 0;  // Start with buffer 0
+
+        // Main K-loop with double-buffering
+        for (int64_t kt = 0; kt < k_tiles; kt++) {
+            // Determine current buffer offsets
+            const uint32_t compute_w_off = (buf_compute == 0) ? ESIMD_SLM_BUF0_WEIGHTS : ESIMD_SLM_BUF1_WEIGHTS;
+            const uint32_t compute_a_off = (buf_compute == 0) ? ESIMD_SLM_BUF0_ACTS : ESIMD_SLM_BUF1_ACTS;
+
+            // Determine load buffer offsets (alternate buffer)
+            const uint32_t load_w_off = (buf_compute == 0) ? ESIMD_SLM_BUF1_WEIGHTS : ESIMD_SLM_BUF0_WEIGHTS;
+            const uint32_t load_a_off = (buf_compute == 0) ? ESIMD_SLM_BUF1_ACTS : ESIMD_SLM_BUF0_ACTS;
+
+            // Load from SLM to registers (from compute buffer)
+            esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> b_vec =
+                esimd::slm_block_load<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(compute_w_off);
+            esimd::simd<sycl::half, ESIMD_SLM_ACTS_SIZE> a_vec =
+                esimd::slm_block_load<sycl::half, ESIMD_SLM_ACTS_SIZE>(compute_a_off);
+
+            // Prefetch/load next K-tile into alternate buffer (if not last iteration)
+            if (kt + 1 < k_tiles) {
+                const int64_t next_k_start = (kt + 1) * ESIMD_K_PER_DPAS;
+                const int64_t next_k_remaining = args.K - next_k_start;
+                const int next_k_len = static_cast<int>(next_k_remaining < ESIMD_K_PER_DPAS ? next_k_remaining : ESIMD_K_PER_DPAS);
+
+                load_weights_to_slm_vnni<TILE_M, TILE_N>(
+                    weights, load_w_off,
+                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len);
+                load_activations_to_slm<TILE_M, TILE_N>(
+                    args.activations, load_a_off,
+                    m_start, next_k_start, args.M, args.K, next_k_len);
+            }
+
+            // Execute dpas on current buffer's data
+            acc = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                            float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
+
+            // Fence after SLM writes (ensure next iteration's loads are visible)
+            if (kt + 1 < k_tiles) {
+                esimd::fence<esimd::fence_mask::local_barrier>();
+            }
+
+            // Swap buffers
+            buf_compute = 1 - buf_compute;
+        }
+    }
+
+    // Write output with boundary checking
+    // Output layout: acc[m * TILE_N + n] = [8 x 16] row-major
+    #pragma unroll
+    for (int m = 0; m < TILE_M; m++) {
+        const int64_t m_global = m_start + m;
+        if (m_global >= args.M) continue;
+
+        #pragma unroll
+        for (int n = 0; n < TILE_N; n++) {
+            const int64_t n_global = n_start + n;
+            if (n_global >= args.N) continue;
+
+            args.output[m_global * args.N + n_global] = acc[m * TILE_N + n];
+        }
+    }
+}
 
 /**
  * ESIMD FP16 matmul kernel using xmx::dpas instruction.
@@ -1216,34 +1518,67 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args) {
         const int esimd_grid_m = (static_cast<int>(args.M) + ESIMD_TM - 1) / ESIMD_TM;
         const int esimd_grid_n = (static_cast<int>(args.N) + ESIMD_TN - 1) / ESIMD_TN;
 
+        // Query XMX config for double-buffer capability
+        // Use device 0 by default (single-GPU typical case)
+        XMXConfig cfg = XMXConfig::from_device(0);
+
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] ESIMD FP16 path: M=%lld N=%lld K=%lld grid=(%d,%d)\n",
+            fprintf(stderr, "[unified-kernel] ESIMD FP16 path: M=%lld N=%lld K=%lld grid=(%d,%d) double_buf=%d\n",
                     static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), esimd_grid_m, esimd_grid_n);
+                    static_cast<long long>(args.K), esimd_grid_m, esimd_grid_n,
+                    cfg.use_double_buffer ? 1 : 0);
             fflush(stderr);
         }
 
-        q.submit([&](sycl::handler & cgh) {
-            // ESIMD kernel: one work-item per output tile (no work-group cooperation)
-            // Total work items = grid_m * grid_n
-            sycl::range<2> global(esimd_grid_m, esimd_grid_n);
-            sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
+        // Use double-buffered kernel if enabled and SLM permits
+        if (cfg.use_double_buffer) {
+            q.submit([&](sycl::handler & cgh) {
+                // ESIMD kernel: one work-item per output tile (no work-group cooperation)
+                sycl::range<2> global(esimd_grid_m, esimd_grid_n);
+                sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
 
-            cgh.parallel_for<esimd_fp16_kernel<ESIMD_TM, ESIMD_TN>>(
-                sycl::nd_range<2>(global, local),
-                [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
-                    // Calculate tile coordinates
-                    const int tile_row = item.get_global_id(0);  // M tile index
-                    const int tile_col = item.get_global_id(1);  // N tile index
+                // Capture cfg by value for device execution
+                XMXConfig cfg_copy = cfg;
 
-                    const int64_t m_start = tile_row * ESIMD_TM;
-                    const int64_t n_start = tile_col * ESIMD_TN;
+                cgh.parallel_for<esimd_fp16_double_buffered_kernel<ESIMD_TM, ESIMD_TN>>(
+                    sycl::nd_range<2>(global, local),
+                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                        // Calculate tile coordinates
+                        const int tile_row = item.get_global_id(0);  // M tile index
+                        const int tile_col = item.get_global_id(1);  // N tile index
 
-                    // Call ESIMD FP16 kernel implementation
-                    esimd_matmul_fp16_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
-                }
-            );
-        });
+                        const int64_t m_start = tile_row * ESIMD_TM;
+                        const int64_t n_start = tile_col * ESIMD_TN;
+
+                        // Call double-buffered ESIMD FP16 kernel implementation
+                        esimd_matmul_fp16_double_buffered_impl<ESIMD_TM, ESIMD_TN>(
+                            args, m_start, n_start, cfg_copy);
+                    }
+                );
+            });
+        } else {
+            // Fall back to non-buffered path
+            q.submit([&](sycl::handler & cgh) {
+                // ESIMD kernel: one work-item per output tile (no work-group cooperation)
+                sycl::range<2> global(esimd_grid_m, esimd_grid_n);
+                sycl::range<2> local(1, 1);  // Single work-item per work-group for ESIMD
+
+                cgh.parallel_for<esimd_fp16_kernel<ESIMD_TM, ESIMD_TN>>(
+                    sycl::nd_range<2>(global, local),
+                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                        // Calculate tile coordinates
+                        const int tile_row = item.get_global_id(0);  // M tile index
+                        const int tile_col = item.get_global_id(1);  // N tile index
+
+                        const int64_t m_start = tile_row * ESIMD_TM;
+                        const int64_t n_start = tile_col * ESIMD_TN;
+
+                        // Call ESIMD FP16 kernel implementation
+                        esimd_matmul_fp16_kernel_impl<ESIMD_TM, ESIMD_TN>(args, m_start, n_start);
+                    }
+                );
+            });
+        }
         return;
     }
 #endif  // GGML_SYCL_ESIMD_AVAILABLE
