@@ -10,6 +10,34 @@ static __forceinline__ int get_mmf_rows_per_block(const int cc) {
     }
 }
 
+template <typename T>
+static void mul_mat_f_switch_rows_per_block(
+        const int rows_per_block, const T * x, const float * y, const int32_t * ids, float * dst,
+        const int64_t ncols_x, const int64_t nrows_x, const int64_t ncols_dst,
+        const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+        const int64_t stride_col_id, const int stride_row_id,
+        const int64_t nchannels_x, const int64_t nchannels_y, const int64_t nchannels_dst,
+        const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst, const int64_t nsamples_x,
+        const int64_t nsamples_dst, const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst,
+        cudaStream_t stream, const mmf_ids_data * ids_data) {
+    switch (rows_per_block) {
+        case MMF_ROWS_PER_BLOCK: {
+            mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK>(
+                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+        } break;
+        case MMF_ROWS_PER_BLOCK_CDNA: {
+            mul_mat_f_switch_cols_per_block<T, MMF_ROWS_PER_BLOCK_CDNA>(
+                x, y, ids, dst, ncols_x, nrows_x, ncols_dst, stride_row, stride_col_y, stride_col_dst,
+                stride_col_id, stride_row_id, nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
+                nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream, ids_data);
+        } break;
+        default:
+            GGML_ABORT("unsupported rows_per_block: %i", rows_per_block);
+    }
+}
+
 void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(!ids ||  ids->type == GGML_TYPE_I32);
@@ -100,55 +128,30 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
     const int cc        = ggml_cuda_info().devices[device].cc;
     const int rows_per_block = get_mmf_rows_per_block(cc);
 
-    if (rows_per_block != MMF_ROWS_PER_BLOCK && rows_per_block != MMF_ROWS_PER_BLOCK_CDNA) {
-        GGML_ABORT("unsupported rows_per_block: %i", rows_per_block);
-    }
-
     switch (src0->type) {
         case GGML_TYPE_F32: {
             const float * src0_d = (const float *) src0->data;
             constexpr int vals_per_T = 1;
-            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
-                mul_mat_f_switch_cols_per_block<float, MMF_ROWS_PER_BLOCK>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            } else {
-                mul_mat_f_switch_cols_per_block<float, MMF_ROWS_PER_BLOCK_CDNA>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            }
+            mul_mat_f_switch_rows_per_block<float>(
+                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
         } break;
         case GGML_TYPE_F16: {
             const half2 * src0_d = (const half2 *) src0->data;
             constexpr int vals_per_T = 2;
-            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
-                mul_mat_f_switch_cols_per_block<half2, MMF_ROWS_PER_BLOCK>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            } else {
-                mul_mat_f_switch_cols_per_block<half2, MMF_ROWS_PER_BLOCK_CDNA>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            }
+            mul_mat_f_switch_rows_per_block<half2>(
+                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
         } break;
         case GGML_TYPE_BF16: {
             const nv_bfloat162 * src0_d = (const nv_bfloat162 *) src0->data;
             constexpr int vals_per_T = 2;
-            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
-                mul_mat_f_switch_cols_per_block<nv_bfloat162, MMF_ROWS_PER_BLOCK>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            } else {
-                mul_mat_f_switch_cols_per_block<nv_bfloat162, MMF_ROWS_PER_BLOCK_CDNA>(
-                    src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
-                    ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
-                    ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
-            }
+            mul_mat_f_switch_rows_per_block<nv_bfloat162>(
+                rows_per_block, src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
+                ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
+                ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
         } break;
         default:
             GGML_ABORT("unsupported type: %s", ggml_type_name(src0->type));
