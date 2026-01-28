@@ -3095,6 +3095,9 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     }
 
     if (nodes[node_idx]->op == GGML_OP_UNARY) {
+        if (ggml_get_unary_op(nodes[node_idx]) != GGML_UNARY_OP_SIGMOID) {
+            return false;
+        }
         args.sigmoid = true;
     }
 
@@ -3107,7 +3110,7 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
     if (args.sigmoid || args.softmax) {
         // SOFTMAX -> RESHAPE
         if (node_idx >= n_nodes || nodes[node_idx]->op != GGML_OP_RESHAPE ||
-            nodes[node_idx]->src[0] != nodes[node_idx - 1]) {
+                nodes[node_idx]->src[0] != nodes[node_idx - 1]) {
             return false;
         }
         ggml_tensor * probs_reshaped = nodes[node_idx];
@@ -3137,7 +3140,7 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
 
         // ARGSORT-> VIEW
         if (node_idx >= n_nodes || nodes[node_idx]->op != GGML_OP_VIEW ||
-            nodes[node_idx]->src[0] != nodes[node_idx - 1]) {
+                nodes[node_idx]->src[0] != nodes[node_idx - 1]) {
             return false;
         }
         node_idx++;
@@ -3166,7 +3169,7 @@ static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int nod
 
         // GET_ROWS
         if (node_idx >= n_nodes || nodes[node_idx]->src[1] != nodes[node_idx - 1] ||
-            nodes[node_idx]->src[0] != probs_reshaped) {
+                nodes[node_idx]->src[0] != probs_reshaped) {
             return false;
         }
         node_idx++;
@@ -3502,7 +3505,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                     if (cgraph->nodes[i]->op == GGML_OP_UNARY || cgraph->nodes[i]->op == GGML_OP_SOFT_MAX ||
                         cgraph->nodes[i]->op == GGML_OP_ARGSORT) {
-                        bool can_fuse = ggml_cuda_topk_moe_fusion(cgraph, i, args);
+                        const bool can_fuse = ggml_cuda_topk_moe_fusion(cgraph, i, args);
 
                         std::vector<ggml_op> ops;
 
@@ -3545,7 +3548,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                                 out_nodes[1] = i + ops.size() - 1;
 
                                 if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
-                                    ggml_cuda_should_use_topk_moe(node, logits, weights, ids)) {
+                                        ggml_cuda_should_use_topk_moe(node, logits, weights, ids)) {
                                     ggml_cuda_op_topk_moe(*cuda_ctx, logits, weights, ids, clamp, scale, bias, args);
                                     i += ops.size() - 1;
                                     continue;
@@ -3560,7 +3563,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                                 int out_nodes[2] = { i + 1, i + 5 };
                                 if (ggml_can_fuse_subgraph(cgraph, i, ops.size(), ops.data(), out_nodes, 2) &&
-                                    ggml_cuda_should_use_topk_moe(softmax, logits, weights, ids)) {
+                                        ggml_cuda_should_use_topk_moe(softmax, logits, weights, ids)) {
                                     ggml_cuda_op_topk_moe(*cuda_ctx, logits, weights, ids, clamp, scale, bias, args);
                                     i += ops.size() - 1;
                                     continue;

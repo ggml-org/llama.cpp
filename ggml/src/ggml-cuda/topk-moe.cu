@@ -344,11 +344,10 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
         clamp_val = ggml_get_op_params_f32(clamp, 0);
     }
 
-    topk_moe_config config = {
-        .use_sigmoid     = args.sigmoid,
-        .with_norm       = with_norm,
-        .delayed_softmax = args.delayed_softmax,
-    };
+    topk_moe_config config;
+    config.use_sigmoid     = args.sigmoid;
+    config.with_norm       = with_norm;
+    config.delayed_softmax = args.delayed_softmax;
 
     if (bias) {
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
