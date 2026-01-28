@@ -10,7 +10,7 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
-static constexpr uint32_t MAX_GRAMMAR_RECURSION_DEPTH = 2000;
+#define MAX_GRAMMAR_RECURSION_DEPTH 2000
 //
 // helpers
 //
