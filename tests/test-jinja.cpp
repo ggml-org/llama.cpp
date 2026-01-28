@@ -1018,6 +1018,19 @@ static void test_tests(testing & t) {
         {{"x", {{"a", 1}}}},
         "yes"
     );
+
+    test_template(t, "something in undefined",
+        "{% if x in y %}yes{% else %}no{% endif %}",
+        {{"x", 1}},
+        "no"
+    );
+
+    test_template(t, "null is undefined",
+        "{% if null is not defined %}yes{% else %}no{% endif %}",
+        json::object(),
+        "yes"
+    );
+
 }
 
 static void test_string_methods(testing & t) {

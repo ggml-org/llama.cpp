@@ -160,7 +160,7 @@ caps caps_get(jinja::program & prog) {
                     {"content", "Assistant message"},
                     {"tool_calls", json::array({
                         {
-                            {"id", "call1"},
+                            {"id", "call00001"},
                             {"type", "function"},
                             {"function", {
                                 {"name", "tool1"},
@@ -170,10 +170,10 @@ caps caps_get(jinja::program & prog) {
                             }}
                         },
                         {
-                            {"id", "call2"},
+                            {"id", "call00002"},
                             {"type", "function"},
                             {"function", {
-                                {"name", "tool2"},
+                                {"name", "tool1"},
                                 {"arguments", {
                                     {"arg", "value"}
                                 }}
@@ -194,7 +194,7 @@ caps caps_get(jinja::program & prog) {
                     {"name", "tool"},
                     {"type", "function"},
                     {"function", {
-                        {"name", "tool"},
+                        {"name", "tool1"},
                         {"description", "Tool description"},
                         {"parameters", {
                             {"type", "object"},
