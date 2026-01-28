@@ -33,6 +33,7 @@
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
+		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		messageContent: string | undefined;
 		onCopy: () => void;
@@ -51,6 +52,7 @@
 	let {
 		class: className = '',
 		deletionInfo,
+		isLastAssistantMessage = false,
 		message,
 		messageContent,
 		onConfirmDelete,
@@ -100,6 +102,25 @@
 
 	let displayedModel = $derived(message.model ?? null);
 
+	let isCurrentlyLoading = $derived(isLoading());
+	let isStreaming = $derived(isChatStreaming());
+	let hasNoContent = $derived(!message?.content?.trim());
+	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
+
+	let showProcessingInfoTop = $derived(
+		message?.role === MessageRole.ASSISTANT &&
+			isActivelyProcessing &&
+			hasNoContent &&
+			isLastAssistantMessage
+	);
+
+	let showProcessingInfoBottom = $derived(
+		message?.role === MessageRole.ASSISTANT &&
+			isActivelyProcessing &&
+			!hasNoContent &&
+			isLastAssistantMessage
+	);
+
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
 	}
@@ -122,7 +143,7 @@
 	role="group"
 	aria-label="Assistant message with actions"
 >
-	{#if message?.role === MessageRole.ASSISTANT && isLoading() && !message?.content?.trim()}
+	{#if showProcessingInfoTop}
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
@@ -195,7 +216,19 @@
 		</div>
 	{/if}
 
-	<div class="info my-6 grid gap-4">
+	{#if showProcessingInfoBottom}
+		<div class="mt-4 w-full max-w-[48rem]" in:fade>
+			<div class="processing-container">
+				<span class="processing-text">
+					{processingState.getPromptProgressText() ??
+						processingState.getProcessingMessage() ??
+						'Processing...'}
+				</span>
+			</div>
+		</div>
+	{/if}
+
+	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}

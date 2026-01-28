@@ -17,10 +17,16 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
+		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
-	let { class: className = '', message, siblingInfo = null }: Props = $props();
+	let {
+		class: className = '',
+		message,
+		isLastAssistantMessage = false,
+		siblingInfo = null
+	}: Props = $props();
 
 	const chatActions = getChatActionsContext();
 
@@ -280,6 +286,7 @@
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
+		{isLastAssistantMessage}
 		{message}
 		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}

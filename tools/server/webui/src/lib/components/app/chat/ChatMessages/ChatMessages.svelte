@@ -105,11 +105,9 @@
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
 		let lastAssistantIndex = -1;
-
 		for (let i = filteredMessages.length - 1; i >= 0; i--) {
 			if (filteredMessages[i].role === MessageRole.ASSISTANT) {
 				lastAssistantIndex = i;
-
 				break;
 			}
 		}
@@ -134,7 +132,12 @@
 </script>
 
 <div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
-	{#each displayMessages as { message, siblingInfo } (message.id)}
-		<ChatMessage class="mx-auto w-full max-w-[48rem]" {message} {siblingInfo} />
+	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
+		<ChatMessage
+			class="mx-auto w-full max-w-[48rem]"
+			{message}
+			{isLastAssistantMessage}
+			{siblingInfo}
+		/>
 	{/each}
 </div>

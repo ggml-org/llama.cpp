@@ -67,7 +67,7 @@
 		{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 			{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}
 			{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4 text-yellow-500'}
-			{@const streamingSubtitle = isStreaming ? 'streaming...' : 'incomplete'}
+			{@const streamingSubtitle = isStreaming ? '' : 'incomplete'}
 
 			<CollapsibleContentBlock
 				open={isExpanded(index, section)}
@@ -171,7 +171,7 @@
 			</CollapsibleContentBlock>
 		{:else if section.type === AgenticSectionType.REASONING_PENDING}
 			{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
-			{@const reasoningSubtitle = isStreaming ? 'streaming...' : 'incomplete'}
+			{@const reasoningSubtitle = isStreaming ? '' : 'incomplete'}
 
 			<CollapsibleContentBlock
 				open={isExpanded(index, section)}
