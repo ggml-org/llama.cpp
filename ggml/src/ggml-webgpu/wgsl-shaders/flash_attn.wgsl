@@ -4,22 +4,11 @@ enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
-
-#ifdef KV_DIRECT
-#define LOAD_K(H) subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + (H), true, params.stride_k1)
-#else
-#define LOAD_K(H) subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + (H), true, HQ)
-#endif
-
-
-
 #ifdef KV_F32
 #define KV_TYPE f32
 #else
 #define KV_TYPE f16
 #endif
-
-#define K_UNROLL 2u
 
 // Default values
 #define HEAD_DIM_QK 64
@@ -103,16 +92,9 @@ struct Params {
     m1: f32,
 };
 
-#if defined(KV_Q4_0) || defined(KV_Q8_0) || defined(KV_DIRECT)
 @group(0) @binding(0) var<storage, read> Q: array<f32>;
 @group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
 @group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
-#else
-@group(0) @binding(0) var<storage, read_write> Q4: array<vec4<f32>>;
-@group(0) @binding(1) var<storage, read_write> K4: array<vec4<KV_TYPE>>;
-@group(0) @binding(2) var<storage, read_write> V4: array<vec4<KV_TYPE>>;
-#endif
-
 
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
@@ -173,7 +155,7 @@ fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f32) -> f32 {
 #ifdef MASK
     let mask_val = select(0.0, f32(mask_shmem[q_tile_row * KV_TILE + kv_idx]), kv_idx < KV_TILE);
     let mask_term = slope * mask_val;
-    v     += mask_term;
+    v += mask_term;
 #endif
     return v;
 }
@@ -244,7 +226,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let head = f32(head_idx);
     let slope = select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), params.max_bias > 0);
 
-#if defined(KV_Q4_0) || defined(KV_Q8_0) || defined(KV_DIRECT)
     // load q tile into shared memory
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let q_row = elem_idx / HEAD_DIM_QK;
@@ -256,32 +237,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             Q[global_q_row_offset + q_col],
             head_q_row < params.seq_len_q && q_col < HEAD_DIM_QK));
     }
-#else
-    let Q_ROW_CHUNKS: u32 = HEAD_DIM_QK / 4u;          
-    let Q_TOTAL_CHUNKS: u32 = Q_TILE * Q_ROW_CHUNKS;   
-
-    for (var c = local_id.x; c < Q_TOTAL_CHUNKS; c += WG_SIZE) {
-        let q_row = c / Q_ROW_CHUNKS;
-        let q_col4 = c - q_row * Q_ROW_CHUNKS;   
-        let q_col = q_col4 * 4u;
-
-        let head_q_row = q_row_start + q_row;
-        let in_bounds = (head_q_row < params.seq_len_q);
-
-        let global_q_row_offset = q_head_offset + head_q_row * params.stride_q1;
-        let base = global_q_row_offset + q_col; // scalar index, multiple of 4
-
-        let qv = select(vec4<f32>(0.0), load_f32x4(&Q4, base), in_bounds);
-
-        let sh = q_row * HEAD_DIM_QK + q_col;
-        q_shmem[sh + 0u] = f16(qv.x);
-        q_shmem[sh + 1u] = f16(qv.y);
-        q_shmem[sh + 2u] = f16(qv.z);
-        q_shmem[sh + 3u] = f16(qv.w);
-    }
-#endif
-
-
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile += KV_TILE) {
       // clear inter_shmem to ensure zero-initialized accumulators
@@ -347,30 +302,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
-
-    let K_ROW_CHUNKS: u32 = HEAD_DIM_QK / 4u;      
-    let K_TOTAL_CHUNKS: u32 = KV_TILE * K_ROW_CHUNKS;     
-
-    for (var c = local_id.x; c < K_TOTAL_CHUNKS; c += WG_SIZE) {
-      let k_row = c / K_ROW_CHUNKS;
-      let k_col4 = c - k_row * K_ROW_CHUNKS;
-      let k_col = k_col4 * 4u;
-
-      let global_k_row = kv_tile + k_row;
-      let in_bounds = (global_k_row < params.seq_len_kv);
-
-      let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-      let base = global_k_row_offset + k_col;
-
-      // Wide load from packed K
-      let kv = select(vec4<KV_TYPE>(KV_TYPE(0.0)), load_kvx4(&K4, base), in_bounds);
-
-      let sh = k_row * HEAD_DIM_QK + k_col;
-      kv_shmem[sh + 0u] = f16(kv.x);
-      kv_shmem[sh + 1u] = f16(kv.y);
-      kv_shmem[sh + 2u] = f16(kv.z);
-      kv_shmem[sh + 3u] = f16(kv.w);
-    }
+      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
+          let k_row = elem_idx / HEAD_DIM_QK;
+          let k_col = elem_idx % HEAD_DIM_QK;
+          let global_k_row = kv_tile + k_row;
+          let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
+          kv_shmem[elem_idx] = f16(select(
+              0.0,
+              K[global_k_row_offset + k_col],
+              global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
+      }
 #endif
 
       workgroupBarrier();
@@ -386,17 +327,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #endif
         for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
             let inter_offset = kv_block * SG_MAT_N;
-
             var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(
                     &inter_shmem, inter_offset, false, KV_TILE);
-
-
-
+            
             const HQ: u32 = u32(HEAD_DIM_QK);
             const SGK: u32 = u32(SG_MAT_K);
             const TILES: u32 = HEAD_DIM_QK / SG_MAT_K;
-
-
             var q_cur = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 0u, false, HQ);
 
 #ifdef KV_DIRECT
@@ -575,28 +511,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
-let V_ROW_CHUNKS: u32 = HEAD_DIM_V / 4u;
-let V_TOTAL_CHUNKS: u32 = KV_TILE * V_ROW_CHUNKS;
-
-for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
-    let v_row = c / V_ROW_CHUNKS;
-    let v_col4 = c - v_row * V_ROW_CHUNKS;
-    let v_col = v_col4 * 4u;
-
-    let global_v_row = kv_tile + v_row;
-    let in_bounds = (global_v_row < params.seq_len_kv);
-
-    let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-    let base = global_v_row_offset + v_col;
-
-    let vv = select(vec4<KV_TYPE>(KV_TYPE(0.0)), load_kvx4(&V4, base), in_bounds);
-
-    let sh = v_row * HEAD_DIM_V + v_col;
-    kv_shmem[sh + 0u] = f16(vv.x);
-    kv_shmem[sh + 1u] = f16(vv.y);
-    kv_shmem[sh + 2u] = f16(vv.z);
-    kv_shmem[sh + 3u] = f16(vv.w);
-}
+      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE) {
+          let v_row = elem_idx / HEAD_DIM_V;
+          let v_col = elem_idx % HEAD_DIM_V;
+          let global_v_row = kv_tile + v_row;
+          let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
+          kv_shmem[elem_idx] = f16(select(
+              0.0,
+              V[global_v_row_offset + v_col],
+              global_v_row < params.seq_len_kv && v_col < HEAD_DIM_V));
+      }
 #endif
 
       workgroupBarrier();
@@ -613,7 +537,6 @@ for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
                   false,
                   HEAD_DIM_V
               );
-
               for (var kv_block = 0u; kv_block < KV_BLOCKS; kv_block++) {
                   let p_offset = kv_block * SG_MAT_N;
                   var p_sg_mat: subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K> = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(
@@ -645,11 +568,9 @@ for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
                   // O += P * V
                   o_sg_mat = subgroupMatrixMultiplyAccumulate(p_sg_mat, v_sg_mat, o_sg_mat);
               }
-
               // store O back to shared memory
               subgroupMatrixStore(&o_shmem, head_dim_block, o_sg_mat, false, HEAD_DIM_V);
       }
-
       workgroupBarrier();
     }
 
@@ -684,41 +605,38 @@ for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
                 o_shmem[idx] = f16(val);
             }
     }
-
     workgroupBarrier();
 #endif
+    for (var q_tile_row = subgroup_id;
+         q_tile_row < Q_TILE;
+         q_tile_row += num_subgroups) {
 
-for (var q_tile_row = subgroup_id;
-     q_tile_row < Q_TILE;
-     q_tile_row += num_subgroups) {
+        let global_q_row = q_row_start + q_tile_row;
+        if (global_q_row >= params.seq_len_q) { break; }
 
-  let global_q_row = q_row_start + q_tile_row;
-  if (global_q_row >= params.seq_len_q) { break; }
+        let exp_sum = exp_sum_shmem[q_tile_row];
+        let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
 
-  let exp_sum = exp_sum_shmem[q_tile_row];
-  let scale = select(0.0, 1.0 / exp_sum, exp_sum != 0.0);
+        let row_base: u32 = dst_global_offset + q_tile_row * dst2_stride;
 
-  let row_base: u32 = dst_global_offset + q_tile_row * dst2_stride;
+        for (var elem_base = sg_inv_id * 4u;
+         elem_base < HEAD_DIM_V;
+         elem_base += subgroup_size * 4u) {
 
-  for (var elem_base = sg_inv_id * 4u;
-       elem_base < HEAD_DIM_V;
-       elem_base += subgroup_size * 4u) {
+            let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
+            let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
+            let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
+            let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
 
-    let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
-    let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
-    let i2 = q_tile_row * HEAD_DIM_V + (elem_base + 2u);
-    let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
+            let v = vec4<f32>(
+             f32(o_shmem[i0]) * scale,
+             f32(o_shmem[i1]) * scale,
+             f32(o_shmem[i2]) * scale,
+             f32(o_shmem[i3]) * scale
+            );
 
-    let v = vec4<f32>(
-      f32(o_shmem[i0]) * scale,
-      f32(o_shmem[i1]) * scale,
-      f32(o_shmem[i2]) * scale,
-      f32(o_shmem[i3]) * scale
-    );
-
-    let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
-    dst[dst_vec_index] = v;
-  }
-}
-
+            let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
+            dst[dst_vec_index] = v;
+        }
+    }
 }
