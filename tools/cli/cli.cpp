@@ -92,10 +92,10 @@ struct cli_context {
         }
 
         // wait for first result
-        console::start();
+        console::spinner::start();
         server_task_result_ptr result = rd.next(should_stop);
 
-        console::stop();
+        console::spinner::stop();
         std::string curr_content;
         bool is_thinking = false;
 
@@ -228,14 +228,14 @@ int main(int argc, char ** argv) {
 #endif
 
     console::log("\nLoading model... "); // followed by loading animation
-    console::start();
+    console::spinner::start();
     if (!ctx_cli.ctx_server.load_model(params)) {
-        console::stop();
+        console::spinner::stop();
         console::error("\nFailed to load the model\n");
         return 1;
     }
 
-    console::stop();
+    console::spinner::stop();
     console::log("\n");
 
     std::thread inference_thread([&ctx_cli]() {

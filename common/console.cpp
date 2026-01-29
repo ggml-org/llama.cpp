@@ -1082,7 +1082,7 @@
         replace_last(LOADING_CHARS[frame]);
         fflush(out);
     }
-    void console::start() {
+    void console::spinner::start() {
         std::unique_lock<std::mutex> lock(mtx);
         if (simple_io || running) {
             return;
@@ -1102,7 +1102,7 @@
             }
         });
     }
-    void console::stop() {
+    void console::spinner::stop() {
         {
             std::unique_lock<std::mutex> lock(mtx);
             if (simple_io || !running) {

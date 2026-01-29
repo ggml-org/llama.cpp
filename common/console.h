@@ -28,8 +28,11 @@ public:
 
     static void set_display(display_type display);
     static bool readline(std::string & line, bool multiline_input);
-    static void start();
-    static void stop();
+
+    struct spinner {
+        static void start();
+        static void stop();
+    };
 
 
     // note: the logging API below output directly to stdout
