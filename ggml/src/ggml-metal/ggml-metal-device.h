@@ -205,7 +205,9 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
 //
 
 struct ggml_metal_device_props {
+    int device;
     char name[128];
+    char desc[128];
 
     size_t max_buffer_size;
     size_t max_working_set_size;
@@ -224,11 +226,10 @@ struct ggml_metal_device_props {
     int op_offload_min_batch_size;
 };
 
-ggml_metal_device_t ggml_metal_device_init(void);
+ggml_metal_device_t ggml_metal_device_init(int device);
 void ggml_metal_device_free(ggml_metal_device_t dev);
 
-// return a singleton that is automatically destroyed when the program exits
-ggml_metal_device_t ggml_metal_device_get(void);
+ggml_metal_device_t ggml_metal_device_get(int device);
 
 void * ggml_metal_device_get_obj  (ggml_metal_device_t dev); // id<MTLDevice>
 void * ggml_metal_device_get_queue(ggml_metal_device_t dev); // id<MTLCommandQueue>
