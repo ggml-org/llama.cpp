@@ -31,6 +31,7 @@ struct clip_graph {
     const float eps;
     const float kq_scale;
     const clip_flash_attn_type flash_attn_type;
+    norm_type block_norm_t = NORM_TYPE_NORMAL;
 
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
