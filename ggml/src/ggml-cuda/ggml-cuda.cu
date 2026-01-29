@@ -2918,7 +2918,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
 static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, ggml_tensor * node) {
     memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
-    props->node_address = node->data;
+    props->node_data = node->data;
     props->node_op = node->op;
     props->flags = node->flags;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
@@ -2936,8 +2936,7 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
 }
 
 static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_graph_node_properties * props) {
-    if (node->data != props->node_address &&
-          node->op != GGML_OP_VIEW) {
+    if (node->data != props->node_data && node->op != GGML_OP_VIEW) {
         return false;
     }
 
