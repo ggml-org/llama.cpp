@@ -3,10 +3,11 @@
 import sys
 import numpy as np
 from pathlib import Path
+import os
 
 # Add utils directory to path for direct script execution
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
-from common import get_model_name_from_env_path  # type: ignore[import-not-found]
+from common import get_model_name_from_env_path, compare_tokens, exit_with_warning  # type: ignore[import-not-found]
 
 def quick_logits_check(pytorch_file, llamacpp_file):
     """Lightweight sanity check before NMSE"""
@@ -38,6 +39,7 @@ def quick_logits_check(pytorch_file, llamacpp_file):
     return True
 
 def main():
+    model_path = os.environ.get('MODEL_PATH')
     model_name = get_model_name_from_env_path('MODEL_PATH')
     data_dir = Path("data")
     pytorch_file = data_dir / f"pytorch-{model_name}.bin"
@@ -58,6 +60,12 @@ def main():
 
     print("Checked all required files were found. Proceeding...\n")
 
+    # Verify tokens as they are a prerequisite for logits comparison.
+    print("🔍 Token Comparison Check")
+    print("=" * 40)
+    if not compare_tokens(f"pytorch-{model_name}", f"llamacpp-{llamacpp_model_name}"):
+        exit_with_warning("\n❌ Token mismatch detected", model_path)
+    print()
 
     print("🔍 GGML Model Validation for model ", model_name)
     print("=" * 40)
@@ -73,8 +81,7 @@ def main():
         print("       Ok to proceed with NMSE check...")
         sys.exit(0)
     else:
-        print(f"❌ NOK: Top 10 predictions don't match - generation will differ")
-        sys.exit(1)
+        exit_with_warning(f"❌ NOK: Top 10 predictions don't match - generation will differ", model_path)
 
 if __name__ == "__main__":
     main()

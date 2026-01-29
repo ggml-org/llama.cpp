@@ -1517,10 +1517,12 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
     struct ggml_cgraph * graph = ggml_new_graph_custom(ctx, n_nodes, false);
     graph->n_nodes = n_nodes;
     std::unordered_map<uint64_t, const rpc_tensor*> tensor_ptrs;
+    tensor_ptrs.reserve(n_tensors);
     for (uint32_t i = 0; i < n_tensors; i++) {
-        tensor_ptrs[tensors[i].id] = &tensors[i];
+        tensor_ptrs.emplace(tensors[i].id, &tensors[i]);
     }
     std::unordered_map<uint64_t, ggml_tensor*> tensor_map;
+    tensor_map.reserve(n_nodes);
     for (uint32_t i = 0; i < n_nodes; i++) {
         int64_t id;
         memcpy(&id, &nodes[i], sizeof(id));

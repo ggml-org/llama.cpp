@@ -681,6 +681,9 @@ class GGUFWriter:
     def add_embedding_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EMBEDDING_LENGTH.format(arch=self.arch), length)
 
+    def add_embedding_length_out(self, length: int) -> None:
+        self.add_uint32(Keys.LLM.EMBEDDING_LENGTH_OUT.format(arch=self.arch), length)
+
     def add_features_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.FEATURES_LENGTH.format(arch=self.arch), length)
 
@@ -1083,6 +1086,9 @@ class GGUFWriter:
     def add_clip_projector_type(self, value: str) -> None:
         self.add_string(Keys.Clip.PROJECTOR_TYPE, value)
 
+    def add_clip_vision_projector_type(self, value: str) -> None:
+        self.add_string(Keys.ClipVision.PROJECTOR_TYPE, value)
+
     def add_vision_projection_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PROJECTION_DIM, value)
 
@@ -1129,12 +1135,44 @@ class GGUFWriter:
         self.add_uint32(Keys.ClipVision.Projector.SCALE_FACTOR, value)
 
     def add_vision_n_wa_pattern(self, value: int) -> None:
+        """Add window attention pattern interval for vision models.
+
+        This defines the pattern interval for window attention vs full attention layers.
+        For example, if n_wa_pattern=4, then layers 3, 7, 11, ... use full attention,
+        while other layers use window attention.
+
+        Used by models like Qwen2.5-VL where full attention layers follow a regular pattern.
+        """
         self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
+
+    def add_vision_wa_layer_indexes(self, layers: Sequence[int]) -> None:
+        """Add explicit layer indexes that use full attention in vision models.
+
+        This specifies the exact layer indices (0-based) that should use full attention
+        instead of window attention. All other layers will use window attention.
+
+        Args:
+            layers: List of layer indices that use full attention (e.g., [3, 7, 11, 15])
+
+        Used by models like YoutuVL where full attention layers are explicitly specified
+        rather than following a regular pattern.
+
+        Difference from add_vision_n_wa_pattern:
+        - n_wa_pattern: Defines a regular interval pattern (every Nth layer uses full attention)
+        - wa_layer_indexes: Explicitly lists which layers use full attention (irregular pattern)
+        """
+        self.add_array(Keys.ClipVision.WA_LAYER_INDEXES, layers)
 
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
 
+    def add_vision_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
+
     # audio models
+
+    def add_clip_audio_projector_type(self, value: str) -> None:
+        self.add_string(Keys.ClipAudio.PROJECTOR_TYPE, value)
 
     def add_audio_projection_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.PROJECTION_DIM, value)

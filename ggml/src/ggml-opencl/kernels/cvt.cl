@@ -47,6 +47,16 @@ struct block_q4_0
 };
 
 //------------------------------------------------------------------------------
+// block_q6_K
+//------------------------------------------------------------------------------
+struct block_q6_K {
+    uint8_t ql[QK_K/2];      // quants, lower 4 bits
+    uint8_t qh[QK_K/4];      // quants, upper 2 bits
+    int8_t  scales[QK_K/16]; // scales, quantized with 8 bits
+    half d;                  // super-block scale
+};
+
+//------------------------------------------------------------------------------
 // kernel_convert_block_q4_0
 // Convert the block_q4_0 format to 2 separate arrays (AOS -> SOA).
 // This kernel does not deshuffle the bits.
@@ -261,5 +271,65 @@ kernel void kernel_restore_block_q8_0(
     b->d = *d;
     for (int i = 0; i < QK8_0; ++i) {
         b->qs[i] = q[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q6_K
+// Convert the block_q6_K format to 3 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+// Each thread processes a super block.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q6_K(
+    global struct block_q6_K * src0,
+    global uchar * dst_ql,
+    global uchar * dst_qh,
+    global char  * dst_s,
+    global half  * dst_d
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
+    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        ql[i] = b->ql[i];
+    }
+    for (int i = 0; i < QK_K/4; ++i) {
+        qh[i] = b->qh[i];
+    }
+    for (int i = 0; i < QK_K/16; ++i) {
+        s[i] = b->scales[i];
+    }
+}
+
+// Restore block_q6_K from flattened arrays.
+// Each thread processes a super block.
+kernel void kernel_restore_block_q6_K(
+    global uchar * dst_ql,
+    global uchar * dst_qh,
+    global char  * dst_s,
+    global half  * dst_d,
+    global struct block_q6_K * dst
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) dst + get_global_id(0);
+    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    b->d = *d;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        b->ql[i] = ql[i];
+    }
+    for (int i = 0; i < QK_K/4; ++i) {
+        b->qh[i] = qh[i];
+    }
+    for (int i = 0; i < QK_K/16; ++i) {
+        b->scales[i] = s[i];
     }
 }

@@ -4,7 +4,7 @@ const path = require('path');
 
 // This file is used for testing wasm build from emscripten
 // Example build command:
-// emcmake cmake -B build-wasm -DGGML_WEBGPU=ON -DLLAMA_CURL=OFF
+// emcmake cmake -B build-wasm -DGGML_WEBGPU=ON -DLLAMA_OPENSSL=OFF
 // cmake --build build-wasm --target test-backend-ops -j
 
 const PORT = 8080;

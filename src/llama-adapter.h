@@ -59,8 +59,6 @@ struct llama_adapter_lora_weight {
 };
 
 struct llama_adapter_lora {
-    llama_model & model;
-
     // map tensor name to lora_a_b
     std::unordered_map<std::string, llama_adapter_lora_weight> ab_map;
 
@@ -75,7 +73,7 @@ struct llama_adapter_lora {
     // activated lora (aLoRA)
     std::vector<llama_token> alora_invocation_tokens;
 
-    llama_adapter_lora(llama_model & model) : model(model) {}
+    llama_adapter_lora() = default;
     ~llama_adapter_lora() = default;
 
     llama_adapter_lora_weight * get_weight(ggml_tensor * w);

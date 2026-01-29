@@ -16,6 +16,48 @@ static std::string rm_leading_dashes(const std::string & str) {
     return str.substr(pos);
 }
 
+// only allow a subset of args for remote presets for security reasons
+// do not add more args unless absolutely necessary
+// args that output to files are strictly prohibited
+static std::set<std::string> get_remote_preset_whitelist(const std::map<std::string, common_arg> & key_to_opt) {
+    static const std::set<std::string> allowed_options = {
+        "model-url",
+        "hf-repo",
+        "hf-repo-draft",
+        "hf-repo-v", // vocoder
+        "hf-file-v", // vocoder
+        "mmproj-url",
+        "pooling",
+        "jinja",
+        "batch-size",
+        "ubatch-size",
+        "cache-reuse",
+        "chat-template-kwargs",
+        "mmap",
+        // note: sampling params are automatically allowed by default
+        // negated args will be added automatically if the positive arg is specified above
+    };
+
+    std::set<std::string> allowed_keys;
+
+    for (const auto & it : key_to_opt) {
+        const std::string & key = it.first;
+        const common_arg & opt = it.second;
+        if (allowed_options.find(key) != allowed_options.end() || opt.is_sparam) {
+            allowed_keys.insert(key);
+            // also add variant keys (args without leading dashes and env vars)
+            for (const auto & arg : opt.get_args()) {
+                allowed_keys.insert(rm_leading_dashes(arg));
+            }
+            for (const auto & env : opt.get_env()) {
+                allowed_keys.insert(env);
+            }
+        }
+    }
+
+    return allowed_keys;
+}
+
 std::vector<std::string> common_preset::to_args(const std::string & bin_path) const {
     std::vector<std::string> args;
 
@@ -118,6 +160,29 @@ bool common_preset::get_option(const std::string & env, std::string & value) con
 void common_preset::merge(const common_preset & other) {
     for (const auto & [opt, val] : other.options) {
         options[opt] = val; // overwrite existing options
+    }
+}
+
+void common_preset::apply_to_params(common_params & params) const {
+    for (const auto & [opt, val] : options) {
+        // apply each option to params
+        if (opt.handler_string) {
+            opt.handler_string(params, val);
+        } else if (opt.handler_int) {
+            opt.handler_int(params, std::stoi(val));
+        } else if (opt.handler_bool) {
+            opt.handler_bool(params, common_arg_utils::is_truthy(val));
+        } else if (opt.handler_str_str) {
+            // not supported yet
+            throw std::runtime_error(string_format(
+                "%s: option with two values is not supported yet",
+                __func__
+            ));
+        } else if (opt.handler_void) {
+            opt.handler_void(params);
+        } else {
+            GGML_ABORT("unknown handler type");
+        }
     }
 }
 
@@ -230,10 +295,16 @@ static std::string parse_bool_arg(const common_arg & arg, const std::string & ke
     return value;
 }
 
-common_preset_context::common_preset_context(llama_example ex)
+common_preset_context::common_preset_context(llama_example ex, bool only_remote_allowed)
         : ctx_params(common_params_parser_init(default_params, ex)) {
     common_params_add_preset_options(ctx_params.options);
     key_to_opt = get_map_key_opt(ctx_params);
+
+    // setup allowed keys if only_remote_allowed is true
+    if (only_remote_allowed) {
+        filter_allowed_keys = true;
+        allowed_keys = get_remote_preset_whitelist(key_to_opt);
+    }
 }
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
@@ -249,7 +320,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
         }
         LOG_DBG("loading preset: %s\n", preset.name.c_str());
         for (const auto & [key, value] : section.second) {
+            if (key == "version") {
+                // skip version key (reserved for future use)
+                continue;
+            }
+
             LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
+            if (filter_allowed_keys && allowed_keys.find(key) == allowed_keys.end()) {
+                throw std::runtime_error(string_format(
+                    "option '%s' is not allowed in remote presets",
+                    key.c_str()
+                ));
+            }
             if (key_to_opt.find(key) != key_to_opt.end()) {
                 const auto & opt = key_to_opt.at(key);
                 if (is_bool_arg(opt)) {
@@ -259,7 +341,10 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                 }
                 LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
             } else {
-                // TODO: maybe warn about unknown key?
+                throw std::runtime_error(string_format(
+                    "option '%s' not recognized in preset '%s'",
+                    key.c_str(), preset.name.c_str()
+                ));
             }
         }
 

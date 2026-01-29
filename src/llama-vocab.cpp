@@ -314,6 +314,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_YOUTU:
+                regex_exprs = {
+                    "[가-힣ㄱ-ㆎ]+|[！…“”‘’—：；，、-〿︰-﹏]+|[ㄅ-ㄯ]+|[一-龥぀-ゟ゠-ヿ]+",
+                    "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_CODER:
                 regex_exprs = {
                     "[\r\n]",
@@ -453,6 +459,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[一-鿿㐀-䶿豈-﫿぀-ゟ゠-ヿ･-ﾟ⼀-⿟เ-๿຀-໿ក-៿က-႟ꩠ-ꩿꧠ-꧿가-힯ᄀ-ᇿ]+",
                     // Main BPE pattern
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
+            case LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE:
+                regex_exprs = {
+                    // original regex from tokenizer.json
+                    // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+"
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
                 };
                 break;
             default:
@@ -1862,6 +1875,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM;
                 clean_spaces = false;
             } else if (
+                    tokenizer_pre == "youtu") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_YOUTU;
+                clean_spaces = false;
+                ignore_merges = true;
+            } else if (
                     tokenizer_pre == "falcon") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_FALCON;
             } else if (
@@ -1954,6 +1972,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "exaone4") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT2;
+            } else if (
+                tokenizer_pre == "exaone-moe") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE;
             } else if (
                 tokenizer_pre == "chameleon") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_CHAMELEON;
@@ -2192,6 +2213,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         //       for now, we apply this workaround to find the tokens based on their text
 
         for (const auto & t : token_to_id) {
+            auto & attr = id_to_token[t.second].attr;
+
             // find EOT token: "<|eot_id|>", "<|im_end|>", "<end_of_turn>", etc.
             if (special_eot_id == LLAMA_TOKEN_NULL) {
                 if (false
@@ -2207,10 +2230,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<end_of_utterance>" // smoldocling
                    ) {
                     special_eot_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2221,10 +2244,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|eom_id|>"
                         ) {
                     special_eom_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2241,10 +2264,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|code_prefix|>" // GLM-4.5
                         ) {
                     special_fim_pre_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2261,10 +2284,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|code_suffix|>" // GLM-4.5
                         ) {
                     special_fim_suf_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2281,10 +2304,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|code_middle|>" // GLM-4.5
                         ) {
                     special_fim_mid_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2298,10 +2321,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<PAD>"
                         ) {
                     special_fim_pad_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2316,10 +2339,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<reponame>"    // Granite
                         ) {
                     special_fim_rep_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
@@ -2330,13 +2353,39 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<|file_sep|>" // Qwen
                         ) {
                     special_fim_sep_id = t.second;
-                    if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                         LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                                 __func__, t.second, t.first.c_str());
-                        id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                     }
                 }
             }
+        }
+
+        // auto-detect unused tokens: e.g. control tokens with the word "unused"
+        // ideally, these tokens should be marked as unused during conversion
+        {
+            uint32_t n_unused = 0;
+
+            for (const auto & t : token_to_id) {
+                auto & attr = id_to_token[t.second].attr;
+
+                if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                    continue;
+                }
+
+                if ((attr & LLAMA_TOKEN_ATTR_UNUSED) == 0) {
+                    if (strstr(t.first.c_str(), "unused") != NULL) {
+                        attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_UNUSED);
+                    }
+                }
+
+                if (attr & LLAMA_TOKEN_ATTR_UNUSED) {
+                    n_unused++;
+                }
+            }
+
+            LLAMA_LOG_INFO("%s: %u unused tokens\n", __func__, n_unused);
         }
 
         // maintain a list of tokens that cause end-of-generation
@@ -2357,6 +2406,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         }
 
         for (const auto & t : token_to_id) {
+            auto & attr = id_to_token[t.second].attr;
+
             if (false
                     || t.first == "<|eot_id|>"
                     || t.first == "<|im_end|>"
@@ -2374,24 +2425,31 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<end_of_utterance>" // smoldocling
                ) {
                 special_eog_ids.insert(t.second);
-                if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
+                if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
                     LLAMA_LOG_WARN("%s: control-looking token: %6d '%s' was not control-type; this is probably a bug in the model. its type will be overridden\n",
                             __func__, t.second, t.first.c_str());
-                    id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
+                    attr = (llama_token_attr) (attr | LLAMA_TOKEN_ATTR_CONTROL);
                 }
             } else {
-                // token is control, but not marked as EOG -> print a debug log
-                if (id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL && special_eog_ids.count(t.second) == 0) {
-                    LLAMA_LOG_DEBUG("%s: control token: %6d '%s' is not marked as EOG\n",
-                            __func__, t.second, t.first.c_str());
+                if (attr & LLAMA_TOKEN_ATTR_CONTROL && !(attr & LLAMA_TOKEN_ATTR_UNUSED)) {
+                    // token is control, but not marked as EOG -> print a debug log
+                    if (special_eog_ids.count(t.second) == 0) {
+                        LLAMA_LOG_DEBUG("%s: control token: %6d '%s' is not marked as EOG\n",
+                                __func__, t.second, t.first.c_str());
+                    }
                 }
             }
         }
 
         // @ngxson : quick hack for gpt-oss, always render these tokens
         for (const auto & t : token_to_id) {
+            auto & attr = id_to_token[t.second].attr;
+
             if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>" || t.first == "<|constrain|>") {
-                id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
+                LLAMA_LOG_WARN("%s: setting token '%s' (%d) attribute to USER_DEFINED (%u), old attributes: %u\n",
+                        __func__, t.first.c_str(), t.second, LLAMA_TOKEN_ATTR_USER_DEFINED, attr);
+
+                attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
             }
         }
 
@@ -2424,15 +2482,17 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             LLAMA_LOG_INFO("%s: printing all EOG tokens:\n", __func__);
             for (auto tid : special_eog_ids) {
-                LLAMA_LOG_INFO("%s:   - %d ('%s')\n", __func__, tid, id_to_token[tid].text.c_str());
+                auto & text = id_to_token[tid].text;
 
-                if (id_to_token[tid].text == "<|return|>") {
+                LLAMA_LOG_INFO("%s:   - %d ('%s')\n", __func__, tid, text.c_str());
+
+                if (text == "<|return|>") {
                     has_return = true;
-                } else if (id_to_token[tid].text == "<|call|>" || id_to_token[tid].text == "<|calls|>") {
+                } else if (text == "<|call|>" || text == "<|calls|>") {
                     has_call = true;
-                } else if (id_to_token[tid].text == "<|flush|>") {
+                } else if (text == "<|flush|>") {
                     has_flush = true;
-                } else if (id_to_token[tid].text == "<|end|>") {
+                } else if (text == "<|end|>") {
                     has_end = true;
                     end_id = tid;
                 }
@@ -2440,7 +2500,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             if ((has_return && has_call && has_end) || (has_call && has_flush && has_end)) {
                 special_eog_ids.erase(end_id);
-                id_to_token[end_id].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
+
+                auto & attr = id_to_token[end_id].attr;
+                attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
+
                 LLAMA_LOG_WARN("%s: special_eog_ids contains both '<|return|>' and '<|call|>', or '<|calls|>' and '<|flush|>' tokens, removing '<|end|>' token from EOG list\n", __func__);
             }
         }
@@ -3239,34 +3302,34 @@ int32_t llama_vocab::impl::detokenize(
 }
 
 void llama_vocab::impl::print_info() const {
-    LLAMA_LOG_INFO("%s: vocab type       = %s\n",     __func__, type_name().c_str());
-    LLAMA_LOG_INFO("%s: n_vocab          = %u\n",     __func__, vocab.n_tokens());
-    LLAMA_LOG_INFO("%s: n_merges         = %u\n",     __func__, (uint32_t) bpe_ranks.size());
+    LLAMA_LOG_INFO("%s: vocab type            = %s\n",     __func__, type_name().c_str());
+    LLAMA_LOG_INFO("%s: n_vocab               = %u\n",     __func__, vocab.n_tokens());
+    LLAMA_LOG_INFO("%s: n_merges              = %u\n",     __func__, (uint32_t) bpe_ranks.size());
 
     // special tokens
-    if (special_bos_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: BOS token        = %d '%s'\n", __func__, special_bos_id,     id_to_token.at(special_bos_id).text.c_str() );  }
-    if (special_eos_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOS token        = %d '%s'\n", __func__, special_eos_id,     id_to_token.at(special_eos_id).text.c_str() );  }
-    if (special_eot_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOT token        = %d '%s'\n", __func__, special_eot_id,     id_to_token.at(special_eot_id).text.c_str() );  }
-    if (special_eom_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOM token        = %d '%s'\n", __func__, special_eom_id,     id_to_token.at(special_eom_id).text.c_str() );  }
-    if (special_unk_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: UNK token        = %d '%s'\n", __func__, special_unk_id,     id_to_token.at(special_unk_id).text.c_str() );  }
-    if (special_sep_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: SEP token        = %d '%s'\n", __func__, special_sep_id,     id_to_token.at(special_sep_id).text.c_str() );  }
-    if (special_pad_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: PAD token        = %d '%s'\n", __func__, special_pad_id,     id_to_token.at(special_pad_id).text.c_str() );  }
-    if (special_mask_id != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: MASK token       = %d '%s'\n", __func__, special_mask_id,    id_to_token.at(special_mask_id).text.c_str() ); }
+    if (special_bos_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: BOS token             = %d '%s'\n", __func__, special_bos_id,     id_to_token.at(special_bos_id).text.c_str() );  }
+    if (special_eos_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOS token             = %d '%s'\n", __func__, special_eos_id,     id_to_token.at(special_eos_id).text.c_str() );  }
+    if (special_eot_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOT token             = %d '%s'\n", __func__, special_eot_id,     id_to_token.at(special_eot_id).text.c_str() );  }
+    if (special_eom_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: EOM token             = %d '%s'\n", __func__, special_eom_id,     id_to_token.at(special_eom_id).text.c_str() );  }
+    if (special_unk_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: UNK token             = %d '%s'\n", __func__, special_unk_id,     id_to_token.at(special_unk_id).text.c_str() );  }
+    if (special_sep_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: SEP token             = %d '%s'\n", __func__, special_sep_id,     id_to_token.at(special_sep_id).text.c_str() );  }
+    if (special_pad_id  != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: PAD token             = %d '%s'\n", __func__, special_pad_id,     id_to_token.at(special_pad_id).text.c_str() );  }
+    if (special_mask_id != LLAMA_TOKEN_NULL)    { LLAMA_LOG_INFO( "%s: MASK token            = %d '%s'\n", __func__, special_mask_id,    id_to_token.at(special_mask_id).text.c_str() ); }
 
-    if (linefeed_id != LLAMA_TOKEN_NULL)        { LLAMA_LOG_INFO( "%s: LF token         = %d '%s'\n", __func__, linefeed_id,        id_to_token.at(linefeed_id).text.c_str() ); }
+    if (linefeed_id != LLAMA_TOKEN_NULL)        { LLAMA_LOG_INFO( "%s: LF token              = %d '%s'\n", __func__, linefeed_id,        id_to_token.at(linefeed_id).text.c_str() ); }
 
-    if (special_fim_pre_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM PRE token    = %d '%s'\n", __func__, special_fim_pre_id, id_to_token.at(special_fim_pre_id).text.c_str() ); }
-    if (special_fim_suf_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM SUF token    = %d '%s'\n", __func__, special_fim_suf_id, id_to_token.at(special_fim_suf_id).text.c_str() ); }
-    if (special_fim_mid_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM MID token    = %d '%s'\n", __func__, special_fim_mid_id, id_to_token.at(special_fim_mid_id).text.c_str() ); }
-    if (special_fim_pad_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM PAD token    = %d '%s'\n", __func__, special_fim_pad_id, id_to_token.at(special_fim_pad_id).text.c_str() ); }
-    if (special_fim_rep_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM REP token    = %d '%s'\n", __func__, special_fim_rep_id, id_to_token.at(special_fim_rep_id).text.c_str() ); }
-    if (special_fim_sep_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM SEP token    = %d '%s'\n", __func__, special_fim_sep_id, id_to_token.at(special_fim_sep_id).text.c_str() ); }
+    if (special_fim_pre_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM PRE token         = %d '%s'\n", __func__, special_fim_pre_id, id_to_token.at(special_fim_pre_id).text.c_str() ); }
+    if (special_fim_suf_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM SUF token         = %d '%s'\n", __func__, special_fim_suf_id, id_to_token.at(special_fim_suf_id).text.c_str() ); }
+    if (special_fim_mid_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM MID token         = %d '%s'\n", __func__, special_fim_mid_id, id_to_token.at(special_fim_mid_id).text.c_str() ); }
+    if (special_fim_pad_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM PAD token         = %d '%s'\n", __func__, special_fim_pad_id, id_to_token.at(special_fim_pad_id).text.c_str() ); }
+    if (special_fim_rep_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM REP token         = %d '%s'\n", __func__, special_fim_rep_id, id_to_token.at(special_fim_rep_id).text.c_str() ); }
+    if (special_fim_sep_id != LLAMA_TOKEN_NULL) { LLAMA_LOG_INFO( "%s: FIM SEP token         = %d '%s'\n", __func__, special_fim_sep_id, id_to_token.at(special_fim_sep_id).text.c_str() ); }
 
     for (const auto & id : special_eog_ids) {
-        LLAMA_LOG_INFO( "%s: EOG token        = %d '%s'\n", __func__, id, id_to_token.at(id).text.c_str() );
+        LLAMA_LOG_INFO( "%s: EOG token             = %d '%s'\n", __func__, id, id_to_token.at(id).text.c_str() );
     }
 
-    LLAMA_LOG_INFO("%s: max token length = %d\n", __func__, max_token_len);
+    LLAMA_LOG_INFO("%s: max token length      = %d\n", __func__, max_token_len);
 }
 
 llama_vocab::llama_vocab() : pimpl(new impl(*this)) {

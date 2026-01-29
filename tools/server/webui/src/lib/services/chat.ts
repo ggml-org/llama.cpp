@@ -86,6 +86,7 @@ export class ChatService {
 			dry_penalty_last_n,
 			// Other parameters
 			samplers,
+			backend_sampling,
 			custom,
 			timings_per_token,
 			// Config options
@@ -158,6 +159,8 @@ export class ChatService {
 					? samplers.split(';').filter((s: string) => s.trim())
 					: samplers;
 		}
+
+		if (backend_sampling !== undefined) requestBody.backend_sampling = backend_sampling;
 
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 

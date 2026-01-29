@@ -1,7 +1,6 @@
 #include "models.h"
 
-template <bool iswa>
-llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
     const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -24,13 +23,8 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
     auto * inp_attn = build_attn_inp_no_cache();
 
     for (int il = 0; il < n_layer; ++il) {
-        float freq_base_l  = 0.0f;
-
-        if constexpr (iswa) {
-            freq_base_l = model.get_rope_freq_base(cparams, il);
-        } else {
-            freq_base_l = freq_base;
-        }
+        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         cur = inpL;
 
@@ -55,13 +49,13 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
         // RoPE
         Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
         Kcur = ggml_rope_ext(
                 ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
@@ -120,7 +114,3 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
     res->t_embd = cur;
     ggml_build_forward_expand(gf, cur);
 }
-
-// Explicit template instantiations
-template struct llm_build_modern_bert<false>;
-template struct llm_build_modern_bert<true>;

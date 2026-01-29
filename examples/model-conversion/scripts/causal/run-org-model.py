@@ -7,12 +7,11 @@ import importlib
 import torch
 import numpy as np
 
-from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForImageTextToText, AutoConfig
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.common import debug_hook
+from utils.common import debug_hook, save_output_data
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Process model with specified path")
@@ -126,6 +125,7 @@ def main():
     device = next(model.parameters()).device
     prompt = get_prompt(args)
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+    token_ids = input_ids[0].cpu().tolist()
 
     print(f"Input tokens: {input_ids}")
     print(f"Input text: {repr(prompt)}")
@@ -151,19 +151,6 @@ def main():
         print(f"Last token logits shape: {last_logits.shape}")
         print(f"Vocab size: {len(last_logits)}")
 
-        data_dir = Path("data")
-        data_dir.mkdir(exist_ok=True)
-        bin_filename = data_dir / f"pytorch-{model_name}.bin"
-        txt_filename = data_dir / f"pytorch-{model_name}.txt"
-
-        # Save to file for comparison
-        last_logits.astype(np.float32).tofile(bin_filename)
-
-        # Also save as text file for easy inspection
-        with open(txt_filename, "w") as f:
-            for i, logit in enumerate(last_logits):
-                f.write(f"{i}: {logit:.6f}\n")
-
         # Print some sample logits for quick verification
         print(f"First 10 logits: {last_logits[:10]}")
         print(f"Last 10 logits: {last_logits[-10:]}")
@@ -175,8 +162,7 @@ def main():
             token = tokenizer.decode([idx])
             print(f"  Token {idx} ({repr(token)}): {last_logits[idx]:.6f}")
 
-        print(f"Saved bin logits to: {bin_filename}")
-        print(f"Saved txt logist to: {txt_filename}")
+        save_output_data(last_logits, token_ids, prompt, model_name)
 
 if __name__ == "__main__":
     main()
