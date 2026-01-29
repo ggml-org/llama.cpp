@@ -1256,6 +1256,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
             "visual.merger.mlp.{bid}", # qwen2vl
+            "mlp_AR.linear_{bid}", # PaddleOCR-VL
             "merger.mlp.{bid}",
         ),
 
@@ -1492,6 +1493,7 @@ class TensorNameMap:
             "multi_modal_projector.pre_norm",
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
+            "mlp_AR.pre_norm", # PaddleOCR-VL
             "merger.ln_q",
         ),
 
@@ -1517,6 +1519,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
             "resampler.attn.out_proj",
+            "model.vision_model.head.attention.out_proj",
         ),
 
         MODEL_TENSOR.V_RESMPL_KV: (
