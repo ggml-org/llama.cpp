@@ -1949,6 +1949,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_YARN_BETA_FAST"));
     add_opt(common_arg(
+        {"--moe-n-expert"}, "N",
+        string_format("MoE: override number of active experts (default: %d = model default)\n"
+                      "for MoE self-draft speculation, use 1 for draft context", params.moe_n_expert_override),
+        [](common_params & params, int value) {
+            params.moe_n_expert_override = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_N_EXPERT"));
+    add_opt(common_arg(
         {"-gan", "--grp-attn-n"}, "N",
         string_format("group-attention factor (default: %d)", params.grp_attn_n),
         [](common_params & params, int value) {
