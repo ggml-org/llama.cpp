@@ -92,9 +92,9 @@ struct Params {
     m1: f32,
 };
 
-@group(0) @binding(0) var<storage, read> Q: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
-@group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
+@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
 
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
