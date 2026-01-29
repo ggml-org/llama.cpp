@@ -318,7 +318,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // accumulate q block * k block into registers across the entire KV tile
       // TODO: this loop seems to be the current largest bottleneck
-    if (subgroup_id < KV_BLOCKS) {
+    // this bracket exists to scope the lifetime of variables, reducing register pressure
+    {
     #ifdef KV_DIRECT
           let k_block_row = kv_tile + subgroup_id * SG_MAT_N;
             var k_global_offset = k_head_offset + k_block_row * params.stride_k1;
