@@ -2916,6 +2916,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 }
 
 static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties * props, ggml_tensor * node) {
+    memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
     props->node_address = node->data;
     props->node_op = node->op;
     props->flags = node->flags;
@@ -2924,7 +2925,16 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
         props->nb[i] = node->nb[i];
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        props->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+        if (!node->src[i]) {
+            continue;
+        }
+
+        props->src_data[i] = node->src[i]->data;
+
+        for (int j = 0; j < GGML_MAX_DIMS; j++) {
+            props->src_ne[i][j] = node->src[i]->ne[j];
+            props->src_nb[i][j] = node->src[i]->nb[j];
+        }
     }
     memcpy(props->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
@@ -2948,12 +2958,27 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
         }
     }
 
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (node->src[i] &&
-            node->src[i]->data != props->src_address[i] &&
-            node->op != GGML_OP_VIEW
-        ) {
-            return false;
+    if (node->op != GGML_OP_VIEW) {
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (!node->src[i]) {
+                if (props->src_data[i] != nullptr) {
+                    return false;
+                }
+                continue;
+            }
+
+            if (node->src[i]->data != props->src_data[i]) {
+                return false;
+            }
+
+            // TODO: this is not ideal since it requires too much memory - figure out an optimization
+            // ref: https://github.com/ggml-org/llama.cpp/pull/19165
+            for (int j = 0; j < GGML_MAX_DIMS; j++) {
+                if (node->src[i]->ne[j] != props->src_ne[i][j] ||
+                    node->src[i]->nb[j] != props->src_nb[i][j]) {
+                    return false;
+                }
+            }
         }
     }
 
@@ -2974,7 +2999,6 @@ static const void * ggml_cuda_graph_get_key(ggml_cgraph * cgraph) {
 }
 
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
-
     bool res = false;
 
     const void * graph_key = ggml_cuda_graph_get_key(cgraph);
@@ -2985,9 +3009,9 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
     }
 
     // Check if the graph size has changed
-    if (graph->props.size() != (size_t)cgraph->n_nodes + cgraph->n_leafs) {
+    if (graph->props.size() != (size_t)cgraph->n_nodes) {
         res = true;
-        graph->props.resize(cgraph->n_nodes + cgraph->n_leafs);
+        graph->props.resize(cgraph->n_nodes);
     }
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
@@ -3001,17 +3025,6 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
             res = true;
         }
         ggml_cuda_graph_node_set_properties(&graph->props[i], cgraph->nodes[i]);
-    }
-
-    for (int i = 0; i < cgraph->n_leafs; i++) {
-        bool props_match = true;
-        if (!res) {
-            props_match = ggml_cuda_graph_node_properties_match(cgraph->leafs[i], &graph->props[cgraph->n_nodes + i]);
-        }
-        if (!props_match) {
-            res = true;
-        }
-        ggml_cuda_graph_node_set_properties(&graph->props[cgraph->n_nodes + i], cgraph->leafs[i]);
     }
 
     return res;
