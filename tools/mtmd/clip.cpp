@@ -849,6 +849,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_youtuvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_VAETKI:
+            {
+                builder = std::make_unique<clip_graph_vaetki>(ctx, img);
+            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }
@@ -1191,6 +1195,15 @@ struct clip_model_loader {
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         hparams.set_limit_image_tokens(8, 4096);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_VAETKI:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        hparams.n_merge = 2;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.set_warmup_n_tokens(40*40);
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
                     {
@@ -1539,6 +1552,16 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));  // merger.mlp.2
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_VAETKI:
+                {
+                    model.class_pos_emb = get_tensor(TN_CLASS_POS_EMBD);
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    model.mm_ffn_up_w   = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b   = get_tensor(string_format(TN_MM_UP,   "bias"));
+                    model.mm_ffn_down_w = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b = get_tensor(string_format(TN_MM_DOWN, "bias"));
                 } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
@@ -2832,6 +2855,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_VAETKI:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
@@ -3229,6 +3253,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_LLAMA4:
+        case PROJECTOR_TYPE_VAETKI:
             {
                 // both X and Y are downscaled by the scale factor
                 int scale_factor = ctx->model.hparams.n_merge;
@@ -3476,11 +3501,14 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_VAETKI:
             {
                 const int merge_ratio = hparams.n_merge;
                 const int pw = image_size_width  / patch_size;
                 const int ph = image_size_height / patch_size;
-                std::vector<int> positions(n_pos * 4);
+
+                const int pos_size = num_patches;
+                std::vector<int> positions(pos_size * 4);
                 int ptr = 0;
                 for (int y = 0; y < ph; y += merge_ratio) {
                     for (int x = 0; x < pw; x += merge_ratio) {
@@ -3770,6 +3798,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_4h_to_h_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
             return ctx->model.position_embeddings->ne[0];
+        case PROJECTOR_TYPE_VAETKI:
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
         default:

@@ -219,6 +219,7 @@ struct clip_model {
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;
+    ggml_tensor * class_pos_emb = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
     ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temproal dimension (Qwen2VL)
     ggml_tensor * patch_bias = nullptr;
