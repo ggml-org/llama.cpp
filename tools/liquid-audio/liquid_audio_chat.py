@@ -257,6 +257,7 @@ def create_stream_chat(client, messages, max_tokens=512, reset_context=False):
         extra_body={
             "id_slot": 0,
             "continue": not reset_context,
+            "reset_context": reset_context,
         },
     )
 
