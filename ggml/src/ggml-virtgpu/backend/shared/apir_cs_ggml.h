@@ -39,11 +39,17 @@ static inline void apir_encode_ggml_tensor(apir_encoder * enc, const ggml_tensor
 
 static inline const ggml_tensor * apir_decode_ggml_tensor(apir_decoder * dec) {
     const apir_rpc_tensor * apir_rpc_tensor = apir_decode_apir_rpc_tensor_inplace(dec);
+
+    if (!apir_rpc_tensor) {
+        return NULL;
+    }
+
     ggml_init_params params{
         /*.mem_size   =*/ ggml_tensor_overhead(),
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
+
     ggml_context * ctx = ggml_init(params);
 
     const ggml_tensor * tensor = apir_deserialize_tensor(ctx, apir_rpc_tensor);
