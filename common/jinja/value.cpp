@@ -115,6 +115,18 @@ static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
 }
 
 template<typename T>
+static value empty_value_fn(const func_args &) {
+    if constexpr (std::is_same_v<T, value_int>) {
+        return mk_val<T>(0);
+    } else if constexpr (std::is_same_v<T, value_float>) {
+        return mk_val<T>(0.0);
+    } else if constexpr (std::is_same_v<T, value_bool>) {
+        return mk_val<T>(false);
+    } else {
+        return mk_val<T>();
+    }
+}
+template<typename T>
 static value test_type_fn(const func_args & args) {
     args.ensure_count(1);
     bool is_type = is_val<T>(args.get_pos(0));
@@ -126,6 +138,13 @@ static value test_type_fn(const func_args & args) {
     args.ensure_count(1);
     bool is_type = is_val<T>(args.get_pos(0)) || is_val<U>(args.get_pos(0));
     JJ_DEBUG("test_type_fn: type=%s or %s result=%d", typeid(T).name(), typeid(U).name(), is_type ? 1 : 0);
+    return mk_val<value_bool>(is_type);
+}
+template<typename T, typename U, typename V>
+static value test_type_fn(const func_args & args) {
+    args.ensure_count(1);
+    bool is_type = is_val<T>(args.get_pos(0)) || is_val<U>(args.get_pos(0)) || is_val<V>(args.get_pos(0));
+    JJ_DEBUG("test_type_fn: type=%s, %s or %s result=%d", typeid(T).name(), typeid(U).name(), typeid(V).name(), is_type ? 1 : 0);
     return mk_val<value_bool>(is_type);
 }
 template<value_compare_op op>
@@ -347,8 +366,8 @@ const func_builtins & global_builtins() {
         {"test_is_integer", test_type_fn<value_int>},
         {"test_is_float", test_type_fn<value_float>},
         {"test_is_number", test_type_fn<value_int, value_float>},
-        {"test_is_iterable", test_type_fn<value_array, value_string>},
-        {"test_is_sequence", test_type_fn<value_array, value_string>},
+        {"test_is_iterable", test_type_fn<value_array, value_string, value_undefined>},
+        {"test_is_sequence", test_type_fn<value_array, value_string, value_undefined>},
         {"test_is_mapping", test_type_fn<value_object>},
         {"test_is_lower", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
@@ -1003,7 +1022,22 @@ const func_builtins & value_none_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
         {"tojson", tojson},
-        {"string", [](const func_args &) -> value { return mk_val<value_string>("None"); }}
+        {"string", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
+        {"safe", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
+        {"strip", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
+        {"items", empty_value_fn<value_array>},
+        {"map", empty_value_fn<value_array>},
+        {"reject", empty_value_fn<value_array>},
+        {"rejectattr", empty_value_fn<value_array>},
+        {"select", empty_value_fn<value_array>},
+        {"selectattr", empty_value_fn<value_array>},
+        {"unique", empty_value_fn<value_array>},
     };
     return builtins;
 }
@@ -1012,10 +1046,33 @@ const func_builtins & value_none_t::get_builtins() const {
 const func_builtins & value_undefined_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
-        {"tojson", [](const func_args & args) -> value {
-            args.ensure_vals<value_undefined>();
-            return mk_val<value_string>("null");
-        }},
+        {"capitalize", empty_value_fn<value_string>},
+        {"first", empty_value_fn<value_undefined>},
+        {"items", empty_value_fn<value_array>},
+        {"join", empty_value_fn<value_string>},
+        {"last", empty_value_fn<value_undefined>},
+        {"length", empty_value_fn<value_int>},
+        {"list", empty_value_fn<value_array>},
+        {"lower", empty_value_fn<value_string>},
+        {"map", empty_value_fn<value_array>},
+        {"max", empty_value_fn<value_undefined>},
+        {"min", empty_value_fn<value_undefined>},
+        {"reject", empty_value_fn<value_array>},
+        {"rejectattr", empty_value_fn<value_array>},
+        {"replace", empty_value_fn<value_string>},
+        {"reverse", empty_value_fn<value_array>},
+        {"safe", empty_value_fn<value_string>},
+        {"select", empty_value_fn<value_array>},
+        {"selectattr", empty_value_fn<value_array>},
+        {"sort", empty_value_fn<value_array>},
+        {"string", empty_value_fn<value_string>},
+        {"strip", empty_value_fn<value_string>},
+        {"sum", empty_value_fn<value_int>},
+        {"title", empty_value_fn<value_string>},
+        {"truncate", empty_value_fn<value_string>},
+        {"unique", empty_value_fn<value_array>},
+        {"upper", empty_value_fn<value_string>},
+        {"wordcount", empty_value_fn<value_int>},
     };
     return builtins;
 }

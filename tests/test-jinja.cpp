@@ -329,6 +329,12 @@ static void test_loops(testing & t) {
         "empty"
     );
 
+    test_template(t, "for undefined empty",
+        "{% for i in items %}{{ i }}{% else %}empty{% endfor %}",
+        json::object(),
+        "empty"
+    );
+
     test_template(t, "nested for",
         "{% for i in a %}{% for j in b %}{{ i }}{{ j }}{% endfor %}{% endfor %}",
         {{"a", json::array({1, 2})}, {"b", json::array({"x", "y"})}},
@@ -1018,6 +1024,18 @@ static void test_tests(testing & t) {
         {{"x", {{"a", 1}}}},
         "yes"
     );
+
+    test_template(t, "undefined is sequence",
+        "{{ 'yes' if x is sequence }}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "undefined is iterable",
+        "{{ 'yes' if x is iterable }}",
+        json::object(),
+        "yes"
+    );
 }
 
 static void test_string_methods(testing & t) {
@@ -1121,6 +1139,54 @@ static void test_string_methods(testing & t) {
         "{{ s.replace('a', 'X', 2) }}",
         {{"s", "banana"}},
         "bXnXna"
+    );
+
+    test_template(t, "undefined|capitalize",
+        "{{ arr|capitalize }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|title",
+        "{{ arr|title }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|truncate",
+        "{{ arr|truncate(9) }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|upper",
+        "{{ arr|upper }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|lower",
+        "{{ arr|lower }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|replace",
+        "{{ arr|replace('a', 'b') }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|trim",
+        "{{ arr|trim }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|wordcount",
+        "{{ arr|wordcount }}",
+        json::object(),
+        "0"
     );
 }
 
@@ -1289,6 +1355,108 @@ static void test_array_methods(testing & t) {
     //     {{"arr", json::array({"a", "b", "c"})}},
     //     "a,x,b,c"
     // );
+
+    test_template(t, "undefined|select",
+        "{% for item in items|select('odd') %}{{ item.name }} {% endfor %}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|selectattr",
+        "{% for item in items|selectattr('active') %}{{ item.name }} {% endfor %}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|reject",
+        "{% for item in items|reject('even') %}{{ item.name }} {% endfor %}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|rejectattr",
+        "{% for item in items|rejectattr('active') %}{{ item.name }} {% endfor %}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|list",
+        "{{ arr|list|string }}",
+        json::object(),
+        "[]"
+    );
+
+    test_template(t, "undefined|string",
+        "{{ arr|string }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|first",
+        "{{ arr|first }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|last",
+        "{{ arr|last }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|length",
+        "{{ arr|length }}",
+        json::object(),
+        "0"
+    );
+
+    test_template(t, "undefined|join",
+        "{{ arr|join }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|sort",
+        "{{ arr|sort|string }}",
+        json::object(),
+        "[]"
+    );
+
+    test_template(t, "undefined|reverse",
+        "{{ arr|reverse|join }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|map",
+        "{% for v in arr|map(attribute='age') %}{{ v }} {% endfor %}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|min",
+        "{{ arr|min }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|max",
+        "{{ arr|max }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|unique",
+        "{{ arr|unique|join }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|sum",
+        "{{ arr|sum }}",
+        json::object(),
+        "0"
+    );
 }
 
 static void test_object_methods(testing & t) {
@@ -1392,6 +1560,12 @@ static void test_object_methods(testing & t) {
         "{% set d = {1: 'a', 2: 'b'} %}{{ d[1] == 'a' and d[2] == 'b' }}",
         json::object(),
         "True"
+    );
+
+    test_template(t, "undefined|items",
+        "{{ arr|items|join }}",
+        json::object(),
+        ""
     );
 }
 
