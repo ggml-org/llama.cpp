@@ -2,19 +2,21 @@
 	import { Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
-		ChatFormActionFileAttachments,
+		ChatFormActionAttachmentsDropdown,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		DialogMcpServersSettings,
+		McpServerSelector,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages, usedModalities } from '$lib/stores/conversations.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -27,6 +29,9 @@
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
+		onSystemPromptClick?: () => void;
+		onMcpPromptClick?: () => void;
+		onMcpResourcesClick?: () => void;
 	}
 
 	let {
@@ -39,7 +44,10 @@
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
-		onStop
+		onStop,
+		onSystemPromptClick,
+		onMcpPromptClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -153,41 +161,55 @@
 		selectorModelRef?.open();
 	}
 
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => usedModalities(),
-		onValidationFailure: async (previousModelId) => {
-			if (previousModelId) {
-				await modelsStore.selectModelById(previousModelId);
-			}
-		}
+	let showMcpDialog = $state(false);
+
+	let hasMcpPromptsSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		return mcpStore.hasEnabledServers(perChatOverrides);
+	});
+
+	let hasMcpResourcesSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		return mcpStore.hasEnabledServers(perChatOverrides) && mcpStore.hasResourcesCapability();
 	});
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<ChatFormActionFileAttachments
-		class="mr-auto"
-		{disabled}
-		{hasAudioModality}
-		{hasVisionModality}
-		{onFileUpload}
-	/>
+	<div class="mr-auto flex items-center gap-2">
+		<ChatFormActionAttachmentsDropdown
+			{disabled}
+			{hasAudioModality}
+			{hasVisionModality}
+			{hasMcpPromptsSupport}
+			{hasMcpResourcesSupport}
+			{onFileUpload}
+			{onSystemPromptClick}
+			{onMcpPromptClick}
+			{onMcpResourcesClick}
+			onMcpServersClick={() => (showMcpDialog = true)}
+		/>
 
-	<ModelsSelector
-		{disabled}
-		bind:this={selectorModelRef}
-		currentModel={conversationModel}
-		forceForegroundText={true}
-		useGlobalSelection={true}
-		onModelChange={handleModelChange}
-	/>
+		<McpServerSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
+	</div>
+
+	<div class="ml-auto flex items-center gap-1.5">
+		<ModelsSelector
+			{disabled}
+			bind:this={selectorModelRef}
+			currentModel={conversationModel}
+			forceForegroundText={true}
+			useGlobalSelection={true}
+		/>
+	</div>
 
 	{#if isLoading}
 		<Button
 			type="button"
 			onclick={onStop}
-			class="h-8 w-8 bg-transparent p-0 hover:bg-destructive/20"
+			class="h-8 w-8 rounded-full bg-transparent p-0 hover:bg-destructive/20"
 		>
 			<span class="sr-only">Stop</span>
+
 			<Square class="h-8 w-8 fill-destructive stroke-destructive" />
 		</Button>
 	{:else if shouldShowRecordButton}
@@ -202,3 +224,8 @@
 		/>
 	{/if}
 </div>
+
+<DialogMcpServersSettings
+	bind:open={showMcpDialog}
+	onOpenChange={(open) => (showMcpDialog = open)}
+/>

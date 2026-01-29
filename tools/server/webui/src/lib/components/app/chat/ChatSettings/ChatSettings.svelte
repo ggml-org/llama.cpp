@@ -14,12 +14,15 @@
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		McpLogo
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
+	import { ColorMode } from '$lib/enums/ui';
 	import type { Component } from 'svelte';
+	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 
 	interface Props {
 		onSave?: () => void;
@@ -41,9 +44,9 @@
 					label: 'Theme',
 					type: 'select',
 					options: [
-						{ value: 'system', label: 'System', icon: Monitor },
-						{ value: 'light', label: 'Light', icon: Sun },
-						{ value: 'dark', label: 'Dark', icon: Moon }
+						{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+						{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+						{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
 					]
 				},
 				{ key: 'apiKey', label: 'API Key', type: 'input' },
@@ -245,17 +248,38 @@
 			fields: []
 		},
 		{
+			title: 'MCP',
+			icon: McpLogo,
+			fields: [
+				{
+					key: 'agenticMaxTurns',
+					label: 'Agentic loop max turns',
+					type: 'input'
+				},
+				{
+					key: 'agenticMaxToolPreviewLines',
+					label: 'Max lines per tool preview',
+					type: 'input'
+				},
+				{
+					key: 'showToolCallInProgress',
+					label: 'Show tool call in progress',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
 			title: 'Developer',
 			icon: Code,
 			fields: [
 				{
-					key: 'showToolCalls',
-					label: 'Show tool call labels',
+					key: 'disableReasoningParsing',
+					label: 'Disable reasoning content parsing',
 					type: 'checkbox'
 				},
 				{
-					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
+					key: 'showRawOutputSwitch',
+					label: 'Enable raw output toggle',
 					type: 'checkbox'
 				},
 				{
@@ -293,7 +317,7 @@
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
 
-		setMode(newTheme as 'light' | 'dark' | 'system');
+		setMode(newTheme as ColorMode);
 	}
 
 	function handleConfigChange(key: string, value: string | boolean) {
@@ -303,7 +327,7 @@
 	function handleReset() {
 		localConfig = { ...config() };
 
-		setMode(localConfig.theme as 'light' | 'dark' | 'system');
+		setMode(localConfig.theme as ColorMode);
 	}
 
 	function handleSave() {
@@ -319,33 +343,16 @@
 
 		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
-		const numericFields = [
-			'temperature',
-			'top_k',
-			'top_p',
-			'min_p',
-			'max_tokens',
-			'pasteLongTextToFileLen',
-			'dynatemp_range',
-			'dynatemp_exponent',
-			'typ_p',
-			'xtc_probability',
-			'xtc_threshold',
-			'repeat_last_n',
-			'repeat_penalty',
-			'presence_penalty',
-			'frequency_penalty',
-			'dry_multiplier',
-			'dry_base',
-			'dry_allowed_length',
-			'dry_penalty_last_n'
-		];
 
-		for (const field of numericFields) {
+		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
 				if (!isNaN(numValue)) {
-					processedConfig[field] = numValue;
+					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
+						processedConfig[field] = Math.max(1, Math.round(numValue));
+					} else {
+						processedConfig[field] = numValue;
+					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
 					return;

@@ -93,12 +93,21 @@ function createHeader(language: string, codeId: string): Element {
 	};
 }
 
+function createScrollContainer(preElement: Element): Element {
+	return {
+		type: 'element',
+		tagName: 'div',
+		properties: { className: ['code-block-scroll-container'] },
+		children: [preElement]
+	};
+}
+
 function createWrapper(header: Element, preElement: Element): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: ['code-block-wrapper'] },
-		children: [header, preElement]
+		properties: { className: ['code-block-wrapper', 'relative'] },
+		children: [header, createScrollContainer(preElement)]
 	};
 }
 

@@ -5,9 +5,11 @@
 		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
+	import { Switch } from '$lib/components/ui/switch';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
-		role: 'user' | 'assistant';
+		role: MessageRole.USER | MessageRole.ASSISTANT;
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
 		siblingInfo?: ChatMessageSiblingInfo | null;
@@ -26,6 +28,9 @@
 		onConfirmDelete: () => void;
 		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
+		showRawOutputSwitch?: boolean;
+		rawOutputEnabled?: boolean;
+		onRawOutputToggle?: (enabled: boolean) => void;
 	}
 
 	let {
@@ -42,7 +47,10 @@
 		onRegenerate,
 		role,
 		siblingInfo = null,
-		showDeleteDialog
+		showDeleteDialog,
+		showRawOutputSwitch = false,
+		rawOutputEnabled = false,
+		onRawOutputToggle
 	}: Props = $props();
 
 	function handleConfirmDelete() {
@@ -51,9 +59,9 @@
 	}
 </script>
 
-<div class="relative {justify === 'start' ? 'mt-2' : ''} flex h-6 items-center justify-{justify}">
+<div class="relative {justify === 'start' ? 'mt-2' : ''} flex h-6 items-center justify-between">
 	<div
-		class="absolute top-0 {actionsPosition === 'left'
+		class="{actionsPosition === 'left'
 			? 'left-0'
 			: 'right-0'} flex items-center gap-2 opacity-100 transition-opacity"
 	>
@@ -70,17 +78,27 @@
 				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
 			{/if}
 
-			{#if role === 'assistant' && onRegenerate}
+			{#if role === MessageRole.ASSISTANT && onRegenerate}
 				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
-			{#if role === 'assistant' && onContinue}
+			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 
 			<ActionButton icon={Trash2} tooltip="Delete" onclick={onDelete} />
 		</div>
 	</div>
+
+	{#if showRawOutputSwitch}
+		<div class="flex items-center gap-2">
+			<span class="text-xs text-muted-foreground">Show raw output</span>
+			<Switch
+				checked={rawOutputEnabled}
+				onCheckedChange={(checked) => onRawOutputToggle?.(checked)}
+			/>
+		</div>
+	{/if}
 </div>
 
 <DialogConfirmation

@@ -1,4 +1,34 @@
 export enum ChatMessageStatsView {
 	GENERATION = 'generation',
-	READING = 'reading'
+	READING = 'reading',
+	TOOLS = 'tools',
+	SUMMARY = 'summary'
+}
+
+/**
+ * Reasoning format options for API requests.
+ */
+export enum ReasoningFormat {
+	NONE = 'none',
+	AUTO = 'auto'
+}
+
+/**
+ * Message roles for chat messages.
+ */
+export enum MessageRole {
+	USER = 'user',
+	ASSISTANT = 'assistant',
+	SYSTEM = 'system',
+	TOOL = 'tool'
+}
+
+/**
+ * Message types for different content kinds.
+ */
+export enum MessageType {
+	ROOT = 'root',
+	TEXT = 'text',
+	THINK = 'think',
+	SYSTEM = 'system'
 }
