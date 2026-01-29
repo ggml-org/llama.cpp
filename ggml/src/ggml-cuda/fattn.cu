@@ -310,8 +310,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
-    const bool V_is_K_view = V->view_src && (V->view_src == K || (V->view_src == K->view_src && V->view_offs == K->view_offs));
-
     const int cc = ggml_cuda_info().devices[device].cc;
 
     switch (K->ne[0]) {
@@ -332,9 +330,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_NONE;
             }
             if (!gqa_opt_applies) {
-                return BEST_FATTN_KERNEL_NONE;
-            }
-            if (!V_is_K_view) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
