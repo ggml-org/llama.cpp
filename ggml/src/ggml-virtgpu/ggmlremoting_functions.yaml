@@ -1,0 +1,168 @@
+# YAML schema for GGML remoting API functions
+# This defines the structure for generating the remoting layer code
+
+# Configuration for the generated files
+config:
+  # Base path for the generated files
+  base_path: "ggml/src"
+
+  # Header files to update
+  files:
+    apir_backend_header: "ggml-virtgpu-apir/backend/shared/apir_backend.gen.h"
+    backend_dispatched_header: "ggml-virtgpu-apir/backend/backend-dispatched.gen.h"
+    virtgpu_forward_header: "ggml-virtgpu-apir/virtgpu-forward.gen.h"
+
+# Simplified function definitions with grouping and metadata combined
+functions:
+  device:
+    group_description: "device"
+    functions:
+      get_device_count:
+        # No specific metadata - uses default void return and base params
+
+      get_count:
+        frontend_return: "int"
+
+      get_name:
+        frontend_return: "const char *"
+
+      get_description:
+        frontend_return: "const char *"
+
+      get_type:
+        frontend_return: "uint32_t"
+
+      get_memory:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "size_t *free"
+        - "size_t *total"
+
+      supports_op:
+        frontend_return: "bool"
+        frontend_extra_params:
+        - "const ggml_tensor *op"
+
+      get_buffer_type:
+        frontend_return: "apir_buffer_type_host_handle_t"
+
+      get_props:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "bool *async"
+        - "bool *host_buffer"
+        - "bool *buffer_from_host_ptr"
+        - "bool *events"
+
+      buffer_from_ptr:
+        frontend_return: "apir_buffer_context_t"
+        frontend_extra_params:
+        - "size_t size"
+        - "size_t max_tensor_size"
+
+  buffer_type:
+    group_description: "buffer-type"
+    functions:
+      get_name:
+        frontend_return: "const char *"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buft"
+
+      get_alignment:
+        frontend_return: "size_t"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buft"
+
+      get_max_size:
+        frontend_return: "size_t"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buft"
+
+      is_host:
+        frontend_return: "bool"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buft"
+
+      alloc_buffer:
+        frontend_return: "apir_buffer_context_t"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buffer_buft"
+        - "size_t size"
+
+      get_alloc_size:
+        frontend_return: "size_t"
+        frontend_extra_params:
+        - "ggml_backend_buffer_type_t buft"
+        - "const ggml_tensor *op"
+
+  buffer:
+    group_description: "buffer"
+    functions:
+      get_base:
+        frontend_return: "void *"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+
+      set_tensor:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+        - "ggml_tensor *tensor"
+        - "const void *data"
+        - "size_t offset"
+        - "size_t size"
+
+      get_tensor:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+        - "const ggml_tensor *tensor"
+        - "void *data"
+        - "size_t offset"
+        - "size_t size"
+
+      cpy_tensor:
+        frontend_return: "bool"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+        - "const ggml_tensor *src"
+        - "const ggml_tensor *dst"
+
+      clear:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+        - "uint8_t value"
+
+      free_buffer:
+        frontend_return: "void"
+        frontend_extra_params:
+        - "apir_buffer_context_t *buffer_context"
+
+  backend:
+    group_description: "backend"
+    functions:
+      graph_compute:
+        frontend_return: "ggml_status"
+        frontend_extra_params:
+        - "ggml_cgraph *cgraph"
+
+      graph_optimize:
+        frontend_return: "ggml_cgraph *"
+        frontend_extra_params:
+        - "ggml_cgraph *cgraph"
+        enabled: false
+
+# Naming patterns used for code generation
+naming_patterns:
+  # How to generate enum names
+  enum_prefix: "APIR_COMMAND_TYPE_"
+
+  # How to generate backend function names
+  backend_function_prefix: "backend_"
+
+  # How to generate frontend function names
+  frontend_function_prefix: "apir_"
+
+  # Standard frontend first parameter
+  frontend_base_param: "struct virtgpu *gpu"
