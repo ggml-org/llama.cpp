@@ -44,8 +44,6 @@
 #define ANSI_COLOR_RESET   "\x1b[0m"
 #define ANSI_BOLD          "\x1b[1m"
 
-// namespace console {
-
 #if defined (_WIN32)
     namespace {
         // Use private-use unicode values to represent special keys that are not reported
@@ -1071,57 +1069,55 @@
         return readline_advanced(line, multiline_input);
     }
 
-    // namespace spinner {
-        static const char LOADING_CHARS[] = {'|', '/', '-', '\\'};
-        static std::condition_variable cv_stop;
-        static std::thread th;
-        static size_t frame = 0; // only modified by one thread
-        static bool running = false;
-        static std::mutex mtx;
-        static auto wait_time = std::chrono::milliseconds(100);
-        static void draw_next_frame() {
-            // don't need lock because only one thread modifies running
-            frame = (frame + 1) % sizeof(LOADING_CHARS);
-            replace_last(LOADING_CHARS[frame]);
-            fflush(out);
+    static const char LOADING_CHARS[] = {'|', '/', '-', '\\'};
+    static std::condition_variable cv_stop;
+    static std::thread th;
+    static size_t frame = 0; // only modified by one thread
+    static bool running = false;
+    static std::mutex mtx;
+    static auto wait_time = std::chrono::milliseconds(100);
+    static void draw_next_frame() {
+        // don't need lock because only one thread modifies running
+        frame = (frame + 1) % sizeof(LOADING_CHARS);
+        replace_last(LOADING_CHARS[frame]);
+        fflush(out);
+    }
+    void console::start() {
+        std::unique_lock<std::mutex> lock(mtx);
+        if (simple_io || running) {
+            return;
         }
-        void console::start() {
+        common_log_flush(common_log_main());
+        fprintf(out, "%c", LOADING_CHARS[0]);
+        fflush(out);
+        frame = 1;
+        running = true;
+        th = std::thread([]() {
             std::unique_lock<std::mutex> lock(mtx);
-            if (simple_io || running) {
+            while (true) {
+                if (cv_stop.wait_for(lock, wait_time, []{ return !running; })) {
+                    break;
+                }
+                draw_next_frame();
+            }
+        });
+    }
+    void console::stop() {
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            if (simple_io || !running) {
                 return;
             }
-            common_log_flush(common_log_main());
-            fprintf(out, "%c", LOADING_CHARS[0]);
-            fflush(out);
-            frame = 1;
-            running = true;
-            th = std::thread([]() {
-                std::unique_lock<std::mutex> lock(mtx);
-                while (true) {
-                    if (cv_stop.wait_for(lock, wait_time, []{ return !running; })) {
-                        break;
-                    }
-                    draw_next_frame();
-                }
-            });
+            running = false;
+            cv_stop.notify_all();
         }
-        void console::stop() {
-            {
-                std::unique_lock<std::mutex> lock(mtx);
-                if (simple_io || !running) {
-                    return;
-                }
-                running = false;
-                cv_stop.notify_all();
-            }
-            if (th.joinable()) {
-                th.join();
-            }
-            replace_last(' ');
-            pop_cursor();
-            fflush(out);
+        if (th.joinable()) {
+            th.join();
         }
-    // }
+        replace_last(' ');
+        pop_cursor();
+        fflush(out);
+    }
 
     void console::log(const char * fmt, ...) {
         va_list args;
@@ -1143,4 +1139,3 @@
     void console::flush() {
         fflush(out);
     }
-// }
