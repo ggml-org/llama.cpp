@@ -23,6 +23,7 @@
 #include <limits>
 #include <array>
 #include <functional>
+#include <algorithm>
 
 struct clip_logger_state g_logger_state = {clip_log_callback_default, NULL};
 
@@ -849,6 +850,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_youtuvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_CRADIO:
+            {
+                builder = std::make_unique<clip_graph_cradio>(ctx, img);
+            } break;
         default:
             GGML_ABORT("missing cgraph builder");
     }
@@ -1039,7 +1044,8 @@ struct clip_model_loader {
             hparams.has_llava_projector = model.proj_type == PROJECTOR_TYPE_MLP
                                        || model.proj_type == PROJECTOR_TYPE_MLP_NORM
                                        || model.proj_type == PROJECTOR_TYPE_LDP
-                                       || model.proj_type == PROJECTOR_TYPE_LDPV2;
+                                       || model.proj_type == PROJECTOR_TYPE_LDPV2
+                                       || model.proj_type == PROJECTOR_TYPE_CRADIO;
 
             {
                 bool use_gelu = false;
@@ -1226,6 +1232,14 @@ struct clip_model_loader {
                         hparams.audio_n_fft            = 512;
                         hparams.audio_window_len       = 400;
                         hparams.audio_hop_len          = 160;
+                    } break;
+                case PROJECTOR_TYPE_CRADIO:
+                    {
+                        get_u32(KEY_MIN_TILES, hparams.min_tiles, true);
+                        get_u32(KEY_MAX_TILES, hparams.max_tiles, true);
+                        get_u32(KEY_MAX_RESOLUTION, hparams.max_resolution, true);
+                        get_u32(KEY_NUM_SKIP, hparams.num_skip, true);
+
                     } break;
                 default:
                     break;
@@ -1828,6 +1842,16 @@ struct clip_model_loader {
                         layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
+                } break;
+            case PROJECTOR_TYPE_CRADIO:
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"), false);
+                    model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"), false);
+                    model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    model.mm_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -2544,8 +2568,48 @@ struct llava_uhd {
 
     static slice_instructions get_slice_instructions(struct clip_ctx * ctx, const clip_image_size & original_size) {
         slice_instructions res;
+        const int slice_size = clip_get_image_size(ctx);
+        
+        if (ctx->proj_type() == PROJECTOR_TYPE_CRADIO) {
+            float aspect_ratio = (float)original_size.width / original_size.height;
+            std::vector<std::pair<int, int>> target_ratios;
+            for (int n = ctx->model.hparams.min_tiles; n <= ctx->model.hparams.max_tiles; ++n) {
+                for (int i = 1; i <= n; ++i) {
+                    for (int j = 1; j <= n; ++j) {
+                        if (i * j <= ctx->model.hparams.max_tiles && i * j >= ctx->model.hparams.min_tiles) {
+                            target_ratios.push_back({i, j});
+                        }
+                    }
+                }
+            }
+
+            std::sort(target_ratios.begin(), target_ratios.end());
+            target_ratios.erase(std::unique(target_ratios.begin(), target_ratios.end()), target_ratios.end());
+            std::sort(target_ratios.begin(), target_ratios.end(), [](const auto& a, const auto& b) {
+                return a.first * a.second < b.first * b.second;
+            });
+            
+            auto [grid_x, grid_y] = find_closest_aspect_ratio(aspect_ratio, target_ratios, original_size.width * original_size.height, slice_size);
+            int num_blocks = grid_x * grid_y;
+            int target_width = grid_x * slice_size;
+            int target_height = grid_y * slice_size;
+            res.overview_size = clip_image_size{slice_size, slice_size};
+            res.refined_size = clip_image_size{target_width, target_height};
+            res.grid_size = clip_image_size{grid_x, grid_y};
+
+            for (int patches_x = 0; patches_x < grid_x; ++patches_x) {
+                for (int patches_y = 0; patches_y < grid_y; ++patches_y) {
+                    slice_coordinates slice;
+                    slice.x = patches_x * slice_size;
+                    slice.y = patches_y * slice_size;
+                    slice.size = clip_image_size{slice_size, slice_size};
+                    res.slices.push_back(slice);
+                }
+            }
+            return res;
+        }
+
         const int patch_size      = clip_get_patch_size(ctx);
-        const int slice_size      = clip_get_image_size(ctx);
         const int original_width  = original_size.width;
         const int original_height = original_size.height;
 
@@ -2646,6 +2710,24 @@ struct llava_uhd {
 
         return res;
     }
+
+    static std::pair<int, int> find_closest_aspect_ratio(float aspect_ratio, const std::vector<std::pair<int,int>> &target_ratios, int area, int image_size) {
+        float best_ratio_diff = std::numeric_limits<float>::max();
+        std::pair<int,int> best_ratio{1,1};
+        for (const auto& ratio : target_ratios) {
+            float target_aspect_ratio = (float)ratio.first / ratio.second;
+            float ratio_diff = std::abs(aspect_ratio - target_aspect_ratio);
+            if (ratio_diff < best_ratio_diff) {
+                best_ratio_diff = ratio_diff;
+                best_ratio = ratio;
+            }
+            else if (ratio_diff == best_ratio_diff && 2 * area > image_size * image_size * ratio.first * ratio.second) {
+                best_ratio = ratio;
+            }
+        }
+        return best_ratio;
+    }
+
 
     static std::vector<clip_image_u8_ptr> slice_image(const clip_image_u8 * img, const slice_instructions & inst) {
         std::vector<clip_image_u8_ptr> output;
@@ -3082,7 +3164,24 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     }
                 }
             } break;
-
+        case PROJECTOR_TYPE_CRADIO:
+            {
+                if (res_imgs->entries.size() > 0) {
+                    clip_image_f32_batch_free(res_imgs);
+                }
+                res_imgs->entries.clear();
+        
+                auto const inst = llava_uhd::get_slice_instructions(ctx, original_size);
+                std::vector<clip_image_u8_ptr> imgs = llava_uhd::slice_image(img, inst);
+                assert(!imgs.empty());
+                std::rotate(imgs.begin(), imgs.begin()+1, imgs.end());
+        
+                for (size_t i = 0; i < imgs.size(); ++i) {
+                    clip_image_f32_ptr res(clip_image_f32_init());
+                    normalize_image_u8_to_f32(*imgs[i], *res, params.image_mean, params.image_std);
+                    res_imgs->entries.push_back(std::move(res));
+                }
+            } break;
         default:
             LOG_ERR("%s: unsupported projector type %d\n", __func__, ctx->proj_type());
             return false;
@@ -3301,6 +3400,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_LFM2A:
             {
                 n_patches = ((((img->nx + 1) / 2) + 1) / 2 + 1) / 2;
+            } break;
+        case PROJECTOR_TYPE_CRADIO:
+            {
+                n_patches = 256;
             } break;
         default:
             GGML_ABORT("unsupported projector type");
@@ -3642,6 +3745,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_COGVLM:
+        case PROJECTOR_TYPE_CRADIO:
             {
                 // do nothing
             } break;
@@ -3756,6 +3860,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_INTERNVL:
+        case PROJECTOR_TYPE_CRADIO:
             return ctx->model.mm_3_w->ne[1];
         case PROJECTOR_TYPE_LLAMA4:
             return ctx->model.mm_model_proj->ne[1];
