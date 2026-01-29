@@ -21,7 +21,8 @@ on:
       '**/*.m',
       '**/*.metal',
       '**/*.comp',
-      '**/*.glsl'
+      '**/*.glsl',
+      '**/*.wgsl'
     ]
 
   pull_request:
@@ -42,7 +43,8 @@ on:
       '**/*.m',
       '**/*.metal',
       '**/*.comp',
-      '**/*.glsl'
+      '**/*.glsl',
+      '**/*.wgsl'
     ]
 
 concurrency:
