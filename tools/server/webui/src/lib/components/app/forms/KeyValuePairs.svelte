@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { Plus, X } from '@lucide/svelte';
+	import { Plus, Trash2 } from '@lucide/svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { autoResizeTextarea } from '$lib/utils';
 	import type { KeyValuePair } from '$lib/types';
 
 	interface Props {
+		class?: string;
 		pairs: KeyValuePair[];
 		onPairsChange: (pairs: KeyValuePair[]) => void;
 		keyPlaceholder?: string;
@@ -16,6 +17,7 @@
 	}
 
 	let {
+		class: className = '',
 		pairs,
 		onPairsChange,
 		keyPlaceholder = 'Key',
@@ -47,7 +49,7 @@
 	}
 </script>
 
-<div>
+<div class={className}>
 	<div class="mb-2 flex items-center justify-between">
 		{#if sectionLabel}
 			<span class="text-xs font-medium">
@@ -70,7 +72,7 @@
 	{#if pairs.length > 0}
 		<div class="space-y-3">
 			{#each pairs as pair, index (index)}
-				<div class="flex items-center gap-2">
+				<div class="flex items-start gap-2">
 					<Input
 						type="text"
 						placeholder={keyPlaceholder}
@@ -93,11 +95,11 @@
 
 					<button
 						type="button"
-						class="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+						class="mt-1.5 shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
 						onclick={() => removePair(index)}
 						aria-label="Remove item"
 					>
-						<X class="h-3.5 w-3.5" />
+						<Trash2 class="h-3.5 w-3.5" />
 					</button>
 				</div>
 			{/each}

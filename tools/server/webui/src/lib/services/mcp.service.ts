@@ -42,6 +42,7 @@ import type {
 import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { throwIfAborted, isAbortError } from '$lib/utils';
+import { base } from '$app/paths';
 
 interface ToolResultContentItem {
 	type: string;
@@ -77,8 +78,23 @@ export class MCPService {
 	}
 
 	/**
+	 * Build a proxied URL that routes through llama-server's CORS proxy.
+	 * @param targetUrl - The original MCP server URL
+	 * @returns URL pointing to the CORS proxy with target encoded
+	 */
+	private static buildProxiedUrl(targetUrl: string): URL {
+		const proxyPath = `${base}/cors-proxy`;
+		const proxyUrl = new URL(proxyPath, window.location.origin);
+
+		proxyUrl.searchParams.set('url', targetUrl);
+
+		return proxyUrl;
+	}
+
+	/**
 	 * Create transport based on server configuration.
 	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
+	 * When useProxy is enabled, routes HTTP requests through llama-server's CORS proxy.
 	 * Returns both transport and the type used.
 	 */
 	static createTransport(config: MCPServerConfig): {
@@ -89,7 +105,7 @@ export class MCPService {
 			throw new Error('MCP server configuration is missing url');
 		}
 
-		const url = new URL(config.url);
+		const useProxy = config.useProxy ?? false;
 		const requestInit: RequestInit = {};
 
 		if (config.headers) {
@@ -101,7 +117,17 @@ export class MCPService {
 		}
 
 		if (config.transport === 'websocket') {
-			console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
+			if (useProxy) {
+				throw new Error(
+					'WebSocket transport is not supported when using CORS proxy. Use HTTP transport instead.'
+				);
+			}
+
+			const url = new URL(config.url);
+
+			if (import.meta.env.DEV) {
+				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
+			}
 
 			return {
 				transport: new WebSocketClientTransport(url),
@@ -109,8 +135,16 @@ export class MCPService {
 			};
 		}
 
+		const url = useProxy ? this.buildProxiedUrl(config.url) : new URL(config.url);
+
+		if (useProxy && import.meta.env.DEV) {
+			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
+		}
+
 		try {
-			console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
+			if (import.meta.env.DEV) {
+				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
+			}
 
 			return {
 				transport: new StreamableHTTPClientTransport(url, {

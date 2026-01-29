@@ -79,7 +79,8 @@ function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 			url,
 			name: (entry as { name?: string })?.name,
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-			headers: headers || undefined
+			headers: headers || undefined,
+			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});
 }
@@ -104,7 +105,8 @@ function buildServerConfig(
 		transport: detectMcpTransportFromUrl(entry.url),
 		handshakeTimeoutMs: connectionTimeoutMs,
 		requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
-		headers
+		headers,
+		useProxy: entry.useProxy
 	};
 }
 
@@ -304,7 +306,8 @@ class MCPStore {
 			url: serverData.url.trim(),
 			name: serverData.name,
 			headers: serverData.headers?.trim() || undefined,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
+			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
+			useProxy: serverData.useProxy
 		};
 		settingsStore.updateConfig('mcpServers', JSON.stringify([...servers, newServer]));
 	}
@@ -845,7 +848,8 @@ class MCPStore {
 					transport: detectMcpTransportFromUrl(trimmedUrl),
 					handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
 					requestTimeoutMs: timeoutMs,
-					headers
+					headers,
+					useProxy: server.useProxy
 				},
 				DEFAULT_MCP_CONFIG.clientInfo,
 				DEFAULT_MCP_CONFIG.capabilities,

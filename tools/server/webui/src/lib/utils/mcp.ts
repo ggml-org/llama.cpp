@@ -58,7 +58,8 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-			headers: headers || undefined
+			headers: headers || undefined,
+			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});
 }
