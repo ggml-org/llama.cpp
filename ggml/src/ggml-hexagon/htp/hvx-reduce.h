@@ -44,6 +44,17 @@ static inline HVX_Vector hvx_vec_reduce_sum_qf32(HVX_Vector in) {
     return hvx_vec_reduce_sum_n_qf32(in, 32);
 }
 
+static inline HVX_Vector hvx_vec_reduce_sum_qf32x2(HVX_Vector in0, HVX_Vector in1) {
+    HVX_VectorPair sum_pair = Q6_W_vshuff_VVR(in1, in0, 4);
+    HVX_Vector     sum01    = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(sum_pair), Q6_V_hi_W(sum_pair));
+
+    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 2));
+    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 4));
+    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 8));
+    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 16));
+    return sum01;
+}
+
 static inline HVX_Vector hvx_vec_reduce_sum_n_f32(HVX_Vector in, unsigned int n) {
     unsigned int total = n * 4;  // total vec nbytes
     unsigned int width = 4;      // fp32 nbytes
