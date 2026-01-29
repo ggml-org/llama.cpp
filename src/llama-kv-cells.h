@@ -15,6 +15,10 @@ struct llama_kv_cell_ext {
     llama_pos x = 0;
     llama_pos y = 0;
 
+    // token ID, used by ngram embeddings
+    // currently default to 0, according to longcat-ngram implementation
+    llama_token id = 0;
+
     // return true if the current 2D spatial position is greater than other
     bool is_2d_gt(llama_pos ox, llama_pos oy) const {
         return (y > oy) || (y == oy && x > ox);
