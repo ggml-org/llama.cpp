@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { FolderOpen, Plus, Loader2 } from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -29,7 +30,8 @@
 			loadResources();
 
 			if (preSelectedUri) {
-				selectedResources = new SvelteSet([preSelectedUri]);
+				selectedResources.clear();
+				selectedResources.add(preSelectedUri);
 				lastSelectedUri = preSelectedUri;
 			}
 		}
@@ -47,7 +49,7 @@
 		open = newOpen;
 		onOpenChange?.(newOpen);
 		if (!newOpen) {
-			selectedResources = new SvelteSet();
+			selectedResources.clear();
 			lastSelectedUri = null;
 		}
 	}
@@ -61,28 +63,24 @@
 			if (lastIndex !== -1 && currentIndex !== -1) {
 				const start = Math.min(lastIndex, currentIndex);
 				const end = Math.max(lastIndex, currentIndex);
-				const newSelection = new SvelteSet(selectedResources);
 
 				for (let i = start; i <= end; i++) {
-					newSelection.add(allResources[i].uri);
+					selectedResources.add(allResources[i].uri);
 				}
-
-				selectedResources = newSelection;
 			}
 		} else {
-			selectedResources = new SvelteSet([resource.uri]);
+			selectedResources.clear();
+			selectedResources.add(resource.uri);
 			lastSelectedUri = resource.uri;
 		}
 	}
 
 	function handleResourceToggle(resource: MCPResourceInfo, checked: boolean) {
-		const newSelection = new SvelteSet(selectedResources);
 		if (checked) {
-			newSelection.add(resource.uri);
+			selectedResources.add(resource.uri);
 		} else {
-			newSelection.delete(resource.uri);
+			selectedResources.delete(resource.uri);
 		}
-		selectedResources = newSelection;
 		lastSelectedUri = resource.uri;
 	}
 
@@ -112,6 +110,13 @@
 				onAttach?.(resource);
 			}
 
+			const count = resourcesToAttach.length;
+			toast.success(
+				count === 1
+					? `Resource attached: ${resourcesToAttach[0].name}`
+					: `${count} resources attached`
+			);
+
 			handleOpenChange(false);
 		} catch (error) {
 			console.error('Failed to attach resources:', error);
@@ -125,6 +130,7 @@
 		try {
 			await mcpStore.attachResource(resource.uri);
 			onAttach?.(resource);
+			toast.success(`Resource attached: ${resource.name}`);
 		} catch (error) {
 			console.error('Failed to attach resource:', error);
 		} finally {

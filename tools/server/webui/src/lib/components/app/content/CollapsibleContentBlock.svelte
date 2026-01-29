@@ -1,13 +1,4 @@
 <script lang="ts">
-	/**
-	 * CollapsibleInfoCard - Reusable collapsible card component
-	 *
-	 * Used for displaying thinking content, tool calls, and other collapsible information
-	 * with a consistent UI pattern.
-	 *
-	 * Features auto-scroll during streaming: scrolls to bottom automatically,
-	 * stops when user scrolls up, resumes when user scrolls back to bottom.
-	 */
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';

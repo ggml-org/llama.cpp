@@ -45,18 +45,6 @@
 		return map;
 	});
 
-	function getServerFavicon(): string | null {
-		const server = serverSettingsMap.get(prompt.serverName);
-		return server ? getFaviconUrl(server.url) : null;
-	}
-
-	function getServerDisplayName(): string {
-		const server = serverSettingsMap.get(prompt.serverName);
-		if (!server) return prompt.serverName;
-
-		return mcpStore.getServerLabel(server);
-	}
-
 	let contentParts = $derived.by((): ContentPart[] => {
 		if (!prompt.content || !hasArguments) {
 			return [{ text: prompt.content || '', argKey: null }];
@@ -107,6 +95,18 @@
 	let maxHeightStyle = $derived(
 		isAttachment ? 'max-height: 10rem;' : 'max-height: var(--max-message-height);'
 	);
+
+	function getServerFavicon(): string | null {
+		const server = serverSettingsMap.get(prompt.serverName);
+		return server ? getFaviconUrl(server.url) : null;
+	}
+
+	function getServerDisplayName(): string {
+		const server = serverSettingsMap.get(prompt.serverName);
+		if (!server) return prompt.serverName;
+
+		return mcpStore.getServerLabel(server);
+	}
 </script>
 
 <div class="flex flex-col gap-2 {className}">

@@ -9,6 +9,9 @@
 /** Styled button for action triggers with icon support. */
 export { default as ActionButton } from './ActionButton.svelte';
 
+/** Code block actions component (copy, preview). */
+export { default as CodeBlockActions } from '../actions/CodeBlockActions.svelte';
+
 /** Copy-to-clipboard button with success feedback. */
 export { default as CopyToClipboardIcon } from './CopyToClipboardIcon.svelte';
 

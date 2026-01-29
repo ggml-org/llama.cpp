@@ -26,8 +26,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { DialogCodePreview } from '$lib/components/app/dialogs';
-	import CodeBlockActions from './CodeBlockActions.svelte';
+	import { CodeBlockActions, DialogCodePreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessage } from '$lib/types/database';
 

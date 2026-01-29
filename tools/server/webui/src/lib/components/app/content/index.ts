@@ -77,6 +77,3 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```
  */
 export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.svelte';
-
-/** Code block actions component (copy, preview). */
-export { default as CodeBlockActions } from './CodeBlockActions.svelte';
