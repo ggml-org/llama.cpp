@@ -344,7 +344,7 @@ __device__ __forceinline__ void ldmatrix_a(
   const half* src,
   half (&reg)[mma_tiles_per_warp_m][mma_tiles_per_warp_k][4]
 ){
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#ifdef CP_ASYNC_AVAILABLE
   static_assert(mma_tiles_per_warp_m == 8, "mma_tiles_per_warp_m must be 8");
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
 
@@ -503,7 +503,7 @@ __device__ __forceinline__ void ldmatrix_b(
   const half* src,
   half (&reg)[mma_tiles_per_warp_k][mma_tiles_per_warp_n][2]
 ){
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#ifdef CP_ASYNC_AVAILABLE
   static_assert(mma_tiles_per_warp_k == 4, "mma_tiles_per_warp_k must be 4");
   static_assert(mma_tiles_per_warp_n == 8, "mma_tiles_per_warp_n must be 8");
 
@@ -981,8 +981,7 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
 
 static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const float * X_D, const half * K_D, float * Y_D, int cc, param_t P, cudaStream_t st) {
 
-    // if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
-    if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r <= 32 && P.s <= 32)) {
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && ampere_mma_available(cc) && P.c % 8 == 0 && (P.r <= 32 && P.s <= 32)) {
 
         int id = ggml_cuda_get_device();
 
