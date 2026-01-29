@@ -10623,7 +10623,7 @@ class MistralMoeModel(DeepseekV2Model):
         self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1) # mscale_all_dim * 0.1
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        if name.startswith("vision_") or name.startswith("patch_merger."):
+        if name.startswith("vision_") or name.startswith("patch_merger.") or "mm_projector" in name:
             return
 
         # rename certain tensors so that we can reuse DeepseekV2Model modify_tensors logic
