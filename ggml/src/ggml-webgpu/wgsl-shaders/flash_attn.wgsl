@@ -168,8 +168,6 @@ fn load_kvx4(buf: ptr<storage, array<vec4<KV_TYPE>>, read_write>, scalar_index: 
     return (*buf)[scalar_index >> 2u];
 }
 
-
-
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     @builtin(local_invocation_id) local_id: vec3<u32>,
@@ -318,77 +316,75 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // accumulate q block * k block into registers across the entire KV tile
       // TODO: this loop seems to be the current largest bottleneck
-    // this bracket exists to scope the lifetime of variables, reducing register pressure
-    {
-    #ifdef KV_DIRECT
+      // this bracket exists to scope the lifetime of variables, reducing register pressure
+      {
+#ifdef KV_DIRECT
           let k_block_row = kv_tile + subgroup_id * SG_MAT_N;
-            var k_global_offset = k_head_offset + k_block_row * params.stride_k1;
+          var k_global_offset = k_head_offset + k_block_row * params.stride_k1;
 #else
-            var k_block_offset = subgroup_id * SG_MAT_N * HEAD_DIM_QK;
+          var k_block_offset = subgroup_id * SG_MAT_N * HEAD_DIM_QK;
 #endif
-        for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
-            let inter_offset = kv_block * SG_MAT_N;
-            var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(
-                    &inter_shmem, inter_offset, false, KV_TILE);
-    
-            var q_cur = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 0u, false, HEAD_DIM_QK);
+          for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
+              let inter_offset = kv_block * SG_MAT_N;
+              var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(&inter_shmem, inter_offset, false, KV_TILE);
+
+              var q_cur = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, 0u, false, HEAD_DIM_QK);
 
 #ifdef KV_DIRECT
-            var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
-                &K, k_global_offset + 0u, true, params.stride_k1);
+              var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + 0u, true, params.stride_k1);
 #else
-            var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
-                &kv_shmem, k_block_offset + 0u, true, HEAD_DIM_QK);
+              var k_cur = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + 0u, true, HEAD_DIM_QK);
 #endif
 
-            var t: u32 = 1u;
-            for (; t + 1u < HEAD_DIM_QK / SG_MAT_K; t += 2u) {
-                let h0 = t * SG_MAT_K;
-                var q0 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h0, false, HEAD_DIM_QK);
+              var t: u32 = 1u;
+              for (; t + 1u < HEAD_DIM_QK / SG_MAT_K; t += 2u) {
+                  let h0 = t * SG_MAT_K;
+                  var q0 = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h0, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
-                var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h0, true, params.stride_k1);
+                  var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h0, true, params.stride_k1);
 #else
-                var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h0, true, HEAD_DIM_QK);
+                  var k0 = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h0, true, HEAD_DIM_QK);
 #endif
-                acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-                q_cur = q0;
-                k_cur = k0;
+                  acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
+                  q_cur = q0;
+                  k_cur = k0;
 
-                let h1 = (t + 1u) * SG_MAT_K;
-                var q1g = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h1, false, HEAD_DIM_QK);
+                  let h1 = (t + 1u) * SG_MAT_K;
+                  var q1g = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h1, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
-                var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h1, true, params.stride_k1);
+                  var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h1, true, params.stride_k1);
 #else
-                var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h1, true, HEAD_DIM_QK);
+                  var k1g = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h1, true, HEAD_DIM_QK);
 #endif
-                acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-                q_cur = q1g;
-                k_cur = k1g;
-            }
+                  acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
+                  q_cur = q1g;
+                  k_cur = k1g;
+              }
 
-    for (; t < HEAD_DIM_QK / SG_MAT_K; t += 1u) {
-        let h = t * SG_MAT_K;
-        var qn = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h, false, HEAD_DIM_QK);
+              // handle odd tail
+              if (t < HEAD_DIM_QK / SG_MAT_K) {
+                  let h = t * SG_MAT_K;
+                  var qn = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(&q_shmem, h, false, HEAD_DIM_QK);
 #ifdef KV_DIRECT
-        var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h, true, params.stride_k1);
+                  var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&K, k_global_offset + h, true, params.stride_k1);
 #else
-        var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h, true, HEAD_DIM_QK);
+                  var kn = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(&kv_shmem, k_block_offset + h, true, HEAD_DIM_QK);
 #endif
-        acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-        q_cur = qn;
-        k_cur = kn;
-    }
+                  acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
+                  q_cur = qn;
+                  k_cur = kn;
+              }
 
-    acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
-// #endif
+              acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
+
 #ifdef KV_DIRECT
-        k_global_offset  += num_subgroups * SG_MAT_N * params.stride_k1;
+              k_global_offset += num_subgroups * SG_MAT_N * params.stride_k1;
 #else
-        k_block_offset   += num_subgroups * SG_MAT_N * HEAD_DIM_QK;
+              k_block_offset += num_subgroups * SG_MAT_N * HEAD_DIM_QK;
 #endif
-            subgroupMatrixStore(&inter_shmem, inter_offset, acc, false, KV_TILE);
-        }
-    }
+              subgroupMatrixStore(&inter_shmem, inter_offset, acc, false, KV_TILE);
+          }
+      }
 
 
 #ifdef MASK
@@ -606,8 +602,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     workgroupBarrier();
 #endif
     for (var q_tile_row = subgroup_id;
-         q_tile_row < Q_TILE;
-         q_tile_row += num_subgroups) {
+        q_tile_row < Q_TILE;
+        q_tile_row += num_subgroups) {
 
         let global_q_row = q_row_start + q_tile_row;
         if (global_q_row >= params.seq_len_q) { break; }
@@ -618,8 +614,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let row_base: u32 = dst_global_offset + q_tile_row * dst2_stride;
 
         for (var elem_base = sg_inv_id * 4u;
-         elem_base < HEAD_DIM_V;
-         elem_base += subgroup_size * 4u) {
+            elem_base < HEAD_DIM_V;
+            elem_base += subgroup_size * 4u) {
 
             let i0 = q_tile_row * HEAD_DIM_V + (elem_base + 0u);
             let i1 = q_tile_row * HEAD_DIM_V + (elem_base + 1u);
@@ -627,10 +623,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let i3 = q_tile_row * HEAD_DIM_V + (elem_base + 3u);
 
             let v = vec4<f32>(
-             f32(o_shmem[i0]) * scale,
-             f32(o_shmem[i1]) * scale,
-             f32(o_shmem[i2]) * scale,
-             f32(o_shmem[i3]) * scale
+                f32(o_shmem[i0]) * scale,
+                f32(o_shmem[i1]) * scale,
+                f32(o_shmem[i2]) * scale,
+                f32(o_shmem[i3]) * scale
             );
 
             let dst_vec_index: u32 = (row_base + elem_base) >> 2u;
