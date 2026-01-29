@@ -1,5 +1,6 @@
 #include "console.h"
 #include "log.h"
+#include <memory>
 #include <vector>
 #include <iostream>
 #include <cassert>
@@ -77,6 +78,8 @@
     static FILE*        tty              = nullptr;
     static termios      initial_state;
 #endif
+
+    std::unique_ptr<console> console::instance = nullptr;
 
     console::console() {
         console::instance = std::make_unique<console>(console());
