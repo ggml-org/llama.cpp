@@ -1255,6 +1255,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
+            "mm_projector.proj.linear_{bid}",
             "visual.merger.mlp.{bid}", # qwen2vl
             "merger.mlp.{bid}",
         ),
@@ -1490,6 +1491,7 @@ class TensorNameMap:
             "multi_modal_projector.norm",
             "multi_modal_projector.layer_norm",
             "multi_modal_projector.pre_norm",
+            "mm_projector.pre_norm", # Kimi-K2.5
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
             "merger.ln_q",
