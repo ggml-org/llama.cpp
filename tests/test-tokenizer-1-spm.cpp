@@ -63,7 +63,7 @@ int main(int argc, char ** argv) {
 #ifdef _WIN32
     // We need this for unicode console support
     console::init(false, false);
-    atexit([]() { console::cleanup(); });
+    // atexit([]() { console::cleanup(); });
 #endif
 
     const int n_vocab = llama_vocab_n_tokens(vocab);

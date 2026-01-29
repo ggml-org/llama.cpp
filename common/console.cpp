@@ -44,7 +44,7 @@
 #define ANSI_COLOR_RESET   "\x1b[0m"
 #define ANSI_BOLD          "\x1b[1m"
 
-namespace console {
+// namespace console {
 
 #if defined (_WIN32)
     namespace {
@@ -80,11 +80,20 @@ namespace console {
     static termios      initial_state;
 #endif
 
+    console::console() {
+        console::instance = std::make_unique<console>(console());
+    }
+
+    console::~console() {
+        // cleanup console after program finishing automatically
+        console::cleanup();
+    }
+
     //
     // Init and cleanup
     //
 
-    void init(bool use_simple_io, bool use_advanced_display) {
+    void console::init(bool use_simple_io, bool use_advanced_display) {
         advanced_display = use_advanced_display;
         simple_io = use_simple_io;
 #if defined(_WIN32)
@@ -146,9 +155,9 @@ namespace console {
 #endif
     }
 
-    void cleanup() {
+    void console::cleanup() {
         // Reset console display
-        set_display(DISPLAY_TYPE_RESET);
+        console::set_display(DISPLAY_TYPE_RESET);
 
 #if !defined(_WIN32)
         // Restore settings on POSIX systems
@@ -168,7 +177,7 @@ namespace console {
     //
 
     // Keep track of current display and only emit ANSI code if it changes
-    void set_display(display_type display) {
+    void console::set_display(display_type display) {
         if (advanced_display && current_display != display) {
             common_log_flush(common_log_main());
             switch(display) {
@@ -1055,14 +1064,14 @@ namespace console {
         return multiline_input;
     }
 
-    bool readline(std::string & line, bool multiline_input) {
+    bool console::readline(std::string & line, bool multiline_input) {
         if (simple_io) {
             return readline_simple(line, multiline_input);
         }
         return readline_advanced(line, multiline_input);
     }
 
-    namespace spinner {
+    // namespace spinner {
         static const char LOADING_CHARS[] = {'|', '/', '-', '\\'};
         static std::condition_variable cv_stop;
         static std::thread th;
@@ -1076,7 +1085,7 @@ namespace console {
             replace_last(LOADING_CHARS[frame]);
             fflush(out);
         }
-        void start() {
+        void console::start() {
             std::unique_lock<std::mutex> lock(mtx);
             if (simple_io || running) {
                 return;
@@ -1096,7 +1105,7 @@ namespace console {
                 }
             });
         }
-        void stop() {
+        void console::stop() {
             {
                 std::unique_lock<std::mutex> lock(mtx);
                 if (simple_io || !running) {
@@ -1112,26 +1121,26 @@ namespace console {
             pop_cursor();
             fflush(out);
         }
-    }
+    // }
 
-    void log(const char * fmt, ...) {
+    void console::log(const char * fmt, ...) {
         va_list args;
         va_start(args, fmt);
         vfprintf(out, fmt, args);
         va_end(args);
     }
 
-    void error(const char * fmt, ...) {
+    void console::error(const char * fmt, ...) {
         va_list args;
         va_start(args, fmt);
         display_type cur = current_display;
-        set_display(DISPLAY_TYPE_ERROR);
+        console::set_display(DISPLAY_TYPE_ERROR);
         vfprintf(out, fmt, args);
-        set_display(cur); // restore previous color
+        console::set_display(cur); // restore previous color
         va_end(args);
     }
 
-    void flush() {
+    void console::flush() {
         fflush(out);
     }
-}
+// }
