@@ -491,16 +491,22 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
 def test_chat_completions_multiple_choices():
     global server
     server.start()
-    res = server.make_request("POST", "/chat/completions", data={
-        "max_tokens": 8,
-        "n": 2,
-        "messages": [
-            {"role": "system", "content": "Book"},
-            {"role": "user", "content": "What is the best book"},
-        ],
-    })
-    assert res.status_code == 200
-    assert len(res.body["choices"]) == 2
-    for choice in res.body["choices"]:
-        assert "assistant" == choice["message"]["role"]
-        assert choice["finish_reason"] == "length"
+    # make sure cache can be reused across multiple choices and multiple requests
+    # ref: https://github.com/ggml-org/llama.cpp/pull/18663
+    for _ in range(2):
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 8,
+            "n": 2,
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+            # test forcing the same slot to be used
+            # the scheduler should not be locked up in this case
+            "id_slot": 0,
+        })
+        assert res.status_code == 200
+        assert len(res.body["choices"]) == 2
+        for choice in res.body["choices"]:
+            assert "assistant" == choice["message"]["role"]
+            assert choice["finish_reason"] == "length"

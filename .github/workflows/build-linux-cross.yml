@@ -8,7 +8,7 @@ jobs:
   #   runs-on: ubuntu-24.04
 
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v6
   #     - name: Setup Riscv
   #       run: |
   #         sudo dpkg --add-architecture riscv64
@@ -52,7 +52,7 @@ jobs:
   #   runs-on: ubuntu-24.04
 
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v6
   #     - name: Setup Riscv
   #       run: |
   #         sudo dpkg --add-architecture riscv64
@@ -99,7 +99,7 @@ jobs:
   #   runs-on: ubuntu-24.04
 
   #   steps:
-  #     - uses: actions/checkout@v4
+  #     - uses: actions/checkout@v6
   #     - name: Setup Arm64
   #       run: |
   #         sudo dpkg --add-architecture arm64
@@ -146,7 +146,7 @@ jobs:
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup LoongArch
         run: |
           rm -f /etc/apt/sources.list.d/*
@@ -201,7 +201,7 @@ jobs:
     container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup LoongArch
         run: |
           rm -f /etc/apt/sources.list.d/*
@@ -262,10 +262,10 @@ jobs:
       SPACEMIT_IME_TOOLCHAIN_VERSION: "1.1.2"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Use SpacemiT Toolchain Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         id: cache-toolchain
         with:
           path: ./spacemit_toolchain

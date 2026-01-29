@@ -73,6 +73,8 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    ngram-map.cpp
+    ngram-map.h
     peg-parser.cpp
     peg-parser.h
     preset.cpp
@@ -85,6 +87,18 @@ add_library(${TARGET} STATIC
     speculative.h
     unicode.cpp
     unicode.h
+    jinja/lexer.cpp
+    jinja/lexer.h
+    jinja/parser.cpp
+    jinja/parser.h
+    jinja/runtime.cpp
+    jinja/runtime.h
+    jinja/value.cpp
+    jinja/value.h
+    jinja/string.cpp
+    jinja/string.h
+    jinja/caps.cpp
+    jinja/caps.h
     )
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)
