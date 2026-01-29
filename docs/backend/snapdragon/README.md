@@ -1,6 +1,8 @@
-# Snapdragon-based Android devices
+# Snapdragon-based devices
 
-## How to Build
+## Setup
+
+### Android
 
 The easiest way to build llama.cpp for a Snapdragon-based Android device is using the toolchain Docker image (see github.com/snapdragon-toolchain).
 This image includes Android NDK, OpenCL SDK, Hexagon SDK, CMake, etc.
@@ -12,7 +14,24 @@ This method works on Linux, macOS, and Windows. macOS and Windows users should i
 [d]/> cd /workspace
 ```
 
-The rest of the Android build process assumes that you're running inside the toolchain container.
+Note: The rest of the **Android** build process assumes that you're running inside the toolchain container.
+
+### Windows On Snapdragon
+
+Native Windows 11 arm64 builds has the following tools dependencies:
+- MS Visual Studio 2026 (Community Edition or Pro)
+  - MSVC arm64 standard and runtime libraries
+  - UCRT and Driver Kit
+- LLVM core libraries and Clang compiler (winget)
+- CMake, Git, Python (winget)
+- Hexagon SDK Community Edition 6.4 or later (see windows.md)
+- OpenCL SDK 2.3 or later (see windows.md)
+
+Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
+Adapt below build commands accordingly.
+
+## How to Build
+
 Let's build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
 
 ```
@@ -49,23 +68,25 @@ Preset CMake variables:
 To generate an installable "package" simply use cmake --install:
 
 ```
-[d]/workspace> cmake --install build-snapdragon --prefix pkg-adb/llama.cpp
+[d]/workspace> cmake --install build-snapdragon --prefix pkg-snapdragon/llama.cpp
 -- Install configuration: "Release"
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-cpu.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-opencl.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-hexagon.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-htp-v73.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-htp-v75.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-htp-v79.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml-htp-v81.so
--- Installing: /workspace/pkg-adb/llama.cpp/lib/libggml.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-cpu.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-opencl.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-hexagon.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-htp-v73.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-htp-v75.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-htp-v79.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml-htp-v81.so
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/lib/libggml.so
 ...
--- Installing: /workspace/pkg-adb/llama.cpp/bin/llama-bench
--- Installing: /workspace/pkg-adb/llama.cpp/bin/llama-cli
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/bin/llama-bench
+-- Installing: /workspace/pkg-snapdragon/llama.cpp/bin/llama-cli
 ...
 ```
 
 ## How to Install
+
+### Android
 
 For this step, your device needs to be configured for on-device development.
 Please see https://developer.android.com/studio/debug/dev-options for details.
@@ -74,10 +95,10 @@ Once ADB is enabled, use `adb push` to install `pkg-snapdragon` on the device.
 **Note that the toolchain Docker image doesn't have ADB and doesn't set up the ADB bridge. Please use native ADB on the host.**
 
 ```
-~/src/llama.cpp$ adb push pkg-adb/llama.cpp /data/local/tmp/
-pkg-adb/llama.cpp/bin/: 67 files pushed, 0 skipped. 190.2 MB/s (919095042 bytes in 4.607s)
-pkg-adb/llama.cpp/include/: 19 files pushed, 0 skipped. 20.5 MB/s (255173 bytes in 0.012s)
-pkg-adb/llama.cpp/lib/: 16 files pushed, 0 skipped. 144.4 MB/s (43801382 bytes in 0.289s)
+~/src/llama.cpp$ adb push pkg-snapdragon/llama.cpp /data/local/tmp/
+pkg-snapdragon/llama.cpp/bin/: 67 files pushed, 0 skipped. 190.2 MB/s (919095042 bytes in 4.607s)
+pkg-snapdragon/llama.cpp/include/: 19 files pushed, 0 skipped. 20.5 MB/s (255173 bytes in 0.012s)
+pkg-snapdragon/llama.cpp/lib/: 16 files pushed, 0 skipped. 144.4 MB/s (43801382 bytes in 0.289s)
 102 files pushed, 0 skipped. 186.9 MB/s (963151597 bytes in 4.914s)
 ```
 
@@ -91,6 +112,11 @@ At this point, you should also install some models:
 ~/src/llama.cpp$ adb push Llama-3.2-1B-Instruct-Q4_0.gguf /data/local/tmp/gguf
 Llama-3.2-1B-Instruct-Q4_0.gguf: 1 file pushed, 0 skipped. 38.3 MB/s (773025920 bytes in 19.250s)
 ```
+
+### Windows
+
+All artifacts are already installed in the `pkg-snapdragon` folder.
+To run, adapt below instructions to use Powershell scrits in `scripts/snapdragon/windows`.
 
 ## How to Run
 

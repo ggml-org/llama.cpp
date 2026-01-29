@@ -14,9 +14,6 @@
 
 #ifdef _WIN32
 #    include <sal.h>
-#    ifndef _WINDOWS
-#        define _WINDOWS
-#    endif
 #else
 #    include <semaphore.h>
 #    include <unistd.h>
@@ -24,8 +21,6 @@
 
 #pragma clang diagnostic ignored "-Wnested-anon-types"
 #pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-
-#include "htp-utils.h"
 
 #include <AEEStdErr.h>
 #include <dspqueue.h>
@@ -40,6 +35,7 @@
 #include "op-desc.h"
 #include "htp-msg.h"
 #include "htp_iface.h"
+#include "htp-drv.h"
 
 static size_t opt_ndev         = 1;
 static size_t opt_nhvx         = 0; // use all
@@ -150,9 +146,9 @@ void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_
                              0,                       // flags - the framework will autoset this
                              n_bufs,                  // number of buffers
                              bufs,                    // buffer references
-                             sizeof(req),
+                             sizeof(req),             // Message length
                              (const uint8_t *) &req,  // Message
-                             1000000                  // Timeout
+                             DSPQUEUE_TIMEOUT         // Timeout
     );
 
     if (err != 0) {
@@ -182,13 +178,13 @@ void ggml_hexagon_session::flush() {
 
         // Read response packet from queue
         int err = dspqueue_read(q, &flags,
-                                   HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
-                                   &n_bufs,                 // Number of buffer references
-                                   bufs,                    // Buffer references
-                                   sizeof(rsp),             // Max message length
-                                   &rsp_size,               // Message length
-                                   (uint8_t *) &rsp,
-                                   1000000);                // Timeout
+                                HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
+                                &n_bufs,                 // Number of buffer references
+                                bufs,                    // Buffer references
+                                sizeof(rsp),             // Max message length
+                                &rsp_size,               // Message length
+                                (uint8_t *) &rsp,        // Message
+                                DSPQUEUE_TIMEOUT);       // Timeout
 
         if (err == AEE_EEXPIRED) {
             // TODO: might need to bail out if the HTP is stuck on something
@@ -269,13 +265,7 @@ struct ggml_backend_hexagon_buffer_context {
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
         size += 4 * 1024;  // extra page for padding
 
-        if (rpcmem_alloc2) {
-            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
-        } else {
-            GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
-            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
-        }
-
+        this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         if (!this->base) {
             GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer : size %zu\n", sess->name.c_str(), size);
             throw std::runtime_error("ggml-hex: rpcmem_alloc failed (see log for details)");
@@ -3056,10 +3046,12 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         }
     }
 
+#if defined(__ANDROID__)
     if (opt_arch < 75) {
         opt_ndev = 1;
         GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
+#endif
 
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);
 
@@ -3156,6 +3148,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
         opt_arch = strtoul(str_arch, NULL, 0);
     }
 
+    opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) : 1;
+
     reg->context = new ggml_hexagon_registry(reg);
 
     HEX_VERBOSE("ggml-hex: size-of-general-req %zu size-of-general-rsp %zu\n", sizeof(struct htp_general_req),
@@ -3180,6 +3174,11 @@ ggml_backend_reg_t ggml_backend_hexagon_reg(void) {
         static std::mutex           mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+            auto nErr = htpdrv_init();
+            if (nErr != AEE_SUCCESS) {
+                return NULL;
+            }
+
             ggml_hexagon_init(&reg);
         }
 
