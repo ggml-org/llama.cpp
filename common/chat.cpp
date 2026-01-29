@@ -771,10 +771,12 @@ static std::string apply(
 
     nlohmann::ordered_json inp = nlohmann::ordered_json{
         {"messages", messages_override.has_value() ? *messages_override : inputs.messages},
-        {"tools", tools_override.has_value() ? *tools_override : inputs.tools},
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
     };
+    if (tools_override.has_value() || !inputs.tools.empty()) {
+        inp["tools"] = tools_override.has_value() ? *tools_override : inputs.tools;
+    }
     if (inputs.extra_context.is_object()) {
         // TODO: do we need to merge, or replacing is fine?
         for (const auto & [k, v] : inputs.extra_context.items()) {
@@ -789,9 +791,6 @@ static std::string apply(
     }
     if (inputs.add_generation_prompt) {
         inp["add_generation_prompt"] = true;
-    }
-    if (inp["tools"].is_null()) {
-        inp["tools"] = json::array();
     }
 
     jinja::global_from_json(ctx, inp, inputs.mark_input);
@@ -2219,12 +2218,11 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
-    const std::optional<json> tools_override = json();
     const std::optional<json> additional_context = json {
         {"datetime", format_time(inputs.now, "%b %d %Y %H:%M:%S GMT")},
         {"functions", json(inputs.tools.empty() ? "" : inputs.tools.dump(2))},
     };
-    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, tools_override, additional_context);
+    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override =*/ std::nullopt, additional_context);
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {

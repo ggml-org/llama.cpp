@@ -1028,6 +1028,16 @@ const func_builtins & value_none_t::get_builtins() const {
         {"safe", [](const func_args &) -> value {
             return mk_val<value_string>("None");
         }},
+        {"strip", [](const func_args &) -> value {
+            return mk_val<value_string>("None");
+        }},
+        {"items", empty_value_fn<value_array>},
+        {"map", empty_value_fn<value_array>},
+        {"reject", empty_value_fn<value_array>},
+        {"rejectattr", empty_value_fn<value_array>},
+        {"select", empty_value_fn<value_array>},
+        {"selectattr", empty_value_fn<value_array>},
+        {"unique", empty_value_fn<value_array>},
     };
     return builtins;
 }
