@@ -67,7 +67,7 @@
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(server.url, server.headers || '');
+		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
 	}
 
 	function cancelEditing() {
@@ -78,15 +78,16 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string) {
+	function saveEditing(url: string, headers: string, useProxy: boolean) {
 		onUpdate({
 			url: url,
-			headers: headers || undefined
+			headers: headers || undefined,
+			useProxy: useProxy
 		});
 		isEditing = false;
 
 		if (server.enabled && url) {
-			setTimeout(() => mcpStore.runHealthCheck({ ...server, url }), 100);
+			setTimeout(() => mcpStore.runHealthCheck({ ...server, url, useProxy }), 100);
 		}
 	}
 
@@ -101,6 +102,7 @@
 			bind:this={editFormRef}
 			serverId={server.id}
 			serverUrl={server.url}
+			serverUseProxy={server.useProxy}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>

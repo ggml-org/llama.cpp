@@ -171,6 +171,7 @@ export interface HealthCheckParams {
 	url: string;
 	requestTimeoutSeconds: number;
 	headers?: string;
+	useProxy?: boolean;
 }
 
 export type MCPServerConfig = {
@@ -182,6 +183,7 @@ export type MCPServerConfig = {
 	handshakeTimeoutMs?: number;
 	requestTimeoutMs?: number;
 	capabilities?: ClientCapabilities;
+	useProxy?: boolean;
 };
 
 export type MCPClientConfig = {
@@ -210,6 +212,7 @@ export type MCPServerSettingsEntry = {
 	headers?: string;
 	name?: string;
 	iconUrl?: string;
+	useProxy?: boolean;
 };
 
 export interface MCPHostManagerConfig {

@@ -7,14 +7,25 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerForm } from '$lib/components/app/mcp';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+
 	let servers = $derived(mcpStore.getServersSorted());
-	let allServersHealthChecked = $derived(
-		servers.length > 0 &&
+
+	let initialLoadComplete = $state(false);
+
+	$effect(() => {
+		if (initialLoadComplete) return;
+
+		const allChecked =
+			servers.length > 0 &&
 			servers.every((server) => {
 				const state = mcpStore.getHealthCheckState(server.id);
 				return state.status === 'success' || state.status === 'error';
-			})
-	);
+			});
+
+		if (allChecked) {
+			initialLoadComplete = true;
+		}
+	});
 
 	let isAddingServer = $state(false);
 	let newServerUrl = $state('');
@@ -118,7 +129,7 @@
 	{#if servers.length > 0}
 		<div class="space-y-3">
 			{#each servers as server (server.id)}
-				{#if !allServersHealthChecked}
+				{#if !initialLoadComplete}
 					<Card.Root class="grid gap-3 p-4">
 						<div class="flex items-center justify-between gap-4">
 							<div class="flex items-center gap-2">
