@@ -42,7 +42,7 @@ import type {
 import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { throwIfAborted, isAbortError } from '$lib/utils';
-import { base } from '$app/paths';
+import { buildProxiedUrl } from '$lib/utils/cors-proxy';
 
 interface ToolResultContentItem {
 	type: string;
@@ -75,20 +75,6 @@ export class MCPService {
 			level,
 			details
 		};
-	}
-
-	/**
-	 * Build a proxied URL that routes through llama-server's CORS proxy.
-	 * @param targetUrl - The original MCP server URL
-	 * @returns URL pointing to the CORS proxy with target encoded
-	 */
-	private static buildProxiedUrl(targetUrl: string): URL {
-		const proxyPath = `${base}/cors-proxy`;
-		const proxyUrl = new URL(proxyPath, window.location.origin);
-
-		proxyUrl.searchParams.set('url', targetUrl);
-
-		return proxyUrl;
 	}
 
 	/**
@@ -135,7 +121,7 @@ export class MCPService {
 			};
 		}
 
-		const url = useProxy ? this.buildProxiedUrl(config.url) : new URL(config.url);
+		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
 
 		if (useProxy && import.meta.env.DEV) {
 			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
