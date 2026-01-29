@@ -62,7 +62,7 @@ The following releases are verified and recommended:
   - Use oneDNN as the default GEMM library, improve the compatibility for new Intel GPUs.
 
 - 2024.5
-  - Performance is increased: 34 -> 37 tokens/s of llama-2-7b.Q4_0 on ArcA770.
+  - Performance is increased: 34 -> 37 tokens/s of llama-2-7b.Q4_0 on Arc A770.
   - Arch Linux is verified successfully.
 
 - 2024.4
