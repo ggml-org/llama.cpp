@@ -2451,12 +2451,12 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
 }
 
 static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type) && ggml_is_quantized(op1->src[1]->type));
+    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type));
 }
 
 static inline bool is_compute_op(ggml_tensor *node)
 {
-    return !(ggml_op_is_empty(node->op) || ggml_is_empty(node));
+    return !ggml_op_is_empty(node->op) && !ggml_is_empty(node) && (node->flags & GGML_TENSOR_FLAG_COMPUTE);
 }
 
 // scan the graph and figure out last compute op index
@@ -2478,7 +2478,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     const int last = last_compute_op(graph);
 
-    const struct ggml_tensor * prev_quant_op = nullptr;  // prev executed op with quantizer
+    const struct ggml_tensor * prev_op = nullptr;  // prev executed op
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * node = graph->nodes[i];
@@ -2487,16 +2487,14 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
             continue;
         }
 
-        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-            continue;
-        }
-
         uint32_t flags = 0;
 
         // skip quantizer if src1 is reused
-        if (op_reuse_src1(node, prev_quant_op)) {
+        if (op_reuse_src1(node, prev_op)) {
             flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
         }
+
+        prev_op = node;
 
         // ask for early notification for the last Op
         if (i == last) {
@@ -2510,7 +2508,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 } else {
                     ggml_hexagon_dispatch_op<init_binary_req<false>>(sess, node, flags);
                 }
-                prev_quant_op = node;
                 break;
             case GGML_OP_MUL_MAT_ID:
                 if (ggml_is_quantized(node->src[0]->type)) {
@@ -2518,7 +2515,6 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 } else {
                     ggml_hexagon_dispatch_op<init_binary_id_req<false>>(sess, node, flags);
                 }
-                prev_quant_op = node;
                 break;
             case GGML_OP_MUL:
             case GGML_OP_ADD:
@@ -2660,7 +2656,7 @@ static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<no
         }
 
         // that many nodes forward to search for stackable nodes that can reuse VTCM
-        constexpr int N_FORWARD = 8;
+        constexpr int N_FORWARD = 16;
 
         for (int i1 = i0 + 1; i1 < i0 + N_FORWARD && i1 < n; i1++) {
             if (used[i1]) {
