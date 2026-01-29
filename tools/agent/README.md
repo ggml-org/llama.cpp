@@ -85,13 +85,13 @@ Use these parameters ([recommended by Unsloth](https://unsloth.ai/docs/models/gl
 
 ```bash
 llama-agent -hf unsloth/GLM-4.7-Flash-GGUF:UD-Q4_K_XL \
-  --jinja --ctx-size 16384 --flash-attn --fit on \
+  --jinja --ctx-size 16384 --flash-attn on --fit on \
   --temp 0.7 --top-p 1.0 --min-p 0.01 --repeat-penalty 1.0
 ```
 
 | Flag | Purpose |
 |------|---------|
-| `--flash-attn` | Up to 1.48x speedup at batch size 1 ([PR #19092](https://github.com/ggml-org/llama.cpp/pull/19092)) |
+| `--flash-attn on` | Up to 1.48x speedup at batch size 1 ([PR #19092](https://github.com/ggml-org/llama.cpp/pull/19092)) |
 | `--fit on` | Auto-optimizes GPU/CPU memory allocation |
 | `--repeat-penalty 1.0` | Prevents output degradation (Unsloth recommendation) |
 
