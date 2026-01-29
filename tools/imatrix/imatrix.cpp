@@ -1,8 +1,8 @@
 #include "arg.h"
 #include "common.h"
-#include "log.h"
-#include "llama.h"
 #include "gguf.h"
+#include "llama.h"
+#include "log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,14 +10,15 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <thread>
-#include <mutex>
-#include <vector>
 #include <fstream>
-#include <unordered_map>
 #include <map>
-#include <regex>
+#include <mutex>
 #include <numeric>
+#include <regex>
+#include <thread>
+#include <unordered_map>
+#include <valarray>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -29,7 +30,7 @@ static void print_usage(int, char ** argv) {
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
             "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
-            "       [--show-statistics] [...]\n" , argv[0]);
+            "       [--output-format gguf|dat] [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -38,6 +39,7 @@ static const char * const LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
 static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 
 struct Stats {
+    std::vector<float>   activations;
     std::vector<float>   values;
     std::vector<int64_t> counts;
 };
@@ -45,16 +47,21 @@ struct Stats {
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
-    float total_sqract = 0.0f;
-    float mean_sqract  = 0.0f;
-    float max_sqract   = 0.0f;
-    float min_sqract   = 0.0f;
-    int elements       = 0;
-    float stddev       = 0.0f;
-    float active       = 0.0f;
-    float entropy      = 0.0f;
-    float zd           = 0.0f;
-    float cossim       = 0.0f;
+    float sum_values    = 0.0f;
+    float mean_values   = 0.0f;
+    float max_values    = 0.0f;
+    float min_values    = 0.0f;
+    int   elements      = 0;
+    float std_deviation = 0.0f;
+    float entropy       = 0.0f;
+    float zd_score      = 0.0f;
+    float cossim        = 0.0f;
+    float pearson       = 0.0f;
+    float l2_dist       = 0.0f;
+    double dot_prod     = 0.0;
+    double norm1_sq     = 0.0;
+    double norm2_sq     = 0.0;
+    double l2_dist_sq   = 0.0;
 };
 
 class IMatrixCollector {
@@ -97,13 +104,14 @@ static std::string filter_tensor_name(const char * name) {
 }
 
 static void process_tensor_name(const std::string & input, std::string & layer, std::string & tensor) {
+    layer.clear();
+    tensor.clear();
+
     std::vector<std::string> name;
     std::istringstream stream(input);
     std::string item;
 
-    while (std::getline(stream, item, '.')) {
-        name.push_back(item);
-    }
+    while (std::getline(stream, item, '.')) { name.push_back(item); }
     for (size_t i = 0; i < name.size(); ++i) {
         if (name[i] == "blk" && i + 1 < name.size()) {
             layer = name[i + 1];
@@ -117,102 +125,290 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
         }
     }
 
-    if (tensor.empty()) {
-        tensor = input;
-    }
-    if (layer.empty()) {
-        layer = "-";
-    }
+    if (tensor.empty()) { tensor = input; }
+    if (layer.empty()) { layer = "-"; }
 }
 
-static void compute_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
-    if (e.values.size() % e.counts.size() != 0) {
-        LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.values.size());
-        return;
+static std::vector<float> compute_tensor_averages(const Stats & tstats) {
+    if (tstats.counts.empty()) { return {}; }
+
+    const size_t n_mat = tstats.counts.size();
+    const size_t len = !tstats.activations.empty() ? tstats.activations.size() : tstats.values.size();
+    if (len == 0 || n_mat == 0 || len % n_mat != 0) { return {}; }
+
+    const size_t row = len / n_mat;
+    std::vector<float> vec;
+    vec.resize(len);
+
+    bool has_valid = false;
+    const bool use_activations = !tstats.activations.empty();
+
+    for (size_t m = 0; m < n_mat; ++m) {
+        const auto c = (float) tstats.counts[m];
+        const size_t off = m * row;
+
+        if (c <= 0.0f) { continue; }
+
+        has_valid = true;
+        const float scale = 1.0f / c;
+        const float * src = use_activations ? &tstats.activations[off] : &tstats.values[off];
+        float * dst = & vec[off];
+
+        for (size_t j = 0; j < row; ++j) { dst[j] = src[j] * scale; }
     }
-    if (e.counts.empty()) {
-        LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
-        return;
+
+    if (!has_valid) { return {}; }
+    return vec;
+}
+
+static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, bool & legacy) {
+    legacy = e.activations.empty();
+    const size_t n_mat = e.counts.size();
+    const size_t len = legacy ? e.values.size() : e.activations.size();
+
+    if (n_mat == 0 || len == 0 || len % n_mat != 0) {
+        LOG_ERR("%s: data size mismatch or empty for tensor %s\n", __func__, name.c_str());
+        return false;
+    }
+    if (!legacy && e.values.size() != len) {
+        LOG_ERR("%s: activations/values size mismatch for %s\n", __func__, name.c_str());
+        return false;
     }
 
-    const int n_mat = e.counts.size();
-    const int row_size = e.values.size() / n_mat;
+    const size_t row_size = len / n_mat;
+    double mean = 0.0;
+    double M2 = 0.0;
+    double sum = 0.0;
+    float vmin = std::numeric_limits<float>::max();
+    float vmax = -std::numeric_limits<float>::max();
+    double energy_sum = 0.0;
+    size_t valid_n = 0;
 
-    std::vector<float> activations;
-    activations.reserve(e.values.size());
+    // Pass 1: Mean, Min, Max, Std Dev
+    for (size_t i = 0; i < n_mat; ++i) {
+        const auto c = (float)e.counts[i];
+        if (c <= 0.0f) { continue; }
 
-    for (int i = 0; i < n_mat; ++i) {
-        for (int j = 0; j < row_size; ++j) {
-            activations.push_back(e.values[i*row_size + j] / e.counts[i]);
+        const double inv_c = 1.0 / (double)c;
+        const size_t off = i * row_size;
+
+        for (size_t j = 0; j < row_size; ++j) {
+            const double v_act = legacy ? 0.0 : (double)e.activations[off + j] * inv_c;
+            const double v_val = (double)e.values[off + j] * inv_c;
+            const double v = legacy ? v_val : v_act; // Use activation average for non-legacy
+
+            sum += v_val;
+            if ((float)v < vmin) { vmin = (float)v; }
+            if ((float)v > vmax) { vmax = (float)v; }
+
+            valid_n++;
+            const double delta = v - mean;
+            mean += delta / (double)valid_n;
+            M2 += delta * (v - mean);
+
+            if (v_val > 0.0) { energy_sum += v_val; }
         }
     }
 
-    const float act_total     = std::accumulate(activations.begin(), activations.end(), 0.0f);
-    const float act_max       = *std::max_element(activations.begin(), activations.end());
-    const float act_min       = *std::min_element(activations.begin(), activations.end());
-    const float act_mean      = act_total / activations.size();
-    const float act_sqr_total = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-    const float act_var       = (act_sqr_total / activations.size()) - (act_mean * act_mean);
-    const float act_dev       = std::sqrt(std::max(0.0f, act_var));
-    float threshold           = 1e-5f;
-    const int inactive_count  = std::count_if(activations.begin(), activations.end(),
-                                               [threshold](const float v) { return fabsf(v) <= threshold; });
-    const float active_ratio  = 1 - static_cast<float>(inactive_count) / activations.size();
+    if (valid_n == 0) { return false; }
 
-    float entropy = 0;
-    if (act_total > 0) {
-        for (const auto act : activations) {
-            if (const float p = act / act_total; p > 0) {
-                entropy -= p * std::log2(p);
+    float std_deviation = 0.0f;
+    float entropy = 0.0f;
+    double zd_count = 0.0;
+
+    const double variance = valid_n > 1 ? M2 / ((double)valid_n - 1) : 0.0;
+    std_deviation = std::sqrt((float)std::max(variance, 0.0));
+
+    // Pass 2: Entropy and Z-Score
+    const double inv_energy_sum = energy_sum > 0.0 ? 1.0 / energy_sum : 0.0;
+    const float inv_std = std_deviation > 0.0f ? 1.0f / std_deviation : 0.0f;
+    const float fmean = (float)mean;
+    const float log2_val = 1 / std::log2f(2);
+
+    for (size_t i = 0; i < n_mat; ++i) {
+        const auto c = (float)e.counts[i];
+        if (c <= 0.0f) { continue; }
+        const double inv_c = 1.0 / (double)c;
+        const size_t off = i * row_size;
+
+        for (size_t j = 0; j < row_size; ++j) {
+            // Entropy (Distribution of Energy)
+            if (inv_energy_sum > 0.0) {
+                const double v_energy = (double)e.values[off + j] * inv_c;
+                const double p = std::max(0.0, v_energy) * inv_energy_sum;
+                if (p > 1e-9) { entropy -= (float)(p * std::log(p) * log2_val); }
             }
-        }
-    }
 
-    int z_score = 0;
-    if (act_dev > 0.0f) {
-        for (const auto act : activations) {
-            if (const float p = (act - act_mean) / act_dev; p > 1) {
-                z_score++;
+            // Z-Score Density (Outlier detection)
+            if (std_deviation > 0.0f) {
+                const double v_act = legacy ? 0.0 : (double)e.activations[off + j] * inv_c;
+                const double v_val = (double)e.values[off + j] * inv_c;
+                const float v = (float)(legacy ? v_val : v_act);
+                if (std::fabs((v - fmean) * inv_std) > 1.0f) { zd_count += 1.0; }
             }
         }
     }
 
     auto & ts = tstats.emplace_back();
-    ts.tensor     = name;
-    ts.stats      = e;
-    ts.total_sqract = act_total;
-    ts.mean_sqract  = act_mean;
-    ts.max_sqract   = act_max;
-    ts.min_sqract   = act_min;
-    ts.elements   = static_cast<int>(activations.size());
-    ts.stddev     = act_dev;
-    ts.active     = active_ratio;
-    ts.entropy    = entropy;
-    ts.zd         = static_cast<float>(z_score) / ts.elements;
+    ts.tensor = name;
+    ts.stats = e;
+    ts.sum_values = (float)sum;
+    ts.mean_values = (float)mean;
+    ts.max_values = vmax;
+    ts.min_values = vmin;
+    ts.elements = (int)valid_n;
+    ts.std_deviation = std_deviation;
+    ts.entropy = std::abs(entropy);
+    ts.zd_score = (float)(zd_count / (double)valid_n);
+    ts.cossim = std::numeric_limits<float>::quiet_NaN();
+    ts.pearson = std::numeric_limits<float>::quiet_NaN();
+    ts.l2_dist = std::numeric_limits<float>::quiet_NaN();
+
+    return true;
 }
 
-static void compute_cossim(std::vector<tensor_statistics> & tstats) {
-    static const std::regex pattern(R"(blk\.(\d+)\.)");
+static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
+    std::unordered_map<std::string, size_t> tensor_map;
+    tensor_map.reserve(tstats.size());
+    for (size_t i = 0; i < tstats.size(); ++i) { tensor_map[tstats[i].tensor] = i; }
+
     for (auto & ts : tstats) {
-        if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
-            const int blk = std::stoi(match[1]);
-            std::string tname(ts.tensor);
-            tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
-            auto prev = std::find_if(tstats.begin(), tstats.end(),
-                [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev != tstats.end()) {
-                const float dp = std::inner_product(ts.stats.values.begin(), ts.stats.values.end(),
-                    prev->stats.values.begin(), 0.0f);
-                const float curr_mag = std::sqrt(std::inner_product(ts.stats.values.begin(), ts.stats.values.end(),
-                    ts.stats.values.begin(), 0.0f));
-                const float prev_mag = std::sqrt(std::inner_product(prev->stats.values.begin(), prev->stats.values.end(),
-                    prev->stats.values.begin(), 0.0f));
-                const float cs = dp / (curr_mag * prev_mag);
-                ts.cossim = cs;
-            }
-        } else {
-            ts.cossim = 0;
+        std::string layer_str;
+        std::string dummy_tensor;
+        process_tensor_name(ts.tensor, layer_str, dummy_tensor);
+
+        int blk = -1;
+        try { blk = std::stoi(layer_str); } catch (...) { continue; }
+        if (blk <= 0) { continue; }
+
+        const size_t blk_start_pos = ts.tensor.find("blk." + layer_str);
+        if (blk_start_pos == std::string::npos) { continue; }
+
+        std::string tname = ts.tensor;
+        tname.replace(blk_start_pos, layer_str.length() + 4, "blk." + std::to_string(blk - 1));
+
+        auto it = tensor_map.find(tname);
+        if (it == tensor_map.end()) {
+            LOG_WRN("%s: missing previous-layer tensor '%s'\n", __func__, tname.c_str());
+            continue;
         }
+
+        const auto & prev_ts = tstats[it->second];
+        const auto curr_avg = compute_tensor_averages(ts.stats);
+        const auto prev_avg = compute_tensor_averages(prev_ts.stats);
+
+        if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
+
+        double dot_prod = 0.0;
+        double norm1_sq = 0.0;
+        double norm2_sq = 0.0;
+        double l2_dist_sq = 0.0;
+        double sum_c = 0.0;
+        double sum_p = 0.0;
+        const size_t n = curr_avg.size();
+
+        // Pass 1: Sums for Means
+        for (size_t i = 0; i < n; ++i) {
+            sum_c += curr_avg[i];
+            sum_p += prev_avg[i];
+        }
+        const double mean_c = sum_c / n;
+        const double mean_p = sum_p / n;
+
+        double cov_sum = 0.0;
+        double var_c_sum = 0.0;
+        double var_p_sum = 0.0;
+
+        // Pass 2: Metrics
+        for (size_t i = 0; i < n; ++i) {
+            const double c_val = curr_avg[i];
+            const double p_val = prev_avg[i];
+
+            // Cosine Similarity & L2 Distance
+            dot_prod += c_val * p_val;
+            norm1_sq += c_val * c_val;
+            norm2_sq += p_val * p_val;
+            const double diff = c_val - p_val;
+            l2_dist_sq += diff * diff;
+
+            // Pearson (Centered stats)
+            const double dc = c_val - mean_c;
+            const double dp = p_val - mean_p;
+            cov_sum += dc * dp;
+            var_c_sum += dc * dc;
+            var_p_sum += dp * dp;
+        }
+
+        ts.dot_prod = dot_prod;
+        ts.norm1_sq = norm1_sq;
+        ts.norm2_sq = norm2_sq;
+        ts.l2_dist_sq = l2_dist_sq;
+        ts.l2_dist = (float)std::sqrt(l2_dist_sq);
+
+        if (norm1_sq > 0.0 && norm2_sq > 0.0) {
+            ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
+            ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
+        } else {
+            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
+        }
+
+        if (var_c_sum > 0.0 && var_p_sum > 0.0) {
+            ts.pearson = (float)(cov_sum / (std::sqrt(var_c_sum) * std::sqrt(var_p_sum)));
+            ts.pearson = std::clamp(ts.pearson, -1.0f, 1.0f);
+        } else {
+            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
+        }
+    }
+}
+
+static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
+                                              std::map<int, float> & layer_cossim,
+                                              std::map<int, float> & layer_l2_dist,
+                                              std::map<int, float> & layer_pearson) {
+    struct layer_aggregation {
+        double sum_dot_prod = 0.0;
+        double sum_norm1_sq = 0.0;
+        double sum_norm2_sq = 0.0;
+        double sum_l2_dist_sq = 0.0;
+        double sum_pearson = 0.0;
+        int n_tensors = 0;
+    };
+
+    std::map<int, layer_aggregation> laggr;
+
+    for (const auto & ts : tstats) {
+        std::string layer_str;
+        std::string dummy;
+        process_tensor_name(ts.tensor, layer_str, dummy);
+        int blk = -1;
+        try { blk = std::stoi(layer_str); } catch(...) { continue; }
+        if (blk <= 0) { continue; }
+
+        if (ts.norm1_sq == 0.0 && ts.norm2_sq == 0.0 && ts.l2_dist_sq == 0.0) { continue; }
+
+        auto & entry = laggr[blk];
+        entry.sum_dot_prod += ts.dot_prod;
+        entry.sum_norm1_sq += ts.norm1_sq;
+        entry.sum_norm2_sq += ts.norm2_sq;
+        entry.sum_l2_dist_sq += ts.l2_dist_sq;
+        entry.sum_pearson += ts.pearson;
+        entry.n_tensors++;
+    }
+
+    for (const auto & [layer, agg] : laggr) {
+        if (agg.n_tensors == 0) { continue; }
+
+        float cossim = 0.0f;
+        if (agg.sum_norm1_sq > 0.0 && agg.sum_norm2_sq > 0.0) {
+            cossim = (float)(agg.sum_dot_prod / (std::sqrt(agg.sum_norm1_sq) * std::sqrt(agg.sum_norm2_sq)));
+            cossim = std::clamp(cossim, -1.0f, 1.0f);
+        } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
+            cossim = std::numeric_limits<float>::quiet_NaN();
+        }
+
+        layer_cossim[layer] = cossim;
+        layer_l2_dist[layer] = (float)std::sqrt(agg.sum_l2_dist_sq);
+        layer_pearson[layer] = (float)(agg.sum_pearson / agg.n_tensors);
     }
 }
 
@@ -281,6 +477,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(n_as, e.counts[0]);
         }
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(n_as, 0);
         }
@@ -312,6 +509,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     e.counts[ex]++;
 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
+                        e.activations[e_start + j] += x[j];
                         e.values[e_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[e_start + j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[e_start + j], wname.c_str());
@@ -351,6 +549,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0] * n_mat, 0);
             e.values.resize(src1->ne[0] * n_mat, 0);
             e.counts.resize(1, 0);
         }
@@ -369,6 +568,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 for (int64_t row = 0; row < src1->ne[1]; ++row) {
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
+                        e.activations[mat_start + j] += x[j];
                         e.values[mat_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
@@ -550,12 +750,28 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
 
         to_store.push_back(kv.first);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * 10, GGML_MEM_ALIGN);
     }
 
     // deterministic tensor name order
     std::sort(to_store.begin(), to_store.end());
+
+    // Compute per-tensor statistics
+    std::vector<tensor_statistics> tstats;
+    tstats.reserve(m_stats.size());
+    bool legacy;
+    for (const auto & kv : m_stats) {
+        compute_vector_statistics(tstats, kv.first, kv.second, legacy);
+    }
+    if (!tstats.empty()) { compute_tensor_statistics(tstats); }
+
+    // index by tensor name
+    std::unordered_map<std::string, const tensor_statistics *> tstat_index;
+    tstat_index.reserve(tstats.size());
+    for (const auto & ts : tstats) { tstat_index[ts.tensor] = &ts; }
 
     struct ggml_init_params params = {
         /* .mem_size   = */ data_size,
@@ -602,6 +818,58 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
             gguf_add_tensor(ctx_gguf, in_sum2);
             gguf_add_tensor(ctx_gguf, counts);
+
+            if (!stat.activations.empty()) {
+                const int32_t nact = (int32_t) stat.activations.size();
+                struct ggml_tensor * in_sum  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nact / nmat, nmat);
+                ggml_format_name(in_sum, "%s.in_sum", name.c_str());
+                for (int32_t j = 0; j < nact; ++j) {
+                    ((float *) in_sum->data)[j] = (float) stat.activations[j];
+                }
+                gguf_add_tensor(ctx_gguf, in_sum);
+            }
+        }
+
+        // Store per-tensor statistics as a small 1D tensor
+        {
+            float nan = std::numeric_limits<float>::quiet_NaN();
+            float min = 0.0f;
+            float max = 0.0f;
+            float mean = 0.0f;
+            float stddev = 0.0f;
+            float h_norm = 0.0f;
+            float zd_score = 0.0f;
+            float sum_sq = 0.0f;
+            float l2_dist = 0.0f;
+            float cossim = 0.0f;
+            float pcc = 0.0f;
+            auto it_ts = tstat_index.find(name);
+            if (it_ts != tstat_index.end() && it_ts->second != nullptr) {
+                sum_sq = it_ts->second->sum_values;
+                h_norm = it_ts->second->elements > 0 ? 100.0f * (it_ts->second->entropy / std::log2f((float)it_ts->second->elements)) : nan;
+                zd_score = it_ts->second->zd_score;
+                l2_dist  = it_ts->second->l2_dist;
+                cossim   = it_ts->second->cossim;
+                pcc      = it_ts->second->pearson;
+                min = it_ts->second->min_values;
+                max = it_ts->second->max_values;
+                mean = it_ts->second->mean_values;
+                stddev = it_ts->second->std_deviation;
+            }
+
+            struct ggml_tensor * stats_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10);
+            ggml_format_name(stats_t, "%s.stats", name.c_str());
+            ((float *)stats_t->data)[0] = sum_sq;
+            ((float *)stats_t->data)[1] = h_norm;
+            ((float *)stats_t->data)[2] = zd_score;
+            ((float *)stats_t->data)[3] = l2_dist;
+            ((float *)stats_t->data)[4] = cossim;
+            ((float *)stats_t->data)[5] = pcc;
+            ((float *)stats_t->data)[6] = min;
+            ((float *)stats_t->data)[7] = max;
+            ((float *)stats_t->data)[8] = mean;
+            ((float *)stats_t->data)[9] = stddev;
+            gguf_add_tensor(ctx_gguf, stats_t);
         }
     }
 
@@ -740,6 +1008,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         }
     }
 
+    const std::string in_sum_suffix{ ".in_sum" };
     const std::string in_sum2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
 
@@ -747,7 +1016,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
     // checking for completeness of *each* loaded imatrix file
     // and also makes it easier to re-use a similar implementation in quantize.cpp
     // Using an ordered map to get a deterministic iteration order.
-    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+    std::map<std::string, std::tuple<struct ggml_tensor *, struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
 
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
@@ -756,21 +1025,26 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
 
         if (string_remove_suffix(name, in_sum2_suffix)) {
             // in_sum2
-            sums_counts_for[std::move(name)].first = cur;
+            std::get<0>(sums_counts_for[std::move(name)]) = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
             // counts
-            sums_counts_for[std::move(name)].second = cur;
-        } else {
+            std::get<1>(sums_counts_for[std::move(name)]) = cur;
+        }  else if (string_remove_suffix(name, in_sum_suffix)) {
+            // in_sum
+            std::get<2>(sums_counts_for[std::move(name)]) = cur;
+        }
+        else {
             // ignore other tensors
         }
     }
 
     for (const auto & sc : sums_counts_for) {
         const std::string &        name    = sc.first;
-        const struct ggml_tensor * in_sum2 = sc.second.first;
-        const struct ggml_tensor * counts  = sc.second.second;
+        const struct ggml_tensor * in_sum  = std::get<2>(sc.second);
+        const struct ggml_tensor * in_sum2 = std::get<0>(sc.second);
+        const struct ggml_tensor * counts  = std::get<1>(sc.second);
 
-        if (!in_sum2 || !counts) {
+        if (!in_sum2 || !counts || (in_sum != nullptr && ggml_nelements(in_sum) != ggml_nelements(in_sum2))) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
@@ -788,6 +1062,16 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
             ggml_free(ctx);
             return false;
         }
+        if (in_sum != nullptr) {
+            if (e.activations.empty()) {
+                e.activations.resize(nval, 0.0f);
+            } else if ((size_t) nval != e.activations.size()) {
+                LOG_ERR("%s: mismatched activations size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.activations.size());
+                gguf_free(ctx_gguf);
+                ggml_free(ctx);
+                return false;
+            }
+        }
 
         int64_t ncounts = ggml_nelements(counts);
         if (e.counts.empty()) {
@@ -804,6 +1088,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
 
         // Recreate the state as expected by save_imatrix()
         for (int64_t j = 0; j < nval; j++) {
+            if (in_sum != nullptr) { e.activations[j] += ((const float *) in_sum->data)[j]; }
             e.values[j] += ((const float *) in_sum2->data)[j];
         }
         for (int64_t j = 0; j < ncounts; j++) {
@@ -1082,109 +1367,194 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 }
 
 static bool show_statistics(const common_params & params) {
+    g_collector.set_params(params);
     std::vector<tensor_statistics> ts;
-    if (params.in_files.empty() || params.in_files.size() > 1) {
-        LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
-        return false;
-    }
+
+    if (params.in_files.empty()) { return false; }
+
+    // Load and process data
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
-        for (const auto & [name, stats] :g_collector.get_mstats()) {
-            compute_statistics(ts, name, stats);
+        ts.reserve(g_collector.get_mstats().size());
+        for (const auto & [name, stats] : g_collector.get_mstats()) {
+            bool legacy_imatrix = true;
+            if (!compute_vector_statistics(ts, name, stats, legacy_imatrix)) { continue; }
         }
     } else {
-        LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
-        return false;
-    }
-    if (!ts.empty()) {
-        compute_cossim(ts);
-    } else {
-        LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
         return false;
     }
 
+    if (ts.empty()) { return false; }
+
+    bool legacy = ts.empty() ? true : ts[0].stats.activations.empty();
+    compute_tensor_statistics(ts);
+
+    // Sorting logic (Layer index -> Tensor Name)
     struct tensor_comparer {
         bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
-            std::string layer, name_a, name_b;
-            ;
-            process_tensor_name(a.tensor, layer, name_a);
-            process_tensor_name(b.tensor, layer, name_b);
-            return name_a < name_b || (name_a == name_b && a.total_sqract > b.total_sqract);
+            std::string lay_a;
+            std::string lay_b;
+            std::string name_a;
+            std::string name_b;
+            process_tensor_name(a.tensor, lay_a, name_a);
+            process_tensor_name(b.tensor, lay_b, name_b);
+
+            // Handle non-numeric layers (e.g., "output")
+            int blk_a = 9999;
+            int blk_b = 9999;
+            try {
+                blk_a = std::stoi(lay_a);
+            } catch(...) {
+                if (lay_a == "output") { blk_a = 10000; }
+            }
+            try {
+                blk_b = std::stoi(lay_b);
+            } catch(...) {
+                if (lay_b == "output") { blk_b = 10000; }
+            }
+
+            if (blk_a != blk_b) { return blk_a < blk_b; }
+            return name_a < name_b;
         }
     };
     std::sort(ts.begin(), ts.end(), tensor_comparer());
 
-    struct weighted_stats {
-        float weighted_bias   = 0.0f;
-        float weighted_zd     = 0.0f;
-        float weighted_cossim = 0.0f;
-        int   total_elements  = 0;
+    struct layer_stats {
+        float layer_sum = 0.0f;
+        float layer_zd = 0.0f;
+        int n = 0;
     };
-    std::map<int, weighted_stats> ws;
+    std::map<int, layer_stats> ls;
 
-    LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-    LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", " Layer", "       Tensor", "          Σ(Act²)",
-            "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD",
-            "  CosSim");
-    LOG_INF(
-        "=============================================================================================================="
-        "===========================================================\n");
+    // Shorten names for table formatting
+    auto label_fmt = [](std::string s, size_t w) -> std::string {
+        if (s.length() <= w) { return s; }
+        return ".." + s.substr(s.length() - (w - 2));
+    };
+
+    constexpr int w_lay = 6;
+    constexpr int w_nam = 40; // Should be wide enough for most tensor names
+    const auto * sep = " | ";
+
+    LOG_INF("\nComputing tensor statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
+
+    if (legacy) {
+        LOG_INF("\n%*s%s%-*s%s%10s %12s %10s %10s%s %8s  %8s%s%17s %8s %8s\n",
+            w_lay, "Layer", sep,
+            w_nam, "Tensor", sep,
+            "Min", "Max", "Mean", "StdDev", sep,
+            "H Norm", "ZD", sep,
+            "∑ E[A²]", "CosSim", "PCC");
+        LOG_INF("%s\n", std::string(154, '-').c_str());
+    } else {
+        LOG_INF("\n%*s%s%-*s%s%10s %12s %10s %10s%s %8s  %8s%s%17s %12s %8s %8s\n",
+            w_lay, "Layer", sep,
+            w_nam, "Tensor", sep,
+            "Min", "Max", "Mean", "StdDev", sep,
+            "H Norm", "ZD", sep,
+            "∑ E[A²]", "L2 Dist", "CosSim", "PCC");
+        LOG_INF("%s\n", std::string(167, '-').c_str());
+    }
+
+    // Tensor Statistics
     for (const auto & tstat : ts) {
-        std::string layer, name;
+        std::string layer;
+        std::string name;
+
         process_tensor_name(tstat.tensor, layer, name);
+        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2f((float)tstat.elements)) : std::numeric_limits<float>::quiet_NaN();
 
         int blk;
-        try {
-            blk = std::stoi(layer);
-        } catch (const std::exception & e) {
-            blk = -1;  // not a block layer
+        try { blk = std::stoi(layer); } catch (...) { blk = -1; }
+
+        if (legacy) {
+            LOG_INF("%*s%s%-*s%s%10.4f %12.4f %10.4f %10.4f%s%8.2f%% %8.2f%%%s%14.4f %8.4f %8.4f\n",
+                w_lay, layer.c_str(), sep,
+                w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
+                tstat.min_values, tstat.max_values, tstat.mean_values, tstat.std_deviation, sep,
+                h_norm, 100.0f * tstat.zd_score, sep,
+                tstat.sum_values, tstat.cossim, tstat.pearson
+            );
+        } else {
+            LOG_INF("%*s%s%-*s%s%10.4f %12.4f %10.4f %10.4f%s%8.2f%% %8.2f%%%s%14.4f %12.4f %8.4f %8.4f\n",
+                w_lay, layer.c_str(), sep,
+                w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
+                tstat.min_values, tstat.max_values, tstat.mean_values, tstat.std_deviation, sep,
+                h_norm, 100.0f * tstat.zd_score, sep,
+                tstat.sum_values, tstat.l2_dist, tstat.cossim, tstat.pearson
+            );
         }
 
-        LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
-                layer.c_str(), name.c_str(), tstat.total_sqract, tstat.min_sqract, tstat.max_sqract, tstat.mean_sqract,
-                tstat.stddev, tstat.active * 100.0f, tstat.elements, tstat.entropy,
-                100.0f * (tstat.entropy / std::log2(tstat.elements)), 100.0f * tstat.zd, tstat.cossim);
+        // Aggregate Layer Stats
+        const float zd = (float)tstat.elements * tstat.zd_score;
+        auto & l = ls[blk];
+        l.layer_sum += tstat.sum_values;
+        l.layer_zd += zd;
+        l.n += tstat.elements;
+    }
 
-        const float weighted_bias   = tstat.elements * tstat.total_sqract;
-        const float weighted_zd     = tstat.elements * tstat.zd;
-        const float weighted_cossim = tstat.elements * tstat.cossim;
+    // Layer Statistics
+    std::map<int, float> layer_cossim;
+    std::map<int, float> layer_l2_dist;
+    std::map<int, float> layer_pearson;
+    compute_layer_statistics(ts, layer_cossim, layer_l2_dist, layer_pearson);
 
-        if (ws.find(blk) != ws.end()) {
-            ws[blk].weighted_bias += weighted_bias;
-            ws[blk].weighted_zd += weighted_zd;
-            ws[blk].weighted_cossim += weighted_cossim;
-            ws[blk].total_elements += tstat.elements;
-        } else {
-            weighted_stats temp_ws;
-            temp_ws.weighted_bias   = weighted_bias;
-            temp_ws.weighted_zd     = weighted_zd;
-            temp_ws.weighted_cossim = weighted_cossim;
-            temp_ws.total_elements  = tstat.elements;
-            ws[blk]                 = temp_ws;
+    size_t layers = 0;
+    int min = std::numeric_limits<int>::max();
+    int max = -1;
+
+    for (const auto & [layer, stats] : ls) {
+        if (layer >= 0 && stats.n > 0) {
+            layers++;
+            min = std::min(layer, min);
+            max = std::max(layer, max);
         }
     }
 
-    const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
-    LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
-    LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Act²)", "      μZD", "μCosSim");
-    LOG_INF("================================================\n");
-    for (const auto & [first, second] : ws) {
-        const auto & layer = first;
-        const auto & stats = second;
-
-        if (stats.total_elements == 0) {
-            continue;
+    if (layers > 0) {
+        const auto expected = (size_t)(max - min + 1);
+        if (layers != expected) {
+            LOG_WRN("\n%s: layer sequence gap detected (found %zu layers in range %d-%d, expected %zu); layer statistics will not be shown\n",
+                __func__, layers, min, max, expected);
+            return false;
         }
+    }
 
-        if (layer >= 0) {
-            const float bias   = stats.weighted_bias / stats.total_elements;
-            const float zd     = stats.weighted_zd / stats.total_elements;
-            const float cossim = stats.weighted_cossim / stats.total_elements;
+    LOG_INF("\n\nComputing layer statistics for %s (%zu layers)\n\n", params.in_files[0].c_str(), layers);
 
-            LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
+    if (legacy) {
+        LOG_INF("%*s%s%9s%s%17s %10s %10s\n",
+            w_lay, "Layer", sep,
+            "ZD", sep,
+            "∑ E[A²]", "CosSim", "PCC");
+        LOG_INF("%s\n", std::string(57, '-').c_str());
+    } else {
+        LOG_INF("%*s%s%9s%s%17s %14s %10s %10s\n",
+            w_lay, "Layer", sep,
+            "ZD", sep,
+            "∑ E[A²]", "L2 Dist", "CosSim", "PCC");
+        LOG_INF("%s\n", std::string(72, '-').c_str());
+    }
+
+    for (const auto & [layer, stats] : ls) {
+        if (layer < 0 || stats.n == 0) { continue; }
+
+        float lcs = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_cossim[layer];
+        float ll2 = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_l2_dist[layer];
+        float lpc = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_pearson[layer];
+
+        if (legacy) {
+            LOG_INF("%*d%s%8.2f%%%s%14.4f %10.4f %10.4f\n",
+                w_lay, layer, sep,
+                100.0f * stats.layer_zd / stats.n, sep,
+                stats.layer_sum, lcs, lpc);
+        } else {
+            LOG_INF("%*d%s%8.2f%%%s%14.4f %14.4f %10.4f %10.4f\n",
+                w_lay, layer, sep,
+                100.0f * stats.layer_zd / stats.n, sep,
+                stats.layer_sum, ll2, lcs, lpc);
         }
     }
     LOG_INF("\n");
-
     return true;
 }
 
