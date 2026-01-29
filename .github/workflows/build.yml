@@ -1371,7 +1371,7 @@ jobs:
         id: update_presets
         if: ${{ matrix.build == 'arm64-snapdragon' }}
         run: |
-          cp docs/backend/hexagon/CMakeUserPresets.json .
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
 
       - name: Build
         id: ndk_build
