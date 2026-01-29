@@ -70,17 +70,18 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <float.h>
+#include <cfloat>
 #include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <stdarg.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
+#include <unordered_set>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -2930,11 +2931,6 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
         }
 
         props->src_data[i] = node->src[i]->data;
-
-        for (int j = 0; j < GGML_MAX_DIMS; j++) {
-            props->src_ne[i][j] = node->src[i]->ne[j];
-            props->src_nb[i][j] = node->src[i]->nb[j];
-        }
     }
     memcpy(props->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
@@ -2969,15 +2965,6 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
 
             if (node->src[i]->data != props->src_data[i]) {
                 return false;
-            }
-
-            // TODO: this is not ideal since it requires too much memory - figure out an optimization
-            // ref: https://github.com/ggml-org/llama.cpp/pull/19165
-            for (int j = 0; j < GGML_MAX_DIMS; j++) {
-                if (node->src[i]->ne[j] != props->src_ne[i][j] ||
-                    node->src[i]->nb[j] != props->src_nb[i][j]) {
-                    return false;
-                }
             }
         }
     }
@@ -3016,8 +3003,13 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
+    std::unordered_set<ggml_tensor *> seen_node;
+    std::vector<ggml_tensor *> srcs_extra;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool props_match = true;
+
+        seen_node.insert(cgraph->nodes[i]);
+
         if (!res) {
             props_match = ggml_cuda_graph_node_properties_match(cgraph->nodes[i], &graph->props[i]);
         }
@@ -3025,6 +3017,31 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
             res = true;
         }
         ggml_cuda_graph_node_set_properties(&graph->props[i], cgraph->nodes[i]);
+
+        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+            ggml_tensor * src = cgraph->nodes[i]->src[src_idx];
+            if (src && seen_node.find(src) == seen_node.end()) {
+                srcs_extra.push_back(src);
+            }
+        }
+    }
+
+    if (graph->extra.size() != (size_t) srcs_extra.size()) {
+        res = true;
+        graph->extra.resize(srcs_extra.size());
+    }
+
+    for (size_t i = 0; i < srcs_extra.size(); ++i) {
+        bool props_match = true;
+
+        if (!res) {
+            props_match = ggml_cuda_graph_node_properties_match(srcs_extra[i], &graph->extra[i]);
+        }
+
+        if (!props_match) {
+            res = true;
+        }
+        ggml_cuda_graph_node_set_properties(&graph->extra[i], srcs_extra[i]);
     }
 
     return res;
