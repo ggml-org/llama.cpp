@@ -7,6 +7,21 @@
 #include <cstdio>
 #include <sstream>
 
+// Print the values of a sublist of `llama_tokens & inp` to a string in the form [v0, v1, v2, ...].
+static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length) {
+    std::ostringstream oss;
+    oss << '[';
+    for (size_t i = 0; i < length; ++i) {
+        if (i > 0) {
+            oss << ", ";
+        }
+        oss << inp[start + i];
+    }
+    oss << ']';
+    return oss.str();
+}
+
+
 // n-gram simple
 //
 
@@ -99,8 +114,6 @@ llama_tokens common_ngram_simple_draft(
 
 // maximum number of counted values of a ngram map value.
 #define COMMON_NGRAM_MAX_VALUE_COUNT 16380
-
-static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length);
 
 void common_ngram_map_draft(common_ngram_map & map,
         const llama_tokens & inp, llama_token sampled,
@@ -347,21 +360,3 @@ void common_ngram_map_accept(common_ngram_map & map, uint16_t n_accepted) {
             n_accepted, curr_value.n_accepted);
     curr_value.n_accepted = n_accepted;
 }
-
-// Helper functions.
-//
-
-// Print the values of a sublist of `llama_tokens & inp` to a string in the form [v0, v1, v2, ...].
-std::string common_tokens_to_str(const llama_tokens & inp, size_t start, size_t length) {
-    std::ostringstream oss;
-    oss << '[';
-    for (size_t i = 0; i < length; ++i) {
-        if (i > 0) {
-            oss << ", ";
-        }
-        oss << inp[start + i];
-    }
-    oss << ']';
-    return oss.str();
-}
-

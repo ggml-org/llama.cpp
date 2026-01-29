@@ -75,6 +75,8 @@ add_library(${TARGET} STATIC
     ngram-cache.h
     ngram-map.cpp
     ngram-map.h
+    ngram-mod.cpp
+    ngram-mod.h
     peg-parser.cpp
     peg-parser.h
     preset.cpp

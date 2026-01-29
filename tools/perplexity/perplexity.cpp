@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "ngram-mod.h"
 
 #include <chrono>
 #include <algorithm>
@@ -470,6 +471,38 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     LOG_INF("%s: tokenizing the input ..\n", __func__);
 
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true);
+
+    // TODO: remove
+    //{
+    //    common_ngram_mod ngrams(16, 1, 1024*1024);
+
+    //    for (size_t i = 0; i < tokens.size() - ngrams.n; ++i) {
+    //        ngrams.add(tokens.data() + i);
+    //    }
+    //    // Determine the maximum number of choices across all bins
+    //    int max_choices = 0;
+    //    for (const auto & entry : ngrams.entries) {
+    //        if (entry.n_choices > max_choices) {
+    //            max_choices = entry.n_choices;
+    //        }
+    //    }
+
+    //    // make max_choices the next power of 2
+    //    max_choices = 1 << (32 - __builtin_clz(max_choices));
+
+    //    // Build a histogram: count how many bins have each possible number of choices
+    //    std::vector<int> histogram(max_choices + 1, 0);
+    //    for (const auto & entry : ngrams.entries) {
+    //        histogram[entry.n_choices]++;
+    //    }
+
+    //    // Print the histogram
+    //    LOG_INF("Histogram of choices (0 .. %d):\n", max_choices);
+    //    for (int i = 0; i <= max_choices; ++i) {
+    //        LOG_INF("choices %3d: %d bins\n", i, histogram[i]);
+    //    }
+    //}
+    //exit(0);
 
     auto tim2 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
