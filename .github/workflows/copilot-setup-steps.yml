@@ -26,7 +26,7 @@ jobs:
     # If you do not check out your code, Copilot will do this for you.
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.16
@@ -45,7 +45,7 @@ jobs:
           sudo chmod +x /usr/local/bin/git-clang-format
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 

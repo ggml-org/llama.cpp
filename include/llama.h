@@ -309,7 +309,7 @@ extern "C" {
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap
+        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
         bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
@@ -489,6 +489,7 @@ extern "C" {
     //   - returns true if the parameters could be successfully modified to fit device memory
     //   - this function is NOT thread safe because it modifies the global llama logger state
     //   - only parameters that have the same value as in llama_default_model_params are modified
+    //     with the exception of the context size which is modified if and only if equal to 0
     LLAMA_API enum llama_params_fit_status llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,
@@ -1256,7 +1257,6 @@ extern "C" {
     // [EXPERIMENTAL]
     // attach a sampler to the context
     // note: prefer initializing the context with llama_context_params.samplers when possible
-    // note: changing the samplers of a context can cause graph reallocations and degraded performance
     LLAMA_API bool llama_set_sampler(struct llama_context * ctx, llama_seq_id seq_id, struct llama_sampler * smpl);
 
     // mirror of llama_sampler_i:
@@ -1396,6 +1396,33 @@ extern "C" {
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
+    /// adaptive-p: select tokens near a configurable target probability over time.
+    ///
+    /// the adaptive-p sampler transforms the token probability distribution to favor tokens
+    /// that fall near a user-configurable probability target.
+    ///
+    /// internally, the sampler maintains an exponential moving average of the *ORIGINAL*
+    /// probabilities of selected tokens at each sampling step. it uses this EMA to compute an
+    /// adapted target probability at each sampling step, thus maintaining the desired target
+    /// probability over time.
+    ///
+    /// adaptive-p selects a token ID rather than just mutating candidates, so it must be last
+    /// in the sampler chain (like mirostat, dist, greedy).
+    ///
+    /// only mild truncation before this sampler is recommended. we suggest applying min-p
+    /// before adaptive-p as the only other active sampler in the chain.
+    ///
+    /// @param target select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+    /// @param decay  EMA decay for adaptation; history ≈ 1/(1-decay) tokens (valid range 0.0 - 0.99)
+    /// @param seed   RNG seed
+    ///
+    /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+    ///
+    LLAMA_API struct llama_sampler * llama_sampler_init_adaptive_p(
+                               float   target,
+                               float   decay,
+                            uint32_t   seed);
+
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
                              int32_t   n_logit_bias,
@@ -1449,12 +1476,12 @@ extern "C" {
     /// @details Build a split GGUF final path for this chunk.
     ///          llama_split_path(split_path, sizeof(split_path), "/models/ggml-model-q4_0", 2, 4) => split_path = "/models/ggml-model-q4_0-00002-of-00004.gguf"
     //  Returns the split_path length.
-    LLAMA_API int llama_split_path(char * split_path, size_t maxlen, const char * path_prefix, int split_no, int split_count);
+    LLAMA_API int32_t llama_split_path(char * split_path, size_t maxlen, const char * path_prefix, int32_t split_no, int32_t split_count);
 
     /// @details Extract the path prefix from the split_path if and only if the split_no and split_count match.
     ///          llama_split_prefix(split_prefix, 64, "/models/ggml-model-q4_0-00002-of-00004.gguf", 2, 4) => split_prefix = "/models/ggml-model-q4_0"
     //  Returns the split_prefix length.
-    LLAMA_API int llama_split_prefix(char * split_prefix, size_t maxlen, const char * split_path, int split_no, int split_count);
+    LLAMA_API int32_t llama_split_prefix(char * split_prefix, size_t maxlen, const char * split_path, int32_t split_no, int32_t split_count);
 
     // Print system information
     LLAMA_API const char * llama_print_system_info(void);

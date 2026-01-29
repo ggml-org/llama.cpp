@@ -254,7 +254,7 @@ function gg_run_ctest_release {
     (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     if [ -z ${GG_BUILD_LOW_PERF} ]; then
-        (time ctest --output-on-failure -L main ) 2>&1 | tee -a $OUT/${ci}-ctest.log
+        (time ctest --output-on-failure -L 'main|python' ) 2>&1 | tee -a $OUT/${ci}-ctest.log
     else
         (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
     fi

@@ -36,7 +36,7 @@ int main(int argc, char ** argv) {
 
     LOG_INF("%s: printing fitted CLI arguments to stdout...\n", __func__);
     common_log_flush(common_log_main());
-    printf("-c %" PRIu32 " -ngl %" PRIu32, cparams.n_ctx, mparams.n_gpu_layers);
+    printf("-c %" PRIu32 " -ngl %" PRIi32, cparams.n_ctx, mparams.n_gpu_layers);
 
     size_t nd = llama_max_devices();
     while (nd > 1 && mparams.tensor_split[nd - 1] == 0.0f) {

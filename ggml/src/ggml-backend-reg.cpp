@@ -69,6 +69,10 @@
 #include "ggml-rpc.h"
 #endif
 
+#ifdef GGML_USE_VIRTGPU_FRONTEND
+#include "ggml-virtgpu.h"
+#endif
+
 #ifdef GGML_USE_CANN
 #include "ggml-cann.h"
 #endif
@@ -77,38 +81,22 @@
 #include "ggml-zendnn.h"
 #endif
 
-// disable C++17 deprecation warning for std::codecvt_utf8
-#if defined(__clang__)
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
-    std::string u8path;
     try {
 #if defined(__cpp_lib_char8_t)
         // C++20 and later: u8string() returns std::u8string
-        std::u8string u8str = path.u8string();
-        u8path = std::string(reinterpret_cast<const char*>(u8str.c_str()));
+        const std::u8string u8str = path.u8string();
+        return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
 #else
         // C++17: u8string() returns std::string
-        u8path = path.u8string();
+        return path.u8string();
 #endif
     } catch (...) {
+        return std::string();
     }
-    return u8path;
 }
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
 
 #ifdef _WIN32
 
@@ -196,7 +184,12 @@ struct ggml_backend_registry {
         register_backend(ggml_backend_sycl_reg());
 #endif
 #ifdef GGML_USE_VULKAN
+    // Add runtime disable check
+    if (getenv("GGML_DISABLE_VULKAN") == nullptr) {
         register_backend(ggml_backend_vk_reg());
+    } else {
+        GGML_LOG_DEBUG("Vulkan backend disabled by GGML_DISABLE_VULKAN environment variable\n");
+    }
 #endif
 #ifdef GGML_USE_WEBGPU
         register_backend(ggml_backend_webgpu_reg());
@@ -204,6 +197,10 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_ZDNN
         register_backend(ggml_backend_zdnn_reg());
 #endif
+#ifdef GGML_USE_VIRTGPU_FRONTEND
+        register_backend(ggml_backend_virtgpu_reg());
+#endif
+
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
 #endif
@@ -620,6 +617,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("rpc", silent, dir_path);
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
+    ggml_backend_load_best("virtgpu", silent, dir_path);
     ggml_backend_load_best("opencl", silent, dir_path);
     ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);

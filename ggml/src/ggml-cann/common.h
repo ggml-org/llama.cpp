@@ -101,7 +101,6 @@ struct ggml_cann_device_info {
 const ggml_cann_device_info & ggml_cann_info();
 
 void    ggml_cann_set_device(int32_t device);
-int32_t ggml_cann_get_device();
 
 std::optional<std::string> get_env_as_lowercase(const std::string & name);
 bool                       parse_bool(const std::string & value);
@@ -382,7 +381,7 @@ struct ggml_cann_graph_lru_cache {
 
     std::list<ggml_cann_graph *> cache_list; /**< List storing cached graphs as raw pointers. */
 
-    ggml_cann_graph_lru_cache() { capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12")); }
+    ggml_cann_graph_lru_cache() { capacity = parse_integer(get_env_as_lowercase("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12")); }
 
     /**
      * @brief Push a new graph to the front of the cache.
@@ -574,7 +573,7 @@ struct ggml_backend_cann_context {
         description = aclrtGetSocName();
 
 #ifdef USE_ACL_GRAPH
-        acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
+        acl_graph_mode = parse_bool(get_env_as_lowercase("GGML_CANN_ACL_GRAPH").value_or("on"));
         GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
                       acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
 #endif

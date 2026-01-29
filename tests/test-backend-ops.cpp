@@ -4679,6 +4679,37 @@ struct test_pool2d : public test_case {
     }
 };
 
+// GGML_OP_POOL1D
+struct test_pool1d : public test_case {
+    enum ggml_op_pool pool_type;
+    const ggml_type type_input;
+    const std::array<int64_t, 4> ne_input;
+    const int k0;
+    const int s0;
+    const int p0;
+
+    std::string vars() override {
+        return VARS_TO_STR6(pool_type, type_input, ne_input, k0, s0, p0);
+    }
+
+    test_pool1d(ggml_op_pool pool_type = GGML_OP_POOL_AVG,
+                ggml_type type_input = GGML_TYPE_F32,
+                std::array<int64_t,4> ne_input = {10, 1, 1, 1},
+                int k0 = 3, int s0 = 3, int p0 = 0)
+        : pool_type(pool_type), type_input(type_input), ne_input(ne_input), k0(k0), s0(s0), p0(p0) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor(ctx, type_input, 4, ne_input.data());
+        ggml_set_param(input);
+        ggml_set_name(input, "input");
+
+        ggml_tensor * out = ggml_pool_1d(ctx, input, pool_type, k0, s0, p0);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_CONV_TRANSPOSE_1D
 struct test_conv_transpose_1d : public test_case {
     const std::array<int64_t, 4> ne_input;
@@ -6091,7 +6122,19 @@ struct test_flash_attn_ext : public test_case {
         ggml_tensor * k = create_permuted(type_KV,       hsk_padded, kv, nh,         nr23[1], true); // the K tensor is usually a view of the K cache
         ggml_set_name(k, "k");
 
-        ggml_tensor * v = create_permuted(type_KV,       hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
+        ggml_tensor * v = nullptr;
+        if (hsk_padded == 576 && hsv_padded == 512) {
+            // TODO: this branch should become a separate test case parameter instead of hardcoding this for these head shapes
+
+            // in this branch, the V cache is sub-view of the K cache. this is used by some MLA-based models
+            // for more info:
+            //   - https://github.com/ggml-org/llama.cpp/pull/13435
+            //   - https://github.com/ggml-org/llama.cpp/pull/18953#issuecomment-3774948392
+            //   - https://github.com/ggml-org/llama.cpp/pull/18986
+            v = ggml_view_4d(ctx, k, hsv_padded, kv, nh, nr23[1], k->nb[1], k->nb[2], k->nb[3], 0);
+        } else {
+            v = create_permuted(type_KV,       hsv_padded, kv, nh,         nr23[1], true); // the V tensor is usually a view of the V cache
+        }
         ggml_set_name(v, "v");
 
         ggml_tensor * m = nullptr;
@@ -7052,6 +7095,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 }
                             }
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    for (ggml_type type_input : {GGML_TYPE_F32}) {
+        for (ggml_op_pool pool_type : {GGML_OP_POOL_AVG, GGML_OP_POOL_MAX}) {
+            for (int k0 : {1, 3}) {
+                for (int s0 : {1, 2}) {
+                    for (int p0 : {0, 1}) {
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 10,  3, 2, 1 }, k0, s0, p0));
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 11,  1, 3, 2 }, k0, s0, p0));
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 128, 2, 1, 3 }, k0, s0, p0));
                     }
                 }
             }
@@ -8159,8 +8216,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                             for (int nh : { 4, }) {
                                 for (int nr3 : { 1, 3, }) {
                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
-                                    for (int nr2 : { 1, 4, 16 }) {
-                                        if (nr2 == 16 && hsk != 128) continue;
+                                    for (int nr2 : { 1, 4, 12 }) {
+                                        if (nr2 == 12 && hsk != 128) continue;
                                         //for (int kv : { 1, 17, 31, 33, 61, 113, 65, 127, 129, 130, 255, 260, 371, 380, 407, 512, 1024, }) {
                                         for (int kv : { 113, 512, 1024, }) {
                                             if (nr2 != 1 && kv != 512) continue;
@@ -8414,6 +8471,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
+
+    test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
 
     for (int kv : { 4096, 8192, 16384, }) {
         for (int hs : { 64, 128, }) {
