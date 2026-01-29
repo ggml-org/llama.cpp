@@ -481,6 +481,85 @@ static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_
     }
 }
 
+template<typename dst_t>
+static __global__ void dequantize_block_mxfp6_e3m2(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+
+    // QK_K(256) / QK_MXFP6_E3M2(32) = 8 blocks
+    const int64_t i   = blockIdx.x;
+    const block_mxfp6_e3m2 * x = (const block_mxfp6_e3m2 *) vx + i*(QK_K/QK_MXFP6_E3M2);
+
+    const int64_t tid = threadIdx.x;
+    // MXFP6 has 32 6-bit values, packed into 24 bytes.
+    // For 4 thread model, each thread handle 24 / 4 = 6 bytes = 2 3-byte block
+    // Each thread generate 8 values.
+    const int64_t il = tid/8; // 0...3 -> 4 threads
+    const int64_t ib = tid%8; // 0...7 -> each threads handle 2 (3 bytes) block
+    dst_t * y = yy + i*QK_K + 32*ib;
+    const uint8_t  * qs = x[ib].qs;
+    const float d = ggml_cuda_e8m0_to_fp32(x[ib].e);
+    for (int g_idx = 0; g_idx < 2; ++g_idx) {
+        const int g = 2 * il + g_idx;
+        // input index -> 3 byte * current index
+        const uint8_t* q3 = qs + 3*g;
+        // output index -> 4 byte * current index
+        const int y_offset = 4 * g;
+
+        const uint8_t b0 = q3[0];
+        const uint8_t b1 = q3[1];
+        const uint8_t b2 = q3[2];
+
+        const uint8_t v0_idx = b0 & 0x3F;
+        const uint8_t v1_idx = (b0 >> 6) | ((b1 & 0x0F) << 2);
+        const uint8_t v2_idx = (b1 >> 4) | ((b2 & 0x03) << 4);
+        const uint8_t v3_idx = b2 >> 2;
+
+        y[y_offset + 0] = d * kvalues_mxfp6_e3m2[v0_idx]*MXFP6_E3M2_SCALER;
+        y[y_offset + 1] = d * kvalues_mxfp6_e3m2[v1_idx]*MXFP6_E3M2_SCALER;
+        y[y_offset + 2] = d * kvalues_mxfp6_e3m2[v2_idx]*MXFP6_E3M2_SCALER;
+        y[y_offset + 3] = d * kvalues_mxfp6_e3m2[v3_idx]*MXFP6_E3M2_SCALER;
+    }
+}
+
+template<typename dst_t>
+static __global__ void dequantize_block_mxfp6_e2m3(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+
+    // QK_K(256) / QK_MXFP6_E2M3(32) = 8 blocks
+    const int64_t i   = blockIdx.x;
+    const block_mxfp6_e2m3 * x = (const block_mxfp6_e2m3 *) vx + i*(QK_K/QK_MXFP6_E2M3);
+
+    const int64_t tid = threadIdx.x;
+    // MXFP6 has 32 6-bit values, packed into 24 bytes.
+    // For 4 thread model, each thread handle 24 / 4 = 6 bytes = 2 3-byte block
+    // Each thread generate 8 values.
+    const int64_t il = tid/8; // 0...3 -> 4 threads
+    const int64_t ib = tid%8; // 0...7 -> each threads handle 2 (3 bytes) block
+    dst_t * y = yy + i*QK_K + 32*ib;
+    const uint8_t  * qs = x[ib].qs;
+    const float d = ggml_cuda_e8m0_to_fp32(x[ib].e);
+    for (int g_idx = 0; g_idx < 2; ++g_idx) {
+        const int g = 2 * il + g_idx;
+        // input index -> 3 byte * current index
+        const uint8_t* q3 = qs + 3*g;
+        // output index -> 4 byte * current index
+        const int y_offset = 4 * g;
+
+        const uint8_t b0 = q3[0];
+        const uint8_t b1 = q3[1];
+        const uint8_t b2 = q3[2];
+
+        const uint8_t v0_idx = b0 & 0x3F;
+        const uint8_t v1_idx = (b0 >> 6) | ((b1 & 0x0F) << 2);
+        const uint8_t v2_idx = (b1 >> 4) | ((b2 & 0x03) << 4);
+        const uint8_t v3_idx = b2 >> 2;
+
+        y[y_offset + 0] = d * kvalues_mxfp6_e2m3[v0_idx]*MXFP6_E2M3_SCALER;
+        y[y_offset + 1] = d * kvalues_mxfp6_e2m3[v1_idx]*MXFP6_E2M3_SCALER;
+        y[y_offset + 2] = d * kvalues_mxfp6_e2m3[v2_idx]*MXFP6_E2M3_SCALER;
+        y[y_offset + 3] = d * kvalues_mxfp6_e2m3[v3_idx]*MXFP6_E2M3_SCALER;
+    }
+}
+
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void dequantize_block_cuda(const void * vx, dst_t * y,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -610,6 +689,18 @@ static void dequantize_row_mxfp4_cuda(const void * vx, dst_t * y, const int64_t 
     dequantize_block_mxfp4<<<nb, 32, 0, stream>>>(vx, y);
 }
 
+template<typename dst_t>
+static void dequantize_row_mxfp6_e3m2_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_mxfp6_e3m2<<<nb, 32, 0, stream>>>(vx, y);
+}
+
+template<typename dst_t>
+static void dequantize_row_mxfp6_e2m3_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_mxfp6_e2m3<<<nb, 32, 0, stream>>>(vx, y);
+}
+
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01, const int64_t ne02,
@@ -701,6 +792,10 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_MXFP6_E3M2:
+            return dequantize_row_mxfp6_e3m2_cuda;
+        case GGML_TYPE_MXFP6_E2M3:
+            return dequantize_row_mxfp6_e2m3_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -752,6 +847,10 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_MXFP6_E3M2:
+            return dequantize_row_mxfp6_e3m2_cuda;
+        case GGML_TYPE_MXFP6_E2M3:
+            return dequantize_row_mxfp6_e2m3_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:

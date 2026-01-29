@@ -211,7 +211,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             const int64_t nx = tensor->ne[0];
             const int64_t qk_k = ggml_blck_size(new_type);
 
-            if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
+            if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE ||
+                ftype == LLAMA_FTYPE_MOSTLY_MXFP6_E3M2_MOE ||
+                ftype == LLAMA_FTYPE_MOSTLY_MXFP6_E2M3_MOE) {
                 new_type = GGML_TYPE_Q8_0;
             }
             else if (arch == LLM_ARCH_FALCON || nx % qk_k != 0) {
@@ -231,6 +233,18 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         // other tensors -> Q8_0
         if (tensor->ne[2] > 1) {
             new_type = GGML_TYPE_MXFP4;
+        } else {
+            new_type = GGML_TYPE_Q8_0;
+        }
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP6_E3M2_MOE) {
+        if (tensor->ne[2] > 1) {
+            new_type = GGML_TYPE_MXFP6_E3M2;
+        } else {
+            new_type = GGML_TYPE_Q8_0;
+        }
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP6_E2M3_MOE) {
+        if (tensor->ne[2] > 1) {
+            new_type = GGML_TYPE_MXFP6_E2M3;
         } else {
             new_type = GGML_TYPE_Q8_0;
         }
@@ -494,6 +508,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         case LLAMA_FTYPE_ALL_F32:     default_type = GGML_TYPE_F32;  break;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: default_type = GGML_TYPE_MXFP4; break;
+        case LLAMA_FTYPE_MOSTLY_MXFP6_E3M2_MOE: default_type = GGML_TYPE_MXFP6_E3M2; break;
+        case LLAMA_FTYPE_MOSTLY_MXFP6_E2M3_MOE: default_type = GGML_TYPE_MXFP6_E2M3; break;
 
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:
@@ -982,9 +998,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
 
-                // TODO: temporary sanity check that the F16 -> MXFP4 is lossless
+                // TODO: temporary sanity check that the F16 -> MXFP4/MXFP6 is lossless
 #if 0
-                if (new_type == GGML_TYPE_MXFP4) {
+                if (new_type == GGML_TYPE_MXFP4 ||
+                    new_type == GGML_TYPE_MXFP6_E3M2 ||
+                    new_type == GGML_TYPE_MXFP6_E2M3) {
                     auto * x = f32_data_03;
 
                     //LLAMA_LOG_INFO("nrows = %d, n_per_row = %d\n", nrows, n_per_row);
