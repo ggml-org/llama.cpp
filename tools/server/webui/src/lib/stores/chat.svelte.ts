@@ -37,7 +37,6 @@ import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
 } from '$lib/constants/cache';
-import { isActiveConversation } from '$lib/stores/shared';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
@@ -85,20 +84,20 @@ class ChatStore {
 		this.touchConversationState(convId);
 		if (loading) {
 			this.chatLoadingStates.set(convId, true);
-			if (isActiveConversation(convId)) this.isLoading = true;
+			if (convId === conversationsStore.activeConversation?.id) this.isLoading = true;
 		} else {
 			this.chatLoadingStates.delete(convId);
-			if (isActiveConversation(convId)) this.isLoading = false;
+			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
 		}
 	}
 	private setChatStreaming(convId: string, response: string, messageId: string): void {
 		this.touchConversationState(convId);
 		this.chatStreamingStates.set(convId, { response, messageId });
-		if (isActiveConversation(convId)) this.currentResponse = response;
+		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
 	private clearChatStreaming(convId: string): void {
 		this.chatStreamingStates.delete(convId);
-		if (isActiveConversation(convId)) this.currentResponse = '';
+		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
 	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
 		return this.chatStreamingStates.get(convId);

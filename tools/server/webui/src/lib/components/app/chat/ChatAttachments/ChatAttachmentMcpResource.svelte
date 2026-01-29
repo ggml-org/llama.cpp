@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { FileText, X, Loader2, AlertCircle, Database, Image, Code, File } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { FileText, Loader2, AlertCircle, Database, Image, Code, File } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { getFaviconUrl } from '$lib/utils';
 	import type { MCPResourceAttachment, MCPResourceInfo } from '$lib/types';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { RemoveButton } from '../../actions';
 
 	interface Props {
 		attachment: MCPResourceAttachment;
@@ -66,7 +66,7 @@
 		<button
 			type="button"
 			class={cn(
-				'flex flex-shrink-0 items-center gap-2 rounded-md border px-2 py-1 text-sm transition-colors',
+				'flex flex-shrink-0 items-center gap-2 rounded-md border p-0.5 pl-2 text-sm transition-colors',
 				getStatusClass(attachment),
 				onClick && 'cursor-pointer hover:bg-muted/50',
 				className
@@ -87,18 +87,7 @@
 			</span>
 
 			{#if onRemove}
-				<Button
-					variant="ghost"
-					size="sm"
-					class="h-5 w-5 p-0 hover:bg-destructive/20"
-					onclick={(e) => {
-						e.stopPropagation();
-						onRemove(attachment.id);
-					}}
-					title="Remove attachment"
-				>
-					<X class="h-3 w-3" />
-				</Button>
+				<RemoveButton class="bg-transparent " id={attachment.id} {onRemove} />
 			{/if}
 		</button>
 	</Tooltip.Trigger>

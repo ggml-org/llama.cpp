@@ -5,8 +5,6 @@
 		AlertTriangle,
 		Code,
 		Monitor,
-		Sun,
-		Moon,
 		ChevronLeft,
 		ChevronRight,
 		Database
@@ -23,6 +21,7 @@
 	import { ColorMode } from '$lib/enums/ui';
 	import type { Component } from 'svelte';
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
+	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
 
 	interface Props {
 		onSave?: () => void;
@@ -43,11 +42,7 @@
 					key: 'theme',
 					label: 'Theme',
 					type: 'select',
-					options: [
-						{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
-						{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
-						{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
-					]
+					options: SETTINGS_COLOR_MODES_CONFIG
 				},
 				{ key: 'apiKey', label: 'API Key', type: 'input' },
 				{

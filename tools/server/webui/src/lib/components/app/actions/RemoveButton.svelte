@@ -16,7 +16,7 @@
 	variant="ghost"
 	size="sm"
 	class="h-6 w-6 bg-white/20 p-0 hover:bg-white/30 {className}"
-	onclick={(e) => {
+	onclick={(e: MouseEvent) => {
 		e.stopPropagation();
 		onRemove?.(id);
 	}}

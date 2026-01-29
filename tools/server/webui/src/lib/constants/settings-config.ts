@@ -1,4 +1,5 @@
 import { ColorMode } from '$lib/enums/ui';
+import { Monitor, Moon, Sun } from '@lucide/svelte';
 
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
@@ -132,3 +133,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };
+
+export const SETTINGS_COLOR_MODES_CONFIG = [
+	{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+];
