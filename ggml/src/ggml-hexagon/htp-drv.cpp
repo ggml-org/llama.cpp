@@ -19,9 +19,9 @@
 #    include <dlfcn.h>
 #    include <unistd.h>
 #endif
-#include "ggml-backend-dl.h"
 #include "ggml-impl.h"
 #include "htp-drv.h"
+#include "libdl.h"
 
 #include <domain.h>
 
