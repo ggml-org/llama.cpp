@@ -4909,11 +4909,6 @@ struct test_conv_2d : public test_case {
         return 5e-4;
     }
 
-    // must run the whole graph for all test cases to pass
-    bool run_whole_graph() override {
-        return true;
-    }
-
     uint64_t op_flops(ggml_tensor * t) override {
         GGML_UNUSED(t);
         // Just counting matmul costs:
