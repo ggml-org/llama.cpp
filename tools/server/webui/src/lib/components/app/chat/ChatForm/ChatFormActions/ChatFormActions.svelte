@@ -165,12 +165,12 @@
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-		return mcpStore.hasEnabledServers(perChatOverrides);
+		return mcpStore.hasPromptsCapability(perChatOverrides);
 	});
 
 	let hasMcpResourcesSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-		return mcpStore.hasEnabledServers(perChatOverrides) && mcpStore.hasResourcesCapability();
+		return mcpStore.hasResourcesCapability(perChatOverrides);
 	});
 </script>
 

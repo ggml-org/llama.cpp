@@ -588,6 +588,60 @@ class MCPStore {
 		return false;
 	}
 
+	/**
+	 * Check if any enabled server with successful health check supports prompts.
+	 * Uses health check state since servers may not have active connections until
+	 * the user actually sends a message or uses prompts.
+	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
+	 *                          If provided (even empty array), only checks enabled servers.
+	 *                          If undefined, checks all servers with successful health checks.
+	 */
+	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
+		// If perChatOverrides is provided (even empty array), filter by enabled servers
+		if (perChatOverrides !== undefined) {
+			const enabledServerIds = new Set(
+				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
+			);
+			// No enabled servers = no capability
+			if (enabledServerIds.size === 0) return false;
+
+			// Check health check states for enabled servers with prompts capability
+			for (const [serverId, state] of Object.entries(this._healthChecks)) {
+				if (!enabledServerIds.has(serverId)) continue;
+				if (
+					state.status === HealthCheckStatus.SUCCESS &&
+					state.capabilities?.server?.prompts !== undefined
+				) {
+					return true;
+				}
+			}
+			// Also check active connections as fallback
+			for (const [serverName, connection] of this.connections) {
+				if (!enabledServerIds.has(serverName)) continue;
+				if (connection.serverCapabilities?.prompts) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// No overrides provided - check all servers (global mode)
+		for (const state of Object.values(this._healthChecks)) {
+			if (
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.prompts !== undefined
+			) {
+				return true;
+			}
+		}
+		for (const connection of this.connections.values()) {
+			if (connection.serverCapabilities?.prompts) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	async getAllPrompts(): Promise<MCPPromptInfo[]> {
 		const results: MCPPromptInfo[] = [];
 		for (const [serverName, connection] of this.connections) {
@@ -953,9 +1007,40 @@ class MCPStore {
 	 * Check if any enabled server with successful health check supports resources.
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
+	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
+	 *                          If provided (even empty array), only checks enabled servers.
+	 *                          If undefined, checks all servers with successful health checks.
 	 */
-	hasResourcesCapability(): boolean {
-		// Check health check states for servers with resources capability
+	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
+		// If perChatOverrides is provided (even empty array), filter by enabled servers
+		if (perChatOverrides !== undefined) {
+			const enabledServerIds = new Set(
+				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
+			);
+			// No enabled servers = no capability
+			if (enabledServerIds.size === 0) return false;
+
+			// Check health check states for enabled servers with resources capability
+			for (const [serverId, state] of Object.entries(this._healthChecks)) {
+				if (!enabledServerIds.has(serverId)) continue;
+				if (
+					state.status === HealthCheckStatus.SUCCESS &&
+					state.capabilities?.server?.resources !== undefined
+				) {
+					return true;
+				}
+			}
+			// Also check active connections as fallback
+			for (const [serverName, connection] of this.connections) {
+				if (!enabledServerIds.has(serverName)) continue;
+				if (MCPService.supportsResources(connection)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		// No overrides provided - check all servers (global mode)
 		for (const state of Object.values(this._healthChecks)) {
 			if (
 				state.status === HealthCheckStatus.SUCCESS &&
@@ -964,7 +1049,6 @@ class MCPStore {
 				return true;
 			}
 		}
-		// Also check active connections as fallback
 		for (const connection of this.connections.values()) {
 			if (MCPService.supportsResources(connection)) {
 				return true;
