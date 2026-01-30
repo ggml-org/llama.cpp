@@ -8806,6 +8806,7 @@ class GraniteMoeModel(GraniteModel):
             gate, up = data_torch.split(ffn_dim, dim=-2)
             yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
             yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            return
 
         has_experts = bool(self.hparams.get('num_local_experts'))
 
