@@ -146,7 +146,7 @@ struct webgpu_submission_futures {
 struct webgpu_buf_pool {
     std::vector<webgpu_pool_bufs> free;
 
-    // The pool must be synchronized because:
+    // The pool must be synchronized because
     // 1. The memset pool is shared globally by every ggml buffer,
     // since allocating a pool per ggml buffer would consume too much memory.
     // 2. For the per-thread buffer pools in webgpu_context,
