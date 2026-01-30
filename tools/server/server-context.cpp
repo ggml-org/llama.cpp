@@ -758,14 +758,13 @@ private:
             {
                 // initialize a shared ngram_mod instance for all speculative contexts
                 if (!ngram_mod && params_base.speculative.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD) {
-                    ngram_mod = std::make_unique<common_ngram_mod>(params_base.speculative.ngram_size_n, 1024*1024);
+                    ngram_mod = std::make_unique<common_ngram_mod>(params_base.speculative.ngram_size_n, 4*1024*1024);
 
                     params_base.speculative.ngram_mod = ngram_mod.get();
 
-                    SRV_INF("initialized ngram_mod with n=%d, size=%d (%.3f MB)\n",
-                        params_base.speculative.ngram_size_n, 1024*1024,
-                        (float)(1024*1024*sizeof(common_ngram_mod_entry))/1024/1024
-                    );
+                    SRV_INF("initialized ngram_mod with n=%d, size=%zu (%.3f MB)\n",
+                            params_base.speculative.ngram_size_n, ngram_mod->size(),
+                            (float)(ngram_mod->size_bytes())/1024/1024);
                 }
 
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);

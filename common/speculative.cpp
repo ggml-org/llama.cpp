@@ -515,24 +515,36 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
 struct common_speculative_state_ngram_mod : public common_speculative_state {
     common_ngram_mod & mod;
 
-    // size of the last begin() prompt
-    size_t n_last = 0;
+    // the last position in the prompt that was added to the ngram container
+    size_t i_last = 0;
 
     common_speculative_state_ngram_mod(enum common_speculative_type type, common_ngram_mod & mod)
-        : common_speculative_state(type), mod(mod) {}
+        : common_speculative_state(type), mod(mod) {
+            static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
+    }
 
     void begin(const llama_tokens & prompt) override {
-        n_last = 0;
+        i_last = 0;
 
-        if (prompt.size() < (size_t) mod.n) {
+        const size_t n = mod.get_n();
+
+        if (prompt.size() < n) {
             return;
         }
 
-        for (size_t i = 0; i < prompt.size() - mod.n; ++i) {
+        for (size_t i = 0; i < prompt.size() - n; ++i) {
             mod.add(prompt.data() + i);
         }
 
-        n_last = prompt.size() - mod.n;
+        i_last = prompt.size() - n;
+
+        const double f = (double)mod.get_used() * 100.0 / (double)mod.size();
+        LOG_INF("%s: ngram_mod occupancy = %zu/%zu (%.2f%%)\\n", __func__, mod.get_used(), mod.size(), f);
+
+        if (f > 0.25) {
+            mod.reset();
+            LOG_WRN("%s: ngram_mod occupancy %.2f%% exceeds threshold, resetting\n", __func__, f);
+        }
     }
 
     void draft(
@@ -543,44 +555,46 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
         GGML_UNUSED(params);
 
         const size_t cur_len = prompt_tgt.size();
-        if (cur_len < (size_t) mod.n) {
+        if (cur_len < mod.get_n()) {
             return;
         }
 
+        const size_t n = mod.get_n();
+
         // add new ngrams in chunks
-        if (n_last + 16*mod.n < cur_len) {
-            for (size_t i = n_last; i < cur_len - mod.n; ++i) {
+        if (i_last + 16*n < cur_len) {
+            for (size_t i = i_last; i < cur_len - n; ++i) {
                 mod.add(prompt_tgt.data() + i);
             }
 
-            n_last = cur_len - mod.n;
+            i_last = cur_len - n;
         }
 
-        result.resize(mod.n + params.n_max);
-        for (size_t i = 0; i < mod.n - 1; ++i) {
-            result[i] = prompt_tgt[cur_len - mod.n + 1 + i];
+        result.resize(n + params.n_max);
+        for (size_t i = 0; i < n - 1; ++i) {
+            result[i] = prompt_tgt[cur_len - n + 1 + i];
         }
-        result[mod.n - 1] = id_last;
+        result[n - 1] = id_last;
 
         for (int i = 0; i < params.n_max; ++i) {
-            const llama_token token = mod.get(result.data() + i, cur_len + i);
-            if (token == LLAMA_TOKEN_NULL) {
+            const llama_token token = mod.get(result.data() + i);
+            if (token == common_ngram_mod::EMPTY) {
                 if (i < params.n_min) {
                     result.clear();
                     return;
                 }
 
-                result.resize(mod.n + i);
+                result.resize(n + i);
                 break;
             }
-            result[mod.n + i] = token;
+            result[n + i] = token;
         }
 
         // only return the m tokens that were drafted
-        for (size_t i = 0; mod.n + i < result.size(); ++i) {
-            result[i] = result[mod.n + i];
+        for (size_t i = 0; n + i < result.size(); ++i) {
+            result[i] = result[n + i];
         }
-        result.resize(result.size() - mod.n);
+        result.resize(result.size() - n);
     }
 
     void accept(uint16_t n_accepted) override {
