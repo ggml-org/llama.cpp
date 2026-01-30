@@ -151,7 +151,7 @@ struct webgpu_buf_pool {
     // since allocating a pool per ggml buffer would consume too much memory.
     // 2. For the per-thread buffer pools in webgpu_context,
     // buffers are allocated and freed in Dawn callbacks,
-    // which can run on a different thread than the calling thread. 
+    // which can run on a different thread than the calling thread.
     std::mutex              mutex;
     std::condition_variable cv;
 
@@ -291,11 +291,11 @@ struct webgpu_global_context_struct {
     wgpu::Device   device;
     wgpu::Queue    queue;
 
-    webgpu_capabilities capabilities;
+    webgpu_capabilities  capabilities;
     // Shared buffer to move data from device to host
-    wgpu::Buffer             get_tensor_staging_buf;
+    wgpu::Buffer         get_tensor_staging_buf;
     // Global mutex for pipeline and staging buffer, will be refactored to exclude pipeline caches.
-    std::recursive_mutex     mutex;
+    std::recursive_mutex mutex;
 
     webgpu_buf_pool                memset_buf_pool;
     std::map<int, webgpu_pipeline> memset_pipelines;  // variant or type index
