@@ -362,13 +362,14 @@ static void vec_dot_q4x4x2_q8x4x2(const int n, float * restrict s, const void * 
         // Zero out unused scales
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
 
         r0_sum = Q6_Vqf32_vadd_Vqf32Vqf32(r0_sum, r0_fa);
     }
 
-    // Reduce and convert into fp32
+    // Convert into fp32 and reduce
     r0_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r0_sum));
 
     hvx_vec_store_u(&s[0], 4, r0_sum);
@@ -456,6 +457,8 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
         r1_dd                = Q6_V_vand_QV(bmask, r1_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
+        r1_ia                = Q6_V_vand_QV(bmask, r1_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
         HVX_Vector r1_fa = Q6_Vqf32_vmpy_VsfVsf(r1_ia, r1_dd);
@@ -465,8 +468,8 @@ static void vec_dot_q4x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
-    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(Q6_Vsf_equals_Vqf32(r0_sum), Q6_Vsf_equals_Vqf32(r1_sum));
+    hvx_vec_store_u(&s[0], 8, rsum);
 }
 
 static void vec_dot_q8x4x2_q8x4x2(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
@@ -532,6 +535,7 @@ static void vec_dot_q8x4x2_q8x4x2(const int n, float * restrict s, const void * 
         // Zero out unused scales
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
 
@@ -626,6 +630,8 @@ static void vec_dot_q8x4x2_q8x4x2_rx2(const int n,
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
         r1_dd                = Q6_V_vand_QV(bmask, r1_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
+        r1_ia                = Q6_V_vand_QV(bmask, r1_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
         HVX_Vector r1_fa = Q6_Vqf32_vmpy_VsfVsf(r1_ia, r1_dd);
@@ -635,8 +641,8 @@ static void vec_dot_q8x4x2_q8x4x2_rx2(const int n,
     }
 
     // Convert into fp32 and reduce
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
-    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(Q6_Vsf_equals_Vqf32(r0_sum), Q6_Vsf_equals_Vqf32(r1_sum));
+    hvx_vec_store_u(&s[0], 8, rsum);
 }
 
 static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
@@ -735,6 +741,7 @@ static void vec_dot_mxfp4x4x2_q8x4x2(const int n,
         // Zero-out unused scales
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
 
@@ -865,6 +872,8 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe / 8);
         r0_dd                = Q6_V_vand_QV(bmask, r0_dd);
         r1_dd                = Q6_V_vand_QV(bmask, r1_dd);
+        r0_ia                = Q6_V_vand_QV(bmask, r0_ia);
+        r1_ia                = Q6_V_vand_QV(bmask, r1_ia);
 
         HVX_Vector r0_fa = Q6_Vqf32_vmpy_VsfVsf(r0_ia, r0_dd);
         HVX_Vector r1_fa = Q6_Vqf32_vmpy_VsfVsf(r1_ia, r1_dd);
@@ -873,9 +882,15 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
         r1_sum = Q6_Vqf32_vadd_Vqf32Vqf32(r1_sum, r1_fa);
     }
 
-    // Convert into fp32 and reduce
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(r0_sum, r1_sum);
-    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
+    // // Convert into fp32 and reduce
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(Q6_Vsf_equals_Vqf32(r0_sum), Q6_Vsf_equals_Vqf32(r1_sum));
+    hvx_vec_store_u(&s[0], 8, rsum);
+
+    // r0_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r0_sum));
+    // r1_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(r1_sum));
+    // HVX_VectorPair p0 = Q6_W_vshuff_VVR(r1_sum, r0_sum, 4);
+
+    // hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
 }
 
 static void vec_dot_f16_f16_aa(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
@@ -904,7 +919,7 @@ static void vec_dot_f16_f16_aa(const int n, float * restrict s, const void * res
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
 
-    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
@@ -948,8 +963,8 @@ static void vec_dot_f16_f16_aa_rx2(const int n,
         rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
     }
 
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(rsum0, rsum1);
-    hvx_vec_store_u(&s[0], 8, Q6_Vsf_equals_Vqf32(rsum));
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(Q6_Vsf_equals_Vqf32(rsum0), Q6_Vsf_equals_Vqf32(rsum1));
+    hvx_vec_store_u(&s[0], 8, rsum);
 }
 
 static void vec_dot_f16_f16_uu(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
@@ -978,7 +993,7 @@ static void vec_dot_f16_f16_uu(const int n, float * restrict s, const void * res
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
 
-    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
@@ -1030,7 +1045,8 @@ static void vec_dot_f16_f32_uu(const int n, float * restrict s, const void * res
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
 
-    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+    // Convert into fp32 and reduce
+    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 

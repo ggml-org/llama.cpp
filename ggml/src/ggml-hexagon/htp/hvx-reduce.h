@@ -44,15 +44,43 @@ static inline HVX_Vector hvx_vec_reduce_sum_qf32(HVX_Vector in) {
     return hvx_vec_reduce_sum_n_qf32(in, 32);
 }
 
-static inline HVX_Vector hvx_vec_reduce_sum_qf32x2(HVX_Vector in0, HVX_Vector in1) {
-    HVX_VectorPair sum_pair = Q6_W_vshuff_VVR(in1, in0, 4);
-    HVX_Vector     sum01    = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(sum_pair), Q6_V_hi_W(sum_pair));
+#if __HVX_ARCH__ > 75
 
-    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 2));
-    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 4));
-    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 8));
-    sum01 = Q6_Vqf32_vadd_Vqf32Vqf32(sum01, Q6_V_vror_VR(sum01, VLEN / 16));
-    return sum01;
+static inline HVX_Vector hvx_vec_reduce_sum_f32x2(HVX_Vector in0, HVX_Vector in1) {
+    HVX_VectorPair sump = Q6_W_vshuff_VVR(in1, in0, 4);
+    HVX_Vector  sum_sf  = Q6_Vsf_vadd_VsfVsf(Q6_V_lo_W(sump), Q6_V_hi_W(sump));
+
+    sum_sf = Q6_Vsf_vadd_VsfVsf(sum_sf, Q6_V_vror_VR(sum_sf, VLEN / 2));
+    sum_sf = Q6_Vsf_vadd_VsfVsf(sum_sf, Q6_V_vror_VR(sum_sf, VLEN / 4));
+    sum_sf = Q6_Vsf_vadd_VsfVsf(sum_sf, Q6_V_vror_VR(sum_sf, VLEN / 8));
+    sum_sf = Q6_Vsf_vadd_VsfVsf(sum_sf, Q6_V_vror_VR(sum_sf, VLEN / 16));
+    return sum_sf;
+}
+
+static inline HVX_Vector hvx_vec_reduce_sum_n_f32(HVX_Vector in, unsigned int n) {
+    unsigned int total = n * 4;  // total vec nbytes
+    unsigned int width = 4;      // fp32 nbytes
+
+    HVX_Vector sum = in, sum_t;
+    while (width < total) {
+        sum_t = Q6_V_vror_VR(sum, width);        // rotate right
+        sum   = Q6_Vsf_vadd_VsfVsf(sum, sum_t);  // elementwise sum
+        width = width << 1;
+    }
+    return sum;
+}
+
+#else
+
+static inline HVX_Vector hvx_vec_reduce_sum_f32x2(HVX_Vector in0, HVX_Vector in1) {
+    HVX_VectorPair sump = Q6_W_vshuff_VVR(in1, in0, 4);
+    HVX_Vector  sum_qf  = Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(sump), Q6_V_hi_W(sump));
+
+    sum_qf = Q6_Vqf32_vadd_Vqf32Vsf(sum_qf, Q6_V_vror_VR(Q6_Vsf_equals_Vqf32(sum_qf), VLEN / 2));
+    sum_qf = Q6_Vqf32_vadd_Vqf32Vsf(sum_qf, Q6_V_vror_VR(Q6_Vsf_equals_Vqf32(sum_qf), VLEN / 4));
+    sum_qf = Q6_Vqf32_vadd_Vqf32Vsf(sum_qf, Q6_V_vror_VR(Q6_Vsf_equals_Vqf32(sum_qf), VLEN / 8));
+    sum_qf = Q6_Vqf32_vadd_Vqf32Vsf(sum_qf, Q6_V_vror_VR(Q6_Vsf_equals_Vqf32(sum_qf), VLEN / 16));
+    return Q6_Vsf_equals_Vqf32(sum_qf);
 }
 
 static inline HVX_Vector hvx_vec_reduce_sum_n_f32(HVX_Vector in, unsigned int n) {
@@ -67,6 +95,8 @@ static inline HVX_Vector hvx_vec_reduce_sum_n_f32(HVX_Vector in, unsigned int n)
     }
     return sum;
 }
+
+#endif
 
 static inline HVX_Vector hvx_vec_reduce_sum_f32(HVX_Vector in) {
     return hvx_vec_reduce_sum_n_f32(in, 32);

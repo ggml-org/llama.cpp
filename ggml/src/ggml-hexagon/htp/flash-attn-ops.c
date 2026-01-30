@@ -68,7 +68,7 @@ static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict 
     }
 
     rsum = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_f32(s));
-    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
 
     hvx_vec_store_u(r, 4, rsum);
 }
@@ -130,10 +130,7 @@ static inline void hvx_dot_f32_f16_aa_rx2(float * restrict r,
         rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
     }
 
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(rsum0, rsum1);
-    rsum            = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_f32(s));
-    rsum            = Q6_Vsf_equals_Vqf32(rsum);
-
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(Q6_Vsf_equals_Vqf32(rsum0), Q6_Vsf_equals_Vqf32(rsum1));
     hvx_vec_store_u(r, 8, rsum);
 }
 
@@ -173,7 +170,7 @@ static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict 
     }
 
     rsum = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_f32(s));
-    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_reduce_sum_qf32(rsum));
+    rsum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(rsum));
     hvx_vec_store_u(r, 4, rsum);
 }
 
@@ -224,8 +221,8 @@ static inline void hvx_dot_f16_f16_aa_rx2(float * restrict r,
         rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy1_qf), Q6_V_hi_W(xy1_qf)));
     }
 
-    HVX_Vector rsum = hvx_vec_reduce_sum_qf32x2(rsum0, rsum1);
-    rsum            = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_f32(s));
+    HVX_Vector rsum = hvx_vec_reduce_sum_f32x2(rsum0, rsum1);
+    rsum            = Q6_Vqf32_vmpy_VsfVsf(rsum, hvx_vec_splat_f32(s));
     rsum            = Q6_Vsf_equals_Vqf32(rsum);
 
     hvx_vec_store_u(r, 8, rsum);
