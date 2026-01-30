@@ -35,9 +35,9 @@ The following releases are verified and recommended:
 
 |Commit ID|Tag|Release|Verified  Platform| Update date|
 |-|-|-|-|-|
-|24e86cae7219b0f3ede1d5abdf5bf3ad515cccb8|b5377 |[llama-b5377-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b5377/llama-b5377-bin-win-sycl-x64.zip) |ArcB580/Linux/oneAPI 2025.1<br>LNL Arc GPU/Windows 11/oneAPI 2025.1.1|2025-05-15|
-|3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
-|fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
+|24e86cae7219b0f3ede1d5abdf5bf3ad515cccb8|b5377 |[llama-b5377-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b5377/llama-b5377-bin-win-sycl-x64.zip) |Arc B580/Linux/oneAPI 2025.1<br>LNL Arc GPU/Windows 11/oneAPI 2025.1.1|2025-05-15|
+|3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
+|fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc A770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
 
 
 ## News
@@ -51,7 +51,7 @@ The following releases are verified and recommended:
     |-|-|-|-|
     |PVC 1550|39|73|+87%|
     |Flex 170|39|50|+28%|
-    |Arc770|42|55|+30%|
+    |Arc A770|42|55|+30%|
     |MTL|13|16|+23%|
     |ARL-H|14|17|+21%|
 
@@ -62,7 +62,7 @@ The following releases are verified and recommended:
   - Use oneDNN as the default GEMM library, improve the compatibility for new Intel GPUs.
 
 - 2024.5
-  - Performance is increased: 34 -> 37 tokens/s of llama-2-7b.Q4_0 on Arc770.
+  - Performance is increased: 34 -> 37 tokens/s of llama-2-7b.Q4_0 on Arc A770.
   - Arch Linux is verified successfully.
 
 - 2024.4
@@ -111,7 +111,8 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 |-------------------------------|---------|---------------------------------------|
 | Intel Data Center Max Series  | Support | Max 1550, 1100                        |
 | Intel Data Center Flex Series | Support | Flex 170                              |
-| Intel Arc Series              | Support | Arc 770, 730M, Arc A750, B580         |
+| Intel Arc A-Series              | Support | Arc A770, Arc A730M, Arc A750         |
+| Intel Arc B-Series              | Support | Arc B580         |
 | Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake, Lunar Lake |
 | Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7  |
 
