@@ -2410,6 +2410,24 @@ static vk_semaphore ggml_vk_create_timeline_semaphore(ggml_backend_vk_context * 
     return ctx->gc.tl_semaphores[ctx->semaphore_idx++];
 }
 
+// Record that the given semaphore should be waited on in the next submission of the given context.
+// For timeline semaphores, set the value of the vk_semaphore before calling this method to define which value to await.
+static void ggml_vk_semaphore_await(vk_context& subctx, const vk_semaphore& semaphore) {
+    VK_LOG_DEBUG("ggml_vk_semaphore_await(" << subctx << ", " << semaphore << ")");
+    GGML_ASSERT(!subctx->seqs.empty() && !subctx->seqs.back().empty() && "ggml_vk_semaphore_await called on context without active submission - call ggml_vk_ctx_begin first");
+
+    subctx->seqs.back().back().wait_semaphores.push_back(semaphore);
+}
+
+// Record that the given semaphore should be signaled at the end of the execution of the given context.
+// For timeline semaphores, set the value of the vk_semaphore before calling this method to define which value to set.
+static void ggml_vk_semaphore_signal(vk_context& subctx, const vk_semaphore& semaphore) {
+    VK_LOG_DEBUG("ggml_vk_semaphore_signal(" << subctx << ", " << semaphore << ")");
+    GGML_ASSERT(!subctx->seqs.empty() && !subctx->seqs.back().empty() && "ggml_vk_semaphore_signal called on context without active submission - call ggml_vk_ctx_begin first");
+
+    subctx->seqs.back().back().signal_semaphores.push_back(semaphore);
+}
+
 static vk::Event ggml_vk_create_event(ggml_backend_vk_context * ctx) {
     if (ctx->event_idx >= ctx->gc.events.size()) {
         ctx->gc.events.push_back(ctx->device->device.createEvent({}));
