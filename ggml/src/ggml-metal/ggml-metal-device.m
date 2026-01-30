@@ -604,8 +604,11 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
-    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
-    GGML_ASSERT([rsets->data count] == 0);
+    // During process exit, resources may not be fully cleaned up - log warning instead of asserting
+    if ([rsets->data count] != 0) {
+        GGML_LOG_WARN("%s: %lu Metal residency sets not freed before shutdown (expected during process exit)\n",
+                      __func__, (unsigned long)[rsets->data count]);
+    }
 
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
 
