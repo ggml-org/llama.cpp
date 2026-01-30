@@ -466,7 +466,6 @@ struct ggml_backend_opencl_context {
     cl_program program_pad;
     cl_program program_tanh;
     cl_program program_upscale;
-    cl_program program_concat;
     cl_program program_conv_2d_f16;
     cl_program program_conv_2d_f32;
     cl_program program_conv_2d_f16_f32;
@@ -554,8 +553,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_softplus_f16_nd;
     cl_kernel kernel_upscale;
     cl_kernel kernel_upscale_bilinear;
-    cl_kernel kernel_concat_f32_contiguous;
-    cl_kernel kernel_concat_f32_non_contiguous;
+    cl_kernel kernel_concat_f32;
     cl_kernel kernel_conv_2d_f16;
     cl_kernel kernel_conv_2d_f32;
     cl_kernel kernel_conv_2d_f16_f32;
@@ -1959,22 +1957,13 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             #include "concat.cl.h"
         };
 #else
-
         const std::string kernel_src = read_file("concat.cl");
 #endif
-        if (!kernel_src.empty()) {
-            backend_ctx->program_concat =
-                build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
-
-            CL_CHECK((backend_ctx->kernel_concat_f32_contiguous = clCreateKernel(backend_ctx->program_concat, "kernel_concat_f32_contiguous", &err), err));
-            CL_CHECK((backend_ctx->kernel_concat_f32_non_contiguous = clCreateKernel(backend_ctx->program_concat, "kernel_concat_f32_non_contiguous", &err), err));
-            GGML_LOG_CONT(".");
-        } else {
-            GGML_LOG_WARN("ggml_opencl: concat kernel source not found or empty. Concat operations will not be available.\n");
-            backend_ctx->program_concat = nullptr;
-            backend_ctx->kernel_concat_f32_contiguous = nullptr;
-            backend_ctx->kernel_concat_f32_non_contiguous = nullptr;
-        }
+        cl_program prog =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+        CL_CHECK((backend_ctx->kernel_concat_f32 = clCreateKernel(prog, "kernel_concat_f32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
     }
 
     // timestep_embedding
@@ -7591,119 +7580,75 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
     cl_command_queue queue = backend_ctx->queue;
 
-    if (backend_ctx->kernel_concat_f32_contiguous == nullptr || backend_ctx->kernel_concat_f32_non_contiguous == nullptr) {
-        GGML_LOG_WARN("%s: concat kernels not available, skipping OpenCL execution.\n", __func__);
-        return;
-    }
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
 
-    ggml_tensor_extra_cl * extra0_cl = (ggml_tensor_extra_cl *)src0->extra;
-    ggml_tensor_extra_cl * extra1_cl = (ggml_tensor_extra_cl *)src1->extra;
-    ggml_tensor_extra_cl * extrad_cl = (ggml_tensor_extra_cl *)dst->extra;
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd  = extrad->offset + dst->view_offs;
 
-    cl_ulong off_src0 = extra0_cl->offset + src0->view_offs;
-    cl_ulong off_src1 = extra1_cl->offset + src1->view_offs;
-    cl_ulong off_dst  = extrad_cl->offset + dst->view_offs;
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
 
-    const int32_t dim = ((const int32_t *) dst->op_params)[0];
+    const cl_ulong nb00 = src0->nb[0];
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
+
+    const cl_ulong nb10 = src1->nb[0];
+    const cl_ulong nb11 = src1->nb[1];
+    const cl_ulong nb12 = src1->nb[2];
+    const cl_ulong nb13 = src1->nb[3];
+
+    const int ne0 = dst->ne[0];
+    const int ne1 = dst->ne[1];
+    const int ne2 = dst->ne[2];
+    const int ne3 = dst->ne[3];
+
+    const cl_ulong nb0 = dst->nb[0];
+    const cl_ulong nb1 = dst->nb[1];
+    const cl_ulong nb2 = dst->nb[2];
+    const cl_ulong nb3 = dst->nb[3];
+
+    const cl_int dim = ((const int32_t *) dst->op_params)[0];
     GGML_ASSERT(dim >= 0 && dim <= 3);
 
-    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
-        if (dim == 3) {
+    int nth = MIN(64, ne0);
 
-            size_t nbytes_src0 = ggml_nbytes(src0);
-            size_t nbytes_src1 = ggml_nbytes(src1);
+    cl_kernel kernel = backend_ctx->kernel_concat_f32;
 
-            CL_CHECK(clEnqueueCopyBuffer(queue, extra0_cl->data_device, extrad_cl->data_device,
-                                         off_src0, off_dst, nbytes_src0, 0, NULL, NULL));
-            CL_CHECK(clEnqueueCopyBuffer(queue, extra1_cl->data_device, extrad_cl->data_device,
-                                         off_src1, off_dst + nbytes_src0, nbytes_src1, 0, NULL, NULL));
-        } else {
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne03));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb00));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb10));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb12));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb13));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb0));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong), &nb3));
+    CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_int),   &dim));
 
-            cl_kernel kernel = backend_ctx->kernel_concat_f32_contiguous;
-            size_t global_work_size[3];
+    size_t global_work_size[] = {(size_t)ne1*nth, (size_t)ne2, (size_t)ne3};
+    size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-            for (int i3 = 0; i3 < dst->ne[3]; ++i3) {
-                cl_ulong current_off_src0 = off_src0 + (i3 * src0->nb[3]);
-                cl_ulong current_off_src1 = off_src1 + (i3 * src1->nb[3]);
-                cl_ulong current_off_dst  = off_dst  + (i3 * dst->nb[3]);
-
-                int d_ne00 = src0->ne[0]; int d_ne01 = src0->ne[1]; int d_ne02 = src0->ne[2];
-                int d_ne10 = src1->ne[0]; int d_ne11 = src1->ne[1]; int d_ne12 = src1->ne[2];
-                int d_ne0  = dst->ne[0];  int d_ne1  = dst->ne[1];  int d_ne2  = dst->ne[2];
-
-                CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra0_cl->data_device));
-                CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &current_off_src0));
-                CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),    &extra1_cl->data_device));
-                CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong),  &current_off_src1));
-                CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),    &extrad_cl->data_device));
-                CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong),  &current_off_dst));
-                CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),       &d_ne00));
-                CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),       &d_ne01));
-                CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &d_ne02));
-                CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &d_ne10));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &d_ne11));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &d_ne12));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &d_ne0));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &d_ne1));
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &d_ne2));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &dim));
-
-                global_work_size[0] = d_ne0;
-                global_work_size[1] = d_ne1;
-                global_work_size[2] = d_ne2;
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, NULL, dst);
-            }
-        }
-    } else {
-        cl_kernel kernel = backend_ctx->kernel_concat_f32_non_contiguous;
-
-        cl_long ne00 = src0->ne[0], ne01 = src0->ne[1], ne02 = src0->ne[2], ne03 = src0->ne[3];
-        cl_ulong nb00 = src0->nb[0], nb01 = src0->nb[1], nb02 = src0->nb[2], nb03 = src0->nb[3];
-
-        cl_ulong nb10 = src1->nb[0], nb11 = src1->nb[1], nb12 = src1->nb[2], nb13 = src1->nb[3];
-
-        cl_long d_ne0 = dst->ne[0], d_ne1 = dst->ne[1], d_ne2 = dst->ne[2], d_ne3 = dst->ne[3];
-        cl_ulong d_nb0 = dst->nb[0], d_nb1 = dst->nb[1], d_nb2 = dst->nb[2], d_nb3 = dst->nb[3];
-
-
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra0_cl->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &off_src0));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),    &extra1_cl->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong),  &off_src1));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),    &extrad_cl->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong),  &off_dst));
-
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_long),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_long),      &ne01));
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_long),      &ne02));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_long),      &ne03));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),    &nb00));
-        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong),    &nb01));
-        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong),    &nb02));
-        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong),    &nb03));
-
-        CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong),    &nb10));
-        CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong),    &nb11));
-        CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong),    &nb12));
-        CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong),    &nb13));
-
-        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_long),     &d_ne0));
-        CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_long),     &d_ne1));
-        CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_long),     &d_ne2));
-        CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_long),     &d_ne3));
-        CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong),    &d_nb0));
-        CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_ulong),    &d_nb1));
-        CL_CHECK(clSetKernelArg(kernel, 24, sizeof(cl_ulong),    &d_nb2));
-        CL_CHECK(clSetKernelArg(kernel, 25, sizeof(cl_ulong),    &d_nb3));
-        CL_CHECK(clSetKernelArg(kernel, 26, sizeof(int),      &dim));
-
-        size_t global_work_size_nc[] = { d_ne1 > 0 ? (size_t)d_ne1 : 1,
-                                         d_ne2 > 0 ? (size_t)d_ne2 : 1,
-                                         d_ne3 > 0 ? (size_t)d_ne3 : 1 };
-
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_nc, NULL, dst);
-    }
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst) {
