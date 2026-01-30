@@ -21,7 +21,8 @@ on:
       '**/*.m',
       '**/*.metal',
       '**/*.comp',
-      '**/*.glsl'
+      '**/*.glsl',
+      '**/*.wgsl'
     ]
 
   pull_request:
@@ -42,7 +43,8 @@ on:
       '**/*.m',
       '**/*.metal',
       '**/*.comp',
-      '**/*.glsl'
+      '**/*.glsl',
+      '**/*.wgsl'
     ]
 
 concurrency:
@@ -1371,7 +1373,7 @@ jobs:
         id: update_presets
         if: ${{ matrix.build == 'arm64-snapdragon' }}
         run: |
-          cp docs/backend/hexagon/CMakeUserPresets.json .
+          cp docs/backend/snapdragon/CMakeUserPresets.json .
 
       - name: Build
         id: ndk_build
