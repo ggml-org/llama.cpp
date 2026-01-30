@@ -62,23 +62,6 @@
 
 #endif
 
-//
-// Console state
-//
-
-//     static bool         advanced_display = false;
-//     static bool         simple_io        = true;
-//     static display_type current_display  = DISPLAY_TYPE_RESET;
-
-//     static FILE*        out              = stdout;
-
-// #if defined (_WIN32)
-//     static void*        hConsole;
-// #else
-//     static FILE*        tty              = nullptr;
-//     static termios      initial_state;
-// #endif
-
 struct console_t::state_t {
     state_t() : advanced_display(false),
                 simple_io(true),
@@ -484,12 +467,6 @@ struct console_t::state_t {
         }
         return pos;
     }
-
-    // static void move_cursor(int delta);
-    // static void move_word_left(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
-    // static void move_word_right(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
-    // static void move_to_line_start(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths);
-    // static void move_to_line_end(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
 
     void console_t::delete_at_cursor(std::string & line, std::vector<int> & widths, size_t & char_pos, size_t & byte_pos) {
         if (char_pos >= widths.size()) {
