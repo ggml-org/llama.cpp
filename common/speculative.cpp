@@ -518,13 +518,24 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
     // the last position in the prompt that was added to the ngram container
     size_t i_last = 0;
 
+    // length of the last drafted n‑gram (number of tokens returned by draft)
+    size_t n_draft_last = 0;
+
+    // consecutive accept rounds with low acceptance fraction (< 0.5)
+    int n_low = 0;
+
+    // enable trace logging if LLAMA_TRACE is set
+    const bool verbose;
+
     common_speculative_state_ngram_mod(enum common_speculative_type type, common_ngram_mod & mod)
-        : common_speculative_state(type), mod(mod) {
-            static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
+        : common_speculative_state(type), mod(mod), verbose(std::getenv("LLAMA_TRACE") != nullptr) {
+        static_assert(sizeof(llama_token) == sizeof(common_ngram_mod::entry_t));
     }
 
     void begin(const llama_tokens & prompt) override {
         i_last = 0;
+
+        n_draft_last = 0;
 
         const size_t n = mod.get_n();
 
@@ -538,12 +549,14 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
         i_last = prompt.size() - n;
 
-        const double f = (double)mod.get_used() * 100.0 / (double)mod.size();
-        LOG_INF("%s: ngram_mod occupancy = %zu/%zu (%.2f%%)\\n", __func__, mod.get_used(), mod.size(), f);
+        const double f = (double)mod.get_used() / (double)mod.size();
+        LOG_INF("%s: ngram_mod occupancy = %zu/%zu (%.2f)\n", __func__, mod.get_used(), mod.size(), f);
 
-        if (f > 0.25) {
+        constexpr double f_thold = 0.25;
+        if (f > f_thold) {
+            LOG_WRN("%s: ngram_mod occupancy %.2f exceeds threshold (%.2f) - resetting\n", __func__, f, f_thold);
+
             mod.reset();
-            LOG_WRN("%s: ngram_mod occupancy %.2f%% exceeds threshold, resetting\n", __func__, f);
         }
     }
 
@@ -553,6 +566,8 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             llama_token id_last,
             llama_tokens & result) override {
         GGML_UNUSED(params);
+
+        n_draft_last = 0;
 
         const size_t cur_len = prompt_tgt.size();
         if (cur_len < mod.get_n()) {
@@ -595,12 +610,30 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
             result[i] = result[n + i];
         }
         result.resize(result.size() - n);
+
+        // store length of drafted n‑gram for later acceptance analysis
+        n_draft_last = result.size();
     }
 
     void accept(uint16_t n_accepted) override {
-        LOG_WRN("XXXXXXXXXXXXX n_accepted = %d\n", n_accepted);
-        // noop
-        GGML_UNUSED(n_accepted);
+        if (verbose) {
+            LOG_INF("%s: accepted %d tokens\n", __func__, n_accepted);
+        }
+
+        // compute acceptance fraction if we have a recorded draft length
+        if (n_draft_last > 0) {
+            const double f_acc = (double)n_accepted / (double)n_draft_last;
+            if (f_acc < 0.5) {
+                n_low++;
+                if (n_low >= 3) {
+                    LOG_WRN("%s: low acceptance streak (%d) – resetting ngram_mod\n", __func__, n_low);
+                    mod.reset();
+                    n_low = 0;
+                }
+            } else {
+                n_low = 0;
+            }
+        }
     }
 };
 

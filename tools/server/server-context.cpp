@@ -773,9 +773,9 @@ private:
                         SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                         return false;
                     }
-                    SRV_WRN("%s", "speculative decoding context initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context initialized\n");
                 } else {
-                    SRV_WRN("%s", "speculative decoding context not initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
                 }
             }
 
@@ -2063,11 +2063,6 @@ private:
                 if (draft.size() > (size_t) n_draft_max) {
                     SLT_WRN(slot, "draft size %d exceeds max %d, truncating\n", (int) draft.size(), n_draft_max);
                     draft.resize(n_draft_max);
-                }
-
-                if (draft.size() > 0) {
-                    std::string tmp = common_detokenize(slot.ctx, draft);
-                    //LOG_WRN("XXXXXX: draft: '%s'\n", tmp.c_str());
                 }
 
                 // add the sampled token to the batch
