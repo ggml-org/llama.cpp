@@ -151,7 +151,7 @@ struct webgpu_buf_pool {
     // since allocating a pool per ggml buffer would consume too much memory.
     // 2. For the per-thread buffer pools in webgpu_context,
     // buffers are allocated and freed in Dawn callbacks,
-    // which can run on a different thread than the calling thread.
+    // which can run on a different thread than the calling thread. 
     std::mutex              mutex;
     std::condition_variable cv;
 
