@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <cstddef>
 
 //
 // common_ngram_mod
