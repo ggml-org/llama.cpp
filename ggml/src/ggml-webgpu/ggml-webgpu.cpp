@@ -152,7 +152,7 @@ struct webgpu_buf_pool {
     // 2. For the per-thread buffer pools in webgpu_context,
     // buffers are allocated and freed in Dawn callbacks,
     // which can run on a different thread than the calling thread.
-    std::mutex mutex;
+    std::mutex              mutex;
     std::condition_variable cv;
 
     void init(wgpu::Device      device,
@@ -366,7 +366,6 @@ struct webgpu_context_struct {
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash> pad_pipelines;
 
     size_t memset_bytes_per_thread;
-
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -388,9 +387,9 @@ struct ggml_backend_webgpu_device_context {
 
 // Per-thread data required to actually run WebGPU operations in a backend instance
 struct ggml_backend_webgpu_context {
-    webgpu_context        webgpu_ctx;
-    std::once_flag        init_once;
-    std::string           name;
+    webgpu_context webgpu_ctx;
+    std::once_flag init_once;
+    std::string    name;
 };
 
 // Per-thread data related to buffers
@@ -866,17 +865,16 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->pad_pipelines.find(pipeline_key);
-        if (it != ctx->pad_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_pad_shader(ctx->p, wgsl_pad, shader_lib_ctx);
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.context = processed.decisions;
-            ctx->pad_pipelines.emplace(pipeline_key, pipeline);
-        }
+    auto            it = ctx->pad_pipelines.find(pipeline_key);
+    if (it != ctx->pad_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed = ggml_webgpu_preprocess_pad_shader(ctx->p, wgsl_pad, shader_lib_ctx);
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        pipeline.context = processed.decisions;
+        ctx->pad_pipelines.emplace(pipeline_key, pipeline);
+    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -945,17 +943,17 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->set_rows_pipelines.find(key);
-        if (it != ctx->set_rows_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_set_rows_shader(ctx->p, wgsl_set_rows, shader_lib_ctx);
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.context = processed.decisions;
-            ctx->set_rows_pipelines.emplace(key, pipeline);
-        }
+    auto            it = ctx->set_rows_pipelines.find(key);
+    if (it != ctx->set_rows_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_set_rows_shader(ctx->p, wgsl_set_rows, shader_lib_ctx);
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        pipeline.context = processed.decisions;
+        ctx->set_rows_pipelines.emplace(key, pipeline);
+    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -1258,26 +1256,26 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->flash_attn_pipelines.find(key);
-        if (it != ctx->flash_attn_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
-                .key                = key,
-                .sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m,
-                .sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n,
-                .sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k,
-                .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
-                .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
-            };
+    auto            it = ctx->flash_attn_pipelines.find(key);
+    if (it != ctx->flash_attn_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
+            .key                = key,
+            .sg_mat_m           = ctx->global_ctx->capabilities.sg_mat_m,
+            .sg_mat_n           = ctx->global_ctx->capabilities.sg_mat_n,
+            .sg_mat_k           = ctx->global_ctx->capabilities.sg_mat_k,
+            .wg_mem_limit_bytes = ctx->global_ctx->capabilities.limits.maxComputeWorkgroupStorageSize,
+            .max_subgroup_size  = ctx->global_ctx->capabilities.max_subgroup_size
+        };
 
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.context = processed.decisions;
-            ctx->flash_attn_pipelines.emplace(key, pipeline);
-        }
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        pipeline.context = processed.decisions;
+        ctx->flash_attn_pipelines.emplace(key, pipeline);
+    }
 
     ggml_webgpu_flash_attn_shader_decisions decisions =
         *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
@@ -1301,17 +1299,17 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->unary_pipelines.find(pipeline_key);
-        if (it != ctx->unary_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_unary_shader(ctx->p, wgsl_unary, shader_lib_ctx);
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.context = processed.decisions;
-            ctx->unary_pipelines.emplace(pipeline_key, pipeline);
-        }
+    auto            it = ctx->unary_pipelines.find(pipeline_key);
+    if (it != ctx->unary_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_unary_shader(ctx->p, wgsl_unary, shader_lib_ctx);
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        pipeline.context = processed.decisions;
+        ctx->unary_pipelines.emplace(pipeline_key, pipeline);
+    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -1732,16 +1730,16 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->argmax_pipelines.find(shader_lib_ctx.vec4);
-        if (it != ctx->argmax_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_argmax, shader_lib_ctx, "argmax");
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            ctx->argmax_pipelines.emplace(shader_lib_ctx.vec4, pipeline);
-        }
+    auto            it = ctx->argmax_pipelines.find(shader_lib_ctx.vec4);
+    if (it != ctx->argmax_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_argmax, shader_lib_ctx, "argmax");
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->argmax_pipelines.emplace(shader_lib_ctx.vec4, pipeline);
+    }
     uint32_t wg_x = ggml_nelements(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -1757,8 +1755,8 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
         .order              = order
     };
 
-    webgpu_pipeline                       argsort_pipeline;
-    auto                                  it = ctx->argsort_pipelines.find(order);
+    webgpu_pipeline argsort_pipeline;
+    auto            it = ctx->argsort_pipelines.find(order);
     if (it != ctx->argsort_pipelines.end()) {
         argsort_pipeline = it->second;
     } else {
@@ -1947,16 +1945,16 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
         .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
     };
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->cumsum_pipelines.find(1);
-        if (it != ctx->cumsum_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_cumsum, shader_lib_ctx, "cumsum");
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            ctx->cumsum_pipelines.emplace(1, pipeline);
-        }
+    auto            it = ctx->cumsum_pipelines.find(1);
+    if (it != ctx->cumsum_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_cumsum, shader_lib_ctx, "cumsum");
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->cumsum_pipelines.emplace(1, pipeline);
+    }
     uint32_t wg_x = ggml_nrows(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -1989,16 +1987,16 @@ static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * s
     };
 
     webgpu_pipeline pipeline;
-        auto                                  it = ctx->sum_rows_pipelines.find(1);
-        if (it != ctx->sum_rows_pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            ggml_webgpu_processed_shader processed =
-                ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_sum_rows, shader_lib_ctx, "sum_rows");
-            pipeline =
-                ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            ctx->sum_rows_pipelines.emplace(1, pipeline);
-        }
+    auto            it = ctx->sum_rows_pipelines.find(1);
+    if (it != ctx->sum_rows_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_generic_shader(ctx->p, wgsl_sum_rows, shader_lib_ctx, "sum_rows");
+        pipeline =
+            ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->sum_rows_pipelines.emplace(1, pipeline);
+    }
     uint32_t wg_x = total_sum ? 1 : ggml_nrows(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -2992,10 +2990,10 @@ static bool create_webgpu_device(ggml_backend_webgpu_reg_context * ctx) {
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
     // Initialize buffer pool for timestamp queries, used for profiling
-    ctx->webgpu_global_ctx->timestamp_query_buf_pool.init(ctx->webgpu_global_ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS,
-                                              WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
-                                              wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
-                                              wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
+    ctx->webgpu_global_ctx->timestamp_query_buf_pool.init(
+        ctx->webgpu_global_ctx->device, WEBGPU_NUM_TIMESTAMP_QUERY_BUFS, WEBGPU_TIMESTAMP_QUERY_BUF_SIZE_BYTES,
+        wgpu::BufferUsage::QueryResolve | wgpu::BufferUsage::CopySrc,
+        wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst);
 #endif
 
     GGML_LOG_INFO(
