@@ -274,6 +274,37 @@ kernel void kernel_restore_block_q8_0(
     }
 }
 
+kernel void kernel_restore_block_q8_0_trans(
+    global uchar * src_q,
+    global half  * src_d,
+    global block_q8_0 * dst,
+    uint ne00,
+    uint ne01
+){
+    uint num_blk_per_row = ne00 / QK8_0;
+
+    global block_q8_0 * b = (global block_q8_0 *) dst + get_global_id(0) * num_blk_per_row;
+    global uchar      * q = (global uchar *) src_q + get_global_id(0) * 4; // 4 8-bit packed
+    global half       * d = (global half *) src_d + get_global_id(0);
+
+    for (uint blk = 0; blk < num_blk_per_row; blk++) {
+        b->d = *d;
+
+        for (uint i = 0; i < QK8_0; i+=4) {
+            b->qs[i]   = q[0];
+            b->qs[i+1] = q[1];
+            b->qs[i+2] = q[2];
+            b->qs[i+3] = q[3];
+
+            q += 4 * ne01; // M stride
+        }
+
+        d += ne01;
+
+        b++;
+    }
+}
+
 //------------------------------------------------------------------------------
 // kernel_convert_block_q6_K
 // Convert the block_q6_K format to 3 separate arrays (AOS -> SOA).
