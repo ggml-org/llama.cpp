@@ -64,12 +64,13 @@ static bool file_is_empty(const std::string & path) {
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void sigint_handler(int signo) {
+    console_t& console = console_t::get_instance();
     if (signo == SIGINT) {
         if (!is_interacting && g_params->interactive) {
             is_interacting  = true;
             need_insert_eot = true;
         } else {
-            console::cleanup();
+            console.cleanup();
             LOG("\n");
             common_perf_print(*g_ctx, *g_smpl);
 
@@ -94,11 +95,11 @@ int main(int argc, char ** argv) {
     common_init();
 
     auto & sparams = params.sampling;
+    console_t& console = console_t::get_instance();
 
     // save choice to use color for later
     // (note for later: this is a slightly awkward choice)
-    console::init(params.simple_io, params.use_color);
-    atexit([]() { console::cleanup(); });
+    console.init(params.simple_io, params.use_color);
 
     if (params.embedding) {
         LOG_ERR("************\n");
@@ -543,7 +544,7 @@ int main(int argc, char ** argv) {
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
-    console::set_display(DISPLAY_TYPE_PROMPT);
+    console.set_display(DISPLAY_TYPE_PROMPT);
     display = params.display_prompt;
 
     std::vector<llama_token> embd;
@@ -588,9 +589,9 @@ int main(int argc, char ** argv) {
                 const int skipped_tokens = (int) embd.size() - max_embd_size;
                 embd.resize(max_embd_size);
 
-                console::set_display(DISPLAY_TYPE_ERROR);
+                console.set_display(DISPLAY_TYPE_ERROR);
                 LOG_WRN("<<input too long: skipped %d token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
-                console::set_display(DISPLAY_TYPE_RESET);
+                console.set_display(DISPLAY_TYPE_RESET);
             }
 
             if (ga_n == 1) {
@@ -772,7 +773,7 @@ int main(int argc, char ** argv) {
 
         // reset color to default if there is no pending user input
         if (input_echo && (int) embd_inp.size() == n_consumed) {
-            console::set_display(DISPLAY_TYPE_RESET);
+            console.set_display(DISPLAY_TYPE_RESET);
             display = true;
         }
 
@@ -868,18 +869,18 @@ int main(int argc, char ** argv) {
                 }
 
                 // color user input only
-                console::set_display(DISPLAY_TYPE_USER_INPUT);
+                console.set_display(DISPLAY_TYPE_USER_INPUT);
                 display = params.display_prompt;
 
                 std::string line;
                 bool another_line = true;
                 do {
-                    another_line = console::readline(line, params.multiline_input);
+                    another_line = console.readline(line, params.multiline_input);
                     buffer += line;
                 } while (another_line);
 
                 // done taking input, reset color
-                console::set_display(DISPLAY_TYPE_RESET);
+                console.set_display(DISPLAY_TYPE_RESET);
                 display = true;
 
                 if (buffer.empty()) { // Ctrl+D on empty line exits

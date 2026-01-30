@@ -170,9 +170,10 @@ int main(int argc, char **argv) {
         }
     }
 
+    console_t& console = console_t::get_instance();
 #ifdef _WIN32
     // We need this for unicode console support
-    console::init(false, false);
+    console.init(false, false);
 #endif
 
     bool success = true;

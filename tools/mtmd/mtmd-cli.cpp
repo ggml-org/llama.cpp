@@ -50,11 +50,12 @@ static void show_additional_info(int /*argc*/, char ** argv) {
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void sigint_handler(int signo) {
+    console_t& console = console_t::get_instance();
     if (signo == SIGINT) {
         if (g_is_generating) {
             g_is_generating = false;
         } else {
-            console::cleanup();
+            console.cleanup();
             if (g_is_interrupted) {
                 _exit(1);
             }
@@ -375,12 +376,13 @@ int main(int argc, char ** argv) {
 
         while (!g_is_interrupted) {
             g_is_generating = false;
+            console_t& console = console_t::get_instance();
             LOG("\n> ");
-            console::set_display(DISPLAY_TYPE_USER_INPUT);
+            console.set_display(DISPLAY_TYPE_USER_INPUT);
             std::string line;
-            console::readline(line, false);
+            console.readline(line, false);
             if (g_is_interrupted) break;
-            console::set_display(DISPLAY_TYPE_RESET);
+            console.set_display(DISPLAY_TYPE_RESET);
             line = string_strip(line);
             if (line.empty()) {
                 continue;

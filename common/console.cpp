@@ -1,7 +1,5 @@
 #include "console.h"
 #include "log.h"
-#include <memory>
-#include <vector>
 #include <iostream>
 #include <cassert>
 #include <cstddef>
@@ -9,6 +7,7 @@
 #include <cwctype>
 #include <cstdint>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <thread>
 #include <stdarg.h>
@@ -61,42 +60,73 @@
         static constexpr char32_t KEY_DELETE           = 0xE008;
     }
 
-    //
-    // Console state
-    //
 #endif
 
-    static bool         advanced_display = false;
-    static bool         simple_io        = true;
-    static display_type current_display  = DISPLAY_TYPE_RESET;
+//
+// Console state
+//
 
-    static FILE*        out              = stdout;
+//     static bool         advanced_display = false;
+//     static bool         simple_io        = true;
+//     static display_type current_display  = DISPLAY_TYPE_RESET;
 
-#if defined (_WIN32)
-    static void*        hConsole;
-#else
-    static FILE*        tty              = nullptr;
-    static termios      initial_state;
-#endif
+//     static FILE*        out              = stdout;
 
-    std::unique_ptr<console> console::instance = nullptr;
+// #if defined (_WIN32)
+//     static void*        hConsole;
+// #else
+//     static FILE*        tty              = nullptr;
+//     static termios      initial_state;
+// #endif
 
-    console::console() {
-        console::instance = std::make_unique<console>(console());
+struct console_t::state_t {
+    state_t() : advanced_display(false),
+                simple_io(true),
+                current_display(DISPLAY_TYPE_RESET) { }
+
+    bool         advanced_display;
+    bool         simple_io;
+    display_type current_display;
+};
+
+
+    console_t& console_t::get_instance() {
+        static console_t instance;
+        return instance;
     }
 
-    console::~console() {
+    //
+    // Constructor of class console
+    //
+
+    console_t::console_t() : state(std::make_unique<state_t>(console_t::state_t())),
+                             out(stdout),
+#if defined (_WIN32)
+                             hConsole(nullptr)
+#else
+                             tty(nullptr),
+                             initial_state()
+#endif
+    {
+
+    }
+
+    // 
+    // Destructor of class console
+    //
+
+    console_t::~console_t() {
         // cleanup console after program finishing automatically
-        console::cleanup();
+        console_t::cleanup();
     }
 
     //
     // Init and cleanup
     //
 
-    void console::init(bool use_simple_io, bool use_advanced_display) {
-        advanced_display = use_advanced_display;
-        simple_io = use_simple_io;
+    void console_t::init(bool use_simple_io, bool use_advanced_display) {
+        state->advanced_display = use_advanced_display;
+        state->simple_io = use_simple_io;
 #if defined(_WIN32)
         // Windows-specific console initialization
         DWORD dwMode = 0;
@@ -105,14 +135,14 @@
             hConsole = GetStdHandle(STD_ERROR_HANDLE);
             if (hConsole != INVALID_HANDLE_VALUE && (!GetConsoleMode(hConsole, &dwMode))) {
                 hConsole = nullptr;
-                simple_io = true;
+                state->simple_io = true;
             }
         }
         if (hConsole) {
             // Check conditions combined to reduce nesting
-            if (advanced_display && !(dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
+            if (state->advanced_display && !(dwMode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) &&
                 !SetConsoleMode(hConsole, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) {
-                advanced_display = false;
+                state->advanced_display = false;
             }
             // Set console output codepage to UTF8
             SetConsoleOutputCP(CP_UTF8);
@@ -123,21 +153,21 @@
             _setmode(_fileno(stdin), _O_WTEXT);
 
             // Set ICANON (ENABLE_LINE_INPUT) and ECHO (ENABLE_ECHO_INPUT)
-            if (simple_io) {
+            if (state->simple_io) {
                 dwMode |= ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT;
             } else {
                 dwMode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
             }
             if (!SetConsoleMode(hConIn, dwMode)) {
-                simple_io = true;
+                state->simple_io = true;
             }
         }
-        if (simple_io) {
+        if (state->simple_io) {
             _setmode(_fileno(stdin), _O_U8TEXT);
         }
 #else
         // POSIX-specific console initialization
-        if (!simple_io) {
+        if (!state->simple_io) {
             struct termios new_termios;
             tcgetattr(STDIN_FILENO, &initial_state);
             new_termios = initial_state;
@@ -156,13 +186,13 @@
 #endif
     }
 
-    void console::cleanup() {
+    void console_t::cleanup() {
         // Reset console display
-        console::set_display(DISPLAY_TYPE_RESET);
+        console_t::set_display(DISPLAY_TYPE_RESET);
 
 #if !defined(_WIN32)
         // Restore settings on POSIX systems
-        if (!simple_io) {
+        if (!state->simple_io) {
             if (tty != nullptr) {
                 out = stdout;
                 fclose(tty);
@@ -178,8 +208,8 @@
     //
 
     // Keep track of current display and only emit ANSI code if it changes
-    void console::set_display(display_type display) {
-        if (advanced_display && current_display != display) {
+    void console_t::set_display(display_type display) {
+        if (state->advanced_display && state->current_display != display) {
             common_log_flush(common_log_main());
             switch(display) {
                 case DISPLAY_TYPE_RESET:
@@ -200,7 +230,7 @@
                 case DISPLAY_TYPE_ERROR:
                     fprintf(out, ANSI_BOLD ANSI_COLOR_RED);
             }
-            current_display = display;
+            state->current_display = display;
             fflush(out);
         }
     }
@@ -270,7 +300,7 @@
 #endif
     }
 
-    static void pop_cursor() {
+    void console_t::pop_cursor() {
 #if defined(_WIN32)
         if (hConsole != NULL) {
             CONSOLE_SCREEN_BUFFER_INFO bufferInfo;
@@ -300,7 +330,7 @@
 #endif
     }
 
-    static int put_codepoint(const char* utf8_codepoint, size_t length, int expectedWidth) {
+    int console_t::put_codepoint(const char* utf8_codepoint, size_t length, int expectedWidth) {
 #if defined(_WIN32)
         CONSOLE_SCREEN_BUFFER_INFO bufferInfo;
         if (!GetConsoleScreenBufferInfo(hConsole, &bufferInfo)) {
@@ -361,7 +391,7 @@
 #endif
     }
 
-    static void replace_last(char ch) {
+    void console_t::replace_last(char ch) {
 #if defined(_WIN32)
         pop_cursor();
         put_codepoint(&ch, 1, 1);
@@ -455,13 +485,13 @@
         return pos;
     }
 
-    static void move_cursor(int delta);
-    static void move_word_left(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
-    static void move_word_right(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
-    static void move_to_line_start(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths);
-    static void move_to_line_end(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
+    // static void move_cursor(int delta);
+    // static void move_word_left(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
+    // static void move_word_right(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
+    // static void move_to_line_start(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths);
+    // static void move_to_line_end(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line);
 
-    static void delete_at_cursor(std::string & line, std::vector<int> & widths, size_t & char_pos, size_t & byte_pos) {
+    void console_t::delete_at_cursor(std::string & line, std::vector<int> & widths, size_t & char_pos, size_t & byte_pos) {
         if (char_pos >= widths.size()) {
             return;
         }
@@ -489,7 +519,7 @@
         move_cursor(-(tail_width + w));
     }
 
-    static void clear_current_line(const std::vector<int> & widths) {
+    void console_t::clear_current_line(const std::vector<int> & widths) {
         int total_width = 0;
         for (int w : widths) {
             total_width += (w > 0 ? w : 1);
@@ -502,8 +532,8 @@
         }
     }
 
-    static void set_line_contents(std::string new_line, std::string & line, std::vector<int> & widths, size_t & char_pos,
-                                  size_t & byte_pos) {
+    void console_t::set_line_contents(std::string new_line, std::string & line, std::vector<int> & widths, size_t & char_pos,
+                           size_t & byte_pos) {
         move_to_line_start(char_pos, byte_pos, widths);
         clear_current_line(widths);
 
@@ -526,7 +556,7 @@
         }
     }
 
-    static void move_to_line_start(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths) {
+    void console_t::move_to_line_start(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths) {
         int back_width = 0;
         for (size_t i = 0; i < char_pos; ++i) {
             back_width += widths[i];
@@ -536,7 +566,7 @@
         byte_pos = 0;
     }
 
-    static void move_to_line_end(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
+    void console_t::move_to_line_end(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
         int forward_width = 0;
         for (size_t i = char_pos; i < widths.size(); ++i) {
             forward_width += widths[i];
@@ -578,7 +608,7 @@
         return std::iswspace(static_cast<wint_t>(cp)) != 0;
     }
 
-    static void move_word_left(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
+    void console_t::move_word_left(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
         if (char_pos == 0) {
             return;
         }
@@ -616,7 +646,7 @@
         byte_pos = new_byte_pos;
     }
 
-    static void move_word_right(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
+    void console_t::move_word_right(size_t & char_pos, size_t & byte_pos, const std::vector<int> & widths, const std::string & line) {
         if (char_pos >= widths.size()) {
             return;
         }
@@ -663,7 +693,7 @@
         byte_pos = new_byte_pos;
     }
 
-    static void move_cursor(int delta) {
+    void console_t::move_cursor(int delta) {
         if (delta == 0) return;
 #if defined(_WIN32)
         if (hConsole != NULL) {
@@ -696,7 +726,7 @@
 #endif
     }
 
-    struct history_t {
+    struct console_t::history_t {
         std::vector<std::string> entries;
         size_t viewing_idx = SIZE_MAX;
         std::string backup_line; // current line before viewing history
@@ -748,9 +778,9 @@
         bool is_viewing() const {
             return viewing_idx != SIZE_MAX;
         }
-    } history;
+    };
 
-    static bool readline_advanced(std::string & line, bool multiline_input) {
+    bool console_t::readline_advanced(std::string & line, bool multiline_input) {
         if (out != stdout) {
             fflush(stdout);
         }
@@ -768,19 +798,19 @@
             assert(char_pos <= byte_pos);
             assert(char_pos <= widths.size());
             auto history_prev = [&]() {
-                if (!history.is_viewing()) {
-                    history.begin_viewing(line);
+                if (!history->is_viewing()) {
+                    history->begin_viewing(line);
                 }
                 std::string new_line;
-                if (!history.prev(new_line)) {
+                if (!history->prev(new_line)) {
                     return;
                 }
                 set_line_contents(new_line, line, widths, char_pos, byte_pos);
             };
             auto history_next = [&]() {
-                if (history.is_viewing()) {
+                if (history->is_viewing()) {
                     std::string new_line;
-                    if (!history.next(new_line)) {
+                    if (!history->next(new_line)) {
                         return;
                     }
                     set_line_contents(new_line, line, widths, char_pos, byte_pos);
@@ -1021,7 +1051,7 @@
                 line.pop_back();
             }
             // TODO: maybe support multiline history entries?
-            history.add(line);
+            history->add(line);
         }
 
         fflush(out);
@@ -1065,8 +1095,8 @@
         return multiline_input;
     }
 
-    bool console::readline(std::string & line, bool multiline_input) {
-        if (simple_io) {
+    bool console_t::readline(std::string & line, bool multiline_input) {
+        if (state->simple_io) {
             return readline_simple(line, multiline_input);
         }
         return readline_advanced(line, multiline_input);
@@ -1079,36 +1109,38 @@
     static bool running = false;
     static std::mutex mtx;
     static auto wait_time = std::chrono::milliseconds(100);
-    static void draw_next_frame() {
+    void console_t::draw_next_frame() {
         // don't need lock because only one thread modifies running
         frame = (frame + 1) % sizeof(LOADING_CHARS);
         replace_last(LOADING_CHARS[frame]);
         fflush(out);
     }
-    void console::spinner::start() {
+    void console_t::spinner::start() {
         std::unique_lock<std::mutex> lock(mtx);
-        if (simple_io || running) {
+        auto& console = console_t::get_instance();
+        if (console.state->simple_io || running) {
             return;
         }
         common_log_flush(common_log_main());
-        fprintf(out, "%c", LOADING_CHARS[0]);
-        fflush(out);
+        fprintf(console.out, "%c", LOADING_CHARS[0]);
+        fflush(console.out);
         frame = 1;
         running = true;
-        th = std::thread([]() {
+        th = std::thread([&console]() {
             std::unique_lock<std::mutex> lock(mtx);
             while (true) {
                 if (cv_stop.wait_for(lock, wait_time, []{ return !running; })) {
                     break;
                 }
-                draw_next_frame();
+                console.draw_next_frame();
             }
         });
     }
-    void console::spinner::stop() {
+    void console_t::spinner::stop() {
+        auto& console = console_t::get_instance();
         {
             std::unique_lock<std::mutex> lock(mtx);
-            if (simple_io || !running) {
+            if (console.state->simple_io || !running) {
                 return;
             }
             running = false;
@@ -1117,28 +1149,30 @@
         if (th.joinable()) {
             th.join();
         }
-        replace_last(' ');
-        pop_cursor();
-        fflush(out);
+        console.replace_last(' ');
+        console.pop_cursor();
+        fflush(console.out);
     }
 
-    void console::log(const char * fmt, ...) {
+    void console_t::log(const char * fmt, ...) {
+        console_t& console = console_t::get_instance();
         va_list args;
         va_start(args, fmt);
-        vfprintf(out, fmt, args);
+        vfprintf(console.out, fmt, args);
         va_end(args);
     }
 
-    void console::error(const char * fmt, ...) {
+    void console_t::error(const char * fmt, ...) {
+        console_t& console = console_t::get_instance();
         va_list args;
         va_start(args, fmt);
-        display_type cur = current_display;
-        console::set_display(DISPLAY_TYPE_ERROR);
-        vfprintf(out, fmt, args);
-        console::set_display(cur); // restore previous color
+        display_type cur = console.state->current_display;
+        console.set_display(DISPLAY_TYPE_ERROR);
+        vfprintf(console.out, fmt, args);
+        console.set_display(cur); // restore previous color
         va_end(args);
     }
 
-    void console::flush() {
+    void console_t::flush() {
         fflush(out);
     }
