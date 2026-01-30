@@ -1763,7 +1763,7 @@ private:
                         break;
                     }
 
-                    int id_slot = task.slot_action.id_slot;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -1801,7 +1801,7 @@ private:
             case SERVER_TASK_TYPE_SLOT_RESTORE:
                 {
                     if (!check_no_mtmd(task.id)) break;
-                    int id_slot = task.slot_action.id_slot;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -1850,7 +1850,7 @@ private:
                     if (!check_no_mtmd(task.id)) {
                         break;
                     }
-                    int id_slot = task.slot_action.id_slot;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -3315,7 +3315,7 @@ void server_routes::init_routes() {
         }
 
         // TODO: get rid of this dynamic_cast
-        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        auto * res_task = dynamic_cast<server_task_result_metrics*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
         // optionally return "fail_on_no_slot" error
@@ -3338,8 +3338,8 @@ void server_routes::init_routes() {
         }
 
         std::string id_slot_str = req.get_param("id_slot");
-        int id_slot;
 
+        int id_slot;
         try {
             id_slot = std::stoi(id_slot_str);
         } catch (const std::exception &) {
@@ -3351,14 +3351,16 @@ void server_routes::init_routes() {
 
         if (action == "save") {
             return handle_slots_save(req, id_slot);
-        } else if (action == "restore") {
-            return handle_slots_restore(req, id_slot);
-        } else if (action == "erase") {
-            return handle_slots_erase(req, id_slot);
-        } else {
-            res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
-            return res;
         }
+        if (action == "restore") {
+            return handle_slots_restore(req, id_slot);
+        }
+        if (action == "erase") {
+            return handle_slots_erase(req, id_slot);
+        }
+
+        res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
+        return res;
     };
 
     this->get_props = [this](const server_http_req &) {
