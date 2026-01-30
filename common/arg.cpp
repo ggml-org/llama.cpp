@@ -3411,7 +3411,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             } else if (value == "ngram-map-k4v") {
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
             } else if (value == "ngram-mod") {
-                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD;
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
             } else {
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }

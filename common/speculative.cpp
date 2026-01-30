@@ -24,7 +24,7 @@ const std::vector<enum common_speculative_type> common_speculative_types = {
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD,
+    COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE
 };
 
@@ -35,7 +35,7 @@ const std::map<std::string, enum common_speculative_type> common_speculative_typ
     {"ngram_simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram_map_k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram_map_k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
-    {"ngram_map_mod", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD},
+    {"ngram_mod",     COMMON_SPECULATIVE_TYPE_NGRAM_MOD},
     {"ngram_cache",   COMMON_SPECULATIVE_TYPE_NGRAM_CACHE}
 };
 
@@ -617,7 +617,7 @@ struct common_speculative_state_ngram_mod : public common_speculative_state {
 
     void accept(uint16_t n_accepted) override {
         if (verbose) {
-            LOG_INF("%s: accepted %d tokens\n", __func__, n_accepted);
+            LOG_INF("%s: accepted %d tokens from %zu drafted tokens\n", __func__, n_accepted, n_draft_last);
         }
 
         // compute acceptance fraction if we have a recorded draft length
@@ -778,7 +778,7 @@ std::string common_speculative_type_to_str(enum common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram_simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram_map_k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram_map_k4v";
-        case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD: return "ngram_map_mod";
+        case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:     return "ngram_mod";
         case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:   return "ngram_cache";
         default:                                    return "unknown";
     }
@@ -795,8 +795,8 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(
-        const common_params_speculative & params,
-              llama_context             * ctx_tgt) {
+        common_params_speculative & params,
+        llama_context             * ctx_tgt) {
     llama_context * ctx_dft = nullptr;
     if (params.model_dft) {
         ctx_dft = llama_init_from_model(params.model_dft, params.cparams_dft);
@@ -816,7 +816,7 @@ common_speculative * common_speculative_init(
         bool has_ngram_simple  = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
         bool has_ngram_map_k   = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
         bool has_ngram_map_k4v = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
-        bool has_ngram_map_mod = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD);
+        bool has_ngram_mod     = (params.type == COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
 
         // In a more complex implementation we could use the same implementation but with different parameters.
         // This was initially used in PR-18471 but removed to simplify the code.
@@ -831,8 +831,17 @@ common_speculative * common_speculative_init(
             // This implementation can guess tokens with high acceptance rate but is more expensive.
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, params));
         }
-        if (has_ngram_map_mod) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD, params));
+        if (has_ngram_mod) {
+            // shared instance for all speculative decoding contexts
+            if (!params.ngram_mod) {
+                params.ngram_mod = std::make_shared<common_ngram_mod>(params.ngram_size_n, 4*1024*1024);
+
+                LOG_INF("%s: initialized ngram_mod with n=%d, size=%zu (%.3f MB)\n", __func__,
+                        params.ngram_size_n, params.ngram_mod->size(),
+                        (float)(params.ngram_mod->size_bytes())/1024/1024);
+            }
+
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, params));
         }
         if (has_ngram_cache) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
@@ -891,7 +900,7 @@ common_speculative * common_speculative_init(
                 ));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_MOD: {
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD: {
                 GGML_ASSERT(config.params.ngram_mod);
                 impls.push_back(std::make_unique<common_speculative_state_ngram_mod>(config.type, *config.params.ngram_mod));
                 break;
