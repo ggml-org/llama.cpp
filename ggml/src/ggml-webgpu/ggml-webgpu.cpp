@@ -861,9 +861,6 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
     };
 
     webgpu_pipeline pipeline;
-    {
-        // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->pad_pipelines.find(pipeline_key);
         if (it != ctx->pad_pipelines.end()) {
             pipeline = it->second;
@@ -875,7 +872,6 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
             pipeline.context = processed.decisions;
             ctx->pad_pipelines.emplace(pipeline_key, pipeline);
         }
-    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -944,9 +940,6 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
     };
 
     webgpu_pipeline pipeline;
-    // TODO: remove guard once pipeline caches are per-thread
-    {
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->set_rows_pipelines.find(key);
         if (it != ctx->set_rows_pipelines.end()) {
             pipeline = it->second;
@@ -958,7 +951,6 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
             pipeline.context = processed.decisions;
             ctx->set_rows_pipelines.emplace(key, pipeline);
         }
-    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -1261,9 +1253,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     };
 
     webgpu_pipeline pipeline;
-    // TODO: remove guard once pipeline caches are per-thread
-    {
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->flash_attn_pipelines.find(key);
         if (it != ctx->flash_attn_pipelines.end()) {
             pipeline = it->second;
@@ -1284,7 +1273,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             pipeline.context = processed.decisions;
             ctx->flash_attn_pipelines.emplace(key, pipeline);
         }
-    }
 
     ggml_webgpu_flash_attn_shader_decisions decisions =
         *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
@@ -1308,9 +1296,6 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
     };
 
     webgpu_pipeline pipeline;
-    {
-        // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->unary_pipelines.find(pipeline_key);
         if (it != ctx->unary_pipelines.end()) {
             pipeline = it->second;
@@ -1322,7 +1307,6 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
             pipeline.context = processed.decisions;
             ctx->unary_pipelines.emplace(pipeline_key, pipeline);
         }
-    }
 
     ggml_webgpu_generic_shader_decisions decisions =
         *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
@@ -1743,9 +1727,6 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
     };
 
     webgpu_pipeline pipeline;
-    {
-        // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->argmax_pipelines.find(shader_lib_ctx.vec4);
         if (it != ctx->argmax_pipelines.end()) {
             pipeline = it->second;
@@ -1756,7 +1737,6 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
                 ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
             ctx->argmax_pipelines.emplace(shader_lib_ctx.vec4, pipeline);
         }
-    }
     uint32_t wg_x = ggml_nelements(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -1772,7 +1752,6 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
         .order              = order
     };
 
-    std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
     webgpu_pipeline                       argsort_pipeline;
     auto                                  it = ctx->argsort_pipelines.find(order);
     if (it != ctx->argsort_pipelines.end()) {
@@ -1963,9 +1942,6 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
         .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup,
     };
     webgpu_pipeline pipeline;
-    // TODO: remove guard once pipeline caches are per-thread
-    {
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->cumsum_pipelines.find(1);
         if (it != ctx->cumsum_pipelines.end()) {
             pipeline = it->second;
@@ -1976,7 +1952,6 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
                 ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
             ctx->cumsum_pipelines.emplace(1, pipeline);
         }
-    }
     uint32_t wg_x = ggml_nrows(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -2009,9 +1984,6 @@ static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * s
     };
 
     webgpu_pipeline pipeline;
-    {
-        // TODO: remove guard once pipeline caches are per-thread
-        std::lock_guard<std::recursive_mutex> lock(ctx->global_ctx->mutex);
         auto                                  it = ctx->sum_rows_pipelines.find(1);
         if (it != ctx->sum_rows_pipelines.end()) {
             pipeline = it->second;
@@ -2022,7 +1994,6 @@ static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * s
                 ggml_webgpu_create_pipeline(ctx->global_ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
             ctx->sum_rows_pipelines.emplace(1, pipeline);
         }
-    }
     uint32_t wg_x = total_sum ? 1 : ggml_nrows(dst);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
