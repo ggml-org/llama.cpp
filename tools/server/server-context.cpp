@@ -11,7 +11,6 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
-#include "ngram-mod.h"
 
 #include <cstddef>
 #include <cinttypes>
@@ -560,8 +559,6 @@ private:
     llama_batch batch {};
 
     llama_model_ptr model_dft;
-
-    common_ngram_mod_ptr ngram_mod;
 
     bool add_bos_token  = true;
 
