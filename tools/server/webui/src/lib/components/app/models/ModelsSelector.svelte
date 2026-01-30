@@ -268,7 +268,7 @@
 				placeholder="Search models..."
 				onSearchKeyDown={handleSearchKeyDown}
 				align="end"
-				contentClass="w-96 max-w-[calc(100vw-2rem)]"
+				contentClass="w-full max-w-[100vw] sm:w-max sm:max-w-[calc(100vw-2rem)]"
 				emptyMessage="No models found."
 				isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
 				disabled={disabled || updating}
@@ -316,7 +316,11 @@
 							aria-disabled="true"
 							disabled
 						>
-							<span class="truncate">{selectedOption?.name || currentModel}</span>
+							<span
+								class="min-w-0 flex-1 truncate text-left sm:overflow-visible sm:text-clip sm:whitespace-nowrap"
+							>
+								{selectedOption?.name || currentModel}
+							</span>
 							<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 						</button>
 						<div class="my-1 h-px bg-border"></div>
@@ -352,43 +356,49 @@
 								}
 							}}
 						>
-							<TruncatedText text={option.model} class="min-w-0 flex-1 text-left" />
+							<span
+								class="min-w-0 flex-1 truncate text-left sm:overflow-visible sm:pr-2 sm:text-clip sm:whitespace-nowrap"
+							>
+								{option.model}
+							</span>
 
-							{#if isLoading}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-									</Tooltip.Trigger>
-									<Tooltip.Content class="z-[9999]">
-										<p>Loading model...</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{:else if isLoaded}
-								<Tooltip.Root>
-									<Tooltip.Trigger>
-										<button
-											type="button"
-											class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
-											onclick={(e) => {
-												e.stopPropagation();
-												modelsStore.unloadModel(option.model);
-											}}
-										>
-											<span
-												class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
-											></span>
-											<Power
-												class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
-											/>
-										</button>
-									</Tooltip.Trigger>
-									<Tooltip.Content class="z-[9999]">
-										<p>Unload model</p>
-									</Tooltip.Content>
-								</Tooltip.Root>
-							{:else}
-								<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
-							{/if}
+							<div class="flex w-6 shrink-0 justify-center">
+								{#if isLoading}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+										</Tooltip.Trigger>
+										<Tooltip.Content class="z-[9999]">
+											<p>Loading model...</p>
+										</Tooltip.Content>
+									</Tooltip.Root>
+								{:else if isLoaded}
+									<Tooltip.Root>
+										<Tooltip.Trigger>
+											<button
+												type="button"
+												class="relative flex h-4 w-4 items-center justify-center"
+												onclick={(e) => {
+													e.stopPropagation();
+													modelsStore.unloadModel(option.model);
+												}}
+											>
+												<span
+													class="h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
+												></span>
+												<Power
+													class="absolute h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
+												/>
+											</button>
+										</Tooltip.Trigger>
+										<Tooltip.Content class="z-[9999]">
+											<p>Unload model</p>
+										</Tooltip.Content>
+									</Tooltip.Root>
+								{:else}
+									<span class="h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+								{/if}
+							</div>
 						</div>
 					{/each}
 				</div>
