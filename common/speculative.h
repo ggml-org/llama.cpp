@@ -15,8 +15,8 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 
 common_speculative * common_speculative_init(
-        const common_params_speculative & params,
-              llama_context             * ctx_tgt);
+        common_params_speculative & params,
+        llama_context             * ctx_tgt);
 
 void common_speculative_free(common_speculative * spec);
 

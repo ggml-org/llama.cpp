@@ -705,6 +705,11 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+
+            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+                params_base.speculative.type =  COMMON_SPECULATIVE_TYPE_NONE;
+                SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
+            }
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx))) {
@@ -754,9 +759,9 @@ private:
                         SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                         return false;
                     }
-                    SRV_WRN("%s", "speculative decoding context initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context initialized\n");
                 } else {
-                    SRV_WRN("%s", "speculative decoding context not initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
                 }
             }
 
