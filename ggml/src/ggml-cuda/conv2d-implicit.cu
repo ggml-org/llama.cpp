@@ -596,7 +596,7 @@ static __global__ void conv2d_implicit_kernel(const half * __restrict__ input,
                                               const half * __restrict__ kernel,
                                               T * __restrict__ output,
                                               const param_t param) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
   constexpr unsigned int MMA_M = 16;
   constexpr unsigned int MMA_N = 8;
