@@ -2920,6 +2920,7 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
     memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
     props->node_data = node->data;
     props->node_op = node->op;
+    props->node_type = node->type;
     props->flags = node->flags;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         props->ne[i] = node->ne[i];
@@ -2941,6 +2942,10 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
     }
 
     if (node->op != props->node_op) {
+        return false;
+    }
+
+    if (node->type != props->node_type) {
         return false;
     }
 
