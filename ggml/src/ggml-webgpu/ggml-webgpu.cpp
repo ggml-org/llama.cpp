@@ -271,7 +271,7 @@ struct webgpu_command {
 #endif
 };
 
-struct webgpu_capabilities_base {
+struct webgpu_capabilities {
     wgpu::Limits limits;
     bool         supports_subgroup_matrix = false;
 
@@ -291,7 +291,7 @@ struct webgpu_global_context_struct {
     wgpu::Device   device;
     wgpu::Queue    queue;
 
-    webgpu_capabilities_base capabilities;
+    webgpu_capabilities capabilities;
     // Shared buffer to move data from device to host
     wgpu::Buffer             get_tensor_staging_buf;
     // Global mutex for pipeline and staging buffer, will be refactored to exclude pipeline caches.
@@ -388,7 +388,6 @@ struct ggml_backend_webgpu_device_context {
 // Per-thread data required to actually run WebGPU operations in a backend instance
 struct ggml_backend_webgpu_context {
     webgpu_context webgpu_ctx;
-    std::once_flag init_once;
     std::string    name;
 };
 
