@@ -11956,7 +11956,8 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
         }
     }
     if (mmq) {
-        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_quantize_q8_1, num_it);
+        vk_pipeline pipeline_quantize_q8_1 = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline_quantize_q8_1, num_it);
     }
 
     ggml_pipeline_allocate_descriptor_sets(ctx);
