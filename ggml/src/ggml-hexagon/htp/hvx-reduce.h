@@ -63,8 +63,8 @@ static inline HVX_Vector hvx_vec_reduce_sum_n_f32(HVX_Vector in, unsigned int n)
 
     HVX_Vector sum = in, sum_t;
     while (width < total) {
-        sum_t = Q6_V_vror_VR(sum, width);        // rotate right
-        sum   = Q6_Vsf_vadd_VsfVsf(sum, sum_t);  // elementwise sum
+        sum_t = Q6_V_vror_VR(sum, width);       // rotate right
+        sum   = Q6_Vsf_vadd_VsfVsf(sum, sum_t); // elementwise sum
         width = width << 1;
     }
     return sum;
