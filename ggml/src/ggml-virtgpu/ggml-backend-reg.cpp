@@ -4,7 +4,7 @@
 #include <iostream>
 #include <mutex>
 
-void ggml_virtgpu_cleanup(virtgpu *gpu);
+void ggml_virtgpu_cleanup(virtgpu * gpu);
 
 static virtgpu * apir_initialize() {
     static virtgpu *         gpu          = NULL;
@@ -171,10 +171,8 @@ ggml_backend_reg_t ggml_backend_virtgpu_reg() {
     return &reg;
 }
 
-GGML_BACKEND_DL_IMPL(ggml_backend_virtgpu_reg)
-
 // public function, not exposed in the GGML interface at the moment
-void ggml_virtgpu_cleanup(virtgpu *gpu) {
+void ggml_virtgpu_cleanup(virtgpu * gpu) {
     if (gpu->cached_device_info.name) {
         free(gpu->cached_device_info.name);
         gpu->cached_device_info.name = NULL;
@@ -190,3 +188,5 @@ void ggml_virtgpu_cleanup(virtgpu *gpu) {
 
     mtx_destroy(&gpu->data_shmem_mutex);
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_virtgpu_reg)
