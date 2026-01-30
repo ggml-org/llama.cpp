@@ -2,11 +2,6 @@
 #include "virtgpu-shm.h"
 
 int apir_device_get_count(virtgpu * gpu) {
-    static int32_t dev_count = -1;
-    if (dev_count != -1) {
-        return dev_count;
-    }
-
     apir_encoder *        encoder;
     apir_decoder *        decoder;
     ApirForwardReturnCode ret;
@@ -14,6 +9,7 @@ int apir_device_get_count(virtgpu * gpu) {
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_COUNT);
     REMOTE_CALL(gpu, encoder, decoder, ret);
 
+    int32_t dev_count = -1;
     apir_decode_int32_t(decoder, &dev_count);
 
     remote_call_finish(gpu, encoder, decoder);
