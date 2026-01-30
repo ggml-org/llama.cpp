@@ -7,7 +7,7 @@
 common_ngram_mod::common_ngram_mod(uint16_t n, size_t size) : n(n), used(0) {
     entries.resize(size);
 
-    std::fill(entries.begin(), entries.end(), EMPTY);
+    reset();
 }
 
 size_t common_ngram_mod::idx(const entry_t * tokens) const {
@@ -25,7 +25,7 @@ size_t common_ngram_mod::idx(const entry_t * tokens) const {
 void common_ngram_mod::add(const entry_t * tokens) {
     const size_t i = idx(tokens);
 
-    if (entries[i] != EMPTY) {
+    if (entries[i] == EMPTY) {
         used++;
     }
 
