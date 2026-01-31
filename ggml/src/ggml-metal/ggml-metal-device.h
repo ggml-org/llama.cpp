@@ -246,7 +246,7 @@ void ggml_metal_device_rsets_rm (ggml_metal_device_t dev, ggml_metal_rset_t rset
 
 void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev);
 
-ggml_metal_event_t ggml_metal_device_event_new(ggml_metal_device_t dev);
+ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev);
 void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev);
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev);
 
