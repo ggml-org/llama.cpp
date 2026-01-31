@@ -53,8 +53,8 @@ llama_tokens common_ngram_simple_draft(
 
 // statistics of a m-gram after a known n-gram
 struct common_ngram_map_value {
-    size_t   value_idx = 0;  // index of value m-gram in token-history (0 if unused)
-    uint16_t value_num = 0;  // number of occurences of this value m-gram after the key n-gram (0 in an unused values-slot)
+    size_t   value_idx =  0;  // index of value m-gram in token-history (0 if unused)
+    uint16_t value_num =  0;  // number of occurences of this value m-gram after the key n-gram (0 in an unused values-slot)
     int16_t n_accepted = -1;  // number of accepted tokens at last draft (-1 if unused)
 };
 
@@ -84,13 +84,24 @@ struct common_ngram_map {
         : size_key(sz_key), size_value(sz_value), key_only(only_keys),
           check_rate(check_rate), min_hits(min_hits) {}
 
+    // In reasoning chats the previous reasoning block will be removed from context history.
+    // A rebuild of the ngram map is needed after that.
+
+    size_t   size_last_begin      = 0; // number of tokens at previous start of generation
+
     bool     last_draft_created   = false; // true if a draft was created at last call.
-    size_t   last_draft_key_idx   = 0; // index of last key used for draft generation.
+    size_t   last_draft_key_idx   = 0; // index of last key used for draft generation (0 = no draft)
     uint16_t last_draft_value_idx = 0; // index of last value used for draft generation.
 
     size_t   idx_last_check       = 0; // index of last check in context history
 };
 
+// Initialize the n-gram map with the given token history.
+// map:                the ngram map to initialize.
+// tokens:             the token history to base the map on.
+void common_ngram_map_begin(
+    common_ngram_map & map,
+    const llama_tokens & tokens);
 
 // Searches for the n-gram in the history and checks whether a draft sequence should be generated.
 // map:                the ngram map to search in.

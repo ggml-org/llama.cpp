@@ -499,7 +499,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
         : common_speculative_state(type), map(std::move(map)) {}
 
     void begin(const llama_tokens & prompt) override {
-        GGML_UNUSED(prompt);
+        common_ngram_map_begin(map, prompt);
     }
 
     void draft(

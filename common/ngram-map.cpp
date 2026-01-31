@@ -115,6 +115,67 @@ llama_tokens common_ngram_simple_draft(
 // maximum number of counted values of a ngram map value.
 #define COMMON_NGRAM_MAX_VALUE_COUNT 16380
 
+void common_ngram_map_begin(
+    common_ngram_map & map, const llama_tokens & tokens) {
+    size_t size_begin = tokens.size();
+
+
+    LOG_DBG("%s: begin, idx_last_draft=%zu,  new begin=%zu\n", __func__,
+            map.idx_last_check, size_begin);
+
+    if (size_begin < map.idx_last_check && !map.keys.empty()) {
+        // The next token generation will start at index size_begin.
+        // The tokens between map.size_last_begin and size_begin are no longer valid.
+        //
+        // Refresh map: Remove all entries with index >= map.size_last_begin.
+        size_t count_keys = map.keys.size();
+        size_t count_keys_del = 0;
+        size_t count_values_del = 0;
+        for (int32_t i = map.keys.size() - 1; i >= 0; --i) {
+            common_ngram_map_key & key = map.keys[i];
+            if (key.key_idx >= map.size_last_begin) {
+                // Delete the key.
+                LOG_INF("%s: delete key %d at index %zu (>= size_last_begin=%zu)\n", __func__, i, key.key_idx, map.size_last_begin);
+                map.keys.erase(map.keys.begin() + i);
+                count_keys_del++;
+                continue;
+            }
+            if (map.key_only) {
+                continue;
+            }
+
+            // Check the indices of the values.
+            for (int16_t j = COMMON_NGRAM_MAX_VALUES - 1; j >= 0; --j) {
+                common_ngram_map_value & value = key.values[j];
+                if (value.value_idx >= map.size_last_begin) {
+                    // Delete the value.
+                    count_values_del++;
+
+                    // Move all values after this value to the left.
+                    for (uint16_t k = j; k < COMMON_NGRAM_MAX_VALUES - 1; ++k) {
+                        key.values[k] = key.values[k + 1];
+                    }
+                    // Clear the last value.
+                    key.values[COMMON_NGRAM_MAX_VALUES - 1].value_idx = 0;
+                    key.values[COMMON_NGRAM_MAX_VALUES - 1].value_num = 0;
+                }
+            }
+            if (key.values[0].value_idx == 0) {
+                // No values left, delete the key.
+                LOG_INF("%s: delete key %d at index %zu (no values left)\n", __func__, i, key.key_idx);
+                map.keys.erase(map.keys.begin() + i);
+                count_keys_del++;
+            }
+        }
+        LOG_INF("%s: refresh map: idx_last_draft=%zu, new begin=%zu, #keys_checked=%zu, #keys_del=%zu, #values_del=%zu\n", __func__,
+                map.idx_last_check, size_begin,
+                count_keys, count_keys_del, count_values_del);
+    }
+
+    map.idx_last_check = std::max(((int) map.size_last_begin) - 1, 0);
+    map.size_last_begin = size_begin;
+}
+
 void common_ngram_map_draft(common_ngram_map & map,
         const llama_tokens & inp, llama_token sampled,
         llama_tokens & draft) {
@@ -147,21 +208,45 @@ void common_ngram_map_draft(common_ngram_map & map,
 
     // search for the key in the map
     size_t match_pos = 0;
-    for (size_t j = cur_len - n - m - 1; j > 0; --j) {
-        bool match = true;
-        for (size_t k = 0; k < n; ++k) {
-            if (inp[j + k] != key_tokens[k]) {
-                match = false;
-                break;
+    if (map.size_last_begin > cur_len) {
+        GGML_ABORT("%s: map.size_last_begin > cur_len: %zu > %zu", __func__, map.size_last_begin, cur_len);
+    }
+    if (map.size_last_begin > (size_t) (n + m + 1)) {
+        // Search for the key in [1, map.size_last_begin - n - m -1], descending.
+        for (size_t j = map.size_last_begin - n - m - 1; j > 0; --j) {
+            bool match = true;
+            for (size_t k = 0; k < n; ++k) {
+                if (inp[j + k] != key_tokens[k]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+               match_pos = j;
+               break;
             }
         }
-        if (match) {
-           match_pos = j;
-           break;
+    }
+    if (match_pos == 0) {
+        // In case of a reasoning chat, the part after size_last_begin may be deleted/reordered later.
+        //
+        // Search in [size_last_begin, cur_len - n - m - 1], descending.
+        for (size_t j = cur_len - n - m - 1; j > map.size_last_begin; --j) {
+            bool match = true;
+            for (size_t k = 0; k < n; ++k) {
+                if (inp[j + k] != key_tokens[k]) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+               match_pos = j;
+               break;
+            }
         }
     }
     if (match_pos > 0) {
-        LOG_INF("%s: cur_len = %zu, n = %d, m = %d, sz_tkns = %zu, sampled = %d, match_pos = %zu\n", __func__,
+        LOG_DBG("%s: cur_len = %zu, n = %d, m = %d, sz_tkns = %zu, sampled = %d, match_pos = %zu\n", __func__,
             cur_len, n, m, key_tokens.size(), sampled, match_pos);
     }
 
@@ -215,8 +300,8 @@ void common_ngram_map_draft(common_ngram_map & map,
             draft.push_back(inp[match_pos + n + i]);
         }
 
-        LOG_INF("%s: key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
-                key_offset, curr_key.key_num, draft.size());
+        LOG_INF("%s: key_idx = %zu, key_offset = %zu, key_num = %d, draft.size = %zu\n", __func__,
+                curr_key.key_idx, key_offset, curr_key.key_num, draft.size());
 
         map.last_draft_created   = false;
         map.last_draft_key_idx   = key_offset;
