@@ -208,6 +208,18 @@ class Processor:
         print(f"Max tokens: {self.n_predict}")
         print()
 
+        # Print task summary table
+        print("Tasks:")
+        print("  Task ID         Dataset    Prompt (first 40 chars)                        Expected    Status")
+        for i in range(min(n_cases, len(self.dataset.questions))):
+            question = self.dataset.get_question(i)
+            case_id = f"aime_{self.dataset.split}_{question['id']}"
+            prompt = question["problem"]
+            gold = self.dataset.get_answer(question)
+            truncated_prompt = prompt[:40] + "..." if len(prompt) > 40 else prompt
+            print(f"  {case_id:<15} AIME2025   {truncated_prompt:<40}    {gold:<10} pending")
+        print()
+
         task_states: Dict[str, List[TaskState]] = {task: [] for task in self.eval_state.tasks}
         total = 0
         correct = 0
