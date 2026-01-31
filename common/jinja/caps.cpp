@@ -61,14 +61,23 @@ static void caps_print_stats(value & v, const std::string & path) {
                 ops.c_str());
 }
 
+std::map<std::string, bool> caps::to_map() const {
+    return {
+        {"requires_typed_content", requires_typed_content},
+        {"supports_tools", supports_tools},
+        {"supports_tool_calls", supports_tool_calls},
+        {"supports_parallel_tool_calls", supports_parallel_tool_calls},
+        {"supports_system_role", supports_system_role},
+        {"supports_preserve_reasoning", supports_preserve_reasoning},
+    };
+}
+
 std::string caps::to_string() const {
     std::ostringstream ss;
     ss << "Caps(\n";
-    ss << "  requires_typed_content=" << requires_typed_content << "\n";
-    ss << "  supports_tools=" << supports_tools << "\n";
-    ss << "  supports_tool_calls=" << supports_tool_calls << "\n";
-    ss << "  supports_parallel_tool_calls=" << supports_parallel_tool_calls << "\n";
-    ss << "  supports_system_role=" << supports_system_role << "\n";
+    for (const auto & [key, value] : to_map()) {
+        ss << "  " << key << "=" << (value ? "true" : "false") << "\n";
+    }
     ss << ")";
     return ss.str();
 }
@@ -225,6 +234,40 @@ caps caps_get(jinja::program & prog) {
             caps_print_stats(tool_call_1, "messages[1].tool_calls[1].function");
             if (!tool_call_1->stats.used) {
                 result.supports_parallel_tool_calls = false;
+            }
+        }
+    );
+
+    // case: preserve reasoning content in chat history
+    caps_try_execute(
+        prog,
+        [&]() {
+            // messages
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "Assistant message"},
+                    {"reasoning_content", "Reasoning content"}
+                },
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+            });
+        },
+        [&]() {
+            // tools
+            return json::array();
+        },
+        [&](bool, value & messages, value &) {
+            auto & content = messages->at(1)->at("reasoning_content");
+            caps_print_stats(content, "messages[1].reasoning_content");
+            if (content->stats.used) {
+                result.supports_preserve_reasoning = true;
             }
         }
     );

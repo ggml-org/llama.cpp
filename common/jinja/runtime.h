@@ -56,6 +56,7 @@ struct context {
     // src is optional, used for error reporting
     context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
         env = mk_val<value_object>();
+        env->has_builtins = false; // context object has no builtins
         env->insert("true",  mk_val<value_bool>(true));
         env->insert("True",  mk_val<value_bool>(true));
         env->insert("false", mk_val<value_bool>(false));
@@ -68,7 +69,7 @@ struct context {
 
     context(const context & parent) : context() {
         // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_object();
+        auto & pvar = parent.env->as_ordered_object();
         for (const auto & pair : pvar) {
             set_val(pair.first, pair.second);
         }
@@ -78,15 +79,15 @@ struct context {
     }
 
     value get_val(const std::string & name) {
-        auto it = env->val_obj.unordered.find(name);
-        if (it != env->val_obj.unordered.end()) {
-            return it->second;
-        } else {
-            return mk_val<value_undefined>(name);
-        }
+        value default_val = mk_val<value_undefined>(name);
+        return env->at(name, default_val);
     }
 
     void set_val(const std::string & name, const value & val) {
+        env->insert(name, val);
+    }
+
+    void set_val(const value & name, const value & val) {
         env->insert(name, val);
     }
 
@@ -265,7 +266,7 @@ struct comment_statement : public statement {
 struct member_expression : public expression {
     statement_ptr object;
     statement_ptr property;
-    bool computed;
+    bool computed; // true if obj[expr] and false if obj.prop
 
     member_expression(statement_ptr && object, statement_ptr && property, bool computed)
         : object(std::move(object)), property(std::move(property)), computed(computed) {
@@ -343,9 +344,19 @@ struct array_literal : public expression {
     }
 };
 
-struct tuple_literal : public array_literal {
-    explicit tuple_literal(statements && val) : array_literal(std::move(val)) {}
+struct tuple_literal : public expression {
+    statements val;
+    explicit tuple_literal(statements && val) : val(std::move(val)) {
+        for (const auto& item : this->val) chk_type<expression>(item);
+    }
     std::string type() const override { return "TupleLiteral"; }
+    value execute_impl(context & ctx) override {
+        auto arr = mk_val<value_array>();
+        for (const auto & item_stmt : val) {
+            arr->push_back(item_stmt->execute(ctx));
+        }
+        return mk_val<value_tuple>(std::move(arr->as_array()));
+    }
 };
 
 struct object_literal : public expression {

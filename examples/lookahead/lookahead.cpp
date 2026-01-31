@@ -50,6 +50,12 @@ int main(int argc, char ** argv) {
     const int N = 5;  // n-gram size
     const int G = 15; // max verification n-grams
 
+    // lookahead requires W + G + 1 sequences for parallel Jacobi decoding
+    params.n_parallel = W + G + 1;
+
+    // unified KV cache is required for coupled sequences in batch splitting
+    params.kv_unified = true;
+
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -115,7 +121,7 @@ int main(int argc, char ** argv) {
     // seq_id == 0           : the current input token
     // seq_id [1, W]         : tokens from the past N - 1 Jacobi iterations
     // seq_id [W + 1, W + G] : verification n-grams
-    llama_batch batch = llama_batch_init(params.n_ctx, 0, W + G + 1);
+    llama_batch batch = llama_batch_init(llama_n_ctx(ctx), 0, W + G + 1);
 
     // target model sampling context
     struct common_sampler * smpl = common_sampler_init(model, params.sampling);

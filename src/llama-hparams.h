@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <array>
+#include <cassert>
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
@@ -52,8 +53,8 @@ struct llama_hparams {
     uint32_t n_rel_attn_bkts = 0;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
-    uint32_t n_embd_head_k_mla = 0;
-    uint32_t n_embd_head_v_mla = 0;
+    uint32_t n_embd_head_k_mla_impl = 0;
+    uint32_t n_embd_head_v_mla_impl = 0;
 
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
@@ -163,7 +164,7 @@ struct llama_hparams {
     uint32_t n_cls_out = 1;
 
     // output embedding dimension (0 = use n_embd)
-    uint32_t n_embd_out = 0;
+    uint32_t n_embd_out_impl = 0;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
@@ -238,7 +239,7 @@ struct llama_hparams {
     uint32_t n_embd_inp() const;
 
     // dimension of output embeddings
-    uint32_t get_n_embd_out() const;
+    uint32_t n_embd_out() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
@@ -268,15 +269,57 @@ struct llama_hparams {
 
     bool is_swa(uint32_t il) const;
 
+    // note: currently only support if either all or none of the layers are MLA
+    bool is_mla() const;
+
+    uint32_t n_embd_head_k_mla() const;
+    uint32_t n_embd_head_v_mla() const;
+
     bool has_kv(uint32_t il) const;
 
     // number of layers for which has_kv() returns true
     uint32_t n_layer_kv() const;
 
     // note that this function uses different SWA parameters from those in the hparams
+    // note: inlined on purpose for performance reasons
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
-    static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
+    static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1) {
+        assert(p0 >= 0 && p1 >= 0);
+
+        switch (swa_type) {
+            case LLAMA_SWA_TYPE_NONE:
+                {
+                } break;
+            case LLAMA_SWA_TYPE_STANDARD:
+                {
+                    if (p1 - p0 >= (int32_t) n_swa) {
+                        return true;
+                    }
+                } break;
+            case LLAMA_SWA_TYPE_CHUNKED:
+                {
+                    const llama_pos pos_chunk_start = (p1 / n_swa) * n_swa;
+
+                    if (p0 < pos_chunk_start) {
+                        return true;
+                    }
+                } break;
+            case LLAMA_SWA_TYPE_SYMMETRIC:
+                {
+                    const int32_t half_n_swa = (int32_t) n_swa / 2;
+                    const int32_t pos_diff = p1 - p0;
+
+                    // Mask if outside the symmetric window
+                    if (pos_diff < -half_n_swa || pos_diff > half_n_swa) {
+                        return true;
+                    }
+                } break;
+        }
+
+        return false;
+    }
+
 
     bool use_mrope() const;
 };

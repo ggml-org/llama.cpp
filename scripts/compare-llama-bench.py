@@ -29,7 +29,7 @@ LLAMA_BENCH_DB_FIELDS = [
     "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
     "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
     "use_mmap",     "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
-    "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
+    "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",    "n_cpu_moe"
 ]
 
 LLAMA_BENCH_DB_TYPES = [
@@ -38,7 +38,7 @@ LLAMA_BENCH_DB_TYPES = [
     "TEXT",    "INTEGER", "INTEGER", "TEXT",    "TEXT",    "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "INTEGER", "TEXT",    "TEXT",
     "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
-    "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",
+    "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",    "INTEGER",
 ]
 
 # All test-backend-ops SQL fields
@@ -59,7 +59,7 @@ assert len(TEST_BACKEND_OPS_DB_FIELDS) == len(TEST_BACKEND_OPS_DB_TYPES)
 
 # Properties by which to differentiate results per commit for llama-bench:
 LLAMA_BENCH_KEY_PROPERTIES = [
-    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "tensor_buft_overrides", "model_filename", "model_type",
+    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "n_cpu_moe", "tensor_buft_overrides", "model_filename", "model_type",
     "n_batch", "n_ubatch", "embeddings", "cpu_mask", "cpu_strict", "poll", "n_threads", "type_k", "type_v",
     "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen", "n_depth"
 ]

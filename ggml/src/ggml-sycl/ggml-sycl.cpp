@@ -1157,13 +1157,28 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
     GGML_UNUSED(buft);
 }
 
+inline void * aligned_malloc_host(size_t alignment, size_t size) {
+#ifdef _WIN32
+    return _aligned_malloc(size, alignment);
+#else
+    return aligned_alloc(alignment, size);
+#endif
+}
+
+inline void free_aligned_mem_host(void * memblock) {
+#ifdef _WIN32
+    _aligned_free(memblock);
+#else
+    free(memblock);
+#endif
+}
+
 static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    ggml_sycl_host_free(buffer->context);
+    free_aligned_mem_host((void *)buffer->context);
 }
 
 static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * ptr = ggml_sycl_host_malloc(size);
-
+    void * ptr = aligned_malloc_host(TENSOR_ALIGNMENT, size);
     if (ptr == nullptr) {
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
@@ -2247,6 +2262,65 @@ inline void ggml_sycl_op_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_ten
 
     diag_mask_inf_f32_sycl(src0_dd, dst_dd, ne00, nrows0, ne01, n_past, main_stream);
 }
+
+static void tri_f32_sycl(
+    const float * src,
+    float * dst,
+    const int64_t ne0,
+    const int64_t ne1,
+    const int64_t ne2,
+    const int64_t ne3,
+    const ggml_tri_type ttype,
+    dpct::queue_ptr main_stream
+) {
+    const size_t total = (size_t) ne0 * (size_t) ne1 * (size_t) ne2 * (size_t) ne3;
+
+    main_stream->parallel_for(sycl::range<1>(total), [=](sycl::id<1> tid) {
+        const int64_t idx = (int64_t) tid[0];
+
+        const int64_t i0 = idx % ne0;
+        const int64_t t1 = idx / ne0;
+        const int64_t i1 = t1 % ne1;
+
+        bool keep = false;
+        switch (ttype) {
+            case GGML_TRI_TYPE_LOWER:      keep = (i0 <  i1); break;
+            case GGML_TRI_TYPE_LOWER_DIAG: keep = (i0 <= i1); break;
+            case GGML_TRI_TYPE_UPPER:      keep = (i0 >  i1); break;
+            case GGML_TRI_TYPE_UPPER_DIAG: keep = (i0 >= i1); break;
+            default: keep = false; break;
+        }
+
+        dst[idx] = keep ? src[idx] : 0.0f;
+    });
+}
+
+static void ggml_sycl_op_tri(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(src0);
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const float * src0_dd = static_cast<const float *>(src0->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
+
+    const ggml_tri_type ttype = (ggml_tri_type) ggml_get_op_params_i32(dst, 0);
+
+    const int64_t ne0 = src0->ne[0];
+    const int64_t ne1 = src0->ne[1];
+    const int64_t ne2 = src0->ne[2];
+    const int64_t ne3 = src0->ne[3];
+
+    tri_f32_sycl(src0_dd, dst_dd, ne0, ne1, ne2, ne3, ttype, main_stream);
+}
+
 
 inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
@@ -3771,6 +3845,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                 case GGML_UNARY_OP_EXP:
                     ggml_sycl_exp(ctx, dst);
                     break;
+                case GGML_UNARY_OP_SOFTPLUS:
+                    ggml_sycl_softplus(ctx, dst);
+                    break;
                 case GGML_UNARY_OP_SGN:
                     ggml_sycl_sgn(ctx, dst);
                     break;
@@ -3896,6 +3973,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
             GGML_SYCL_DEBUG("%s: Tensor NO-OP\n", __func__);
+            break;
+        case GGML_OP_TRI:
+            ggml_sycl_op_tri(ctx, dst);
             break;
         case GGML_OP_DIAG_MASK_INF:
             ggml_sycl_diag_mask_inf(ctx, dst);
@@ -4107,6 +4187,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+            continue;
+        }
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             continue;
         }
 #ifndef NDEBUG
@@ -4386,6 +4469,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_ELU:
                     return true;
                 case GGML_UNARY_OP_FLOOR:
@@ -4588,18 +4672,23 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return (op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
 #endif
         case GGML_OP_NORM:
-            return true;
         case GGML_OP_L2_NORM:
         case GGML_OP_GROUP_NORM:
-            return ggml_is_contiguous(op->src[0]);
         case GGML_OP_RMS_NORM:
-            return ((op->src[0]->ne[0] % WARP_SIZE) == 0);
+            return true;
         case GGML_OP_RMS_NORM_BACK:
-            return ((op->src[0]->ne[0] % WARP_SIZE) == 0);
+            return ggml_is_contiguous(op->src[0]);
         case GGML_OP_SCALE:
             return true;
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
+        case GGML_OP_TRI:
+            {
+                const ggml_tensor * src0 = op->src[0];
+                return src0 &&
+                       op->type == GGML_TYPE_F32 &&
+                       ggml_is_contiguous(src0);
+            }
         case GGML_OP_DIAG_MASK_INF:
             return true;
         case GGML_OP_SOFT_MAX:

@@ -57,8 +57,8 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
         sum_v         = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
     }
 
-    HVX_Vector reduced_sum = hvx_vec_reduce_sum_qf32(sum_v);
-    sum_v                  = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(reduced_sum));
+    HVX_Vector reduced_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    sum_v                  = hvx_vec_repl4(reduced_sum);
 
     HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
     HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
