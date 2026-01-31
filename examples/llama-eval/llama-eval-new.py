@@ -51,7 +51,14 @@ class AimeDataset:
     def _load_dataset(self):
         print(f"Loading AIME dataset (split: {self.split})...")
         from datasets import load_dataset
-        ds = load_dataset("AI-MO/aimo-validation-aime", split=self.split)
+
+        cache_path = cache_dir / "AI-MO___aimo-validation-aime" / "default" / "0.0.0"
+        if cache_path.exists():
+            print(f"Using cached dataset from {cache_path}")
+            ds = load_dataset("AI-MO/aimo-validation-aime", split=self.split, cache_dir=str(cache_path))
+        else:
+            ds = load_dataset("AI-MO/aimo-validation-aime", split=self.split)
+
         self.questions = list(ds)
         print(f"AIME dataset loaded: {len(self.questions)} questions")
 
