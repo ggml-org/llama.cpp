@@ -150,3 +150,62 @@ Questions:
 - Created make_request() helper function to reduce code duplication
 - Added proper error handling for error responses
 - Fixed simulator stopping issue at script completion
+
+### llama-eval-new.py Implementation
+
+**Created:**
+- `llama-eval-new.py` - Simplified evaluation tool focused on AIME
+
+**Features Implemented:**
+1. **Eval State Object** - Structured dataclass with ID, tasks, task states, and sampling config
+2. **Processor Object** - Handles processing, grading, and state management
+3. **Real-time Feedback** - Shows correct/incorrect status for each case
+4. **Flexible Grading System** - Supports regex and CLI-based grading
+5. **Structured JSON Output** - Saves complete eval state to JSON file
+6. **HuggingFace Dataset Caching** - Uses cached dataset path to avoid HF Hub requests
+
+**Grading System:**
+- **Regex Grading**: Built-in patterns for different task types
+  - `aime`: `\boxed{(\d+)}|\b(\d+)\b` (handles boxed and plain text)
+  - `gsm8k`: `\b(\d+)\b` (extract first number)
+  - `mmlu`, `hellaswag`, `arc`, `winogrande`: `[A-D]` (extract single letter)
+- **CLI Grading**: External script interface
+  - Script accepts `--answer <pred>` and `--expected <gold>`
+  - Returns exit code 0 if correct, non-zero if incorrect
+  - 30-second timeout to prevent hanging
+
+**Configuration Options:**
+- `--server`: llama-server URL (default: http://localhost:8033)
+- `--n_cases`: Number of cases to evaluate (default: all)
+- `--n_predict`: Max tokens to predict per prompt (default: 2048)
+- `--threads`: Number of threads for parallel requests (default: 32)
+- `--verbose`: Show detailed output for each case
+- `--output`: Output file for eval state (default: llama-eval-state.json)
+- `--grader-type`: `regex` or `cli`
+- `--grader-regex-type`: aime, gsm8k, mmlu, hellaswag, arc, winogrande
+- `--grader-script`: Path to CLI grader script
+
+**Testing Results:**
+- ✅ Works with simulator at 100% success rate (all correct)
+- ✅ Works with simulator at 0% success rate (all incorrect)
+- ✅ Works with simulator at 80% success rate (8/10 correct)
+- ✅ Real-time verbose output shows gold/pred/status for each case
+- ✅ JSON output contains complete eval state with all cases
+- ✅ HF Hub telemetry disabled (no warnings)
+- ✅ Uses cached dataset path to avoid HF Hub requests when available
+
+**Key Technical Decisions:**
+- Removed Levenshtein matching - eval script only sends requests and validates answers
+- Abstract grading interface for external grader support
+- Exact match requirement for regex patterns
+- Handles both boxed and plain text formats for AIME answers
+- 30-second timeout for CLI grader
+- Validates script exists before running
+
+**Refactoring:**
+- Removed all task implementations except AIME
+- Removed regex-based grading (moved to flexible grader system)
+- Removed multiple endpoint support
+- Removed complex task loading logic
+- Removed summary reporting (replaced with real-time feedback)
+- Added HuggingFace dataset caching optimization
