@@ -15,7 +15,7 @@ from tqdm import tqdm
 cache_dir = Path.home() / ".cache" / "huggingface" / "datasets"
 cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["HF_DATASETS_CACHE"] = str(cache_dir)
-os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 GRADER_PATTERNS = {
     "aime": r'\boxed{(\d+)}|\b(\d+)\b',
