@@ -23,6 +23,15 @@
 
 #define UNUSED GGML_UNUSED
 
+static inline bool ggml_ifairy_vecdot_act_tensor_enabled(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = getenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
+        cached           = (env && strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
 #if defined(__ARM_NEON)
 #define B1(c,s,n)  0x ## n ## c ,  0x ## n ## s
 #define B2(c,s,n) B1(c,s,n ## c), B1(c,s,n ## s)
@@ -1768,15 +1777,7 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
     float sum_real_total = 0.0f;
     float sum_imag_total = 0.0f;
 
-    // If activation scales are uniform across blocks (tensor-scale activation),
-    // we can accumulate integer sums across blocks and apply x scales once.
-    const ggml_fp16_t x0_d_real = x[0].d_real;
-    const ggml_fp16_t x0_d_imag = x[0].d_imag;
-
-    int32_t sum_ac_total = 0;
-    int32_t sum_ad_total = 0;
-    int32_t sum_bc_total = 0;
-    int32_t sum_bd_total = 0;
+    const bool act_tensor = ggml_ifairy_vecdot_act_tensor_enabled();
 
     // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列
     // 每个 byte 存 4 个 2-bit code：bits[1:0], bits[3:2], bits[5:4], bits[7:6]
@@ -1810,159 +1811,321 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
     register int8x16_t  v_lut_wr_i1_reg __asm__("v30") = v_lut_wr_i1;
     register int8x16_t  v_lut_wi_i1_reg __asm__("v31") = v_lut_wi_i1;
 
-    for (int i = 0; i < nb; ++i) {
-        __builtin_prefetch(w + i + 1, 0, 1);
-        __builtin_prefetch(x + i + 1, 0, 1);
+    if (act_tensor) {
+        int32_t sum_ac_total = 0;
+        int32_t sum_ad_total = 0;
+        int32_t sum_bc_total = 0;
+        int32_t sum_bd_total = 0;
 
-        // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
-        register int32x4_t acc_ac0 __asm__("v20") = vzero;
-        register int32x4_t acc_ad0 __asm__("v21") = vzero;
-        register int32x4_t acc_bc0 __asm__("v22") = vzero;
-        register int32x4_t acc_bd0 __asm__("v23") = vzero;
-        register int32x4_t acc_ac1 __asm__("v24") = vzero;
-        register int32x4_t acc_ad1 __asm__("v25") = vzero;
-        register int32x4_t acc_bc1 __asm__("v26") = vzero;
-        register int32x4_t acc_bd1 __asm__("v7")  = vzero;
+        for (int i = 0; i < nb; ++i) {
+            __builtin_prefetch(w + i + 1, 0, 1);
+            __builtin_prefetch(x + i + 1, 0, 1);
 
-        const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
-        const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
-        const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+            // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
+            register int32x4_t acc_ac0 __asm__("v20") = vzero;
+            register int32x4_t acc_ad0 __asm__("v21") = vzero;
+            register int32x4_t acc_bc0 __asm__("v22") = vzero;
+            register int32x4_t acc_bd0 __asm__("v23") = vzero;
+            register int32x4_t acc_ac1 __asm__("v24") = vzero;
+            register int32x4_t acc_ad1 __asm__("v25") = vzero;
+            register int32x4_t acc_bc1 __asm__("v26") = vzero;
+            register int32x4_t acc_bd1 __asm__("v7")  = vzero;
 
-        // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
-        for (int j = 0; j < QK_K; j += 128) {
-            const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
-            const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
-            const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
+            const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+            const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
+            const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
 
-            __asm__ volatile(
-                // ---- block 0: weights 0..63 ----
-                "ldr            q0, [%[w]]                  \n"  // w_all_0
-                "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
-                "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
+            // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_K; j += 128) {
+                const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
+                const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
+                const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
 
-                // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
-                // save/restore overhead for this very hot function.
-                //
-                // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
-                "ldp            q3,  q4,  [%[xr]]           \n"
-                "ldp            q5,  q6,  [%[xi]]           \n"
+                __asm__ volatile(
+                    // ---- block 0: weights 0..63 ----
+                    "ldr            q0, [%[w]]                  \n"  // w_all_0
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
+                    "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
 
-                // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
-                "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
-                "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
-                "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
-                "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+                    // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
+                    // save/restore overhead for this very hot function.
+                    //
+                    // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr]]           \n"
+                    "ldp            q5,  q6,  [%[xi]]           \n"
 
-                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+                    // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
 
-                // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
-                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
-                "ldp            q3,  q4,  [%[xr], #32]      \n"
-                "ldp            q5,  q6,  [%[xi], #32]      \n"
+                    // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
-                // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
-                "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
-                "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
-                "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
-                "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+                    // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr], #32]      \n"
+                    "ldp            q5,  q6,  [%[xi], #32]      \n"
 
-                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+                    // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
 
-                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                // ---- block 1: weights 64..127 ----
-                "ldr            q0, [%[w],  #16]            \n"
-                "and            v1.16b, v0.16b, %[m0f].16b  \n"
-                "ushr           v2.16b, v0.16b, #4          \n"
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
-                "ldp            q3,  q4,  [%[xr], #64]      \n"
-                "ldp            q5,  q6,  [%[xi], #64]      \n"
+                    // ---- block 1: weights 64..127 ----
+                    "ldr            q0, [%[w],  #16]            \n"
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"
+                    "ushr           v2.16b, v0.16b, #4          \n"
 
-                "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
-                "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
-                "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
-                "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+                    "ldp            q3,  q4,  [%[xr], #64]      \n"
+                    "ldp            q5,  q6,  [%[xi], #64]      \n"
 
-                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
 
-                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                "ldp            q3,  q4,  [%[xr], #96]      \n"
-                "ldp            q5,  q6,  [%[xi], #96]      \n"
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
-                "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
-                "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
-                "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
-                "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+                    "ldp            q3,  q4,  [%[xr], #96]      \n"
+                    "ldp            q5,  q6,  [%[xi], #96]      \n"
 
-                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
 
-                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
-                : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
-                  [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
-                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
-                  [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
-                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
-        }  // j loop
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-        // 合并两个累加 Bank
-        acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
-        acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
-        acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
-        acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
+                      [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
+                    : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
+                      [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
+                    : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
+            }  // j loop
 
-        // 水平求和
-        const int32_t sum_ac = vaddvq_s32(acc_ac0);
-        const int32_t sum_ad = vaddvq_s32(acc_ad0);
-        const int32_t sum_bc = vaddvq_s32(acc_bc0);
-        const int32_t sum_bd = vaddvq_s32(acc_bd0);
+            // 合并两个累加 Bank
+            acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
+            acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
+            acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
+            acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
 
-        sum_ac_total += sum_ac;
-        sum_bd_total += sum_bd;
-        sum_bc_total += sum_bc;
-        sum_ad_total += sum_ad;
+            // 水平求和
+            const int32_t sum_ac = vaddvq_s32(acc_ac0);
+            const int32_t sum_ad = vaddvq_s32(acc_ad0);
+            const int32_t sum_bc = vaddvq_s32(acc_bc0);
+            const int32_t sum_bd = vaddvq_s32(acc_bd0);
+
+            sum_ac_total += sum_ac;
+            sum_bd_total += sum_bd;
+            sum_bc_total += sum_bc;
+            sum_ad_total += sum_ad;
+        }
+
+        // Load these scales late to reduce register pressure in the hot loop.
+        const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+        const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
+        const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x[0].d_real);
+        const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x[0].d_imag);
+
+        const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
+        const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
+        const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
+        const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
+
+        sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
+        sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
+    } else {
+        // Accumulate with per-block activation scales (matches generic semantics).
+        float acc_ac_xr = 0.0f;
+        float acc_bd_xi = 0.0f;
+        float acc_bc_xr = 0.0f;
+        float acc_ad_xi = 0.0f;
+
+        for (int i = 0; i < nb; ++i) {
+            __builtin_prefetch(w + i + 1, 0, 1);
+            __builtin_prefetch(x + i + 1, 0, 1);
+
+            // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
+            register int32x4_t acc_ac0 __asm__("v20") = vzero;
+            register int32x4_t acc_ad0 __asm__("v21") = vzero;
+            register int32x4_t acc_bc0 __asm__("v22") = vzero;
+            register int32x4_t acc_bd0 __asm__("v23") = vzero;
+            register int32x4_t acc_ac1 __asm__("v24") = vzero;
+            register int32x4_t acc_ad1 __asm__("v25") = vzero;
+            register int32x4_t acc_bc1 __asm__("v26") = vzero;
+            register int32x4_t acc_bd1 __asm__("v7")  = vzero;
+
+            const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
+            const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
+            const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+
+            // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_K; j += 128) {
+                const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
+                const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
+                const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
+
+                __asm__ volatile(
+                    // ---- block 0: weights 0..63 ----
+                    "ldr            q0, [%[w]]                  \n"  // w_all_0
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
+                    "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
+
+                    // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
+                    // save/restore overhead for this very hot function.
+                    //
+                    // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr]]           \n"
+                    "ldp            q5,  q6,  [%[xi]]           \n"
+
+                    // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
+                    "ldp            q3,  q4,  [%[xr], #32]      \n"
+                    "ldp            q5,  q6,  [%[xi], #32]      \n"
+
+                    // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    // ---- block 1: weights 64..127 ----
+                    "ldr            q0, [%[w],  #16]            \n"
+                    "and            v1.16b, v0.16b, %[m0f].16b  \n"
+                    "ushr           v2.16b, v0.16b, #4          \n"
+
+                    "ldp            q3,  q4,  [%[xr], #64]      \n"
+                    "ldp            q5,  q6,  [%[xi], #64]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+
+                    "ldp            q3,  q4,  [%[xr], #96]      \n"
+                    "ldp            q5,  q6,  [%[xi], #96]      \n"
+
+                    "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                    "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                    "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                    "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                    "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                    "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                    "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                    "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
+
+                    "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                    "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                    "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                    "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
+                    : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
+                      [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
+                    : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
+                      [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
+                    : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
+            }  // j loop
+
+            // 合并两个累加 Bank
+            acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
+            acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
+            acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
+            acc_bd0 = vaddq_s32(acc_bd0, acc_bd1);
+
+            // 水平求和
+            const int32_t sum_ac = vaddvq_s32(acc_ac0);
+            const int32_t sum_ad = vaddvq_s32(acc_ad0);
+            const int32_t sum_bc = vaddvq_s32(acc_bc0);
+            const int32_t sum_bd = vaddvq_s32(acc_bd0);
+
+            const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+            const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+
+            acc_ac_xr += x_real * (float) sum_ac;
+            acc_bd_xi += x_imag * (float) sum_bd;
+            acc_bc_xr += x_real * (float) sum_bc;
+            acc_ad_xi += x_imag * (float) sum_ad;
+        }
+
+        // Load these scales late to reduce register pressure in the hot loop.
+        const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+        const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
+        sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+        sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
     }
-
-    // Load these scales late to reduce register pressure in the hot loop.
-    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
-    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
-
-    const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x0_d_real);
-    const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x0_d_imag);
-
-    const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
-    const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
-    const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
-    const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
-
-    sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
-    sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
 
     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
