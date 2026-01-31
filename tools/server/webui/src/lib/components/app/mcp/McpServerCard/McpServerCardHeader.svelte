@@ -44,7 +44,7 @@
 <div class="space-y-3">
 	<div class="flex items-start justify-between gap-3">
 		<div class="grid min-w-0 gap-3">
-			<div class="flex items-center gap-2">
+			<div class="flex items-center gap-2 overflow-hidden">
 				{#if faviconUrl}
 					<img
 						src={faviconUrl}
@@ -63,7 +63,7 @@
 				<p class="truncate leading-none font-medium">{displayName}</p>
 
 				{#if serverInfo?.version}
-					<Badge variant="secondary" class="h-4 shrink-0 px-1 text-[10px]">
+					<Badge variant="secondary" class="h-4 max-w-[200px] truncate px-1 text-[10px]">
 						v{serverInfo.version}
 					</Badge>
 				{/if}
