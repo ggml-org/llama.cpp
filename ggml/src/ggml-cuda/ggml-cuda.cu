@@ -83,6 +83,10 @@
 #include <vector>
 #include <unordered_set>
 
+#if defined(__linux__)
+#include <unistd.h>
+#endif
+
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
 [[noreturn]]
@@ -5049,14 +5053,38 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
-            // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
+            // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance.
+            // Only apply when multiple GPUs are present, as scaling the launch queue on single-GPU systems
+            // (especially Jetson/Tegra with unified memory) can cause deadlocks in the MMQ kernel path.
             // PR: https://github.com/ggml-org/llama.cpp/pull/19042
+            // Issue: https://github.com/ggml-org/llama.cpp/issues/19219
             if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
+                int num_devices = 0;
+#if defined(__linux__)
+                // Count NVIDIA GPU devices without making any CUDA API calls.
+                // The env var must be set before the first CUDA call, so we use
+                // device node enumeration instead of cudaGetDeviceCount().
+                for (int i = 0; i < 16; i++) {
+                    char path[64];
+                    snprintf(path, sizeof(path), "/dev/nvidia%d", i);
+                    if (access(path, F_OK) == 0) {
+                        num_devices++;
+                    } else {
+                        break;
+                    }
+                }
+#elif defined(_WIN32)
+                // On Windows, assume multi-GPU is possible — set the scaling.
+                // TODO: detect GPU count via registry or SetupAPI without CUDA calls.
+                num_devices = 2;
+#endif
+                if (num_devices > 1) {
 #ifdef _WIN32
-                _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
+                    _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
 #else
-                setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
+                    setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
 #endif // _WIN32
+                }
             }
 
             ggml_backend_cuda_reg_context * ctx = new ggml_backend_cuda_reg_context;
