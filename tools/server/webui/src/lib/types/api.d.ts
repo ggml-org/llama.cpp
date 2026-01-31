@@ -23,12 +23,12 @@ export interface ApiContextSizeError {
 
 export interface ApiErrorResponse {
 	error:
-		| ApiContextSizeError
-		| {
-				code: number;
-				message: string;
-				type?: string;
-		  };
+	| ApiContextSizeError
+	| {
+		code: number;
+		message: string;
+		type?: string;
+	};
 }
 
 export interface ApiChatMessageData {
@@ -219,6 +219,39 @@ export interface ApiChatCompletionRequest {
 	timings_per_token?: boolean;
 }
 
+export interface ApiCompletionRequest {
+	prompt: string;
+	stream?: boolean;
+	model?: string;
+	// Generation parameters
+	temperature?: number;
+	max_tokens?: number;
+	// Sampling parameters
+	dynatemp_range?: number;
+	dynatemp_exponent?: number;
+	top_k?: number;
+	top_p?: number;
+	min_p?: number;
+	xtc_probability?: number;
+	xtc_threshold?: number;
+	typ_p?: number;
+	// Penalty parameters
+	repeat_last_n?: number;
+	repeat_penalty?: number;
+	presence_penalty?: number;
+	frequency_penalty?: number;
+	dry_multiplier?: number;
+	dry_base?: number;
+	dry_allowed_length?: number;
+	dry_penalty_last_n?: number;
+	// Sampler configuration
+	samplers?: string[];
+	backend_sampling?: boolean;
+	// Custom parameters (JSON string)
+	custom?: Record<string, unknown>;
+	timings_per_token?: boolean;
+}
+
 export interface ApiChatCompletionToolCallFunctionDelta {
 	name?: string;
 	arguments?: string;
@@ -256,6 +289,32 @@ export interface ApiChatCompletionStreamChunk {
 		cache_n?: number;
 	};
 	prompt_progress?: ChatMessagePromptProgress;
+}
+
+export interface ApiCompletionStreamChunk {
+	content: string;
+	stop: boolean;
+	model: string;
+	timings?: {
+		prompt_n?: number;
+		prompt_ms?: number;
+		predicted_n?: number;
+		predicted_ms?: number;
+		cache_n?: number;
+	};
+}
+
+export interface ApiCompletionResponse {
+	content: string;
+	stop: boolean;
+	model: string;
+	timings?: {
+		prompt_n?: number;
+		prompt_ms?: number;
+		predicted_n?: number;
+		predicted_ms?: number;
+		cache_n?: number;
+	};
 }
 
 export interface ApiChatCompletionResponse {
