@@ -27,6 +27,19 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
+
+/**
+
+ * Core LLM inference engine implementing model loading, context management,
+ * and token generation for GGUF format models
+ * This file provides the main implementation for loading and running large language models in the GGUF format. 
+ * It handles:
+ * - Model weight loading and memory management
+ * - KV cache management for efficient inference
+ * - Multi-backend support (CPU, CUDA, Metal, etc.)
+ * - Batched token processing and generation
+ */
+
 //
 // interface implementation
 //
