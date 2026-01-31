@@ -2736,7 +2736,7 @@ class AfmoeModel(LlamaModel):
 
                     data_torch = torch.stack(datas, dim=0)
                     merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
+                    yield from ModelBase.modify_tensors(self, data_torch, merged_name, bid)
 
                 return
             else:
@@ -2745,7 +2745,7 @@ class AfmoeModel(LlamaModel):
         if name.endswith(".expert_bias"):
             name = name.replace(".expert_bias", ".expert_bias.bias")
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register(
@@ -3799,7 +3799,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
                     merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
                     yield from super().modify_tensors(data_torch, merged_name, bid)
         else:
-            yield from super().modify_tensors(data_torch, name, bid)
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def prepare_tensors(self):
         super().prepare_tensors()
@@ -6145,7 +6145,8 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
 
         if name.startswith("model.vision_tower.timm_model.blocks."):
             # Double-indexed block tensors through custom logic
-            new_name = self.custom_map(name)
+            yield (self.custom_map(name), data_torch)
+            return
         else:
             # Route non-repeating (conv_stem, msfa, embedding, etc.) and un-catched through tensor_mapping.py
             new_name = self.map_tensor_name(name)
@@ -6153,7 +6154,7 @@ class Gemma3nVisionAudioModel(ConformerAudioModel):
         if new_name.endswith("conv_stem.conv.bias") or new_name.endswith("layer_scale.gamma"):
             data_torch = data_torch.unsqueeze(0).unsqueeze(-1).unsqueeze(-1) # [1, C, 1, 1]
 
-        yield from super().modify_tensors(data_torch, new_name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
 
 
 @ModelBase.register("Gemma3nForCausalLM", "Gemma3nForConditionalGeneration")
@@ -6253,7 +6254,7 @@ class Gemma3NModel(Gemma3Model):
 
             # Continue with normal processing
             name = name.replace("language_model.", "")
-            yield from super().modify_tensors(data_torch, name, bid)
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
 
         if "altup_unembed_projections" in name:
@@ -6270,7 +6271,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_unembd)
             if out is not None:
-                yield from super().modify_tensors(out, "model.altup_unembed_projections.weight", bid)
+                yield from ModelBase.modify_tensors(self, out, "model.altup_unembed_projections.weight", bid)
                 return
             else:
                 return
@@ -6287,7 +6288,7 @@ class Gemma3NModel(Gemma3Model):
                 raise ValueError(f"Unknown name: {name}")
             out = self._stack_matrices(self._altup_proj)
             if out is not None:
-                yield from super().modify_tensors(out, "model.altup_projections.weight", bid)
+                yield from ModelBase.modify_tensors(self, out, "model.altup_projections.weight", bid)
                 return
             else:
                 return
@@ -8803,8 +8804,8 @@ class GraniteMoeModel(GraniteModel):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
             gate, up = data_torch.split(ffn_dim, dim=-2)
-            yield from super().modify_tensors(gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
-            yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
 
         has_experts = bool(self.hparams.get('num_local_experts'))
 
@@ -8813,15 +8814,15 @@ class GraniteMoeModel(GraniteModel):
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
             gate, up = data_torch.split(ffn_dim, dim=-2)
             if has_experts:
-                yield from super().modify_tensors(gate,self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
-                yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+                yield from ModelBase.modify_tensors(self, gate,self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
+                yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
                 return
-            yield from super().modify_tensors(gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), bid)
-            yield from super().modify_tensors(up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), bid)
+            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), bid)
+            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), bid)
             return
 
         if not has_experts and name.endswith("shared_mlp.output_linear.weight"):
-            yield from super().modify_tensors(data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), bid)
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), bid)
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
@@ -8911,14 +8912,17 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             name.endswith("block_sparse_moe.input_linear.weight")
             or "shared_mlp" in name
         ):
-            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            yield from GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            return
 
         # Determine whether this is a mamba layer or an attention layer
         if bid in self._ssm_layers:
-            return Mamba2Model.modify_tensors(self, data_torch, name, bid)
+            yield from Mamba2Model.modify_tensors(self, data_torch, name, bid)
+            return
         elif bid in self._attn_layers:
-            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
-        yield from super().modify_tensors(data_torch, name, bid)
+            yield from GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+            return
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
     def set_gguf_parameters(self):
         """This method merges params from both parents and some that are
@@ -9050,33 +9054,33 @@ class NemotronHModel(GraniteHybridModel):
         if self.is_moe and bid is not None:
             if name.endswith("mixer.gate.e_score_correction_bias"):
                 new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-                yield from super().modify_tensors(data_torch, new_name, bid)
+                yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
                 return
 
             if name.endswith("mixer.dt_bias"):
                 new_name = name.replace("dt_bias", "dt.bias")
-                yield from super().modify_tensors(data_torch, new_name, bid)
+                yield from ModelBase.modify_tensors(self, data_torch, new_name, bid)
                 return
 
             if name.endswith("mixer.conv1d.weight"):
                 squeezed_data = data_torch.squeeze()
-                yield from super().modify_tensors(squeezed_data, name, bid)
+                yield from ModelBase.modify_tensors(self, squeezed_data, name, bid)
                 return
 
             if name.endswith("mixer.A_log"):
                 transformed_data = -torch.exp(data_torch)
                 reshaped_data = transformed_data.squeeze().reshape(-1, 1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.endswith("mixer.D"):
                 reshaped_data = data_torch.squeeze().reshape(-1, 1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.endswith("mixer.norm.weight"):
                 reshaped_data = data_torch.reshape(self.n_group, -1)
-                yield from super().modify_tensors(reshaped_data, name, bid)
+                yield from ModelBase.modify_tensors(self, reshaped_data, name, bid)
                 return
 
             if name.find("mixer.experts") != -1:
@@ -9101,7 +9105,7 @@ class NemotronHModel(GraniteHybridModel):
                         data_torch = torch.stack(datas, dim=0)
                         merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
 
-                        yield from super().modify_tensors(data_torch, merged_name, bid)
+                        yield from ModelBase.modify_tensors(self, data_torch, merged_name, bid)
                     return
                 else:
                     return
@@ -10731,7 +10735,7 @@ class CogVLMModel(LlamaModel):
         if name.startswith("model.vision."):
             return
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("JanusForConditionalGeneration")

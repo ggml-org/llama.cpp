@@ -14,6 +14,7 @@
 #include "vec.h"
 #include "ops.h"
 #include "ggml.h"
+#include "common.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -2866,10 +2867,12 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
-                        const int64_t ne10 = node->src[1]->ne[0]; // DK
-                        const int64_t ne20 = node->src[2]->ne[0]; // DV
+                        const int64_t DK = node->src[1]->ne[0];
+                        const int64_t DV = node->src[2]->ne[0];
 
-                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                        // Tiled flash attention scratch (tile sizes defined in common.h)
+                        // Per-thread: Q_q + KQ + mask + VKQ32 + V32 + padding
+                        cur = sizeof(float)*(GGML_FA_TILE_Q*DK + 2*GGML_FA_TILE_Q*GGML_FA_TILE_KV + GGML_FA_TILE_Q*DV + GGML_FA_TILE_KV*DV)*n_tasks;
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {

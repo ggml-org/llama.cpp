@@ -144,7 +144,7 @@ We also have a [guide](./backend/CUDA-FEDORA.md) for setting up CUDA toolkit in 
 - ***Necessary*** for users of [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/); such as: [Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/) and [Kinoite](https://fedoraproject.org/atomic-desktops/kinoite/).
   - (there are no supported CUDA packages for these systems)
 - ***Necessary*** for users that have a host that is not a: [Supported Nvidia CUDA Release Platform](https://developer.nvidia.com/cuda-downloads).
-  - (for example, you may have [Fedora 42 Beta](https://fedoramagazine.org/announcing-fedora-linux-42-beta/) as your your host operating system)
+  - (for example, you may have [Fedora 42 Beta](https://fedoramagazine.org/announcing-fedora-linux-42-beta/) as your host operating system)
 - ***Convenient*** For those running [Fedora Workstation](https://fedoraproject.org/workstation/) or [Fedora KDE Plasma Desktop](https://fedoraproject.org/spins/kde), and want to keep their host system clean.
 - *Optionally* toolbox packages are available: [Arch Linux](https://archlinux.org/), [Red Hat Enterprise Linux >= 8.5](https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux), or [Ubuntu](https://ubuntu.com/download)
 
@@ -247,6 +247,14 @@ You may set the [cuda environmental variables](https://docs.nvidia.com/cuda/cuda
 # Use `CUDA_VISIBLE_DEVICES` to hide the first compute device.
 CUDA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
 ```
+
+#### CUDA_SCALE_LAUNCH_QUEUES
+
+The environment variable [`CUDA_SCALE_LAUNCH_QUEUES`](https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/environment-variables.html#cuda-scale-launch-queues) controls the size of CUDA's command buffer, which determines how many GPU operations can be queued before the CPU must wait for the GPU to catch up. A larger buffer reduces CPU-side stalls and allows more work to be queued on a GPU.
+
+**Default behavior:** llama.cpp automatically sets `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command buffer to 4 times its default size. This optimization is particularly beneficial for **Multi-GPU setups with pipeline parallelism**, where it significantly improves prompt processing throughput by allowing more operations to be enqueued across GPUs.
+
+See PR [#19042](https://github.com/ggml-org/llama.cpp/pull/19042) for performance benchmarks and technical details.
 
 ### Unified Memory
 
@@ -485,6 +493,37 @@ Finally, after finishing your build, you should be able to do something like thi
 
 # You should see in the output, ggml_vulkan detected your GPU. For example:
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
+```
+
+### For Mac users:
+
+Generally, follow LunarG's [Getting Started with the MacOS Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/mac/getting_started.html) guide for installation and setup of the Vulkan SDK. There are two options of Vulkan drivers on macOS, both of which implement translation layers to map Vulkan to Metal. They can be hot-swapped by setting the `VK_ICD_FILENAMES` environment variable to point to the respective ICD JSON file.
+
+Check the box for "KosmicKrisp" during the LunarG Vulkan SDK installation.
+
+Set environment variable for the LunarG Vulkan SDK after installation (and optionally add to your shell profile for persistence):
+```bash
+source /path/to/vulkan-sdk/setup-env.sh
+```
+
+#### Using MoltenVK
+
+MoltenVK is the default Vulkan driver installed with the LunarG Vulkan SDK on macOS, so you can use the above environment variable settings as is.
+
+#### Using KosmicKrisp
+
+Override the environment variable for KosmicKrisp:
+```bash
+export VK_ICD_FILENAMES=$VULKAN_SDK/share/vulkan/icd.d/libkosmickrisp_icd.json
+export VK_DRIVER_FILES=$VULKAN_SDK/share/vulkan/icd.d/libkosmickrisp_icd.json
+```
+
+#### Build
+
+This is the only step different from [above](#common-steps) instructions.
+```bash
+cmake -B build -DGGML_VULKAN=1 -DGGML_METAL=OFF
+cmake --build build --config Release
 ```
 
 ## CANN

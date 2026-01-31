@@ -15,7 +15,6 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
-#include <syclcompat/math.hpp>
 #include <map>
 
 #ifdef GGML_SYCL_USE_INTEL_ONEMKL

@@ -54,7 +54,6 @@ std::string DEFAULT_JSON = R"({
     ],
     "bos_token": "<s>",
     "eos_token": "</s>",
-    "tools": [],
     "add_generation_prompt": true
 })";
 
