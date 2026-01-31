@@ -154,8 +154,8 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         v_pad[i] = v3;
     }
 
-    v       = hvx_vec_reduce_sum_qf32(sum_vec);
-    sum_vec = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(v));
+    v       = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_vec));
+    sum_vec = hvx_vec_repl4(v);
 
     HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, zero_v);
     HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
