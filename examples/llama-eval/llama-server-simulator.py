@@ -62,9 +62,14 @@ class AimeDataset:
 
     def _load_dataset(self):
         print(f"Loading AIME dataset (split: {self.split})...")
-        print(f"Using cache: {os.environ.get('HF_DATASETS_CACHE', 'default')}")
 
-        ds = datasets.load_dataset("AI-MO/aimo-validation-aime", split=self.split)
+        cache_path = Path.home() / ".cache" / "huggingface" / "datasets" / "AI-MO___aimo-validation-aime" / "default" / "0.0.0"
+        if cache_path.exists():
+            print(f"Using cached dataset from {cache_path}")
+            ds = datasets.load_dataset("AI-MO/aimo-validation-aime", split=self.split, cache_dir=str(cache_path))
+        else:
+            ds = datasets.load_dataset("AI-MO/aimo-validation-aime", split=self.split)
+
         self.questions = list(ds)
         print(f"AIME dataset loaded: {len(self.questions)} questions")
 
