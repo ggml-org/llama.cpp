@@ -6,11 +6,23 @@ export class NotebookStore {
     isGenerating = $state(false);
     abortController: AbortController | null = null;
 
+    // Statistics
+    promptTokens = $state(0);
+    promptMs = $state(0);
+    predictedTokens = $state(0);
+    predictedMs = $state(0);
+
     async generate(model?: string) {
         if (this.isGenerating) return;
 
         this.isGenerating = true;
         this.abortController = new AbortController();
+
+        // Reset stats
+        this.promptTokens = 0;
+        this.promptMs = 0;
+        this.predictedTokens = 0;
+        this.predictedMs = 0;
 
         try {
             const currentConfig = config();
@@ -22,6 +34,14 @@ export class NotebookStore {
                     stream: true,
                     onChunk: (chunk) => {
                         this.content += chunk;
+                    },
+                    onTimings: (timings) => {
+                        if (timings) {
+                            if (timings.prompt_n) this.promptTokens = timings.prompt_n;
+                            if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
+                            if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
+                            if (timings.predicted_ms) this.predictedMs = timings.predicted_ms;
+                        }
                     },
                     onComplete: () => {
                         this.isGenerating = false;
