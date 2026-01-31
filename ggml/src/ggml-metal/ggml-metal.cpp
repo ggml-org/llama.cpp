@@ -166,6 +166,11 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_private_i = {
     /* .reset           = */ NULL,
 };
 
+static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer) {
+    return buffer->iface.free_buffer == ggml_backend_metal_buffer_shared_free_buffer ||
+           buffer->iface.free_buffer == ggml_backend_metal_buffer_private_free_buffer;
+}
+
 //
 // buffer types
 //
@@ -496,12 +501,24 @@ static void ggml_backend_metal_get_tensor_async(ggml_backend_t backend, const gg
 }
 
 static bool ggml_backend_metal_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
-    return false;
+    if (!ggml_backend_is_metal(backend_src) || !ggml_backend_is_metal(backend_dst)) {
+        return false;
+    }
 
-    GGML_UNUSED(backend_src);
-    GGML_UNUSED(backend_dst);
-    GGML_UNUSED(src);
-    GGML_UNUSED(dst);
+    if (!ggml_backend_buffer_is_metal(src->buffer) || !ggml_backend_buffer_is_metal(dst->buffer)) {
+        return false;
+    }
+
+    ggml_metal_t ctx_src = (ggml_metal_t)backend_src->context;
+    ggml_metal_t ctx_dst = (ggml_metal_t)backend_dst->context;
+
+    //ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
+    //ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
+
+    //ggml_metal_buffer_t buf_ctx_src = (ggml_metal_buffer_t)buf_src->context;
+    //ggml_metal_buffer_t buf_ctx_dst = (ggml_metal_buffer_t)buf_dst->context;
+
+    return ggml_metal_cpy_tensor_async(ctx_src, ctx_dst, src, dst);
 }
 
 static enum ggml_status ggml_backend_metal_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -736,7 +753,7 @@ static bool ggml_backend_metal_device_offload_op(ggml_backend_dev_t dev, const g
 static ggml_backend_event_t ggml_backend_metal_device_event_new(ggml_backend_dev_t dev) {
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
-    ggml_metal_event_t event = ggml_metal_device_event_new(ctx_dev);
+    ggml_metal_event_t event = ggml_metal_device_event_init(ctx_dev);
     GGML_ASSERT(event);
 
     ggml_backend_event_t ev = new ggml_backend_event {

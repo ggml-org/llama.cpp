@@ -948,7 +948,7 @@ void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cm
     [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
 }
 
-ggml_metal_event_t ggml_metal_device_event_new(ggml_metal_device_t dev) {
+ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
     id<MTLEvent> event = [dev->mtl_device newEvent];
 
     ggml_metal_event_t ev = calloc(1, sizeof(struct ggml_metal_event));

@@ -29,6 +29,8 @@ struct ggml_metal {
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
 
+    ggml_metal_event_t ev_cpy; // for async copies
+
     dispatch_queue_t d_queue;
 
     // additional, inference-time compiled pipelines
@@ -118,6 +120,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             return NULL;
         }
     }
+
+    res->ev_cpy = ggml_metal_device_event_init(dev);
 
     const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
@@ -209,6 +213,8 @@ void ggml_metal_free(ggml_metal_t ctx) {
     //[ctx->queue release]; // [TAG_QUEUE_PER_BACKEND]
 
     dispatch_release(ctx->d_queue);
+
+    ggml_metal_device_event_free(ctx->dev, ctx->ev_cpy);
 
     free(ctx);
 }
@@ -361,6 +367,49 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
         ctx->cmd_buf_last = cmd_buf;
 
         [cmd_buf retain];
+    }
+}
+
+bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    @autoreleasepool {
+        struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(src);
+        struct ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(dst);
+
+        if (bid_src.metal == nil || bid_dst.metal == nil) {
+            return false;
+        }
+
+        // queue the copy operation into the Metal context
+        // this will be queued at the end, after any currently ongoing GPU operations
+        id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx_src->dev);
+        id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+        [encoder copyFromBuffer:bid_src.metal
+                   sourceOffset:bid_src.offs
+                       toBuffer:bid_dst.metal
+              destinationOffset:bid_dst.offs
+                           size:ggml_nbytes(src)];
+
+        [encoder endEncoding];
+
+        ggml_metal_event_t ev_cpy = ggml_metal_get_ev_cpy(ctx_src);
+        ggml_metal_event_record(ctx_src, ev_cpy);
+
+        [cmd_buf commit];
+
+        // do not wait here for completion
+        //[cmd_buf waitUntilCompleted];
+
+        // instead, remember a reference to the command buffer and wait for it later if needed
+        [ctx_src->cmd_bufs_ext addObject:cmd_buf];
+        ctx_src->cmd_buf_last = cmd_buf;
+
+        [cmd_buf retain];
+
+        ggml_metal_event_wait(ctx_dst, ev_cpy);
+
+        return true;
     }
 }
 
@@ -568,6 +617,10 @@ void ggml_metal_event_wait(ggml_metal_t ctx, ggml_metal_event_t ev) {
 
         [cmd_buf retain];
     }
+}
+
+ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
+    return ctx->ev_cpy;
 }
 
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
