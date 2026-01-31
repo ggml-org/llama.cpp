@@ -229,13 +229,18 @@ class Processor:
         with ThreadPoolExecutor(max_workers=self.threads) as executor:
             futures = {executor.submit(self._process_single_case, i): i for i in indices}
 
-            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing"):
+            for future in as_completed(futures):
                 task_state = future.result()
                 task_states["aime"].append(task_state)
                 total += 1
 
                 if task_state.correct:
                     correct += 1
+
+                # Print task completion status
+                pred_display = task_state.pred if task_state.pred else "N/A"
+                success_ratio = correct / total if total > 0 else 0.0
+                print(f"{total:3}/{n_cases:3}  {task_state.case_id:<15} AIME2025   {task_state.prompt[:50]:<50}    {task_state.gold:<10} {pred_display:<10} {'✓' if task_state.correct else '✗'}  [{correct:3}/{total:3}, {success_ratio:.3f}]")
 
                 if self.verbose:
                     print(f"\nCase {total}: {task_state.correct}")
