@@ -1,3 +1,5 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
 kernel void kernel_tanh_f32(
         global const float * src0,
         ulong                offset0,
