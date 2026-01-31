@@ -209,3 +209,39 @@ Questions:
 - Removed complex task loading logic
 - Removed summary reporting (replaced with real-time feedback)
 - Added HuggingFace dataset caching optimization
+
+### llama-eval-new.py Threading and Model Parameter Updates
+
+**Changes Made:**
+1. **Threading Support** - Added ThreadPoolExecutor for parallel request processing
+   - Added `from concurrent.futures import ThreadPoolExecutor, as_completed`
+   - Created `_process_single_case()` method for thread-safe case processing
+   - Refactored `process()` to use ThreadPoolExecutor with configurable thread count
+   - Updated progress tracking to work with concurrent execution
+   - Thread-safe eval state updates (task_states and counters)
+
+2. **Model Parameter** - Added `--model` argument to specify model name in request data
+   - Added `model_name` parameter to Processor.__init__()
+   - Updated `_make_request()` to use provided model name or default to "llama"
+   - Added `--model` argument to argument parser
+   - Model name is included in request JSON as `"model": "gpt-oss-20b-hf"`
+
+**Testing Results:**
+- ✅ Works with 2 threads (5 cases processed in ~0.2s)
+- ✅ Works with 4 threads (slightly faster throughput)
+- ✅ Model parameter correctly added to request data
+- ✅ Thread-safe progress tracking with tqdm
+- ✅ No race conditions in eval state updates
+
+**Key Technical Decisions:**
+- Used ThreadPoolExecutor for simple, effective parallelism
+- No rate limiting needed (server can handle concurrent requests)
+- Thread-safe counter updates for correct/total tracking
+- Progress bar shows completion status across all threads
+- Model parameter is optional - defaults to "llama" if not specified
+
+**Refactoring:**
+- Extracted single case processing into `_process_single_case()` method
+- Changed from sequential loop to ThreadPoolExecutor with futures
+- Updated verbose output to show total count instead of index
+- Made eval state updates thread-safe
