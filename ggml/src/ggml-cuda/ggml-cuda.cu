@@ -2921,6 +2921,7 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
     memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
     props->node_data = node->data;
     props->node_op = node->op;
+    props->node_type = node->type;
     props->flags = node->flags;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         props->ne[i] = node->ne[i];
@@ -2942,6 +2943,10 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
     }
 
     if (node->op != props->node_op) {
+        return false;
+    }
+
+    if (node->type != props->node_type) {
         return false;
     }
 
@@ -3906,14 +3911,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
 #else
+        GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
 #endif  // USE_CUDA_GRAPH
     }
 }
 
-static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
-
 #ifdef USE_CUDA_GRAPH
+static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     if (graph->graph == nullptr) {
@@ -3926,12 +3931,8 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, co
     }
 
     return graph->is_enabled();
-#else
-    GGML_UNUSED(cuda_ctx);
-    GGML_UNUSED(graph_key);
-    return false;
-#endif // USE_CUDA_GRAPH
 }
+#endif // USE_CUDA_GRAPH
 
 static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;

@@ -213,6 +213,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [llama.vim](https://github.com/ggml-org/llama.vim) (MIT)
 - [LARS](https://github.com/abgulati/LARS) (AGPL)
 - [Llama Assistant](https://github.com/vietanhdev/llama-assistant) (GPL)
+- [LlamaLib](https://github.com/undreamai/LlamaLib) (Apache-2.0)
 - [LLMFarm](https://github.com/guinmoon/LLMFarm?tab=readme-ov-file) (MIT)
 - [LLMUnity](https://github.com/undreamai/LLMUnity) (MIT)
 - [LMStudio](https://lmstudio.ai/) (proprietary)
