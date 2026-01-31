@@ -60,10 +60,10 @@
 					</div>
 				{/if}
 
-				<p class="truncate leading-none font-medium">{displayName}</p>
+				<p class="min-w-0 shrink-0 truncate leading-none font-medium">{displayName}</p>
 
 				{#if serverInfo?.version}
-					<Badge variant="secondary" class="h-4 max-w-[200px] truncate px-1 text-[10px]">
+					<Badge variant="secondary" class="h-4 min-w-0 truncate px-1 text-[10px]">
 						v{serverInfo.version}
 					</Badge>
 				{/if}
