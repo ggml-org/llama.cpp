@@ -9,7 +9,7 @@
 	import { AgenticSectionType, AttachmentType } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
 	import { parseAgenticContent, type AgenticSection } from '$lib/utils/agentic';
-	import type { DatabaseMessage } from '$lib/types/database';
+	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
 
 	interface Props {
 		/** Optional database message for context */
@@ -27,6 +27,16 @@
 	const sections = $derived(parseAgenticContent(content));
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+
+	// Parse toolResults with images only when sections or message.extra change
+	const sectionsParsed = $derived(
+		sections.map((section) => ({
+			...section,
+			parsedLines: section.toolResult
+				? parseToolResultWithImages(section.toolResult, message?.extra)
+				: []
+		}))
+	);
 
 	function getDefaultExpanded(section: AgenticSection): boolean {
 		if (
@@ -56,10 +66,34 @@
 
 		expandedStates[index] = !currentState;
 	}
+
+	type ToolResultLine = {
+		text: string;
+		image?: DatabaseMessageExtraImageFile;
+	};
+
+	function parseToolResultWithImages(
+		toolResult: string,
+		extras?: DatabaseMessage['extra']
+	): ToolResultLine[] {
+		const lines = toolResult.split('\n');
+		return lines.map((line) => {
+			const match = line.match(/\[Attachment saved: ([^\]]+)\]/);
+			if (!match || !extras) return { text: line };
+
+			const attachmentName = match[1];
+			const image = extras.find(
+				(e): e is DatabaseMessageExtraImageFile =>
+					e.type === AttachmentType.IMAGE && e.name === attachmentName
+			);
+
+			return { text: line, image };
+		});
+	}
 </script>
 
 <div class="agentic-content">
-	{#each sections as section, index (index)}
+	{#each sectionsParsed as section, index (index)}
 		{#if section.type === AgenticSectionType.TEXT}
 			<div class="agentic-text">
 				<MarkdownContent content={section.content} {message} />
@@ -144,26 +178,19 @@
 						{/if}
 					</div>
 					{#if section.toolResult}
-						<div class="overflow-auto rounded-lg border border-border bg-muted">
-							<!-- prettier-ignore -->
-							<pre class="m-0 overflow-x-auto whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed"><code>{section.toolResult}</code></pre>
+						<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
+							{#each section.parsedLines as line, i (i)}
+								<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">{line.text}</div>
+								{#if line.image}
+									<img
+										src={line.image.base64Url}
+										alt={line.image.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+								{/if}
+							{/each}
 						</div>
-
-						{#if message?.extra}
-							{@const images = message.extra.filter((e) => e.type === AttachmentType.IMAGE)}
-							{#if images.length > 0}
-								<div class="mt-3 flex flex-col gap-2">
-									{#each images as image (image.name)}
-										<img
-											src={image.base64Url}
-											alt={image.name}
-											class="h-auto max-w-full rounded-lg"
-											loading="lazy"
-										/>
-									{/each}
-								</div>
-							{/if}
-						{/if}
 					{:else if isPending}
 						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
 							Waiting for result...
