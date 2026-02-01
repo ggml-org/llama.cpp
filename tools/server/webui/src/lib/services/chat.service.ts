@@ -3,6 +3,7 @@ import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+import { modelsStore } from '$lib/stores/models.svelte';
 
 /**
  * ChatService - Low-level API communication layer for Chat Completions
@@ -149,6 +150,27 @@ export class ChatService {
 
 				return true;
 			});
+
+		// Filter out image attachments if the model doesn't support vision
+		if (options.model && !modelsStore.modelSupportsVision(options.model)) {
+			normalizedMessages.forEach((msg) => {
+				if (Array.isArray(msg.content)) {
+					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
+						if (part.type === 'image_url') {
+							console.info(
+								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
+							);
+							return false;
+						}
+						return true;
+					});
+					// If only text remains and it's a single part, simplify to string
+					if (msg.content.length === 1 && msg.content[0].type === 'text') {
+						msg.content = msg.content[0].text;
+					}
+				}
+			});
+		}
 
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
