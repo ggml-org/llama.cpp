@@ -1,21 +1,23 @@
 #include "server-context.h"
-#include "server-common.h"
-#include "server-http.h"
-#include "server-task.h"
-#include "server-queue.h"
 
 #include "common.h"
 #include "llama.h"
 #include "log.h"
-#include "sampling.h"
-#include "speculative.h"
-#include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd.h"
+#include "sampling.h"
+#include "server-common.h"
+#include "server-http.h"
+#include "server-queue.h"
+#include "server-task.h"
+#include "speculative.h"
 
-#include <cstddef>
+#include <bsm/audit.h>
+
 #include <cinttypes>
-#include <memory>
+#include <cstddef>
 #include <filesystem>
+#include <memory>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -1121,6 +1123,13 @@ private:
                 SLT_DBG(slot, "alora %zu activated starting at %zu\n", enabled_ids[0], alora_invocation_start);
                 slot.alora_invocation_start = alora_invocation_start;
             }
+        }
+
+        if (task.params.n_token_healing_enabled) {
+            task.token_healing_params.healing_token = task.tokens.back();
+            task.token_healing_params.healing_token_text = ltrim( common_token_to_piece(ctx, task.token_healing_params.healing_token));
+            task.tokens.pop_back();
+            SLT_DBG(slot, "Token healing enabled, removed last token: %d ('%s')\n",task.token_healing_params.healing_token, task.token_healing_params.healing_token_text.c_str());
         }
 
         if (!task.tokens.validate(ctx)) {
@@ -2739,6 +2748,41 @@ private:
 
                 llama_token id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
 
+                if (slot.task->params.n_token_healing_enabled && !slot.task->token_healing_result.token_healing_complete) {
+                    //need to compare sampled token with the prefix of the healing token
+                    bool continue_sampling = true;
+                    int num_attempts = 0;
+
+                    while (continue_sampling) {
+                        const std::string token_text = ltrim(common_token_to_piece(ctx, id));
+
+                        if (token_text.empty()) {
+                            break;
+                        }
+
+                        bool matched_healing_token = false;
+
+                        size_t matched_position = token_text.find(slot.task->token_healing_params.healing_token_text);
+
+                        if (matched_position != std::string::npos) {
+                            matched_healing_token = true;
+                        }
+
+                        if (!matched_healing_token && num_attempts < slot.task->params.n_token_healing_max_retries) {
+                            id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
+                            num_attempts ++;
+                        } else {
+                            if (matched_healing_token) {
+                                //If token healing matched, we only want to return a substring AFTER the match.
+                                slot.task->token_healing_result.accepted_healing_token_text = token_text.substr(matched_position + slot.task->token_healing_params.healing_token_text.length());
+                            } else {
+                                slot.task->token_healing_result.accepted_healing_token_text = token_text;
+                            }
+                            continue_sampling = false;
+                        }
+                    }
+                }
+
                 slot.i_batch = -1;
 
                 common_sampler_accept(slot.smpl.get(), id, true);
@@ -2758,7 +2802,16 @@ private:
 
                 completion_token_output result;
                 result.tok          = id;
-                result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+
+                if (slot.task->params.n_token_healing_enabled && !slot.task->token_healing_result.token_healing_complete)  {
+                    if (!slot.task->token_healing_result.accepted_healing_token_text.empty()) {
+                        result.text_to_send = slot.task->token_healing_result.accepted_healing_token_text;
+                        slot.task->token_healing_result.token_healing_complete = true;
+                    }
+                } else {
+                    result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+                }
+
                 result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
                 if (slot.task->params.sampling.n_probs > 0) {
@@ -2954,6 +3007,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         std::vector<server_task> tasks;
 
         const auto & prompt = data.at("prompt");
+
+        SRV_INF("\n\nYOOO (UPDATED) this is the System Prompt: %s\n\n", prompt.get<std::string>().c_str());
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
