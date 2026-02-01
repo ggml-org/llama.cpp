@@ -499,6 +499,7 @@
 	/**
 	 * Queues markdown for processing with coalescing support.
 	 * Only processes the latest markdown when multiple updates arrive quickly.
+	 * Uses requestAnimationFrame to yield to browser paint between batches.
 	 * @param markdown - The markdown content to render
 	 */
 	async function updateRenderedBlocks(markdown: string) {
@@ -516,6 +517,12 @@
 				pendingMarkdown = null;
 
 				await processMarkdown(nextMarkdown);
+
+				// Yield to browser for paint before processing next batch
+				// This prevents UI freeze at high token rates (250+ tok/s)
+				if (pendingMarkdown !== null) {
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				}
 			}
 		} catch (error) {
 			console.error('Failed to process markdown:', error);
