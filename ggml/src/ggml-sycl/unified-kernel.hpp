@@ -96,14 +96,14 @@ constexpr int XMX_SUBGROUP_SIZE = 16;
 // Environment Variable Checks for XMX Configuration
 // =============================================================================
 // These functions use static caching to avoid repeated getenv() calls.
-// GGML_SYCL_XMX_ESIMD=1: Enable ESIMD dpas path (disabled by default)
+// GGML_SYCL_XMX_ESIMD=0: Disable ESIMD dpas path (enabled by default while optimizing)
 // GGML_SYCL_XMX_INT8=1: Enable INT8 quantization in dpas (disabled by default)
 
 /**
  * Check if ESIMD dpas path is enabled via environment.
  *
  * The ESIMD dpas path uses low-level ESIMD instructions instead of joint_matrix.
- * This is disabled by default. Set GGML_SYCL_XMX_ESIMD=1 to enable.
+ * This is enabled by default while optimizing. Set GGML_SYCL_XMX_ESIMD=0 to disable.
  *
  * @return true if ESIMD dpas path is enabled
  */
@@ -111,7 +111,11 @@ inline bool use_esimd_dpas() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_XMX_ESIMD");
-        enabled          = (env && std::string(env) == "1") ? 1 : 0;
+        if (!env) {
+            enabled = 1;
+        } else {
+            enabled = (std::string(env) == "0") ? 0 : 1;
+        }
     }
     return enabled != 0;
 }
@@ -310,6 +314,44 @@ inline int get_esimd_min_batch() {
 }
 
 /**
+ * Prefer ESIMD for small batches (cached).
+ *
+ * When GGML_SYCL_UNIFIED_PREFER_ESIMD_SMALL=1 (default), the unified kernel
+ * will bias toward ESIMD for small M to improve XMX occupancy vs joint_matrix.
+ *
+ * @return true if ESIMD should be preferred for small batches
+ */
+inline bool prefer_esimd_small() {
+    static int prefer = -1;
+    if (prefer < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_PREFER_ESIMD_SMALL");
+        prefer = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
+    }
+    return prefer != 0;
+}
+
+/**
+ * Maximum M to prefer ESIMD over joint_matrix (cached).
+ *
+ * Controlled by GGML_SYCL_UNIFIED_PREFER_ESIMD_MAX_M (default: 32).
+ *
+ * @return Maximum M for ESIMD preference
+ */
+inline int prefer_esimd_max_m() {
+    static int max_m = -1;
+    if (max_m < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_PREFER_ESIMD_MAX_M");
+        if (env) {
+            int val = std::atoi(env);
+            max_m = (val > 0) ? val : 32;
+        } else {
+            max_m = 32;
+        }
+    }
+    return max_m;
+}
+
+/**
  * Check if MMVQ path is forced via environment (cached).
  *
  * When GGML_SYCL_FORCE_MMVQ=1 is set, always use MMVQ path regardless of
@@ -455,11 +497,11 @@ struct XMXConfig {
  * 3. Environment overrides (GGML_SYCL_FORCE_MMVQ, GGML_SYCL_FORCE_ESIMD)
  *
  * Decision tree:
- * - batch_size == 1 -> DMMV (always, memory-bound single vector)
  * - FORCE_MMVQ=1 -> MMVQ (environment override)
- * - batch_size < min_batch -> MMVQ (small batch, memory-bound)
+ * - FORCE_ESIMD=1 -> ESIMD_DPAS (environment override, if hardware supports XMX)
+ * - batch_size == 1 -> DMMV unless ESIMD is explicitly enabled (GGML_SYCL_XMX_ESIMD=1)
+ * - batch_size < min_batch -> MMVQ unless ESIMD is explicitly enabled
  * - !cfg.supported -> MMVQ (no XMX hardware)
- * - FORCE_ESIMD=1 -> ESIMD_DPAS (environment override)
  * - Otherwise -> ESIMD_DPAS (compute-bound, XMX beneficial)
  *
  * @param batch_size   Number of tokens (M dimension)
@@ -481,32 +523,41 @@ inline KernelPath select_kernel_path(
     (void)K;
     (void)quant_type;
 
-    // Batch=1: Always DMMV (memory-bound, optimized for single vector)
-    if (batch_size == 1) {
-        return KernelPath::DMMV;
-    }
-
     // Environment override: Force MMVQ path
     if (env_force_mmvq()) {
         return KernelPath::MMVQ;
     }
 
+    // Environment override: Force ESIMD path (if hardware supports it)
+    if (env_force_esimd()) {
+        return cfg.supported ? KernelPath::ESIMD_DPAS : KernelPath::MMVQ;
+    }
+
     // Check environment override first (cached at init)
     const int min_batch = get_esimd_min_batch();
 
-    // Batch < threshold: MMVQ (small batch, still memory-bound)
+    // Explicit ESIMD opt-in via GGML_SYCL_XMX_ESIMD=1 can bypass batch gating.
+    const bool esimd_opt_in = use_esimd_dpas();
+
+    // Batch=1: DMMV unless ESIMD explicitly enabled (or prefer ESIMD for small batches)
+    if (batch_size == 1) {
+        if (prefer_esimd_small() && cfg.supported) {
+            return KernelPath::ESIMD_DPAS;
+        }
+        return (esimd_opt_in && cfg.supported) ? KernelPath::ESIMD_DPAS : KernelPath::DMMV;
+    }
+
+    // Batch < threshold: MMVQ unless ESIMD explicitly enabled (or prefer ESIMD for small batches)
     if (batch_size < min_batch) {
-        return KernelPath::MMVQ;
+        if (prefer_esimd_small() && cfg.supported) {
+            return KernelPath::ESIMD_DPAS;
+        }
+        return (esimd_opt_in && cfg.supported) ? KernelPath::ESIMD_DPAS : KernelPath::MMVQ;
     }
 
     // Check if ESIMD available
     if (!cfg.supported) {
         return KernelPath::MMVQ;
-    }
-
-    // Environment override: Force ESIMD path
-    if (env_force_esimd()) {
-        return KernelPath::ESIMD_DPAS;
     }
 
     // Default: ESIMD dpas for compute-bound regime
@@ -673,6 +724,9 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args);
 // Utility Functions
 // =============================================================================
 
+// Forward declarations for small-tile XMX gating helpers.
+inline bool allow_small_xmx_tiles();
+
 /**
  * Calculate required SLM size for unified kernel.
  *
@@ -741,8 +795,8 @@ inline bool validate_args(const UnifiedKernelArgs & args) {
  * @return true if scalar fallback should be used
  */
 inline bool should_use_scalar_fallback(const UnifiedKernelArgs & args) {
-    // Use scalar for very small M (too small for XMX)
-    if (args.M < 8) {
+    // Use scalar for very small M unless small-tile XMX is explicitly enabled
+    if (args.M < 8 && !allow_small_xmx_tiles()) {
         return true;
     }
     // Use scalar for K not aligned to 32 (dpas requirement)
@@ -1668,8 +1722,8 @@ inline void compute_tile_xmx(
 /**
  * Check if XMX unified kernel path is enabled via environment.
  *
- * XMX unified path is DISABLED by default due to 27% performance regression
- * (PP512: 25.73 -> 18.78 t/s). Set GGML_SYCL_XMX_UNIFIED=1 to enable for testing.
+ * XMX unified path is ENABLED by default while optimizing. Set
+ * GGML_SYCL_XMX_UNIFIED=0 to disable if needed.
  *
  * The XMX path correctness issues have been resolved.
  * TODO: Enable by default once kernel is optimized (see llama.cpp-gkvk).
@@ -1680,21 +1734,58 @@ inline bool is_xmx_unified_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char* env = std::getenv("GGML_SYCL_XMX_UNIFIED");
-        // Disabled by default (opt-in): XMX path shows 27% regression vs scalar path
-        // Enable with GGML_SYCL_XMX_UNIFIED=1 for testing/development only
-        // TODO: Enable by default once XMX kernel is optimized (see llama.cpp-gkvk benchmark results)
-        enabled = (env && std::string(env) == "1") ? 1 : 0;
+        if (!env) {
+            enabled = 1;
+        } else {
+            enabled = (std::string(env) == "0") ? 0 : 1;
+        }
     }
     return enabled != 0;
+}
+
+/**
+ * Check if XMX is force-enabled via environment.
+ *
+ * GGML_SYCL_UNIFIED_FORCE_XMX=1 or GGML_SYCL_FORCE_ESIMD=1 forces XMX usage
+ * in dispatch and should also bypass conservative size gating.
+ */
+inline bool is_xmx_force_enabled() {
+    static int forced = -1;
+    if (forced < 0) {
+        const char * env_force = std::getenv("GGML_SYCL_UNIFIED_FORCE_XMX");
+        const char * env_esimd = std::getenv("GGML_SYCL_FORCE_ESIMD");
+        const bool   force_xmx = (env_force && std::atoi(env_force) != 0);
+        const bool   force_esimd = (env_esimd && std::atoi(env_esimd) != 0);
+        forced = (force_xmx || force_esimd) ? 1 : 0;
+    }
+    return forced != 0;
+}
+
+/**
+ * Allow XMX for small tiles (M < 8 or N < 16).
+ *
+ * Enabled by default to drive XMX usage during decode. Set
+ * GGML_SYCL_XMX_ALLOW_SMALL_TILES=0 to restore strict M/N gating.
+ */
+inline bool allow_small_xmx_tiles() {
+    static int allow = -1;
+    if (allow < 0) {
+        const char * env = std::getenv("GGML_SYCL_XMX_ALLOW_SMALL_TILES");
+        allow = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
+        if (!allow && is_xmx_force_enabled()) {
+            allow = 1;
+        }
+    }
+    return allow != 0;
 }
 
 /**
  * Check if XMX path can be used for given dimensions.
  *
  * XMX requires:
- * - XMX enabled (GGML_SYCL_XMX_UNIFIED=1, disabled by default)
- * - M >= XMX_TILE_M (8)
- * - N >= XMX_TILE_N (16)
+ * - XMX enabled (GGML_SYCL_XMX_UNIFIED=0 disables; default enabled while optimizing)
+ * - M >= XMX_TILE_M (8) unless GGML_SYCL_XMX_ALLOW_SMALL_TILES=1
+ * - N >= XMX_TILE_N (16) unless GGML_SYCL_XMX_ALLOW_SMALL_TILES=1
  * - K aligned to XMX_TILE_K (16) for dpas
  *
  * @param M  Output rows
@@ -1703,11 +1794,19 @@ inline bool is_xmx_unified_enabled() {
  * @return true if XMX can be used
  */
 inline bool can_use_xmx(int64_t M, int64_t N, int64_t K) {
-    // XMX path disabled by default, enable with GGML_SYCL_XMX_UNIFIED=1
+    // XMX path enabled by default; disable with GGML_SYCL_XMX_UNIFIED=0
     if (!is_xmx_unified_enabled()) {
         return false;
     }
-    return M >= XMX_TILE_M && N >= XMX_TILE_N && (K % XMX_TILE_K) == 0;
+    if (M <= 0 || N <= 0 || K <= 0) {
+        return false;
+    }
+    if (!allow_small_xmx_tiles()) {
+        if (M < XMX_TILE_M || N < XMX_TILE_N) {
+            return false;
+        }
+    }
+    return (K % XMX_TILE_K) == 0;
 }
 
 #else  // !GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
@@ -1718,6 +1817,14 @@ inline bool can_use_xmx(int64_t M, int64_t N, int64_t K) {
  * Note: For production use without joint_matrix, consider implementing
  * an ESIMD-based dpas path using sycl::ext::intel::esimd::xmx::dpas.
  */
+inline bool is_xmx_force_enabled() {
+    return false;
+}
+
+inline bool allow_small_xmx_tiles() {
+    return false;
+}
+
 inline bool can_use_xmx(int64_t /* M */, int64_t /* N */, int64_t /* K */) {
     return false;  // XMX not available
 }

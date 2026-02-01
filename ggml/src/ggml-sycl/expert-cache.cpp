@@ -6,6 +6,7 @@
 
 #include "expert-cache.hpp"
 
+#include "common.hpp"
 #include "ggml-impl.h"
 #include "pinned-pool.hpp"
 
@@ -15,6 +16,7 @@ expert_cache::expert_cache(sycl::queue & compute_queue, pinned_chunk_pool & pool
     compute_queue_(compute_queue),
     copy_queue_(compute_queue.get_context(), compute_queue.get_device()),
     pinned_pool_(pool),
+    device_id_(ggml_sycl_get_device_id_from_queue(compute_queue)),
     vram_budget_(vram_budget) {
     GGML_LOG_INFO("[SYCL] Expert cache created with %.1f GB VRAM budget\n", vram_budget / (1024.0 * 1024.0 * 1024.0));
 }
@@ -27,6 +29,7 @@ expert_cache::~expert_cache() {
     // Free all VRAM allocations
     for (auto & [key, entry] : vram_entries_) {
         if (entry.vram_ptr) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, entry.size);
             sycl::free(entry.vram_ptr, compute_queue_);
         }
     }
@@ -156,15 +159,19 @@ void * expert_cache::allocate_vram(size_t size) {
     // Allocate device memory
     void * ptr = nullptr;
     try {
-        ptr = sycl::malloc_device(size, compute_queue_);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size);
+        ptr = ggml_sycl_malloc_device(size, compute_queue_, "expert_cache_vram");
     } catch (const sycl::exception & e) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
         GGML_LOG_ERROR("[SYCL] Expert cache VRAM allocation failed: %s\n", e.what());
         return nullptr;
     }
 
-    if (ptr) {
-        vram_used_ += size;
+    if (!ptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
+        return nullptr;
     }
+    vram_used_ += size;
     return ptr;
 }
 
@@ -186,6 +193,7 @@ void expert_cache::evict_lowest_score() {
     }
 
     // Free VRAM and remove entry
+    ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, worst->second.size);
     sycl::free(worst->second.vram_ptr, compute_queue_);
     vram_used_ -= worst->second.size;
     vram_entries_.erase(worst);

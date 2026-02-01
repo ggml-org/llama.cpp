@@ -1,4 +1,5 @@
 #include "convert.hpp"
+#include "common.hpp"
 
 #include "dequantize.hpp"
 #include "presets.hpp"
@@ -511,7 +512,7 @@ void reorder_q4_0_aos_to_coalesced_sycl(const void *    src,
     const size_t total_bytes    = total_blocks * sizeof(block_q4_0);
 
     // Always use a temp buffer to support in-place conversion safely
-    uint8_t *   temp       = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t *   temp       = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "convert_temp");
     sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
 
     sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
@@ -526,7 +527,9 @@ void reorder_q4_0_aos_to_coalesced_sycl(const void *    src,
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -591,7 +594,7 @@ void reorder_q8_0_aos_to_coalesced_sycl(const void *    src,
     const size_t total_blocks   = (size_t) blocks_per_row * (size_t) nrows;
     const size_t total_bytes    = total_blocks * sizeof(block_q8_0);
 
-    uint8_t *   temp       = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t *   temp       = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "convert_temp");
     sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
 
     sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
@@ -606,7 +609,9 @@ void reorder_q8_0_aos_to_coalesced_sycl(const void *    src,
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -669,7 +674,7 @@ void reorder_mxfp4_aos_to_coalesced_sycl(const void *    src,
     const size_t total_blocks   = (size_t) blocks_per_row * (size_t) nrows;
     const size_t total_bytes    = total_blocks * sizeof(block_mxfp4);
 
-    uint8_t *   temp       = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t *   temp       = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "convert_temp");
     sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
 
     sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
@@ -684,7 +689,9 @@ void reorder_mxfp4_aos_to_coalesced_sycl(const void *    src,
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -771,7 +778,7 @@ void reorder_q6_k_aos_to_coalesced_sycl(const void *    src,
     const size_t total_blocks   = (size_t) blocks_per_row * (size_t) nrows;
     const size_t total_bytes    = total_blocks * sizeof(block_q6_K);
 
-    uint8_t *   temp       = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t *   temp       = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "convert_temp");
     sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
 
     sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
@@ -786,7 +793,9 @@ void reorder_q6_k_aos_to_coalesced_sycl(const void *    src,
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 

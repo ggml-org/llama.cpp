@@ -697,6 +697,8 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
     // The pointer type check is unreliable because Level Zero may report mmap'd memory
     // as "host" type. Instead, check if the source came from tensor->data (not extra->data_device).
     char * staged_src = nullptr;
+    bool   staged_is_host = false;
+    bool   staged_is_shared = false;
     bool dst_is_device = (src1_type == sycl::usm::alloc::device);
 
     // Source needs staging if:
@@ -718,9 +720,16 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
             // Allocate host memory in the shared TP context (if available)
             // This is accessible from all TP devices
             if (tp_ctx != nullptr) {
-                staged_src = (char*)sycl::malloc_host(nbytes, *tp_ctx);
+                staged_src = (char *) ggml_sycl_host_malloc(nbytes);
+                staged_is_host = staged_src != nullptr;
             } else {
-                staged_src = (char*)sycl::malloc_shared(nbytes, *main_stream);
+                ggml_sycl::unified_cache_add_runtime_bytes(device, nbytes);
+                staged_src = (char *) ggml_sycl_malloc_shared(nbytes, *main_stream, "cpy_staging");
+                if (!staged_src) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(device, nbytes);
+                } else {
+                    staged_is_shared = true;
+                }
             }
             GGML_SYCL_DEBUG("[CPY] Allocated staging buffer at %p for device %d\n", (void*)staged_src, device);
             // Copy from CPU memory to USM memory
@@ -829,7 +838,14 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
     // Free staging buffer if used (need to wait for kernel to complete first)
     if (staged_src != nullptr) {
         main_stream->wait();
-        sycl::free(staged_src, query_ctx);
+        if (staged_is_host) {
+            ggml_sycl_host_free(staged_src);
+        } else {
+            if (staged_is_shared) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, ggml_nbytes(src0));
+            }
+            sycl::free(staged_src, query_ctx);
+        }
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;

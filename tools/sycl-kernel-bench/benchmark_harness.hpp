@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -19,6 +20,7 @@
 
 #include "ggml-sycl/ggml-sycl-bench.hpp"
 #include "ggml-sycl/common.hpp"
+#include "ggml-sycl/dispatch.hpp"
 #include "ggml-sycl/presets.hpp"
 
 #include "data_generators.hpp"
@@ -50,6 +52,8 @@ struct BenchmarkConfig {
     ggml_type      quant_type  = GGML_TYPE_Q4_0;
     ggml_layout_mode layout    = GGML_LAYOUT_AOS;
     KernelKind     kernel_kind = KernelKind::MMVQ;
+    std::string    tensor_name;
+    int64_t        tensor_instances = 1;
     int64_t        batch_size  = 1;
     int64_t        dim_m       = 4096;
     int64_t        dim_n       = 4096;
@@ -628,6 +632,9 @@ private:
     static bool run_reference(const BenchmarkConfig & config,
                               sycl::queue & queue,
                               BenchmarkOutput & out);
+    static bool run_unified(const BenchmarkConfig & config,
+                            sycl::queue & queue,
+                            BenchmarkOutput & out);
     static bool run_mmq(const BenchmarkConfig & config,
                         sycl::queue & queue,
                         BenchmarkOutput & out);
@@ -904,6 +911,33 @@ inline bool BenchmarkHarness::run_reference(const BenchmarkConfig & config,
             }
             break;
         }
+        case KernelKind::ONEDNN_WOQ_GEMM: {
+            if (m == 2048 && k == 2048) {
+                out.error = "SKIP: oneDNN WoQ matmul (M=2048,K=2048) triggers device lost on Xe; skipping.";
+                return false;
+            }
+            if (m == 4096 && k == 14336) {
+                out.error = "SKIP: oneDNN WoQ matmul (M=4096,K=14336) triggers device lost on Xe; skipping.";
+                return false;
+            }
+            if (m == 14336 && k == 4096) {
+                out.error = "SKIP: oneDNN WoQ matmul (M=14336,K=4096) triggers device lost on Xe; skipping.";
+                return false;
+            }
+            GeneratedWeights weights;
+            if (!generate_quantized_weights(config.quant_type, GGML_LAYOUT_AOS, m, k, false, weights)) {
+                out.error = "Failed to generate quantized weights for oneDNN WoQ.";
+                return false;
+            }
+            GeneratedActivations activations = generate_activations(n, k, k, true, true, false);
+            if (!run_onednn_woq_gemm(weights, activations, m, n, k, config.quant_type,
+                                     config.warmup_iterations, config.measure_iterations,
+                                     queue, metrics, error)) {
+                out.error = error;
+                return false;
+            }
+            break;
+        }
         case KernelKind::MEMORY_BANDWIDTH: {
             size_t bytes = config.transfer_bytes;
             if (bytes == 0) {
@@ -945,6 +979,224 @@ inline bool BenchmarkHarness::run_reference(const BenchmarkConfig & config,
     out.result.ref_tops = metrics.tops;
     out.result.ref_bandwidth_gbps = metrics.bandwidth_gbps;
     out.result.ref_arith_intensity = metrics.arithmetic_intensity;
+
+    out.ok = true;
+    return true;
+}
+
+inline bool BenchmarkHarness::run_unified(const BenchmarkConfig & config,
+                                          sycl::queue & queue,
+                                          BenchmarkOutput & out) {
+    if (config.quant_type != GGML_TYPE_Q4_0) {
+        out.error = "Unified kernel benchmark supports Q4_0 only.";
+        return false;
+    }
+    if (config.memory_mode == MemoryMode::BUFFER) {
+        out.error = "Unified kernel requires USM memory (buffer mode unsupported).";
+        return false;
+    }
+    if (config.dim_m <= 0 || config.dim_k <= 0 || config.batch_size <= 0) {
+        out.error = "Invalid dimensions.";
+        return false;
+    }
+    if (config.dim_k % QK4_0 != 0) {
+        out.error = "Unified kernel requires K divisible by QK4_0.";
+        return false;
+    }
+
+    GeneratedWeights weights;
+    if (!generate_quantized_weights(config.quant_type,
+                                    GGML_LAYOUT_AOS,
+                                    config.dim_m,
+                                    config.dim_k,
+                                    config.validate,
+                                    weights)) {
+        out.error = "Failed to generate quantized weights for unified kernel.";
+        return false;
+    }
+
+    GeneratedActivations activations = generate_activations(config.batch_size,
+                                                            config.dim_k,
+                                                            config.dim_k,
+                                                            true,
+                                                            false,
+                                                            false);
+
+    const size_t weight_bytes = weights.bytes_aos;
+    const size_t activation_bytes =
+        static_cast<size_t>(config.batch_size) * static_cast<size_t>(config.dim_k) * sizeof(float);
+    const size_t output_bytes =
+        static_cast<size_t>(config.batch_size) * static_cast<size_t>(config.dim_m) * sizeof(float);
+
+    std::string error;
+    int device_id = get_current_device_id();
+    if (device_id < 0) {
+        out.error = "Invalid device id.";
+        return false;
+    }
+
+    DeviceBuffer weight_buf = allocate_buffer(weight_bytes, config.memory_mode, queue, device_id, error);
+    if (!error.empty()) {
+        out.error = error;
+        return false;
+    }
+    DeviceBuffer act_buf = allocate_buffer(activation_bytes, config.memory_mode, queue, device_id, error);
+    if (!error.empty()) {
+        free_buffer(weight_buf, queue);
+        out.error = error;
+        return false;
+    }
+    DeviceBuffer out_buf = allocate_buffer(output_bytes, config.memory_mode, queue, device_id, error);
+    if (!error.empty()) {
+        free_buffer(weight_buf, queue);
+        free_buffer(act_buf, queue);
+        out.error = error;
+        return false;
+    }
+
+    if (!copy_to_device(weight_buf, weights.aos.data(), weight_bytes, queue, error)) {
+        free_buffer(weight_buf, queue);
+        free_buffer(act_buf, queue);
+        free_buffer(out_buf, queue);
+        out.error = error;
+        return false;
+    }
+    if (!copy_to_device(act_buf, activations.fp32.data(), activation_bytes, queue, error)) {
+        free_buffer(weight_buf, queue);
+        free_buffer(act_buf, queue);
+        free_buffer(out_buf, queue);
+        out.error = error;
+        return false;
+    }
+    queue.wait_and_throw();
+
+    for (int i = 0; i < config.warmup_iterations; ++i) {
+        ggml_sycl::ggml_sycl_mul_mat_unified_default(queue,
+                                                     weight_buf.ptr,
+                                                     static_cast<const float *>(act_buf.ptr),
+                                                     static_cast<float *>(out_buf.ptr),
+                                                     config.batch_size,
+                                                     config.dim_m,
+                                                     config.dim_k,
+                                                     config.quant_type);
+    }
+    queue.wait_and_throw();
+
+    std::vector<double> iter_us;
+    iter_us.reserve(static_cast<size_t>(config.measure_iterations));
+    for (int i = 0; i < config.measure_iterations; ++i) {
+        auto t0 = std::chrono::high_resolution_clock::now();
+        ggml_sycl::ggml_sycl_mul_mat_unified_default(queue,
+                                                     weight_buf.ptr,
+                                                     static_cast<const float *>(act_buf.ptr),
+                                                     static_cast<float *>(out_buf.ptr),
+                                                     config.batch_size,
+                                                     config.dim_m,
+                                                     config.dim_k,
+                                                     config.quant_type);
+        queue.wait_and_throw();
+        auto t1 = std::chrono::high_resolution_clock::now();
+        iter_us.push_back(std::chrono::duration<double, std::micro>(t1 - t0).count());
+    }
+
+    double sum_us = 0.0;
+    for (double v : iter_us) {
+        sum_us += v;
+    }
+    const double mean_us = (iter_us.empty()) ? 0.0 : sum_us / static_cast<double>(iter_us.size());
+    const double mean_s = mean_us * 1e-6;
+
+    double variance = 0.0;
+    for (double v : iter_us) {
+        const double diff = v - mean_us;
+        variance += diff * diff;
+    }
+    const double std_us = (iter_us.size() > 1)
+        ? std::sqrt(variance / static_cast<double>(iter_us.size() - 1))
+        : 0.0;
+
+    out.result.latency_us = mean_us;
+    out.result.latency_std = std_us;
+    out.result.throughput_tps = (mean_s > 0.0) ? (static_cast<double>(config.batch_size) / mean_s) : 0.0;
+    out.result.bandwidth_gbps = (mean_s > 0.0)
+        ? (static_cast<double>(weight_bytes + activation_bytes + output_bytes) / mean_s) / 1e9
+        : 0.0;
+    if (mean_s > 0.0) {
+        const double ops = 2.0 * static_cast<double>(config.batch_size) *
+                           static_cast<double>(config.dim_m) *
+                           static_cast<double>(config.dim_k);
+        out.result.throughput_tops = ops / mean_s / 1.0e12;
+    }
+
+    if (config.validate) {
+        std::vector<float> host_output(config.batch_size * config.dim_m);
+        if (!copy_to_host(host_output.data(), out_buf, output_bytes, queue, error)) {
+            out.error = error;
+            free_buffer(weight_buf, queue);
+            free_buffer(act_buf, queue);
+            free_buffer(out_buf, queue);
+            return false;
+        }
+        queue.wait_and_throw();
+
+        const double abs_tol = config.abs_tol;
+        const double rel_tol = config.rel_tol;
+        std::vector<float> weights_deq(config.dim_m * config.dim_k);
+
+        for (int64_t row = 0; row < config.dim_m; ++row) {
+            const uint8_t * row_ptr = weights.aos.data() + row * ggml_row_size(config.quant_type, config.dim_k);
+            if (!dequantize_weights_row(config.quant_type, row_ptr,
+                                        weights_deq.data() + row * config.dim_k,
+                                        config.dim_k, error)) {
+                out.error = error;
+                free_buffer(weight_buf, queue);
+                free_buffer(act_buf, queue);
+                free_buffer(out_buf, queue);
+                return false;
+            }
+        }
+
+        double max_err = 0.0;
+        double sum_err = 0.0;
+        double max_ref_abs = 0.0;
+        const size_t total_vals = static_cast<size_t>(config.batch_size * config.dim_m);
+        for (int64_t b = 0; b < config.batch_size; ++b) {
+            const float * act = activations.fp32.data() + b * config.dim_k;
+            for (int64_t row = 0; row < config.dim_m; ++row) {
+                const float * w = weights_deq.data() + row * config.dim_k;
+                float sum_row = 0.0f;
+                for (int64_t k = 0; k < config.dim_k; ++k) {
+                    sum_row += w[k] * act[k];
+                }
+                const size_t idx = static_cast<size_t>(b) * static_cast<size_t>(config.dim_m) + static_cast<size_t>(row);
+                const double ref_val = static_cast<double>(sum_row);
+                const double diff = std::fabs(ref_val - static_cast<double>(host_output[idx]));
+                sum_err += diff;
+                max_err = std::max(max_err, diff);
+                max_ref_abs = std::max(max_ref_abs, std::fabs(ref_val));
+            }
+        }
+
+        out.max_abs_error = max_err;
+        out.mean_abs_error = (total_vals > 0) ? sum_err / static_cast<double>(total_vals) : 0.0;
+
+        const double tol = abs_tol + rel_tol * max_ref_abs;
+        if (max_err > tol) {
+            char msg[256];
+            std::snprintf(msg, sizeof(msg),
+                          "Validation failed: max_abs_error=%.6f (tol=%.6f, abs=%.6f, rel=%.6f).",
+                          max_err, tol, abs_tol, rel_tol);
+            out.error = msg;
+            free_buffer(weight_buf, queue);
+            free_buffer(act_buf, queue);
+            free_buffer(out_buf, queue);
+            return false;
+        }
+    }
+
+    free_buffer(weight_buf, queue);
+    free_buffer(act_buf, queue);
+    free_buffer(out_buf, queue);
 
     out.ok = true;
     return true;
@@ -1542,6 +1794,10 @@ inline bool BenchmarkHarness::run(const BenchmarkConfig & config, BenchmarkOutpu
         return run_mmq(config, queue, out);
     }
 
+    if (config.kernel_kind == KernelKind::UNIFIED_MATMUL) {
+        return run_unified(config, queue, out);
+    }
+
     if (config.kernel_kind != KernelKind::MMVQ) {
         return run_reference(config, queue, out);
     }
@@ -1795,36 +2051,54 @@ inline bool BenchmarkHarness::run(const BenchmarkConfig & config, BenchmarkOutpu
     std::vector<double> iter_ns;
     iter_ns.reserve(iter_offsets.size());
 
-    for (size_t i = 0; i < iter_offsets.size(); ++i) {
-        const size_t begin = iter_offsets[i];
-        const size_t end = (i + 1 < iter_offsets.size()) ? iter_offsets[i + 1] : events.size();
-        if (end <= begin) {
-            out.error = "No events captured for iteration.";
-            free_buffer(weight_buf, queue);
-            free_buffer(act_buf, queue);
-            free_buffer(out_buf, queue);
-            return false;
-        }
-        uint64_t min_start = 0;
-        uint64_t max_end = 0;
-        for (size_t j = begin; j < end; ++j) {
-            uint64_t start = 0;
-            uint64_t finish = 0;
-            if (!get_event_timing(events[j], start, finish, error)) {
-                out.error = error;
+    if (events.empty()) {
+        // Fallback to host timing when kernels do not surface events.
+        for (int i = 0; i < config.measure_iterations; ++i) {
+            auto t0 = std::chrono::high_resolution_clock::now();
+            std::string launch_error;
+            if (!launch_kernel(nullptr, launch_error)) {
+                out.error = launch_error.empty() ? "Measured kernel launch failed." : launch_error;
                 free_buffer(weight_buf, queue);
                 free_buffer(act_buf, queue);
                 free_buffer(out_buf, queue);
                 return false;
             }
-            if (min_start == 0 || start < min_start) {
-                min_start = start;
-            }
-            if (finish > max_end) {
-                max_end = finish;
-            }
+            queue.wait_and_throw();
+            auto t1 = std::chrono::high_resolution_clock::now();
+            iter_ns.push_back(std::chrono::duration<double, std::nano>(t1 - t0).count());
         }
-        iter_ns.push_back(static_cast<double>(max_end - min_start));
+    } else {
+        for (size_t i = 0; i < iter_offsets.size(); ++i) {
+            const size_t begin = iter_offsets[i];
+            const size_t end = (i + 1 < iter_offsets.size()) ? iter_offsets[i + 1] : events.size();
+            if (end <= begin) {
+                out.error = "No events captured for iteration.";
+                free_buffer(weight_buf, queue);
+                free_buffer(act_buf, queue);
+                free_buffer(out_buf, queue);
+                return false;
+            }
+            uint64_t min_start = 0;
+            uint64_t max_end = 0;
+            for (size_t j = begin; j < end; ++j) {
+                uint64_t start = 0;
+                uint64_t finish = 0;
+                if (!get_event_timing(events[j], start, finish, error)) {
+                    out.error = error;
+                    free_buffer(weight_buf, queue);
+                    free_buffer(act_buf, queue);
+                    free_buffer(out_buf, queue);
+                    return false;
+                }
+                if (min_start == 0 || start < min_start) {
+                    min_start = start;
+                }
+                if (finish > max_end) {
+                    max_end = finish;
+                }
+            }
+            iter_ns.push_back(static_cast<double>(max_end - min_start));
+        }
     }
 
     double sum = 0.0;

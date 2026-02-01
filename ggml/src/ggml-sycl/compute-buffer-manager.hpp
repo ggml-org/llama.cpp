@@ -155,6 +155,7 @@ class ComputeBufferManager {
 
     // Monotonic time counter
     std::atomic<uint64_t> time_counter_{ 0 };
+    int                   device_id_ = 0;
 
     // Statistics
     std::atomic<size_t> total_allocations_{ 0 };

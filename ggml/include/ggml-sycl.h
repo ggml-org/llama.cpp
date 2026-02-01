@@ -71,6 +71,10 @@ GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_budget_pct(int pct);
 // Set unified host cache budget as a percentage of total system RAM (clamped 1..100).
 GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_host_budget_pct(int pct);
 
+// Set per-tensor oneDNN pack M dimension for ONEDNN_PACKED/ONEDNN_WOQ layouts.
+// pack_m <= 0 clears the override (falls back to GGML_SYCL_ONEDNN_PACK_M).
+GGML_BACKEND_API void ggml_backend_sycl_set_onednn_pack_m(struct ggml_tensor * tensor, int64_t pack_m);
+
 // Register a host-backed weight tensor for SYCL layout metadata/accessors.
 GGML_BACKEND_API void ggml_backend_sycl_register_host_weight_tensor(ggml_backend_dev_t   dev,
                                                                     struct ggml_tensor * tensor);

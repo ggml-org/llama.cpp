@@ -19,8 +19,11 @@
 
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
+#include <cstdio>
 #include <unordered_map>
 #include <mutex>
+
+extern int g_ggml_sycl_debug;
 
 // =============================================================================
 // oneDNN Primitive Cache
@@ -43,6 +46,8 @@ struct DnnlPrimitiveKey {
     int64_t stra0, stra1, stra2;
     // Strides for B
     int64_t strb0, strb1, strb2;
+    // Strides for C
+    int64_t strc0, strc1;
     // For batch_strided: transpose flags and alpha/beta
     bool trans_a, trans_b;
     float alpha, beta;
@@ -51,6 +56,9 @@ struct DnnlPrimitiveKey {
     int batch_size;
     // Variant: 0 = gemm, 1 = gemm_batch_strided
     int variant;
+    int64_t woq_group_size;
+    int woq_scales_mask;
+    int woq_zp_mask;
 
     bool operator==(const DnnlPrimitiveKey& other) const {
         return m == other.m && n == other.n && k == other.k &&
@@ -58,11 +66,15 @@ struct DnnlPrimitiveKey {
                at == other.at && bt == other.bt && ct == other.ct &&
                stra0 == other.stra0 && stra1 == other.stra1 && stra2 == other.stra2 &&
                strb0 == other.strb0 && strb1 == other.strb1 && strb2 == other.strb2 &&
+               strc0 == other.strc0 && strc1 == other.strc1 &&
                trans_a == other.trans_a && trans_b == other.trans_b &&
                alpha == other.alpha && beta == other.beta &&
                stride_a == other.stride_a && stride_b == other.stride_b && stride_c == other.stride_c &&
                lda == other.lda && ldb == other.ldb && ldc == other.ldc &&
-               batch_size == other.batch_size && variant == other.variant;
+               batch_size == other.batch_size && variant == other.variant &&
+               woq_group_size == other.woq_group_size &&
+               woq_scales_mask == other.woq_scales_mask &&
+               woq_zp_mask == other.woq_zp_mask;
     }
 };
 
@@ -79,9 +91,13 @@ struct DnnlPrimitiveKeyHash {
         h ^= std::hash<int>{}(static_cast<int>(k.ct)) << 7;
         h ^= std::hash<int64_t>{}(k.stra0 + k.stra1 + k.stra2) << 8;
         h ^= std::hash<int64_t>{}(k.strb0 + k.strb1 + k.strb2) << 9;
-        h ^= std::hash<int>{}(k.variant) << 10;
-        h ^= std::hash<int>{}(k.batch_size) << 11;
-        h ^= std::hash<int>{}(k.ldc) << 12;
+        h ^= std::hash<int64_t>{}(k.strc0 + k.strc1) << 10;
+        h ^= std::hash<int>{}(k.variant) << 11;
+        h ^= std::hash<int>{}(k.batch_size) << 12;
+        h ^= std::hash<int>{}(k.ldc) << 13;
+        h ^= std::hash<int64_t>{}(k.woq_group_size) << 14;
+        h ^= std::hash<int>{}(k.woq_scales_mask) << 15;
+        h ^= std::hash<int>{}(k.woq_zp_mask) << 16;
         return h;
     }
 };
@@ -128,11 +144,10 @@ public:
         try {
             DnnlCachedPrimitive cached;
             cached.engine = eng;  // Store engine for future comparisons
-            cached.a_md = a_md;
-            cached.b_md = b_md;
-            cached.c_md = c_md;
-
             auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_md, b_md, c_md, attr);
+            cached.a_md = matmul_pd.src_desc();
+            cached.b_md = matmul_pd.weights_desc();
+            cached.c_md = matmul_pd.dst_desc();
             cached.scratchpad_md = matmul_pd.scratchpad_desc();
             cached.scratchpad_size = cached.scratchpad_md.get_size();
             cached.primitive = dnnl::matmul(matmul_pd);
@@ -141,6 +156,9 @@ public:
             return &result.first->second;
         } catch (const dnnl::error& e) {
             // Failed to create primitive
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN] matmul primitive creation failed: %s\n", e.what());
+            }
             return nullptr;
         }
     }
@@ -311,6 +329,209 @@ public:
 
         gemm(ctx, m, n, k, a, at, 1, k, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1, ldc);
     }
+
+    // WoQ GEMM for Q4_0 weights (s4) with grouped scales/zero-points.
+    // A: [m, k] row-major, B: [k, n] row-major (s4), C: [m, n] row-major.
+    static bool woq_gemm_q4_0(
+        ggml_backend_sycl_context & ctx,
+        int m, int n, int k,
+        const void * a, dt at,
+        const void * b_s4,
+        int64_t group_size,
+        const float * scales,
+        const int8_t * zero_points,
+        void * c, dt ct,
+        const queue_ptr & q,
+        int64_t c_stride0,
+        int64_t c_stride1) {
+        return woq_gemm_q4_0_impl(ctx, m, n, k, a, at, b_s4, /* b_bytes = */ 0, /* b_is_packed = */ false,
+                                 group_size, scales, zero_points, c, ct, q, c_stride0, c_stride1);
+    }
+
+    // WoQ GEMM with pre-packed oneDNN weights (b_packed uses cached->b_md layout).
+    static bool woq_gemm_q4_0_packed(
+        ggml_backend_sycl_context & ctx,
+        int m, int n, int k,
+        const void * a, dt at,
+        const void * b_packed,
+        size_t b_packed_bytes,
+        int64_t group_size,
+        const float * scales,
+        const int8_t * zero_points,
+        void * c, dt ct,
+        const queue_ptr & q,
+        int64_t c_stride0,
+        int64_t c_stride1) {
+        return woq_gemm_q4_0_impl(ctx, m, n, k, a, at, b_packed, b_packed_bytes, /* b_is_packed = */ true,
+                                 group_size, scales, zero_points, c, ct, q, c_stride0, c_stride1);
+    }
+
+private:
+    static bool woq_gemm_q4_0_impl(
+        ggml_backend_sycl_context & ctx,
+        int m, int n, int k,
+        const void * a, dt at,
+        const void * b_data,
+        size_t b_bytes,
+        bool b_is_packed,
+        int64_t group_size,
+        const float * scales,
+        const int8_t * zero_points,
+        void * c, dt ct,
+        const queue_ptr & q,
+        int64_t c_stride0,
+        int64_t c_stride1) {
+
+        if (!a || !b_data || !scales || !zero_points || !c) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] null pointer(s) provided\n");
+            }
+            return false;
+        }
+        if (m <= 0 || n <= 0 || k <= 0 || group_size <= 0) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] invalid dims m=%d n=%d k=%d group=%lld\n",
+                             m, n, k, static_cast<long long>(group_size));
+            }
+            return false;
+        }
+        if (c_stride0 <= 0 || c_stride1 <= 0) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] invalid C strides %lld,%lld\n",
+                             static_cast<long long>(c_stride0), static_cast<long long>(c_stride1));
+            }
+            return false;
+        }
+        if ((k % group_size) != 0) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] K not divisible by group size (k=%d group=%lld)\n",
+                             k, static_cast<long long>(group_size));
+            }
+            return false;
+        }
+
+        const int64_t groups = k / group_size;
+
+        std::lock_guard<std::mutex> lock(exec_mutex());
+        auto stream = ctx.stream_dnnl(q);
+        auto eng = ctx.engine_dnnl(q);
+
+        const dnnl::memory::desc a_md({m, k}, at, {k, 1});
+        const dnnl::memory::desc b_user_md({k, n}, dt::s4, {n, 1});
+        const dnnl::memory::desc c_md({m, n}, ct, {c_stride0, c_stride1});
+        const dnnl::memory::desc b_any_md({k, n}, dt::s4, tag::any);
+
+        dnnl::primitive_attr attr;
+        attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+        const int mask = (1 << 0) | (1 << 1);
+        dnnl_dims_t group_dims = { group_size, 1 };
+        if (dnnl_primitive_attr_set_scales(attr.get(), DNNL_ARG_WEIGHTS, mask, 2, group_dims,
+                                           dnnl::memory::convert_to_c(dt::f32)) != dnnl_success) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] set_scales failed\n");
+            }
+            return false;
+        }
+        if (dnnl_primitive_attr_set_zero_points(attr.get(), DNNL_ARG_WEIGHTS, mask, 2, group_dims,
+                                                dnnl::memory::convert_to_c(dt::s8)) != dnnl_success) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] set_zero_points failed\n");
+            }
+            return false;
+        }
+#ifdef GGML_SYCL_F16
+        attr.set_fpmath_mode(dnnl::fpmath_mode::f16, /* apply_to_int = */ true);
+#endif
+
+        DnnlPrimitiveKey key{};
+        key.m = m;
+        key.n = n;
+        key.k = k;
+        key.batches_a = 1;
+        key.batches_b = 1;
+        key.at = at;
+        key.bt = dt::s4;
+        key.ct = ct;
+        key.stra0 = 1;
+        key.stra1 = k;
+        key.stra2 = static_cast<int64_t>(m) * k;
+        key.strb0 = 1;
+        key.strb1 = n;
+        key.strb2 = static_cast<int64_t>(k) * n;
+        key.ldc = n;
+        key.variant = 2;
+        key.strc0 = c_stride0;
+        key.strc1 = c_stride1;
+        key.woq_group_size = group_size;
+        key.woq_scales_mask = mask;
+        key.woq_zp_mask = mask;
+
+        auto & cache = get_dnnl_primitive_cache();
+        const DnnlCachedPrimitive * cached = cache.get_or_create(key, eng, a_md, b_any_md, c_md, attr);
+        if (!cached) {
+            if (g_ggml_sycl_debug) {
+                std::fprintf(stderr, "[ONEDNN][WOQ] primitive cache miss+create failed\n");
+            }
+            return false;
+        }
+
+        auto a_mem = dnnl::memory(cached->a_md, eng, const_cast<void *>(a));
+        auto c_mem = dnnl::memory(cached->c_md, eng, c);
+
+        dnnl::memory b_mem = {};
+        void * b_packed_dev = nullptr;
+        if (b_is_packed) {
+            const size_t packed_bytes = cached->b_md.get_size();
+            if (b_bytes > 0 && b_bytes < packed_bytes) {
+                if (g_ggml_sycl_debug) {
+                    std::fprintf(stderr, "[ONEDNN][WOQ] packed weights too small (%zu < %zu)\n",
+                                 b_bytes, packed_bytes);
+                }
+                return false;
+            }
+            b_mem = dnnl::memory(cached->b_md, eng, const_cast<void *>(b_data));
+        } else {
+            dnnl::memory b_user_mem(b_user_md, eng, const_cast<void *>(b_data));
+            b_mem = b_user_mem;
+            if (cached->b_md != b_user_mem.get_desc()) {
+                const size_t packed_bytes = cached->b_md.get_size();
+                b_packed_dev = sycl::aligned_alloc_device(64, packed_bytes, *q);
+                if (!b_packed_dev) {
+                    if (g_ggml_sycl_debug) {
+                        std::fprintf(stderr, "[ONEDNN][WOQ] packed weights alloc failed (%zu bytes)\n",
+                                     packed_bytes);
+                    }
+                    return false;
+                }
+                b_mem = dnnl::memory(cached->b_md, eng, b_packed_dev);
+                dnnl::reorder(b_user_mem, b_mem).execute(stream, b_user_mem, b_mem);
+                stream.wait();
+            }
+        }
+
+        dnnl::memory scales_mem({{n, groups}, dt::f32, {1, n}}, eng, const_cast<float *>(scales));
+        dnnl::memory zp_mem({{n, groups}, dt::s8, {1, n}}, eng, const_cast<int8_t *>(zero_points));
+
+        std::unordered_map<int, dnnl::memory> args;
+        args.insert({DNNL_ARG_SRC, a_mem});
+        args.insert({DNNL_ARG_WEIGHTS, b_mem});
+        args.insert({DNNL_ARG_DST, c_mem});
+        args.insert({DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS, scales_mem});
+        args.insert({DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_WEIGHTS, zp_mem});
+        if (cached->scratchpad_size > 0) {
+            auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+            args.insert({DNNL_ARG_SCRATCHPAD, scratchpad_mem});
+        }
+
+        cached->primitive.execute(stream, args);
+
+        if (b_packed_dev) {
+            sycl::free(b_packed_dev, *q);
+        }
+        return true;
+    }
+
+public:
 
     // Strided batch GEMM - C[i] = alpha * A[i] * B[i] + beta * C[i]
     // Matches dpct::gemm_batch interface for strided buffers

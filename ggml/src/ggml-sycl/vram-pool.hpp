@@ -63,6 +63,7 @@ class vram_pool {
     };
 
     sycl::queue &                            queue_;
+    int                                     device_id_ = -1;
     size_t                                   budget_;
     size_t                                   used_ = 0;
     std::unordered_map<uint64_t, allocation> allocations_;

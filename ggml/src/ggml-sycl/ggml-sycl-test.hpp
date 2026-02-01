@@ -18,6 +18,9 @@ bool test_backend_supports_graphs(ggml_backend_t backend);
 bool test_backend_graphs_disabled(ggml_backend_t backend);
 size_t test_graph_pinned_entry_count(ggml_backend_t backend);
 size_t test_layout_bytes(const ggml_tensor * tensor, ggml_layout_mode layout, int device);
+const char * test_layout_name(ggml_layout_mode layout);
+void test_reset_orchestrator_call_count();
+int test_get_orchestrator_call_count();
 
 inline ggml_sycl_cache_id test_make_cache_id(const void * tag, uint64_t model_id = 1) {
     ggml_sycl_cache_id id{};

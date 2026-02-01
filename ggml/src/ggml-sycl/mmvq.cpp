@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 #include "convert.hpp"
+#include "ggml-sycl-bench.hpp"
 #include "ggml.h"
 #include "quantize.hpp"
 #include "quants.hpp"
@@ -1484,7 +1485,7 @@ static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const i
     const int bytes_per_row = ncols / 2;
     const int total_bytes   = nrows * bytes_per_row;
 
-    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t * temp = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "mmvq_q4_coalesce");
 
     // Copy original quants to temp
     sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
@@ -1507,7 +1508,9 @@ static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const i
     // host_task waits for convert_event then frees, without blocking the host thread
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -1836,7 +1839,7 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
     const int bytes_per_row = ncols;
     const int total_bytes   = nrows * bytes_per_row;
 
-    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t * temp = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "mmvq_temp");
 
     // Copy original quants to temp
     sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
@@ -1857,7 +1860,9 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
     // Free temp buffer after conversion completes using host_task
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -2065,7 +2070,7 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
     const int bytes_per_row = ncols / 2;
     const int total_bytes   = nrows * bytes_per_row;
 
-    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    uint8_t * temp = ggml_sycl_malloc_device_tracked_t<uint8_t>(total_bytes, *stream, "mmvq_temp");
 
     sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
 
@@ -2083,7 +2088,9 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, total_bytes, stream]() {
+            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+        });
     });
 }
 
@@ -2205,7 +2212,12 @@ static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const i
     const size_t total_quant_bytes   = nrows * quant_bytes_per_row;
 
     // Allocate temp buffer for in-place conversion
-    uint8_t * temp = (uint8_t *) sycl::malloc_device(total_quant_bytes, *stream);
+    const int runtime_device = ggml_sycl_get_device_id_from_queue(*stream);
+    ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, total_quant_bytes);
+    uint8_t * temp = (uint8_t *) ggml_sycl_malloc_device(total_quant_bytes, *stream, "mmvq_quant_temp");
+    if (!temp) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
+    }
     GGML_ASSERT(temp != nullptr);
 
     // Copy current data to temp
@@ -2228,7 +2240,10 @@ static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const i
     // Free temp after kernel completes
     stream->submit([&](sycl::handler & cgh) {
         cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream]() { sycl::free(temp, *stream); });
+        cgh.host_task([temp, stream, runtime_device, total_quant_bytes]() {
+            ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
+            sycl::free(temp, *stream);
+        });
     });
 }
 
@@ -3333,13 +3348,16 @@ static bool ggml_sycl_moe_ensure_compact_storage(ggml_backend_sycl_context & ctx
             return false;
         }
         if (extra->moe_expert_ptrs_compact_device[ctx.device] != nullptr) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, extra->moe_expert_ptrs_compact_capacity[ctx.device]);
             sycl::free(extra->moe_expert_ptrs_compact_device[ctx.device], *stream);
             extra->moe_expert_ptrs_compact_device[ctx.device]   = nullptr;
             extra->moe_expert_ptrs_compact_capacity[ctx.device] = 0;
             extra->moe_expert_ptrs_compact_size[ctx.device]     = 0;
         }
-        void * compact = sycl::malloc_device(bytes, *stream);
+        ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, bytes);
+        void * compact = ggml_sycl_malloc_device(bytes, *stream, "mmvq_compact");
         if (!compact) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, bytes);
             GGML_LOG_ERROR("[MOE] Failed to allocate compact pointer list (%zu bytes)\n", bytes);
             return false;
         }
@@ -3352,8 +3370,10 @@ static bool ggml_sycl_moe_ensure_compact_storage(ggml_backend_sycl_context & ctx
         if (!allow_alloc) {
             return false;
         }
-        int * missing = sycl::malloc_device<int>(1, *stream);
+        ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, sizeof(int));
+        int * missing = ggml_sycl_malloc_device_t<int>(1, *stream, "mmvq_missing");
         if (!missing) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, sizeof(int));
             GGML_LOG_ERROR("[MOE] Failed to allocate compact list missing flag\n");
             return false;
         }
@@ -3516,13 +3536,16 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
     ctx.moe_buffers.q8_1_sizes.resize(moe_count);
 
     for (int i = 0; i < moe_count; i++) {
-        ctx.moe_buffers.q8_1_buffers[i] = sycl::malloc_device(buffer_size, *stream);
+        ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, buffer_size);
+        ctx.moe_buffers.q8_1_buffers[i] = ggml_sycl_malloc_device(buffer_size, *stream, "mmvq_moe_q8");
         ctx.moe_buffers.q8_1_sizes[i]   = buffer_size;
 
         if (!ctx.moe_buffers.q8_1_buffers[i]) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, buffer_size);
             GGML_LOG_ERROR("[MOE-GRAPH] Failed to allocate Q8_1 buffer %d\n", i);
             // Cleanup and abort
             for (int j = 0; j < i; j++) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ctx.moe_buffers.q8_1_sizes[j]);
                 sycl::free(ctx.moe_buffers.q8_1_buffers[j], *stream);
             }
             ctx.moe_buffers.q8_1_buffers.clear();
@@ -3579,7 +3602,22 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
         }
         if (effective != layout && allow_aos_fallback) {
             GGML_SYCL_DEBUG("[MMVQ] Using AoS fallback for %s (effective=%d)\n", src0->name ? src0->name : "?",
-                            (int) effective);
+            (int) effective);
+        }
+    }
+    if (ctx.layouts_finalized) {
+        layout_mode chosen = GGML_LAYOUT_AOS;
+        if (ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen) && chosen != layout) {
+            const bool allow_aos_fallback =
+                forced_layout && layout == GGML_LAYOUT_AOS &&
+                (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0);
+            if (!allow_aos_fallback) {
+                GGML_SYCL_DEBUG("[MMVQ] Layout=%d mismatches chosen=%d for %s\n", (int) layout, (int) chosen,
+                                src0->name ? src0->name : "?");
+                return false;
+            }
+            GGML_SYCL_DEBUG("[MMVQ] Allowing AoS fallback despite chosen=%d for %s\n", (int) chosen,
+                            src0->name ? src0->name : "?");
         }
     }
     if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0) && layout != GGML_LAYOUT_AOS) {
@@ -4536,6 +4574,38 @@ static sycl::event mmvq_stream_copy(sycl::queue &                    queue,
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
     const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
 
+    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    if (src_alloc != sycl::usm::alloc::device) {
+        uint8_t * host_slice =
+            static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmvq:host_stage"));
+        if (!host_slice) {
+            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                  "MMVQ stream: host staging allocation failed");
+        }
+        size_t dst_offset = 0;
+        for (int i = 0; i < ctx->segment_count; ++i) {
+            const auto & seg   = ctx->segments[i];
+            const size_t bytes = row_count * seg.bytes_per_row;
+            if (bytes == 0) {
+                continue;
+            }
+            const uint8_t * src = ctx->src_base + seg.src_base + src_row * seg.bytes_per_row;
+            std::memcpy(host_slice + dst_offset, src, bytes);
+            dst_offset += bytes;
+        }
+        GGML_ASSERT(dst_offset == slice_bytes);
+        sycl::event evt = queue.memcpy(device_slice, host_slice, slice_bytes, deps);
+        if (auto * cache = ggml_sycl::get_unified_cache(queue)) {
+            cache->defer_host_free(host_slice, slice_bytes, evt);
+        } else {
+            if (!ggml_sycl_graph_recording_active()) {
+                evt.wait();
+            }
+            ggml_sycl_free_host_tracked_bytes(host_slice, slice_bytes, queue);
+        }
+        return evt;
+    }
+
     size_t                      dst_offset = 0;
     std::vector<sycl::event>    cur_deps   = deps;
     sycl::event                last_evt;
@@ -4557,6 +4627,8 @@ static sycl::event mmvq_stream_copy(sycl::queue &                    queue,
     return last_evt;
 }
 
+struct ggml_sycl_mmvq_marker_kernel;
+
 static sycl::event mmvq_stream_slice(sycl::queue &                    queue,
                                      void *                           device_slice,
                                      size_t                           slice_bytes,
@@ -4566,7 +4638,7 @@ static sycl::event mmvq_stream_slice(sycl::queue &                    queue,
     GGML_UNUSED(deps);
     const auto * ctx = static_cast<const mmvq_stream_ctx *>(ctx_void);
     if (!ctx || ctx->row_total_bytes == 0) {
-        return queue.ext_oneapi_submit_barrier();
+        return ggml_sycl_submit_marker<ggml_sycl_mmvq_marker_kernel>(queue);
     }
     GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
     GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
@@ -4596,7 +4668,7 @@ static sycl::event mmvq_stream_slice(sycl::queue &                    queue,
                             ctx->dst_row_stride,
                             &queue);
 
-    return queue.ext_oneapi_submit_barrier();
+    return ggml_sycl_submit_marker<ggml_sycl_mmvq_marker_kernel>(queue);
 }
 
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
@@ -4664,6 +4736,18 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MMVQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
                         src0->name ? src0->name : "?", (int) layout);
         mmvq_mode = reorder_mode::NONE;
+    }
+    if (mmvq_mode != reorder_mode::NONE && layout_base && src0->buffer &&
+        ggml_backend_buffer_is_host(src0->buffer)) {
+        const sycl::usm::alloc alloc = sycl::get_pointer_type(layout_base, stream->get_context());
+        if (alloc == sycl::usm::alloc::unknown) {
+            GGML_SYCL_DEBUG(
+                "[MMVQ] Host-mmap layout pointer is non-USM for %s (layout=%d); falling back to AoS\n",
+                src0->name ? src0->name : "?", (int) layout);
+            mmvq_mode   = reorder_mode::NONE;
+            layout      = GGML_LAYOUT_AOS;
+            layout_base = nullptr;
+        }
     }
 
     // DEBUG: Check dimensions and src1 values for layer 0 projections
@@ -4952,3 +5036,79 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
     GGML_UNUSED(src1_ddf_i);
     GGML_UNUSED(ctx);
 }
+
+namespace ggml_sycl {
+
+bool ggml_sycl_mmvq_bench_launch(const mmvq_bench_args & args, std::vector<sycl::event> * events) {
+    if (!args.stream || !args.weights || !args.activations || !args.output) {
+        return false;
+    }
+    if (args.ncols <= 0 || args.nrows <= 0 || args.batch <= 0) {
+        return false;
+    }
+    if (args.ncols % QK8_1 != 0) {
+        return false;
+    }
+    if (args.row_low < 0 || args.row_high <= args.row_low || args.row_high > args.nrows) {
+        return false;
+    }
+    if (args.src1_padded_col_size <= 0 || args.dst_row_stride <= 0) {
+        return false;
+    }
+
+    reorder_mode mmvq_mode = reorder_mode::NONE;
+    const void * layout_base = nullptr;
+    switch (args.layout) {
+        case GGML_LAYOUT_AOS:
+            mmvq_mode = reorder_mode::NONE;
+            break;
+        case GGML_LAYOUT_SOA:
+            mmvq_mode = reorder_mode::SOA;
+            layout_base = args.layout_base;
+            if (!layout_base) {
+                return false;
+            }
+            break;
+        case GGML_LAYOUT_COALESCED:
+            mmvq_mode = reorder_mode::COALESCED;
+            layout_base = args.layout_base;
+            if (!layout_base) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+    }
+
+    int device_id = args.device_id;
+    if (device_id < 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+    }
+
+    ggml_tensor fake{};
+    fake.type = args.weight_type;
+    fake.name[0] = '\0';
+
+    // MMVQ kernels do not currently surface per-kernel events; ignore events.
+    (void) events;
+
+    ggml_sycl_mmvq_dispatch(&fake,
+                            static_cast<const char *>(args.weights),
+                            layout_base,
+                            mmvq_mode,
+                            device_id,
+                            args.ncols,
+                            args.nrows,
+                            args.ncols,
+                            args.row_low,
+                            args.row_high,
+                            args.batch,
+                            args.src1_padded_col_size,
+                            static_cast<const char *>(args.activations),
+                            args.output,
+                            args.dst_row_stride,
+                            args.stream);
+    return true;
+}
+
+}  // namespace ggml_sycl

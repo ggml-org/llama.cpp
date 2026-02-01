@@ -998,7 +998,8 @@ SYCL_ESIMD_FUNCTION void prefetch_activations_cooperative(
  * Check if cooperative ESIMD dpas path is enabled via environment.
  *
  * Cooperative path uses multiple work-items with named barriers for
- * work-group level loading. Enabled via GGML_SYCL_XMX_COOPERATIVE=1.
+ * work-group level loading. Enabled by default while optimizing;
+ * set GGML_SYCL_XMX_COOPERATIVE=0 to disable.
  *
  * @return true if cooperative ESIMD path is enabled
  */
@@ -1006,7 +1007,11 @@ inline bool use_cooperative_esimd() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_XMX_COOPERATIVE");
-        enabled          = (env && std::string(env) == "1") ? 1 : 0;
+        if (!env) {
+            enabled = 1;
+        } else {
+            enabled = (std::string(env) == "0") ? 0 : 1;
+        }
     }
     return enabled != 0;
 }
@@ -2038,7 +2043,7 @@ inline bool can_use_esimd_int8_dpas(int64_t M, int64_t N, int64_t K) {
  * Check if ESIMD dpas path can be used for given dimensions.
  *
  * ESIMD dpas requires:
- * - ESIMD enabled via GGML_SYCL_XMX_ESIMD=1
+ * - ESIMD enabled (default on; disable with GGML_SYCL_XMX_ESIMD=0)
  * - M >= 1 (we handle partial tiles)
  * - N >= 1 (we handle partial tiles)
  * - K aligned to Q4_0 block size (32)
@@ -2049,7 +2054,7 @@ inline bool can_use_esimd_int8_dpas(int64_t M, int64_t N, int64_t K) {
  * @return true if ESIMD dpas can be used
  */
 inline bool can_use_esimd_dpas(int64_t M, int64_t N, int64_t K) {
-    // ESIMD path disabled by default, enable with GGML_SYCL_XMX_ESIMD=1
+    // ESIMD path enabled by default; disable with GGML_SYCL_XMX_ESIMD=0
     if (!use_esimd_dpas()) {
         return false;
     }
@@ -2307,9 +2312,14 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     const int wg_size_n = std::min(tile_n, 16);
 
     // Determine if XMX path should be used
+    const bool prefer_esimd_small = ggml_sycl_unified::prefer_esimd_small();
+    const int  esimd_min_batch    = ggml_sycl_unified::get_esimd_min_batch();
+    const int  prefer_esimd_max_m = ggml_sycl_unified::prefer_esimd_max_m();
+    const bool allow_joint_matrix = !(prefer_esimd_small &&
+                                     (batch_size < esimd_min_batch || args.M <= prefer_esimd_max_m));
     bool use_xmx_path = false;
 #if GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
-    if (args.use_xmx && can_use_xmx(args.M, args.N, args.K)) {
+    if (allow_joint_matrix && args.use_xmx && can_use_xmx(args.M, args.N, args.K)) {
         // Check if device supports XMX
         sycl::device dev = q.get_device();
         use_xmx_path = dev.has(sycl::aspect::ext_intel_matrix);
@@ -2328,6 +2338,12 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
 
         const int xmx_grid_m = (static_cast<int>(args.M) + XMX_TM - 1) / XMX_TM;
         const int xmx_grid_n = (static_cast<int>(args.N) + XMX_TN - 1) / XMX_TN;
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] XMX path: M=%lld N=%lld K=%lld grid=(%d,%d)\n",
+                    static_cast<long long>(args.M), static_cast<long long>(args.N),
+                    static_cast<long long>(args.K), xmx_grid_m, xmx_grid_n);
+            fflush(stderr);
+        }
 
         // Work-group size: 1 sub-group (16 threads)
         // Each work-group handles one XMX tile (8x16 output)
@@ -2361,7 +2377,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // ==========================================================================
     // ESIMD dpas Path: Use ESIMD xmx::dpas for explicit SIMD control
     // ==========================================================================
-    // Enabled via GGML_SYCL_XMX_ESIMD=1 environment variable.
+    // Enabled by default while optimizing; set GGML_SYCL_XMX_ESIMD=0 to disable.
     // Each work-item processes one 8x16 output tile using ESIMD dpas instruction.
     //
     // Two variants:
@@ -2418,7 +2434,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     }
 
     // Cooperative ESIMD FP16 path (multi-work-item with named barriers)
-    // Enabled via GGML_SYCL_XMX_COOPERATIVE=1 in addition to GGML_SYCL_XMX_ESIMD=1
+    // Enabled by default while optimizing; set GGML_SYCL_XMX_COOPERATIVE=0 to disable
     // Work-group size configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
     if (esimd_enabled_by_gating && can_use_cooperative_esimd(args.M, args.N, args.K)) {
         // Get configured work-group size (default: 32)

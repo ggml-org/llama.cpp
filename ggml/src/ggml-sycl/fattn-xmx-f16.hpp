@@ -447,9 +447,8 @@ static void flash_attn_xmx_f16_kernel(
     // process KV positions belonging to the sequences in this work-group.
     const bool is_prefill = (ne01 > ncols);
     int kv_loop_end_bound = seq_kv_end;  // Default bound from multi-sequence info
-    if (maskh && is_prefill) {
-        kv_loop_end_bound = sycl::min(kv_loop_end_bound, last_q_pos + XMX_BATCH_KV);
-    }
+    // NOTE: mask can be arbitrary (not necessarily causal). Do not apply causal skip
+    // based on mask presence, or we can incorrectly skip valid KV positions.
 
     for (int kv_start = kv_loop_start; kv_start < kv_loop_end_bound; kv_start += XMX_BATCH_KV) {
         const int kv_end = sycl::min(kv_start + XMX_BATCH_KV, seq_kv_end);
@@ -564,10 +563,13 @@ static void flash_attn_xmx_f16_kernel(
                 }
 
                 if (mask_row) {
-                    // Load 4 mask values and convert to float
-                    sycl::half4 mh = *reinterpret_cast<const sycl::half4*>(&mask_row[k]);
-                    sycl::float4 mask_val(static_cast<float>(mh.x()), static_cast<float>(mh.y()),
-                                          static_cast<float>(mh.z()), static_cast<float>(mh.w()));
+                    // Avoid unaligned half4 loads when stride_mask is not a multiple of 4.
+                    const sycl::half mh0 = mask_row[k + 0];
+                    const sycl::half mh1 = mask_row[k + 1];
+                    const sycl::half mh2 = mask_row[k + 2];
+                    const sycl::half mh3 = mask_row[k + 3];
+                    const sycl::float4 mask_val(static_cast<float>(mh0), static_cast<float>(mh1),
+                                                static_cast<float>(mh2), static_cast<float>(mh3));
 
                     qk += slope * mask_val;
                 }

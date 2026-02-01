@@ -709,6 +709,8 @@ enum ggml_layout_mode {
     GGML_LAYOUT_COALESCED,         // Warp-coalesced tile layout
     GGML_LAYOUT_XMX_TILED,         // XMX tile-aligned layout (MXFP4 MoE)
     GGML_LAYOUT_XMX_GEMM_TILED,    // XMX GEMM tiled layout (quant/int8 weights)
+    GGML_LAYOUT_ONEDNN_PACKED,     // oneDNN packed weight layout (matmul primitive)
+    GGML_LAYOUT_ONEDNN_WOQ,        // oneDNN WoQ layout (s4 + grouped scales/zp)
 };
 
 // Backend-managed layout metadata for a tensor
@@ -723,6 +725,9 @@ struct ggml_tensor_layout {
     enum ggml_type qtype;
     int64_t        n_elements;
     int64_t        n_experts;
+
+    // oneDNN packed layout metadata (valid when mode == GGML_LAYOUT_ONEDNN_PACKED or GGML_LAYOUT_ONEDNN_WOQ)
+    int64_t        onednn_pack_m;  // M dimension used during oneDNN packing (0 = unset)
 
     // XMX-specific metadata (valid when mode == GGML_LAYOUT_XMX_TILED)
     struct {

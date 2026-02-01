@@ -1,6 +1,5 @@
 #include "mmvq_tier2.hpp"
 
-#include "ggml-quants.h"
 #include "ggml-sycl/mmq-esimd.hpp"
 
 namespace sycl_bench {

@@ -16,6 +16,11 @@
 #include <vector>
 #include <atomic>
 
+template <typename T>
+static inline T * ggml_sycl_cont_batch_alloc(size_t count, sycl::queue & q) {
+    return ggml_sycl_malloc_device_t<T>(count, q, "cont_batch");
+}
+
 // Maximum concurrent sequences
 constexpr int CONT_BATCH_MAX_SEQS = 64;
 // Tokens per sequence ring buffer
@@ -371,23 +376,23 @@ inline void ggml_sycl_multi_seq_sampler_init(
     sampler.n_active = 0;
 
     // Allocate device memory for per-sequence config
-    sampler.temperatures = sycl::malloc_device<float>(max_seqs, q);
-    sampler.top_k_values = sycl::malloc_device<int32_t>(max_seqs, q);
-    sampler.top_p_values = sycl::malloc_device<float>(max_seqs, q);
-    sampler.min_p_values = sycl::malloc_device<float>(max_seqs, q);
-    sampler.greedy_flags = sycl::malloc_device<uint8_t>(max_seqs, q);
-    sampler.rng_states = sycl::malloc_device<uint32_t>(max_seqs, q);
-    sampler.seq_active = sycl::malloc_device<int>(max_seqs, q);
-    sampler.sampled_tokens = sycl::malloc_device<int32_t>(max_seqs, q);
+    sampler.temperatures = ggml_sycl_cont_batch_alloc<float>(max_seqs, q);
+    sampler.top_k_values = ggml_sycl_cont_batch_alloc<int32_t>(max_seqs, q);
+    sampler.top_p_values = ggml_sycl_cont_batch_alloc<float>(max_seqs, q);
+    sampler.min_p_values = ggml_sycl_cont_batch_alloc<float>(max_seqs, q);
+    sampler.greedy_flags = ggml_sycl_cont_batch_alloc<uint8_t>(max_seqs, q);
+    sampler.rng_states = ggml_sycl_cont_batch_alloc<uint32_t>(max_seqs, q);
+    sampler.seq_active = ggml_sycl_cont_batch_alloc<int>(max_seqs, q);
+    sampler.sampled_tokens = ggml_sycl_cont_batch_alloc<int32_t>(max_seqs, q);
 
     const int n_blocks = (n_vocab + GPU_SAMPLER_BLOCK_SIZE - 1) / GPU_SAMPLER_BLOCK_SIZE;
-    sampler.block_max = sycl::malloc_device<float>(max_seqs * n_blocks, q);
-    sampler.block_sum = sycl::malloc_device<float>(max_seqs * n_blocks, q);
-    sampler.block_idx = sycl::malloc_device<int32_t>(max_seqs * n_blocks, q);
+    sampler.block_max = ggml_sycl_cont_batch_alloc<float>(max_seqs * n_blocks, q);
+    sampler.block_sum = ggml_sycl_cont_batch_alloc<float>(max_seqs * n_blocks, q);
+    sampler.block_idx = ggml_sycl_cont_batch_alloc<int32_t>(max_seqs * n_blocks, q);
 
-    sampler.token_buffers = sycl::malloc_device<int32_t>(max_seqs * CONT_BATCH_TOKENS_PER_SEQ, q);
-    sampler.write_indices = sycl::malloc_device<int>(max_seqs, q);
-    sampler.token_counts = sycl::malloc_device<int>(max_seqs, q);
+    sampler.token_buffers = ggml_sycl_cont_batch_alloc<int32_t>(max_seqs * CONT_BATCH_TOKENS_PER_SEQ, q);
+    sampler.write_indices = ggml_sycl_cont_batch_alloc<int>(max_seqs, q);
+    sampler.token_counts = ggml_sycl_cont_batch_alloc<int>(max_seqs, q);
 
     // Initialize to zero/defaults
     q.memset(sampler.seq_active, 0, max_seqs * sizeof(int));

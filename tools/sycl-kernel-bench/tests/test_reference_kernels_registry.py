@@ -10,6 +10,7 @@ def test_reference_kernels_registered():
     for name in [
         "onednn_fp16_gemm",
         "onednn_int8_gemm",
+        "onednn_woq_gemm",
         "memory_bandwidth",
         "roofline_compute",
     ]:

@@ -77,8 +77,12 @@ bool test_scalar_fallback_small_m() {
     args.quant_type  = QUANT_TYPE_Q4_0;
 
     bool result = should_use_scalar_fallback(args);
-    if (result != true) {
-        printf("[FAIL] test_scalar_fallback_small_m: expected true, got false\n");
+    const bool allow_small = ggml_sycl_unified::allow_small_xmx_tiles();
+    const bool expected = allow_small ? false : true;
+    if (result != expected) {
+        printf("[FAIL] test_scalar_fallback_small_m: expected %s, got %s\n",
+               expected ? "true" : "false",
+               result ? "true" : "false");
         return false;
     }
 

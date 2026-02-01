@@ -19,6 +19,7 @@ enum class ggml_sycl_mul_mat_kernel {
     MMQ_SOA,
     MMQ_AOS,
     ONEDNN_AOS,
+    UNIFIED_MATMUL,
 };
 
 // Parse GGML_SYCL_FORCE_KERNEL environment variable

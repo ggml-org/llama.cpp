@@ -316,6 +316,7 @@ struct cmd_params {
     std::vector<std::string>         model;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
+    std::vector<int>                 tg_batch;
     std::vector<std::pair<int, int>> n_pg;
     std::vector<int>                 n_depth;
     std::vector<int>                 n_batch;
@@ -356,6 +357,7 @@ static const cmd_params cmd_params_defaults = {
     /* model                */ { "models/7B/ggml-model-q4_0.gguf" },
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
+    /* tg_batch             */ { 1 },
     /* n_pg                 */ {},
     /* n_depth              */ { 0 },
     /* n_batch              */ { 2048 },
@@ -421,6 +423,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -p, --n-prompt <n>                        (default: %s)\n",
            join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                           (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
+    printf("  --tg-batch <n>                            (default: %s)\n",
+           join(cmd_params_defaults.tg_batch, ",").c_str());
     printf("  -pg <pp,tg>                               (default: %s)\n",
            join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
     printf("  -d, --n-depth <n>                         (default: %s)\n",
@@ -554,6 +558,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gen.insert(params.n_gen.end(), p.begin(), p.end());
+            } else if (arg == "--tg-batch") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.tg_batch.insert(params.tg_batch.end(), p.begin(), p.end());
             } else if (arg == "-pg") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -989,6 +1000,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_gen.empty()) {
         params.n_gen = cmd_params_defaults.n_gen;
     }
+    if (params.tg_batch.empty()) {
+        params.tg_batch = cmd_params_defaults.tg_batch;
+    }
     if (params.n_pg.empty()) {
         params.n_pg = cmd_params_defaults.n_pg;
     }
@@ -1072,6 +1086,7 @@ struct cmd_params_instance {
     std::string        model;
     int                n_prompt;
     int                n_gen;
+    int                tg_batch;
     int                n_depth;
     int                n_batch;
     int                n_ubatch;
@@ -1216,6 +1231,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .model        = */ m,
                 /* .n_prompt     = */ n_prompt,
                 /* .n_gen        = */ 0,
+                /* .tg_batch     = */ params.tg_batch.front(),
                 /* .n_depth      = */ nd,
                 /* .n_batch      = */ nb,
                 /* .n_ubatch     = */ nub,
@@ -1244,76 +1260,80 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             instances.push_back(instance);
         }
 
-        for (const auto & n_gen : params.n_gen) {
-            if (n_gen == 0) {
-                continue;
+        for (const auto & tgb : params.tg_batch) {
+            for (const auto & n_gen : params.n_gen) {
+                if (n_gen == 0) {
+                    continue;
+                }
+                cmd_params_instance instance = {
+                    /* .model        = */ m,
+                    /* .n_prompt     = */ 0,
+                    /* .n_gen        = */ n_gen,
+                    /* .tg_batch     = */ tgb,
+                    /* .n_depth      = */ nd,
+                    /* .n_batch      = */ nb,
+                    /* .n_ubatch     = */ nub,
+                    /* .type_k       = */ tk,
+                    /* .type_v       = */ tv,
+                    /* .n_threads    = */ nt,
+                    /* .cpu_mask     = */ cm,
+                    /* .cpu_strict   = */ cs,
+                    /* .poll         = */ pl,
+                    /* .n_gpu_layers = */ nl,
+                    /* .n_cpu_moe    = */ ncmoe,
+                    /* .split_mode   = */ sm,
+                    /* .main_gpu     = */ mg,
+                    /* .no_kv_offload= */ nkvo,
+                    /* .flash_attn   = */ fa,
+                    /* .paged_attn   = */ pa,
+                    /* .prefix_cache = */ pc,
+                    /* .devices      = */ devs,
+                    /* .tensor_split = */ ts,
+                    /* .tensor_buft_overrides = */ ot,
+                    /* .use_mmap     = */ mmp,
+                    /* .embeddings   = */ embd,
+                    /* .no_op_offload= */ nopo,
+                    /* .no_host      = */ noh,
+                };
+                instances.push_back(instance);
             }
-            cmd_params_instance instance = {
-                /* .model        = */ m,
-                /* .n_prompt     = */ 0,
-                /* .n_gen        = */ n_gen,
-                /* .n_depth      = */ nd,
-                /* .n_batch      = */ nb,
-                /* .n_ubatch     = */ nub,
-                /* .type_k       = */ tk,
-                /* .type_v       = */ tv,
-                /* .n_threads    = */ nt,
-                /* .cpu_mask     = */ cm,
-                /* .cpu_strict   = */ cs,
-                /* .poll         = */ pl,
-                /* .n_gpu_layers = */ nl,
-                /* .n_cpu_moe    = */ ncmoe,
-                /* .split_mode   = */ sm,
-                /* .main_gpu     = */ mg,
-                /* .no_kv_offload= */ nkvo,
-                /* .flash_attn   = */ fa,
-                /* .paged_attn   = */ pa,
-                /* .prefix_cache = */ pc,
-                /* .devices      = */ devs,
-                /* .tensor_split = */ ts,
-                /* .tensor_buft_overrides = */ ot,
-                /* .use_mmap     = */ mmp,
-                /* .embeddings   = */ embd,
-                /* .no_op_offload= */ nopo,
-                /* .no_host      = */ noh,
-            };
-            instances.push_back(instance);
-        }
 
-        for (const auto & n_pg : params.n_pg) {
-            if (n_pg.first == 0 && n_pg.second == 0) {
-                continue;
+            for (const auto & n_pg : params.n_pg) {
+                if (n_pg.first == 0 && n_pg.second == 0) {
+                    continue;
+                }
+                cmd_params_instance instance = {
+                    /* .model        = */ m,
+                    /* .n_prompt     = */ n_pg.first,
+                    /* .n_gen        = */ n_pg.second,
+                    /* .tg_batch     = */ tgb,
+                    /* .n_depth      = */ nd,
+                    /* .n_batch      = */ nb,
+                    /* .n_ubatch     = */ nub,
+                    /* .type_k       = */ tk,
+                    /* .type_v       = */ tv,
+                    /* .n_threads    = */ nt,
+                    /* .cpu_mask     = */ cm,
+                    /* .cpu_strict   = */ cs,
+                    /* .poll         = */ pl,
+                    /* .n_gpu_layers = */ nl,
+                    /* .n_cpu_moe    = */ ncmoe,
+                    /* .split_mode   = */ sm,
+                    /* .main_gpu     = */ mg,
+                    /* .no_kv_offload= */ nkvo,
+                    /* .flash_attn   = */ fa,
+                    /* .paged_attn   = */ pa,
+                    /* .prefix_cache = */ pc,
+                    /* .devices      = */ devs,
+                    /* .tensor_split = */ ts,
+                    /* .tensor_buft_overrides = */ ot,
+                    /* .use_mmap     = */ mmp,
+                    /* .embeddings   = */ embd,
+                    /* .no_op_offload= */ nopo,
+                    /* .no_host      = */ noh,
+                };
+                instances.push_back(instance);
             }
-            cmd_params_instance instance = {
-                /* .model        = */ m,
-                /* .n_prompt     = */ n_pg.first,
-                /* .n_gen        = */ n_pg.second,
-                /* .n_depth      = */ nd,
-                /* .n_batch      = */ nb,
-                /* .n_ubatch     = */ nub,
-                /* .type_k       = */ tk,
-                /* .type_v       = */ tv,
-                /* .n_threads    = */ nt,
-                /* .cpu_mask     = */ cm,
-                /* .cpu_strict   = */ cs,
-                /* .poll         = */ pl,
-                /* .n_gpu_layers = */ nl,
-                /* .n_cpu_moe    = */ ncmoe,
-                /* .split_mode   = */ sm,
-                /* .main_gpu     = */ mg,
-                /* .no_kv_offload= */ nkvo,
-                /* .flash_attn   = */ fa,
-                /* .paged_attn   = */ pa,
-                /* .prefix_cache = */ pc,
-                /* .devices      = */ devs,
-                /* .tensor_split = */ ts,
-                /* .tensor_buft_overrides = */ ot,
-                /* .use_mmap     = */ mmp,
-                /* .embeddings   = */ embd,
-                /* .no_op_offload= */ nopo,
-                /* .no_host      = */ noh,
-            };
-            instances.push_back(instance);
         }
     }
     // clang-format on
@@ -1355,6 +1375,7 @@ struct test {
     bool                     no_host;
     int                      n_prompt;
     int                      n_gen;
+    int                      tg_batch;
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
@@ -1394,6 +1415,7 @@ struct test {
         no_host        = inst.no_host;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
+        tg_batch       = inst.tg_batch;
         n_depth        = inst.n_depth;
         // RFC 3339 date-time format
         time_t t       = time(NULL);
@@ -1449,7 +1471,7 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "embeddings",     "no_op_offload",
-            "no_host",        "n_prompt",       "n_gen",          "n_depth",       "test_time",
+            "no_host",        "n_prompt",       "n_gen",          "tg_batch",      "n_depth",       "test_time",
             "avg_ns",         "stddev_ns",      "avg_ts",         "stddev_ts"
         };
         return fields;
@@ -1460,8 +1482,8 @@ struct test {
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
-            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
-            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
+            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "tg_batch" || field == "n_depth" ||
+            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
@@ -1543,6 +1565,7 @@ struct test {
                                             std::to_string(no_host),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
+                                            std::to_string(tg_batch),
                                             std::to_string(n_depth),
                                             test_time,
                                             std::to_string(avg_ns()),
@@ -2006,23 +2029,32 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
-static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static bool test_gen(llama_context * ctx, int n_gen, int tg_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
-    llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+    if (tg_batch <= 0) {
+        tg_batch = 1;
+    }
+    std::vector<llama_token> tokens(tg_batch);
 
-    for (int i = 0; i < n_gen; i++) {
-        int res = llama_decode(ctx, llama_batch_get_one(&token, 1));
+    int generated = 0;
+    while (generated < n_gen) {
+        const int n_tokens = std::min(tg_batch, n_gen - generated);
+        tokens[0] = (generated == 0 && llama_vocab_get_add_bos(vocab)) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+        for (int i = 1; i < n_tokens; i++) {
+            tokens[i] = std::rand() % n_vocab;
+        }
+        int res = llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
         if (res != 0) {
             fprintf(stderr, "%s: failed to decode generation batch, res = %d\n", __func__, res);
             return false;
         }
         llama_synchronize(ctx);
-        token = std::rand() % n_vocab;
+        generated += n_tokens;
     }
     return true;
 }
@@ -2184,7 +2216,7 @@ int main(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res = test_gen(ctx, 1, t.tg_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                     exit(1);
@@ -2248,7 +2280,7 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen, t.tg_batch, t.n_threads);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     exit(1);

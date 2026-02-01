@@ -3,6 +3,7 @@ add_executable(${TARGET}
     main.cpp
     kernels/reference/onednn_fp16_gemm.cpp
     kernels/reference/onednn_int8_gemm.cpp
+    kernels/reference/onednn_woq_gemm.cpp
     kernels/reference/memory_bandwidth.cpp
     kernels/reference/roofline_compute.cpp
     kernels/tier1/mmvq_aos_baseline.cpp

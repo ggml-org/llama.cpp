@@ -69,6 +69,18 @@ bool run_onednn_int8_gemm(const GeneratedWeights & weights,
                           ReferenceMetrics & out,
                           std::string & error);
 
+bool run_onednn_woq_gemm(const GeneratedWeights & weights,
+                         const GeneratedActivations & activations,
+                         int64_t m,
+                         int64_t n,
+                         int64_t k,
+                         ggml_type quant_type,
+                         int warmup,
+                         int iterations,
+                         sycl::queue & queue,
+                         ReferenceMetrics & out,
+                         std::string & error);
+
 bool run_memory_bandwidth(size_t bytes,
                           int warmup,
                           int iterations,

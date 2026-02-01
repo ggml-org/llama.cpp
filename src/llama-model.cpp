@@ -284,6 +284,18 @@ static bool weight_buft_supported(const llama_hparams &      hparams,
         return true;
     }
 
+#ifdef GGML_USE_SYCL
+    // When SYCL unified cache is managing evictable weights, force host buft support.
+    // The cache will materialize device layouts on demand.
+    if (ggml_backend_dev_backend_reg(dev) == ggml_backend_sycl_reg() &&
+        ggml_backend_sycl_weights_evictable()) {
+        ggml_backend_buffer_type_t host_buft = ggml_backend_dev_host_buffer_type(dev);
+        if (host_buft && buft == host_buft) {
+            return true;
+        }
+    }
+#endif
+
     ggml_init_params params = {
         /*.mem_size   =*/ggml_tensor_overhead() * 8,
         /*.mem_buffer =*/NULL,

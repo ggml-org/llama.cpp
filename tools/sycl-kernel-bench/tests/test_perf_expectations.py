@@ -14,6 +14,8 @@ def test_usage_includes_expect_flags():
     text = _read(MAIN_CPP)
     for flag in ("--expect-tps", "--expect-tops", "--expect-bandwidth", "--expect-xmx-util", "--xmx-peak-tops"):
         assert flag in text
+    for flag in ("--emit-json", "--limit-shapes", "--sample-strategy"):
+        assert flag in text
     assert "--dpas-ntiles" in text
     for flag in ("--dpas-device-opt", "--dpas-autotune", "--dpas-autotune-force",
                  "--dpas-autotune-cache", "--dpas-autotune-metric", "--dpas-autotune-override-ntiles",
@@ -24,6 +26,9 @@ def test_usage_includes_expect_flags():
 def test_parse_kv_supports_expect_flags():
     text = _read(MAIN_CPP)
     for flag in ("--expect-tps", "--expect-tops", "--expect-bandwidth", "--expect-xmx-util", "--xmx-peak-tops"):
+        pattern = re.escape(f'if (key == "{flag}")')
+        assert re.search(pattern, text), f"Missing parse_kv handler for {flag}"
+    for flag in ("--emit-json", "--limit-shapes", "--sample-strategy"):
         pattern = re.escape(f'if (key == "{flag}")')
         assert re.search(pattern, text), f"Missing parse_kv handler for {flag}"
     assert re.search(re.escape('if (key == "--dpas-ntiles")'), text)
@@ -46,3 +51,4 @@ def test_expect_flags_in_value_arg_list():
     assert "--expect-tps" in text and "--expect-tops" in text
     assert "--expect-bandwidth" in text and "--expect-xmx-util" in text
     assert "--xmx-peak-tops" in text
+    assert "--emit-json" in text and "--limit-shapes" in text and "--sample-strategy" in text

@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <future>
 
+#include "common.hpp"
 #include "ggml-impl.h"
 
 namespace ggml_sycl {
@@ -33,7 +34,11 @@ bool pinned_trace_enabled() {
 size_t resolve_chunk_size() {
     const char * env = std::getenv("GGML_SYCL_PINNED_CHUNK_MB");
     if (!env || env[0] == '\0') {
-        return pinned_chunk_pool::CHUNK_SIZE;
+        size_t chunk = pinned_chunk_pool::CHUNK_SIZE;
+        if (ggml_backend_sycl_weights_evictable()) {
+            chunk = std::min<size_t>(chunk, 256ull * 1024ull * 1024ull);
+        }
+        return chunk;
     }
 
     char * end = nullptr;
@@ -184,7 +189,7 @@ bool pinned_chunk_pool::grow(size_t min_size) {
                           alloc_timeout_ms_);
         }
         auto future = std::async(std::launch::async, [&]() {
-            return sycl::malloc_host(chunk_size, queue_);
+            return ggml_sycl_malloc_host(chunk_size, queue_, "pinned_chunk");
         });
 
         const auto status = future.wait_for(std::chrono::milliseconds(alloc_timeout_ms_));
@@ -209,7 +214,7 @@ bool pinned_chunk_pool::grow(size_t min_size) {
             GGML_LOG_INFO("[SYCL] pinned chunk malloc_host begin: size=%zu\n", chunk_size);
         }
         try {
-            ptr = sycl::malloc_host(chunk_size, queue_);
+            ptr = ggml_sycl_malloc_host(chunk_size, queue_, "pinned_chunk");
         } catch (const sycl::exception & e) {
             GGML_LOG_ERROR("[SYCL] Failed to allocate pinned chunk (%zu bytes): %s\n", chunk_size, e.what());
             return false;

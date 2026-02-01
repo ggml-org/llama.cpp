@@ -98,7 +98,20 @@ inline int get_debug_level() {
  * @return BatchBucket enum value
  */
 inline ggml_sycl_tuning::BatchBucket get_batch_bucket(int64_t M) {
-    return ggml_sycl_tuning::bucket_for_batch(static_cast<int>(M));
+    static int min_m = -1;
+    if (min_m < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_TUNING_MIN_M");
+        min_m = (env && std::atoi(env) > 0) ? std::atoi(env) : 8;
+        if (min_m < 1) {
+            min_m = 1;
+        }
+        if (min_m > 1 && get_debug_level() > 0) {
+            fprintf(stderr, "[unified-dispatch] tuning min M override: %d\n", min_m);
+            fflush(stderr);
+        }
+    }
+    const int64_t tuned_m = (min_m > 1 && M < min_m) ? min_m : M;
+    return ggml_sycl_tuning::bucket_for_batch(static_cast<int>(tuned_m));
 }
 
 // =============================================================================
@@ -191,6 +204,21 @@ inline ggml_sycl_unified::UnifiedKernelArgs build_kernel_args(
     args.weights = weights;
     args.activations = activations;
     args.output = output;
+
+    static int force_xmx = -1;
+    if (force_xmx < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_FORCE_XMX");
+        force_xmx = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    if (force_xmx || ggml_sycl_unified::env_force_esimd()) {
+        args.use_xmx = true;
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            fprintf(stderr, "[unified-dispatch] forcing XMX path (GGML_SYCL_UNIFIED_FORCE_XMX or GGML_SYCL_FORCE_ESIMD)\n");
+            fflush(stderr);
+        }
+    }
     return args;
 }
 

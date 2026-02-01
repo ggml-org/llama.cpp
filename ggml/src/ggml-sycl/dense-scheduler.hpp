@@ -74,6 +74,7 @@ class dense_layer_scheduler {
   private:
     sycl::queue & compute_queue_;
     sycl::queue   copy_queue_;
+    int           device_id_ = -1;
 
     void * vram_slot_[2] = { nullptr, nullptr };
     size_t slot_size_;

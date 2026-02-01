@@ -29,15 +29,15 @@ using namespace ggml_sycl_unified;
 // =============================================================================
 
 // CPU reference dequantization for Q4_0
-// block_q4_0 layout: [d: fp16] [qs: 16 bytes = 32 nibbles]
+// block_q4_0_unified layout: [d: fp16] [qs: 16 bytes = 32 nibbles]
 // For index i < 16: low nibble = qs[i] & 0xF
 // For index i >= 16: high nibble = qs[i-16] >> 4
 // Dequant: weight = (nibble - 8) * d
-void dequant_q4_0_cpu_reference(const block_q4_0* block, float* output) {
+void dequant_q4_0_cpu_reference(const block_q4_0_unified* block, float* output) {
     // Convert fp16 scale to float
     float scale = static_cast<float>(block->d);
 
-    for (int i = 0; i < QK4_0; i++) {
+    for (int i = 0; i < UNIFIED_QK4_0; i++) {
         int nibble;
         if (i < 16) {
             nibble = block->qs[i] & 0x0F;
@@ -139,18 +139,18 @@ bool test_kernel_args_has_layout() {
 // Test 3: Q4_0 block structure is correct size
 // =============================================================================
 bool test_block_q4_0_structure() {
-    std::cout << "[Test 3] block_q4_0 structure has correct size... ";
+    std::cout << "[Test 3] block_q4_0_unified structure has correct size... ";
 
     // Q4_0 block: 2 bytes (fp16 scale) + 16 bytes (32 nibbles) = 18 bytes
-    constexpr size_t expected_size = sizeof(sycl::half) + QK4_0 / 2;
+    constexpr size_t expected_size = sizeof(sycl::half) + UNIFIED_QK4_0 / 2;
 
-    if (sizeof(block_q4_0) != expected_size) {
-        std::cout << "FAIL: expected " << expected_size << " bytes, got " << sizeof(block_q4_0) << "\n";
+    if (sizeof(block_q4_0_unified) != expected_size) {
+        std::cout << "FAIL: expected " << expected_size << " bytes, got " << sizeof(block_q4_0_unified) << "\n";
         return false;
     }
 
-    if (sizeof(block_q4_0) != 18) {
-        std::cout << "FAIL: block_q4_0 should be 18 bytes\n";
+    if (sizeof(block_q4_0_unified) != 18) {
+        std::cout << "FAIL: block_q4_0_unified should be 18 bytes\n";
         return false;
     }
 
@@ -165,7 +165,7 @@ bool test_dequant_q4_0_correctness() {
     std::cout << "[Test 4] Q4_0 dequantization matches CPU reference... ";
 
     // Create test block with known values
-    block_q4_0 block;
+    block_q4_0_unified block;
 
     // Set scale = 1.0 (0x3C00 in fp16)
     block.d = uint16_to_half(0x3C00);
@@ -180,7 +180,7 @@ bool test_dequant_q4_0_correctness() {
     }
 
     // Dequantize using CPU reference
-    float output[QK4_0];
+    float output[UNIFIED_QK4_0];
     dequant_q4_0_cpu_reference(&block, output);
 
     // Verify output values
@@ -214,7 +214,7 @@ bool test_dequant_q4_0_correctness() {
 bool test_dequant_q4_0_with_scale() {
     std::cout << "[Test 5] Q4_0 dequantization with non-unit scale... ";
 
-    block_q4_0 block;
+    block_q4_0_unified block;
 
     // Set scale = 0.5 (0x3800 in fp16)
     block.d = uint16_to_half(0x3800);
@@ -225,11 +225,11 @@ bool test_dequant_q4_0_with_scale() {
         block.qs[i] = 0xCC;  // Low nibble = 12, high nibble = 12
     }
 
-    float output[QK4_0];
+    float output[UNIFIED_QK4_0];
     dequant_q4_0_cpu_reference(&block, output);
 
     float expected = 4.0f * 0.5f;  // (12 - 8) * 0.5 = 2.0
-    for (int i = 0; i < QK4_0; i++) {
+    for (int i = 0; i < UNIFIED_QK4_0; i++) {
         if (!float_equal(output[i], expected)) {
             std::cout << "FAIL: output[" << i << "] = " << output[i]
                       << ", expected " << expected << "\n";
@@ -334,7 +334,7 @@ bool test_validate_args_with_layout() {
     // Set up valid args
     args.M = 32;
     args.N = 64;
-    args.K = 128;  // Must be multiple of QK4_0 (32)
+    args.K = 128;  // Must be multiple of UNIFIED_QK4_0 (32)
     args.tile_m = 8;
     args.tile_n = 16;
     args.tile_k = 32;

@@ -1,16 +1,14 @@
 //
-// Test: XMX Default Disable Behavior
+// Test: XMX Default Enable Behavior
 //
 // TDD tests to validate XMX unified kernel behavior:
-// 1. XMX disabled by default (27% regression vs scalar path)
-// 2. Opt-in via GGML_SYCL_XMX_UNIFIED=1 works
+// 1. XMX enabled by default while optimizing
+// 2. can_use_xmx returns true for valid dimensions
 // 3. can_use_xmx correctly validates dimensions
 // 4. XMX tile constants match hardware expectations
 //
-// The XMX path correctness issues have been resolved,
-// but benchmark shows 27% regression (PP512: 25.73 -> 18.78 t/s).
-// XMX is disabled by default until kernel is optimized.
-// Use GGML_SYCL_XMX_UNIFIED=1 to enable for testing.
+// XMX is enabled by default while optimizing.
+// Use GGML_SYCL_XMX_UNIFIED=0 to disable.
 //
 // MIT license
 // Copyright (C) 2024-2026 Intel Corporation
@@ -69,48 +67,47 @@ static int g_tests_skipped = 0;
     } while (0)
 
 // =============================================================================
-// Test 1: XMX Disabled by Default (Performance Regression)
-// Verifies that is_xmx_unified_enabled() returns false without env var
+// Test 1: XMX Enabled by Default (Optimization Phase)
+// Verifies that is_xmx_unified_enabled() returns true without env var
 // =============================================================================
-static bool test_xmx_disabled_by_default(sycl::queue & q) {
-    TEST_BEGIN("test_xmx_disabled_by_default");
+static bool test_xmx_enabled_by_default(sycl::queue & q) {
+    TEST_BEGIN("test_xmx_enabled_by_default");
     (void)q;  // Unused in this test
 
-    // Test: is_xmx_unified_enabled() should return false by default
-    // XMX correctness issues have been fixed, but benchmark shows 27% regression.
-    // Use GGML_SYCL_XMX_UNIFIED=1 to enable (opt-in).
+    // Test: is_xmx_unified_enabled() should return true by default
+    // Use GGML_SYCL_XMX_UNIFIED=0 to disable.
 
     bool enabled = ggml_sycl_unified::is_xmx_unified_enabled();
 
-    // XMX disabled by default (enable with GGML_SYCL_XMX_UNIFIED=1)
-    TEST_ASSERT(!enabled, "XMX should be DISABLED by default (27% regression)");
+    // XMX enabled by default (disable with GGML_SYCL_XMX_UNIFIED=0)
+    TEST_ASSERT(enabled, "XMX should be ENABLED by default while optimizing");
 
-    fprintf(stderr, "\n  [INFO] XMX disabled by default - use GGML_SYCL_XMX_UNIFIED=1 to enable\n");
+    fprintf(stderr, "\n  [INFO] XMX enabled by default - use GGML_SYCL_XMX_UNIFIED=0 to disable\n");
 
     TEST_PASS();
     return true;
 }
 
 // =============================================================================
-// Test 2: can_use_xmx Returns False When Disabled
-// Verifies that can_use_xmx respects the disabled-by-default setting
+// Test 2: can_use_xmx Returns True When Enabled
+// Verifies that can_use_xmx respects the enabled-by-default setting
 // =============================================================================
-static bool test_can_use_xmx_respects_disabled(sycl::queue & q) {
-    TEST_BEGIN("test_can_use_xmx_respects_disabled");
+static bool test_can_use_xmx_respects_enabled(sycl::queue & q) {
+    TEST_BEGIN("test_can_use_xmx_respects_enabled");
     (void)q;  // Unused in this test
 
-    // XMX is disabled by default, can_use_xmx returns false for all dimensions
+    // XMX is enabled by default, can_use_xmx should return true for valid dimensions
     int64_t M = 16;
     int64_t N = 32;
     int64_t K = 64;
 
     bool can_use = ggml_sycl_unified::can_use_xmx(M, N, K);
 
-    // can_use_xmx should return false because XMX is disabled by default
-    fprintf(stderr, "\n  [INFO] can_use_xmx(%lld, %lld, %lld) = %s (XMX disabled by default)\n",
+    // can_use_xmx should return true because XMX is enabled by default
+    fprintf(stderr, "\n  [INFO] can_use_xmx(%lld, %lld, %lld) = %s (XMX enabled by default)\n",
             (long long)M, (long long)N, (long long)K, can_use ? "true" : "false");
 
-    TEST_ASSERT(!can_use, "can_use_xmx should return false when XMX is disabled by default");
+    TEST_ASSERT(can_use, "can_use_xmx should return true when XMX is enabled by default");
 
     TEST_PASS();
     return true;
@@ -127,13 +124,15 @@ static bool test_can_use_xmx_rejects_invalid(sycl::queue & q) {
     // Test various invalid dimension combinations
     // These should return false regardless of whether XMX is enabled
 
-    // M too small (< 8)
-    TEST_ASSERT(!ggml_sycl_unified::can_use_xmx(4, 32, 64),
-                "Should reject M < 8");
+    const bool allow_small = ggml_sycl_unified::allow_small_xmx_tiles();
 
-    // N too small (< 16)
-    TEST_ASSERT(!ggml_sycl_unified::can_use_xmx(16, 8, 64),
-                "Should reject N < 16");
+    // M too small (< 8) - rejected unless small tiles explicitly enabled
+    TEST_ASSERT(ggml_sycl_unified::can_use_xmx(4, 32, 64) == allow_small,
+                "M < 8 should be rejected unless small tiles are enabled");
+
+    // N too small (< 16) - rejected unless small tiles explicitly enabled
+    TEST_ASSERT(ggml_sycl_unified::can_use_xmx(16, 8, 64) == allow_small,
+                "N < 16 should be rejected unless small tiles are enabled");
 
     // K not aligned to 16
     TEST_ASSERT(!ggml_sycl_unified::can_use_xmx(16, 32, 65),
@@ -144,11 +143,11 @@ static bool test_can_use_xmx_rejects_invalid(sycl::queue & q) {
 }
 
 // =============================================================================
-// Test 4: XMX Path Selection When Disabled
-// Verifies that launch_unified_matmul handles XMX disabled appropriately
+// Test 4: XMX Path Selection When Enabled
+// Verifies that launch_unified_matmul handles XMX enabled appropriately
 // =============================================================================
-static bool test_xmx_path_selection_disabled(sycl::queue & q) {
-    TEST_BEGIN("test_xmx_path_selection_disabled");
+static bool test_xmx_path_selection_enabled(sycl::queue & q) {
+    TEST_BEGIN("test_xmx_path_selection_enabled");
 
     // Check if device supports XMX
     sycl::device dev = q.get_device();
@@ -169,15 +168,15 @@ static bool test_xmx_path_selection_disabled(sycl::queue & q) {
     const int N = 32;
     const int K = 32;
 
-    // XMX is disabled by default, can_use_xmx should return false
+    // XMX is enabled by default, can_use_xmx should return true
     bool can_use = ggml_sycl_unified::can_use_xmx(M, N, K);
     fprintf(stderr, "  [INFO] can_use_xmx(%d, %d, %d) = %s\n",
             M, N, K, can_use ? "true" : "false");
 
-    // Expected: false because XMX is disabled by default
-    TEST_ASSERT(!can_use, "XMX should NOT be used when disabled by default");
+    // Expected: true because XMX is enabled by default
+    TEST_ASSERT(can_use, "XMX should be usable when enabled by default");
 
-    fprintf(stderr, "  [INFO] XMX path selection working correctly (disabled by default)\n");
+    fprintf(stderr, "  [INFO] XMX path selection working correctly (enabled by default)\n");
 
     TEST_PASS();
     return true;
@@ -229,11 +228,10 @@ int main(int argc, char ** argv) {
     (void) argv;
 
     fprintf(stderr, "===========================================\n");
-    fprintf(stderr, "XMX Default Disable Tests\n");
+    fprintf(stderr, "XMX Default Enable Tests\n");
     fprintf(stderr, "===========================================\n");
-    fprintf(stderr, "XMX is DISABLED by default due to 27%% performance regression.\n");
-    fprintf(stderr, "Benchmark: PP512 25.73 -> 18.78 t/s with XMX enabled.\n");
-    fprintf(stderr, "Use GGML_SYCL_XMX_UNIFIED=1 to enable for testing.\n");
+    fprintf(stderr, "XMX is ENABLED by default while optimizing.\n");
+    fprintf(stderr, "Use GGML_SYCL_XMX_UNIFIED=0 to disable.\n");
     fprintf(stderr, "===========================================\n");
 
     // Select GPU device
@@ -253,10 +251,10 @@ int main(int argc, char ** argv) {
     // Run tests
     bool all_passed = true;
 
-    all_passed &= test_xmx_disabled_by_default(q);
-    all_passed &= test_can_use_xmx_respects_disabled(q);
+    all_passed &= test_xmx_enabled_by_default(q);
+    all_passed &= test_can_use_xmx_respects_enabled(q);
     all_passed &= test_can_use_xmx_rejects_invalid(q);
-    all_passed &= test_xmx_path_selection_disabled(q);
+    all_passed &= test_xmx_path_selection_enabled(q);
     all_passed &= test_xmx_tile_constants(q);
 
     // Summary

@@ -262,7 +262,7 @@ static bool test_xmx_correctness_basic(sycl::queue& q) {
     launch_unified_matmul(q, args);
     q.wait();
 
-    // Restore XMX disabled
+    // Restore XMX env override
     unsetenv("GGML_SYCL_XMX_UNIFIED");
 
     // Copy output back

@@ -193,6 +193,7 @@ llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
+llama_build_and_test(test-sycl-model-shapes.cpp)
 llama_build_and_test(
     test-peg-parser.cpp
     peg-parser/simple-tokenize.cpp
@@ -273,6 +274,34 @@ add_executable(test-tuning-engine test-tuning-engine.cpp)
 target_include_directories(test-tuning-engine PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
 install(TARGETS test-tuning-engine RUNTIME)
 add_test(NAME test-tuning-engine COMMAND $<TARGET_FILE:test-tuning-engine>)
+
+# test-dispatch-tuning: unit tests for dispatch tuning cache parsing and lookup
+add_executable(test-dispatch-tuning
+    test-dispatch-tuning.cpp
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/dispatch-tuning.cpp)
+target_include_directories(test-dispatch-tuning PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+target_link_libraries(test-dispatch-tuning PRIVATE ggml)
+install(TARGETS test-dispatch-tuning RUNTIME)
+add_test(NAME test-dispatch-tuning COMMAND $<TARGET_FILE:test-dispatch-tuning>)
+
+# test-onednn-woq: unit tests for WoQ metadata and dequant-fp16 support
+add_executable(test-onednn-woq test-onednn-woq.cpp)
+target_include_directories(test-onednn-woq PRIVATE
+    ${PROJECT_SOURCE_DIR}/ggml/include
+    ${PROJECT_SOURCE_DIR}/ggml/src
+    ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+target_link_libraries(test-onednn-woq PRIVATE ggml ggml-base ggml-sycl)
+target_compile_options(test-onednn-woq PRIVATE "-fsycl" "-Wno-narrowing")
+target_link_options(test-onednn-woq PRIVATE "-fsycl")
+target_compile_definitions(test-onednn-woq PRIVATE $<TARGET_PROPERTY:ggml-sycl,COMPILE_DEFINITIONS>)
+if (GGML_SYCL)
+    find_package(DNNL REQUIRED)
+    target_link_libraries(test-onednn-woq PRIVATE DNNL::dnnl)
+endif()
+install(TARGETS test-onednn-woq RUNTIME)
+add_test(NAME test-onednn-woq COMMAND $<TARGET_FILE:test-onednn-woq>)
 
 # test-tuning-engine-impl: unit tests for TuningEngine implementation (progressive tuning)
 # Pure C++ test (no SYCL required), needs access to tuning-engine.hpp and tuning-engine-impl.hpp
@@ -1331,6 +1360,30 @@ if(GGML_SYCL)
     install(TARGETS test-sycl-layout-choice RUNTIME)
     add_test(NAME test-sycl-layout-choice COMMAND $<TARGET_FILE:test-sycl-layout-choice>)
 
+    # test-sycl-layout-names: Ensure layout name mapping includes ONEDNN_PACKED.
+    add_executable(test-sycl-layout-names test-sycl-layout-names.cpp)
+    target_link_libraries(test-sycl-layout-names PRIVATE ggml)
+    target_include_directories(test-sycl-layout-names PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-layout-names PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-layout-names PRIVATE "-fsycl")
+    install(TARGETS test-sycl-layout-names RUNTIME)
+    add_test(NAME test-sycl-layout-names COMMAND $<TARGET_FILE:test-sycl-layout-names>)
+
+    # test-sycl-onednn-packed-cache: Ensure ONEDNN_PACKED caching evicts AoS.
+    add_executable(test-sycl-onednn-packed-cache test-sycl-onednn-packed-cache.cpp)
+    target_link_libraries(test-sycl-onednn-packed-cache PRIVATE ggml)
+    target_include_directories(test-sycl-onednn-packed-cache PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-onednn-packed-cache PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-onednn-packed-cache PRIVATE "-fsycl")
+    install(TARGETS test-sycl-onednn-packed-cache RUNTIME)
+    add_test(NAME test-sycl-onednn-packed-cache COMMAND $<TARGET_FILE:test-sycl-onednn-packed-cache>)
+
     # test-sycl-kernel-selection: Verifies unified kernel selection logic.
     add_executable(test-sycl-kernel-selection test-sycl-kernel-selection.cpp)
     target_link_libraries(test-sycl-kernel-selection PRIVATE ggml)
@@ -1342,6 +1395,18 @@ if(GGML_SYCL)
     target_link_options(test-sycl-kernel-selection PRIVATE "-fsycl")
     install(TARGETS test-sycl-kernel-selection RUNTIME)
     add_test(NAME test-sycl-kernel-selection COMMAND $<TARGET_FILE:test-sycl-kernel-selection>)
+
+    # test-sycl-orchestrator: selection logic for UnifiedMatmulOrchestrator.
+    add_executable(test-sycl-orchestrator test-sycl-orchestrator.cpp)
+    target_link_libraries(test-sycl-orchestrator PRIVATE ggml)
+    target_include_directories(test-sycl-orchestrator PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-orchestrator PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-orchestrator PRIVATE "-fsycl")
+    install(TARGETS test-sycl-orchestrator RUNTIME)
+    add_test(NAME test-sycl-orchestrator COMMAND $<TARGET_FILE:test-sycl-orchestrator>)
 
     # test-sycl-weight-key-stability: key should remain stable across repeated lookups.
     add_executable(test-sycl-weight-key-stability test-sycl-weight-key-stability.cpp)
@@ -1882,6 +1947,7 @@ if(GGML_SYCL)
     target_include_directories(test-unified-dispatch-integration PRIVATE
         ${PROJECT_SOURCE_DIR}/ggml/include
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_definitions(test-unified-dispatch-integration PRIVATE GGML_SYCL_WARP_SIZE=32)
     target_compile_options(test-unified-dispatch-integration PRIVATE "-fsycl" "-Wno-narrowing")
     target_link_options(test-unified-dispatch-integration PRIVATE "-fsycl")
     install(TARGETS test-unified-dispatch-integration RUNTIME)

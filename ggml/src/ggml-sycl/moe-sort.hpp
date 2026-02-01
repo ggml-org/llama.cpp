@@ -17,6 +17,8 @@ struct MoETokenMapping {
     int32_t original_idx;  // Original token index
     int32_t expert_idx;    // Which expert this goes to
 };
+static_assert(sizeof(MoETokenMapping) == kMoETokenMappingBytes,
+              "MoETokenMapping size changed; update kMoETokenMappingBytes in common.hpp");
 
 // Per-expert batch info
 struct MoEExpertBatch {

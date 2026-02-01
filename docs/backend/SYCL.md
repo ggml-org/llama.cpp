@@ -56,7 +56,7 @@ The following releases are verified and recommended:
     |ARL-H|14|17|+21%|
 
 - 2024.11
-  - Use syclcompat to improve the performance on some platforms. This requires to use oneAPI 2025.0 or newer.
+  - Use syclcompat to improve the performance on some platforms. This requires to use oneAPI 2025.0 or newer (tested with 2025.3.1).
 
 - 2024.8
   - Use oneDNN as the default GEMM library, improve the compatibility for new Intel GPUs.
@@ -243,6 +243,7 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 
 |Verified release|
 |-|
+|2025.3.1|
 |2025.2.1|
 |2025.1|
 |2024.1|
@@ -662,7 +663,7 @@ Once it is completed, final results will be in **build/Release/bin**
 
     - `SYCL_LIBRARY_DIR_HINT`
 
-- Above instruction has been tested with Visual Studio 17 Community edition and oneAPI 2025.0. We expect them to work also with future version if the instructions are adapted accordingly.
+- Above instruction has been tested with Visual Studio 17 Community edition and oneAPI 2025.3.1. We expect them to work also with future version if the instructions are adapted accordingly.
 
 ### III. Run the inference
 

@@ -439,7 +439,7 @@ sycl::event kv_offload_manager::transfer_to_cpu(kv_block* block) {
 }
 
 void* kv_offload_manager::allocate_cpu_block(size_t size) {
-    void* ptr = sycl::malloc_host(size, queue_);
+    void* ptr = ggml_sycl_malloc_host_tracked_bytes(size, queue_, "kv_offload:cpu_block");
     if (ptr) {
         cpu_memory_used_ += size;
     }
@@ -449,13 +449,19 @@ void* kv_offload_manager::allocate_cpu_block(size_t size) {
 void kv_offload_manager::free_cpu_block(void* ptr) {
     if (ptr) {
         // Find block to get size
+        size_t block_size = 0;
         for (auto& [key, block] : blocks_) {
             if (block.cpu_ptr == ptr) {
                 cpu_memory_used_ -= block.size;
+                block_size = block.size;
                 break;
             }
         }
-        sycl::free(ptr, queue_);
+        if (block_size > 0) {
+            ggml_sycl_free_host_tracked_bytes(ptr, block_size, queue_);
+        } else {
+            ggml_sycl_free_host_tracked_bytes(ptr, 0, queue_);
+        }
     }
 }
 

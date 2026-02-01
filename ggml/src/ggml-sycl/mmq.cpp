@@ -11,6 +11,7 @@
 //
 
 #include "mmq.hpp"
+#include "common.hpp"
 #include "ggml-sycl-bench.hpp"
 
 #include <utility>
@@ -232,7 +233,7 @@ static int32_t* get_mmq_work_counter(dpct::queue_ptr stream) {
     // Slow path: allocate with lock
     std::lock_guard<std::mutex> lock(s_mmq_persistent_mutex);
     if (s_mmq_work_counters[device_id] == nullptr) {
-        s_mmq_work_counters[device_id] = sycl::malloc_device<int32_t>(1, *stream);
+        s_mmq_work_counters[device_id] = ggml_sycl_malloc_device_tracked_t<int32_t>(1, *stream, "mmq_work_counter");
     }
     return s_mmq_work_counters[device_id];
 }
@@ -6313,6 +6314,62 @@ static bool mmq_parse_env_count_value(const char * name, size_t & out_count) {
     return true;
 }
 
+static int mmq_tile_rows_q8_0(int device_id) {
+    if (device_id < 0 || device_id >= ggml_sycl_info().device_count) {
+        return 0;
+    }
+    const int compute_capability = ggml_sycl_info().devices[device_id].cc;
+    if (compute_capability >= VER_GEN13) {
+        return MMQ_Y_Q8_0_RDNA2;
+    }
+    if (compute_capability >= VER_GEN12) {
+        return MMQ_Y_Q8_0_RDNA1;
+    }
+    if (compute_capability >= VER_GEN9) {
+        return MMQ_Y_Q8_0_AMPERE;
+    }
+    if (compute_capability >= VER_4VEC) {
+        return MMQ_Y_Q8_0_PASCAL;
+    }
+    return MMQ_Y_Q8_0_AMPERE;
+}
+
+static void mmq_align_slice_bytes_for_mmq(ggml_type type,
+                                          int device_id,
+                                          size_t row_bytes,
+                                          int64_t total_rows,
+                                          size_t & slice_bytes) {
+    if (row_bytes == 0 || total_rows <= 0 || slice_bytes == 0) {
+        return;
+    }
+    int tile_rows = 0;
+    switch (type) {
+        case GGML_TYPE_Q8_0:
+            tile_rows = mmq_tile_rows_q8_0(device_id);
+            break;
+        default:
+            return;
+    }
+    if (tile_rows <= 0) {
+        return;
+    }
+    if ((total_rows % tile_rows) != 0) {
+        return;
+    }
+    size_t rows_per_slice = slice_bytes / row_bytes;
+    if (rows_per_slice == 0) {
+        rows_per_slice = 1;
+    }
+    rows_per_slice = (rows_per_slice / static_cast<size_t>(tile_rows)) * static_cast<size_t>(tile_rows);
+    if (rows_per_slice < static_cast<size_t>(tile_rows)) {
+        rows_per_slice = static_cast<size_t>(tile_rows);
+    }
+    if (rows_per_slice > static_cast<size_t>(total_rows)) {
+        rows_per_slice = static_cast<size_t>(total_rows);
+    }
+    slice_bytes = rows_per_slice * row_bytes;
+}
+
 static void mmq_resolve_dma_params(size_t row_bytes, size_t & slice_bytes, size_t & buffer_count) {
     size_t slice_mb = 1024;
     size_t buffers  = 2;
@@ -6651,6 +6708,38 @@ static sycl::event mmq_stream_copy(sycl::queue &                    queue,
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
     const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
 
+    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    if (src_alloc != sycl::usm::alloc::device) {
+        uint8_t * host_slice =
+            static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "mmq:host_stage"));
+        if (!host_slice) {
+            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                  "MMQ stream: host staging allocation failed");
+        }
+        size_t dst_offset = 0;
+        for (int i = 0; i < ctx->segment_count; ++i) {
+            const auto & seg   = ctx->segments[i];
+            const size_t bytes = row_count * seg.bytes_per_row;
+            if (bytes == 0) {
+                continue;
+            }
+            const uint8_t * src = ctx->src_base + seg.src_base + src_row * seg.bytes_per_row;
+            std::memcpy(host_slice + dst_offset, src, bytes);
+            dst_offset += bytes;
+        }
+        GGML_ASSERT(dst_offset == slice_bytes);
+        sycl::event evt = queue.memcpy(device_slice, host_slice, slice_bytes, deps);
+        if (auto * cache = ggml_sycl::get_unified_cache(queue)) {
+            cache->defer_host_free(host_slice, slice_bytes, evt);
+        } else {
+            if (!ggml_sycl_graph_recording_active()) {
+                evt.wait();
+            }
+            ggml_sycl_free_host_tracked_bytes(host_slice, slice_bytes, queue);
+        }
+        return evt;
+    }
+
     size_t                   dst_offset = 0;
     std::vector<sycl::event> cur_deps   = deps;
     sycl::event              last_evt;
@@ -6710,6 +6799,8 @@ static sycl::event mmq_stream_copy(sycl::queue &                    queue,
     return last_evt;
 }
 
+struct ggml_sycl_mmq_marker_kernel;
+
 static sycl::event mmq_stream_slice(sycl::queue &                    queue,
                                     void *                           device_slice,
                                     size_t                           slice_bytes,
@@ -6718,7 +6809,7 @@ static sycl::event mmq_stream_slice(sycl::queue &                    queue,
                                     const std::vector<sycl::event> & deps) {
     const auto * ctx = static_cast<const mmq_stream_ctx *>(ctx_void);
     if (!ctx || ctx->row_total_bytes == 0) {
-        return queue.ext_oneapi_submit_barrier();
+        return ggml_sycl_submit_marker<ggml_sycl_mmq_marker_kernel>(queue);
     }
     GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
     GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
@@ -6728,9 +6819,9 @@ static sycl::event mmq_stream_slice(sycl::queue &                    queue,
     float *      dst_ptr   = ctx->dst_dd_i + static_cast<int64_t>(row_start);
 
     if (!deps.empty()) {
-        sycl::event deps_barrier = queue.ext_oneapi_submit_barrier(deps);
+        sycl::event deps_marker = ggml_sycl_submit_marker<ggml_sycl_mmq_marker_kernel>(queue, deps);
         if (!queue.has_property<sycl::property::queue::in_order>() && !g_ggml_sycl_graph_recording) {
-            deps_barrier.wait();
+            deps_marker.wait();
         }
     }
 
@@ -6755,7 +6846,13 @@ static sycl::event mmq_stream_slice(sycl::queue &                    queue,
                            0,
                            &queue);
 
-    return queue.ext_oneapi_submit_barrier();
+    // Ensure the returned event only completes after the MMQ kernel finishes,
+    // even on out-of-order queues, so staging buffers are not reused early.
+    try {
+        return queue.ext_oneapi_submit_barrier();
+    } catch (...) {
+        return ggml_sycl_submit_marker<ggml_sycl_mmq_marker_kernel>(queue);
+    }
 }
 
 void ggml_sycl_op_mul_mat_q(
@@ -6876,27 +6973,6 @@ void ggml_sycl_op_mul_mat_q(
         }
     }
 
-    const layout_mode dispatch_layout = layout;
-    const void *      dispatch_base   =
-        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_base : nullptr;
-    const char * dispatch_ptr   = src0_dd_i;
-
-    mmq_stream_ctx stream_ctx{};
-    const int64_t   build_rows  = (dispatch_layout == GGML_LAYOUT_AOS) ? src0->ne[1] : layout_rows;
-    const bool      custom_copy = mmq_build_stream_segments(src0, dispatch_layout, ne00, build_rows, stream_ctx);
-    stream_ctx.device_id            = device_id;
-    stream_ctx.src0                 = src0;
-    stream_ctx.src1_ddq_i           = src1_ddq_i;
-    stream_ctx.dst_dd_i             = dst_dd_i;
-    stream_ctx.dst_row_stride       = nrows_dst;
-    stream_ctx.ne00                 = ne00;
-    stream_ctx.ne10                 = ne10;
-    stream_ctx.src1_ncols           = src1_ncols;
-    stream_ctx.src1_padded_row_size = src1_padded_row_size;
-    stream_ctx.row_base             =
-        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_row_low : 0;
-    stream_ctx.layout               = dispatch_layout;
-
     auto infer_location = [&](const void * ptr) -> ggml_sycl::cache_location {
         if (!ptr) {
             return ggml_sycl::cache_location::HOST_MMAP;
@@ -6915,19 +6991,67 @@ void ggml_sycl_op_mul_mat_q(
         ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*stream) : nullptr;
     ggml_sycl_cache_id         cache_key =
         cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : ggml_sycl_cache_id{};
-    ggml_sycl::cache_ptr_view  view{};
-    if (cache && cache_key.valid) {
-        view = cache->get_view(cache_key, dispatch_layout);
+
+    mmq_stream_ctx           stream_ctx{};
+    ggml_sycl::cache_ptr_view view{};
+    layout_mode              dispatch_layout = layout;
+    const void *             dispatch_base   = nullptr;
+    const char *             dispatch_ptr    = src0_dd_i;
+    int64_t                  build_rows      = 0;
+    bool                     custom_copy     = false;
+    bool                     forced_aos_for_mmap = false;
+
+    for (int pass = 0; pass < 2; ++pass) {
+        dispatch_layout = layout;
+        dispatch_base   =
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_base : nullptr;
+        build_rows      = (dispatch_layout == GGML_LAYOUT_AOS) ? src0->ne[1] : layout_rows;
+
+        stream_ctx = {};
+        custom_copy = mmq_build_stream_segments(src0, dispatch_layout, ne00, build_rows, stream_ctx);
+        stream_ctx.device_id            = device_id;
+        stream_ctx.src0                 = src0;
+        stream_ctx.src1_ddq_i           = src1_ddq_i;
+        stream_ctx.dst_dd_i             = dst_dd_i;
+        stream_ctx.dst_row_stride       = nrows_dst;
+        stream_ctx.ne00                 = ne00;
+        stream_ctx.ne10                 = ne10;
+        stream_ctx.src1_ncols           = src1_ncols;
+        stream_ctx.src1_padded_row_size = src1_padded_row_size;
+        stream_ctx.row_base             =
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_row_low : 0;
+        stream_ctx.layout               = dispatch_layout;
+
+        view = {};
+        if (cache && cache_key.valid) {
+            view = cache->get_view(cache_key, dispatch_layout);
+        }
+        const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
+        if (!view.ptr) {
+            view.ptr      = const_cast<void *>(view_ptr);
+            view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(build_rows);
+            view.layout   = dispatch_layout;
+            view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+            view.location = infer_location(view.ptr);
+        }
+        stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
+
+        if (!forced_aos_for_mmap &&
+            view.location == ggml_sycl::cache_location::HOST_MMAP &&
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED)) {
+            GGML_SYCL_DEBUG("[MMQ] Host-mmap weights; forcing AoS streaming (layout=%d)\n",
+                            static_cast<int>(dispatch_layout));
+            forced_aos_for_mmap = true;
+            layout = GGML_LAYOUT_AOS;
+            mode = reorder_mode::NONE;
+            layout_base = nullptr;
+            layout_rows = src0->ne[1];
+            layout_row_low = 0;
+            view = {};
+            continue;
+        }
+        break;
     }
-    const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
-    if (!view.ptr) {
-        view.ptr      = const_cast<void *>(view_ptr);
-        view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(build_rows);
-        view.layout   = dispatch_layout;
-        view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-        view.location = infer_location(view.ptr);
-    }
-    stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
 
     if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
         if (!cache) {
@@ -6936,7 +7060,13 @@ void ggml_sycl_op_mul_mat_q(
         size_t slice_bytes  = 0;
         size_t buffer_count = 0;
         mmq_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
+        mmq_align_slice_bytes_for_mmq(src0->type, device_id, stream_ctx.row_total_bytes, row_diff, slice_bytes);
         const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(row_diff);
+        if (std::getenv("GGML_SYCL_FORCE_MMQ") != nullptr && slice_bytes < total_bytes) {
+            if (total_bytes <= slice_bytes * 2) {
+                slice_bytes = total_bytes;
+            }
+        }
         std::vector<sycl::event> deps;
         if (!stream->has_property<sycl::property::queue::in_order>()) {
             deps.push_back(stream->ext_oneapi_submit_barrier());

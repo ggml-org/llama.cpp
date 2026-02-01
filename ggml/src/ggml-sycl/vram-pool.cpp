@@ -6,11 +6,15 @@
 
 #include "vram-pool.hpp"
 
+#include "common.hpp"
 #include "ggml-impl.h"
 
 namespace ggml_sycl {
 
-vram_pool::vram_pool(sycl::queue & queue, size_t budget) : queue_(queue), budget_(budget) {
+vram_pool::vram_pool(sycl::queue & queue, size_t budget) :
+    queue_(queue),
+    device_id_(ggml_sycl_get_device_id_from_queue(queue)),
+    budget_(budget) {
     GGML_LOG_INFO("[SYCL] VRAM pool created with %.2f GB budget\n", budget / (1024.0 * 1024.0 * 1024.0));
 }
 
@@ -22,6 +26,7 @@ vram_pool::~vram_pool() {
     for (auto & [id, alloc] : allocations_) {
         if (alloc.ptr) {
             try {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, alloc.size);
                 sycl::free(alloc.ptr, queue_);
             } catch (const sycl::exception & e) {
                 GGML_LOG_ERROR("[SYCL] Failed to free tensor_id %llu: %s\n", (unsigned long long) id, e.what());
@@ -77,13 +82,16 @@ void * vram_pool::allocate(size_t size, uint64_t tensor_id, size_t alignment) {
     // Allocate device memory
     void * ptr = nullptr;
     try {
-        ptr = sycl::malloc_device(size, queue_);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size);
+        ptr = ggml_sycl_malloc_device(size, queue_, "vram_pool");
     } catch (const sycl::exception & e) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
         GGML_LOG_ERROR("[SYCL] VRAM allocation failed: %s\n", e.what());
         return nullptr;
     }
 
     if (!ptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
         GGML_LOG_ERROR("[SYCL] malloc_device returned nullptr for size %zu\n", size);
         return nullptr;
     }
@@ -104,6 +112,7 @@ void vram_pool::deallocate(uint64_t tensor_id) {
     }
 
     try {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, it->second.size);
         sycl::free(it->second.ptr, queue_);
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[SYCL] Failed to deallocate tensor_id %llu: %s\n", (unsigned long long) tensor_id, e.what());

@@ -311,13 +311,14 @@ static sycl::event set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_ten
         }
 
         // Check src0 first values
-        float * check_buf = (float *)sycl::malloc_host(32 * sizeof(float), *ctx.stream());
+        float * check_buf =
+            (float *) ggml_sycl_malloc_host_tracked_bytes(32 * sizeof(float), *ctx.stream(), "set_rows_debug");
         ctx.stream()->memcpy(check_buf, src0_d, 32 * sizeof(float)).wait();
         int zeros = 0;
         for (int i = 0; i < 32; i++) if (check_buf[i] == 0.0f) zeros++;
         fprintf(stderr, "  src0 data[0..4]=%.4f,%.4f,%.4f,%.4f,%.4f zeros=%d/32\n",
                 check_buf[0], check_buf[1], check_buf[2], check_buf[3], check_buf[4], zeros);
-        sycl::free(check_buf, *ctx.stream());
+        ggml_sycl_free_host_tracked_bytes(check_buf, 32 * sizeof(float), *ctx.stream());
         set_rows_debug++;
     }
 

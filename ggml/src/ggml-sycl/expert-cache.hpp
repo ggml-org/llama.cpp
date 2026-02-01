@@ -117,6 +117,7 @@ class expert_cache {
     sycl::queue &       compute_queue_;
     sycl::queue         copy_queue_;  // Separate queue for async prefetch
     pinned_chunk_pool & pinned_pool_;
+    int                 device_id_ = -1;
 
     size_t   vram_budget_;
     size_t   vram_used_ = 0;

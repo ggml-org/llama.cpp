@@ -5,6 +5,7 @@
 //
 
 #include "fattn.hpp"
+#include "common.hpp"
 
 #include "fattn-debug.hpp"
 #include "fattn-esimd-f16.hpp"
@@ -96,12 +97,18 @@ struct v2_auto_buffers {
 
     ~v2_auto_buffers() {
         if (block_table && alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*alloc_queue),
+                                                       block_table_capacity * sizeof(int32_t));
             sycl::free(block_table, *alloc_queue);
         }
         if (seq_lens && alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*alloc_queue),
+                                                       seq_lens_capacity * sizeof(int32_t));
             sycl::free(seq_lens, *alloc_queue);
         }
         if (temp_buf && alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*alloc_queue),
+                                                       temp_buf_capacity);
             sycl::free(temp_buf, *alloc_queue);
         }
     }
@@ -148,18 +155,23 @@ struct tl_seq_id_buffers {
         g_seq_id_buffer_instances.fetch_sub(1);
     }
 
-    void free_ptr(int32_t *& ptr) {
+    void free_ptr(int32_t *& ptr, size_t bytes) {
         if (ptr && alloc_queue) {
             sycl::free(ptr, *alloc_queue);
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*alloc_queue), bytes);
             ptr = nullptr;
             g_seq_id_buffer_allocs.fetch_sub(1);
         }
     }
 
     int32_t * alloc_ptr(size_t count, sycl::queue * stream) {
-        int32_t * ptr = sycl::malloc_device<int32_t>(count, *stream);
+        const size_t bytes = sizeof(int32_t) * count;
+        ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*stream), bytes);
+        int32_t * ptr = ggml_sycl_malloc_device_t<int32_t>(count, *stream, "fattn_block_table");
         if (ptr) {
             g_seq_id_buffer_allocs.fetch_add(1);
+        } else {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*stream), bytes);
         }
         return ptr;
     }
@@ -168,10 +180,10 @@ struct tl_seq_id_buffers {
         if (g_fattn_shutting_down.load(std::memory_order_acquire)) {
             return;
         }
-        free_ptr(q_seq_ids_dev);
-        free_ptr(kv_seq_ids_dev);
-        free_ptr(seq_q_offsets_dev);
-        free_ptr(seq_kv_offsets_dev);
+        free_ptr(q_seq_ids_dev, q_seq_ids_size);
+        free_ptr(kv_seq_ids_dev, kv_seq_ids_size);
+        free_ptr(seq_q_offsets_dev, seq_offsets_capacity);
+        free_ptr(seq_kv_offsets_dev, seq_offsets_capacity);
         q_seq_ids_size       = 0;
         kv_seq_ids_size      = 0;
         seq_offsets_capacity = 0;
@@ -303,9 +315,17 @@ void ggml_sycl_v2_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgr
     if (!g_v2_auto.block_table || g_v2_auto.alloc_queue != ctx.stream() ||
         g_v2_auto.block_table_capacity < (size_t) block_table_size) {
         if (g_v2_auto.block_table && g_v2_auto.alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                                                       g_v2_auto.block_table_capacity * sizeof(int32_t));
             sycl::free(g_v2_auto.block_table, *g_v2_auto.alloc_queue);
         }
-        g_v2_auto.block_table          = sycl::malloc_device<int32_t>(block_table_size, *ctx.stream());
+        ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                   block_table_size * sizeof(int32_t));
+        g_v2_auto.block_table          = ggml_sycl_malloc_device_t<int32_t>(block_table_size, *ctx.stream(), "fattn_block_table");
+        if (!g_v2_auto.block_table) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                       block_table_size * sizeof(int32_t));
+        }
         g_v2_auto.block_table_capacity = block_table_size;
         GGML_SYCL_DEBUG("[V2-PREALLOC] block_table allocated: %d elements\n", block_table_size);
     }
@@ -314,9 +334,17 @@ void ggml_sycl_v2_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgr
     if (!g_v2_auto.seq_lens || g_v2_auto.alloc_queue != ctx.stream() ||
         g_v2_auto.seq_lens_capacity < (size_t) seq_lens_size) {
         if (g_v2_auto.seq_lens && g_v2_auto.alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                                                       g_v2_auto.seq_lens_capacity * sizeof(int32_t));
             sycl::free(g_v2_auto.seq_lens, *g_v2_auto.alloc_queue);
         }
-        g_v2_auto.seq_lens          = sycl::malloc_device<int32_t>(seq_lens_size, *ctx.stream());
+        ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                   seq_lens_size * sizeof(int32_t));
+        g_v2_auto.seq_lens          = ggml_sycl_malloc_device_t<int32_t>(seq_lens_size, *ctx.stream(), "fattn_seq_lens");
+        if (!g_v2_auto.seq_lens) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                       seq_lens_size * sizeof(int32_t));
+        }
         g_v2_auto.seq_lens_capacity = seq_lens_size;
         GGML_SYCL_DEBUG("[V2-PREALLOC] seq_lens allocated: %d elements\n", seq_lens_size);
     }
@@ -324,9 +352,15 @@ void ggml_sycl_v2_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgr
     // Pre-allocate temp buffer if needed
     if (!g_v2_auto.temp_buf || g_v2_auto.alloc_queue != ctx.stream() || g_v2_auto.temp_buf_capacity < temp_size) {
         if (g_v2_auto.temp_buf && g_v2_auto.alloc_queue) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                                                       g_v2_auto.temp_buf_capacity);
             sycl::free(g_v2_auto.temp_buf, *g_v2_auto.alloc_queue);
         }
-        g_v2_auto.temp_buf          = sycl::malloc_device(temp_size, *ctx.stream());
+        ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()), temp_size);
+        g_v2_auto.temp_buf          = ggml_sycl_malloc_device_t<uint8_t>(temp_size, *ctx.stream(), "fattn_temp");
+        if (!g_v2_auto.temp_buf) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()), temp_size);
+        }
         g_v2_auto.temp_buf_capacity = temp_size;
         GGML_SYCL_DEBUG("[V2-PREALLOC] temp_buf allocated: %zu bytes\n", temp_size);
     }
@@ -393,6 +427,8 @@ static void init_kv_fp8_config() {
 
 static bool g_sycl_fa_esimd_enabled     = false;
 static bool g_sycl_fa_esimd_initialized = false;
+static bool g_sycl_fa_safe_decode_initialized = false;
+static bool g_sycl_fa_safe_decode_enabled     = true;
 
 static void init_fa_esimd_config() {
     if (g_sycl_fa_esimd_initialized) {
@@ -411,6 +447,17 @@ static void init_fa_esimd_config() {
     if (enable_esimd && fattn_esimd_f16_available()) {
         g_sycl_fa_esimd_enabled = true;
         GGML_SYCL_DEBUG("[SYCL] ESIMD Flash Attention enabled for decode\n");
+    }
+}
+
+static void init_fa_safe_decode_config() {
+    if (g_sycl_fa_safe_decode_initialized) {
+        return;
+    }
+    g_sycl_fa_safe_decode_initialized = true;
+    const char * env = std::getenv("GGML_SYCL_FA_SAFE_DECODE");
+    if (env && (strcmp(env, "0") == 0 || strcmp(env, "false") == 0)) {
+        g_sycl_fa_safe_decode_enabled = false;
     }
 }
 
@@ -682,10 +729,7 @@ bool ggml_sycl_flash_attn_ext_supported(const ggml_tensor * dst) {
         return false;
     }
 
-    // Check mask type if present
-    if (mask && mask->type != GGML_TYPE_F16) {
-        return false;
-    }
+    // Masked flash attention is supported; keep the gate in place via GGML_SYCL_FLASH_ATTN_EXT if needed.
 
     // Check head dimension - must be a supported size
     const int D = Q->ne[0];
@@ -727,12 +771,16 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(ggml_backend_sycl_context & 
     // Runtime kernel selection based on GPU capabilities
     // Check if the device has XMX (Intel matrix extension) support
     sycl::device dev     = stream->get_device();
-    const bool   use_xmx = gpu_has_xmx(dev);
+    bool         use_xmx = gpu_has_xmx(dev);
+    const bool   safe_decode = g_sycl_fa_safe_decode_enabled && ne01 <= 1;
+    if (safe_decode) {
+        use_xmx = false;
+    }
 
     // ESIMD kernel dispatch (uses explicit SIMD operations)
     // - Single query (ne01 <= 1): +7% speedup for decode on Mistral 7B
     // - Batched queries (ne01 <= 8): Only for D=64 due to SLM constraints
-    if (g_sycl_fa_esimd_enabled && fattn_esimd_f16_available()) {
+    if (!safe_decode && g_sycl_fa_esimd_enabled && fattn_esimd_f16_available()) {
         if (ne01 <= 1) {
             // Partitioned kernel: each thread processes disjoint KV ranges
             GGML_SYCL_KTRACE("fattn_esimd_f16", " D=%d ne01=%d", D, ne01);
@@ -803,6 +851,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 #endif
     init_kv_fp8_config();
     init_fa_esimd_config();
+    init_fa_safe_decode_config();
 
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -1005,12 +1054,12 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             // Need to copy from host to device for kernel access
             // Reallocate device buffers if size changed or first time
             if (tl_buffers.alloc_queue != stream || tl_buffers.q_seq_ids_size < q_size) {
-                tl_buffers.free_ptr(tl_buffers.q_seq_ids_dev);
+                tl_buffers.free_ptr(tl_buffers.q_seq_ids_dev, tl_buffers.q_seq_ids_size);
                 tl_buffers.q_seq_ids_dev  = tl_buffers.alloc_ptr(q_seq_ids->ne[0], stream);
                 tl_buffers.q_seq_ids_size = q_size;
             }
             if (tl_buffers.alloc_queue != stream || tl_buffers.kv_seq_ids_size < kv_size) {
-                tl_buffers.free_ptr(tl_buffers.kv_seq_ids_dev);
+                tl_buffers.free_ptr(tl_buffers.kv_seq_ids_dev, tl_buffers.kv_seq_ids_size);
                 tl_buffers.kv_seq_ids_dev  = tl_buffers.alloc_ptr(kv_seq_ids->ne[0], stream);
                 tl_buffers.kv_seq_ids_size = kv_size;
             }
@@ -1040,8 +1089,8 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
                 // Reallocate device buffers if capacity is insufficient
                 if (tl_buffers.seq_offsets_capacity < offsets_size) {
-                    tl_buffers.free_ptr(tl_buffers.seq_q_offsets_dev);
-                    tl_buffers.free_ptr(tl_buffers.seq_kv_offsets_dev);
+                    tl_buffers.free_ptr(tl_buffers.seq_q_offsets_dev, tl_buffers.seq_offsets_capacity);
+                    tl_buffers.free_ptr(tl_buffers.seq_kv_offsets_dev, tl_buffers.seq_offsets_capacity);
                     tl_buffers.seq_q_offsets_dev    = tl_buffers.alloc_ptr(n_seqs + 1, stream);
                     tl_buffers.seq_kv_offsets_dev   = tl_buffers.alloc_ptr(n_seqs + 1, stream);
                     tl_buffers.seq_offsets_capacity = offsets_size;
@@ -1230,16 +1279,34 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
             if (needs_realloc_block) {
                 if (g_v2_auto.block_table && g_v2_auto.alloc_queue) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(
+                        ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                        g_v2_auto.block_table_capacity * sizeof(int32_t));
                     sycl::free(g_v2_auto.block_table, *g_v2_auto.alloc_queue);
                 }
-                g_v2_auto.block_table          = sycl::malloc_device<int32_t>(block_table_size, *ctx.stream());
+                ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                           block_table_size * sizeof(int32_t));
+                g_v2_auto.block_table          = ggml_sycl_malloc_device_t<int32_t>(block_table_size, *ctx.stream(), "fattn_block_table");
+                if (!g_v2_auto.block_table) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                               block_table_size * sizeof(int32_t));
+                }
                 g_v2_auto.block_table_capacity = block_table_size;
             }
             if (needs_realloc_seq) {
                 if (g_v2_auto.seq_lens && g_v2_auto.alloc_queue) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(
+                        ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                        g_v2_auto.seq_lens_capacity * sizeof(int32_t));
                     sycl::free(g_v2_auto.seq_lens, *g_v2_auto.alloc_queue);
                 }
-                g_v2_auto.seq_lens          = sycl::malloc_device<int32_t>(seq_lens_size, *ctx.stream());
+                ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                           seq_lens_size * sizeof(int32_t));
+                g_v2_auto.seq_lens          = ggml_sycl_malloc_device_t<int32_t>(seq_lens_size, *ctx.stream(), "fattn_seq_lens");
+                if (!g_v2_auto.seq_lens) {
+                    ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                               seq_lens_size * sizeof(int32_t));
+                }
                 g_v2_auto.seq_lens_capacity = seq_lens_size;
             }
             if (needs_realloc_block || needs_realloc_seq) {
@@ -1278,9 +1345,17 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                                   (g_v2_auto.alloc_queue != ctx.stream() || g_v2_auto.temp_buf_capacity < temp_size);
         if (needs_realloc_temp) {
             if (g_v2_auto.temp_buf && g_v2_auto.alloc_queue) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(
+                    ggml_sycl_get_device_id_from_queue(*g_v2_auto.alloc_queue),
+                    g_v2_auto.temp_buf_capacity);
                 sycl::free(g_v2_auto.temp_buf, *g_v2_auto.alloc_queue);
             }
-            g_v2_auto.temp_buf          = sycl::malloc_device(temp_size, *ctx.stream());
+            ggml_sycl::unified_cache_add_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()), temp_size);
+            g_v2_auto.temp_buf          = ggml_sycl_malloc_device_t<uint8_t>(temp_size, *ctx.stream(), "fattn_temp");
+            if (!g_v2_auto.temp_buf) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(ggml_sycl_get_device_id_from_queue(*ctx.stream()),
+                                                           temp_size);
+            }
             g_v2_auto.temp_buf_capacity = temp_size;
             g_v2_auto.alloc_queue       = ctx.stream();
         }

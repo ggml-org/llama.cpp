@@ -43,6 +43,10 @@ static ggml_sycl_binbcast_event_mode ggml_sycl_get_binbcast_event_mode() {
 struct ggml_sycl_binbcast_unpin_event_kernel;
 
 static sycl::event ggml_sycl_submit_binbcast_event(sycl::queue & q, ggml_sycl_binbcast_event_mode mode) {
+    if (mode == ggml_sycl_binbcast_event_mode::BARRIER &&
+        q.has_property<sycl::property::queue::in_order>()) {
+        mode = ggml_sycl_binbcast_event_mode::SAFE;
+    }
     if (mode == ggml_sycl_binbcast_event_mode::BARRIER) {
         return q.ext_oneapi_submit_barrier();
     }
@@ -63,6 +67,8 @@ static inline const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode) {
             return "xmx_tiled";
         case GGML_LAYOUT_XMX_GEMM_TILED:
             return "xmx_gemm_tiled";
+        case GGML_LAYOUT_ONEDNN_PACKED:
+            return "onednn_packed";
         default:
             return "unknown";
     }

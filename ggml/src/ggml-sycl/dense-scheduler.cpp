@@ -6,6 +6,7 @@
 
 #include "dense-scheduler.hpp"
 
+#include "common.hpp"
 #include "ggml-impl.h"
 
 namespace ggml_sycl {
@@ -13,18 +14,29 @@ namespace ggml_sycl {
 dense_layer_scheduler::dense_layer_scheduler(sycl::queue & compute_queue, size_t max_layer_size) :
     compute_queue_(compute_queue),
     copy_queue_(compute_queue.get_context(), compute_queue.get_device()),
+    device_id_(ggml_sycl_get_device_id_from_queue(compute_queue)),
     slot_size_(max_layer_size) {
     // Allocate two VRAM slots for double buffering
-    vram_slot_[0] = sycl::malloc_device(slot_size_, compute_queue_);
-    vram_slot_[1] = sycl::malloc_device(slot_size_, compute_queue_);
+    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot_size_);
+    vram_slot_[0] = ggml_sycl_malloc_device(slot_size_, compute_queue_, "dense_scheduler_slot");
+    if (!vram_slot_[0]) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
+    }
+    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, slot_size_);
+    vram_slot_[1] = ggml_sycl_malloc_device(slot_size_, compute_queue_, "dense_scheduler_slot");
+    if (!vram_slot_[1]) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
+    }
 
     if (!vram_slot_[0] || !vram_slot_[1]) {
         GGML_LOG_ERROR("[SYCL] Failed to allocate dense scheduler VRAM slots (%.1f MB each)\n",
                        slot_size_ / (1024.0 * 1024.0));
         if (vram_slot_[0]) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
             sycl::free(vram_slot_[0], compute_queue_);
         }
         if (vram_slot_[1]) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
             sycl::free(vram_slot_[1], compute_queue_);
         }
         vram_slot_[0] = vram_slot_[1] = nullptr;
@@ -46,9 +58,11 @@ dense_layer_scheduler::~dense_layer_scheduler() {
 
     // Free VRAM slots
     if (vram_slot_[0]) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
         sycl::free(vram_slot_[0], compute_queue_);
     }
     if (vram_slot_[1]) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, slot_size_);
         sycl::free(vram_slot_[1], compute_queue_);
     }
 

@@ -507,7 +507,7 @@ static int run_mmq_bench() {
     setenv("GGML_SYCL_FORCE_MMQ", "1", 1);
     setenv("GGML_SYCL_UNIFIED_CACHE", "1", 1);
     if (std::getenv("GGML_SYCL_DMA_SLICE_MB") == nullptr) {
-        setenv("GGML_SYCL_DMA_SLICE_MB", "1", 1);
+        setenv("GGML_SYCL_DMA_SLICE_MB", "2", 1);
     }
     if (std::getenv("GGML_SYCL_DMA_BUFFERS") == nullptr && std::getenv("GGML_SYCL_DMA_SLICES") == nullptr) {
         setenv("GGML_SYCL_DMA_BUFFERS", "1", 1);

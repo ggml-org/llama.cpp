@@ -1,10 +1,9 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Machine-specific configuration and SYCL development context for this workstation.
+For general llama.cpp guidance, see CLAUDE.md.
 
-## Build Commands
-
-### SYCL Build (Recommended - Guaranteed Single-Pass)
+## SYCL Build (Recommended for Intel GPU Development)
 
 Use the build script for reliable, single-pass compilation:
 
@@ -125,6 +124,89 @@ ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/llama-completion \
 
 # Benchmark
 ./build/bin/llama-bench -m model.gguf -p 512 -n 128 -ngl 99 -fa 0,1
+```
+
+## Profiling (Intel SYCL / Xe)
+
+### VTune GPU Offload
+Force a specific SYCL device (logical index from `llama-bench --list-devices`):
+```bash
+GGML_SYCL_DEVICE=0  # B580
+```
+
+Prereqs for xe driver systems (B580/B50):
+```bash
+# Allow GPU profiling
+echo 'dev.xe.observation_paranoid=0' | sudo tee /etc/sysctl.d/90-intel-xe-vtune.conf
+sudo sysctl --system
+
+# Metrics Discovery (VTune depends on libigdmd)
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libigdmd.so.1 /usr/lib/x86_64-linux-gnu/libigdmd.so
+```
+
+Collect GPU offload profile:
+```bash
+source /opt/intel/oneapi/setvars.sh --force
+GGML_SYCL_DEVICE=0 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+vtune -collect gpu-offload -knob enable-stack-collection=true \
+  -result-dir /tmp/vtune_b580_llama \
+  -- ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 64 -n 8 --tg-batch 4 -ngl 99 -fa 1
+```
+
+If multiple GPUs are present, pin VTune to the B580 by BDF and enable API tracing:
+```bash
+vtune -collect gpu-hotspots -knob target-gpu=0:3:0.0 -knob collect-programming-api=true \
+  -result-dir /tmp/vtune_b580_hotspots \
+  -- ./build-sycl/bin/llama-bench ...
+```
+
+Build-time profiling flags are now controlled by CMake:
+```bash
+# Enabled by default
+-DGGML_SYCL_PROFILING_DEBUG=ON
+```
+
+To verify unified-cache layout materialization at load time:
+```bash
+GGML_SYCL_LAYOUT_SUMMARY=1 GGML_SYCL_DEBUG=1 ./build-sycl/bin/llama-bench ...
+```
+
+For higher XMX occupancy during decode, increase generation batch size in the bench:
+```bash
+./build/bin/llama-bench ... -n 128 --tg-batch 4
+```
+
+If VTune shows only memcpy tasks, use PTI + UR tracers (kernel time + launch shapes):
+```bash
+# PTI summary (kernel time + memcpy bytes)
+g++ -shared -fPIC /tmp/pti_trace_summary.cpp \
+  -I/opt/intel/oneapi/pti/0.16/include -L/opt/intel/oneapi/pti/0.16/lib \
+  -lpti_view -Wl,-rpath,/opt/intel/oneapi/pti/0.16/lib \
+  -o /tmp/libpti_trace_summary.so
+
+# UR launch tracer (global/local sizes + arg signature)
+cat >/tmp/ur_launch_trace.map <<'MAP'
+LIBUR_LOADER_0.12 {
+    global:
+        urEnqueueKernelLaunch;
+        urKernelSetArgValue;
+        urKernelSetArgPointer;
+        urKernelSetArgMemObj;
+        urKernelSetArgLocal;
+    local:
+        *;
+};
+MAP
+g++ -shared -fPIC /tmp/ur_launch_trace.cpp -ldl \
+  -I/opt/intel/oneapi/redist/include \
+  -Wl,--version-script=/tmp/ur_launch_trace.map \
+  -o /tmp/libur_launch_trace.so
+
+LD_PRELOAD=/tmp/libpti_trace_summary.so:/tmp/libur_launch_trace.so \
+ZE_ENABLE_TRACING_LAYER=1 ZET_ENABLE_PROGRAM_INSTRUMENTATION=1 ZET_ENABLE_METRICS=1 \
+SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS=0 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 64 -n 8 -ngl 99 -fa 1 \
+  2> /tmp/pti_ur_trace_b580.log
 ```
 
 ### Python Environment

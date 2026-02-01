@@ -65,6 +65,7 @@ inline void print_csv_header(FILE * out, const BenchmarkConfig & cfg) {
                      ",ref_total_us,ref_dequant_us,ref_gemm_us,ref_scale_us,ref_tflops,ref_tops,ref_bandwidth_gbps,"
                      "ref_arith_intensity");
     }
+    std::fprintf(out, ",tensor_name,tensor_instances");
     std::fprintf(out, "\n");
 }
 
@@ -128,7 +129,9 @@ inline void print_csv_row(FILE * out, const BenchmarkOutput & result) {
                      res.ref_bandwidth_gbps,
                      res.ref_arith_intensity);
     }
-    std::fprintf(out, "\n");
+    std::fprintf(out, ",%s,%lld\n",
+                 cfg.tensor_name.empty() ? "" : cfg.tensor_name.c_str(),
+                 static_cast<long long>(cfg.tensor_instances));
 }
 
 inline void print_json(FILE * out, const BenchmarkOutput & result) {
@@ -181,6 +184,8 @@ inline void print_json(FILE * out, const BenchmarkOutput & result) {
                  "  \"dim_m\": %lld,\n"
                  "  \"dim_n\": %lld,\n"
                  "  \"dim_k\": %lld,\n"
+                 "  \"tensor\": \"%s\",\n"
+                 "  \"tensor_instances\": %lld,\n"
                  "  \"layout\": \"%s\",\n"
                  "  \"memory\": \"%s\",\n"
                  "  \"throughput_tps\": %.6f,\n"
@@ -192,6 +197,8 @@ inline void print_json(FILE * out, const BenchmarkOutput & result) {
                  (long long) cfg.dim_m,
                  (long long) cfg.dim_n,
                  (long long) cfg.dim_k,
+                 json_escape(cfg.tensor_name).c_str(),
+                 static_cast<long long>(cfg.tensor_instances),
                  layout_name(cfg.layout),
                  memory_mode_name(cfg.memory_mode),
                  res.throughput_tps,
@@ -272,18 +279,23 @@ inline void print_jsonl(FILE * out, const BenchmarkOutput & result) {
     }
     std::fprintf(out,
                  "{\"kernel\":\"%s\",\"quant\":\"%s\",\"batch\":%lld,\"dim_m\":%lld,\"dim_n\":%lld,\"dim_k\":%lld,"
-                 "\"layout\":\"%s\",\"memory\":\"%s\",\"throughput_tps\":%.6f,\"latency_us\":%.6f,"
-                 "\"latency_std_us\":%.6f",
+                 "\"tensor\":\"%s\",\"tensor_instances\":%lld,"
+                 "\"layout\":\"%s\",\"memory\":\"%s\",\"throughput_tps\":%.6f,"
+                 "\"throughput_tops\":%.6f,\"latency_us\":%.6f,\"latency_ns\":%.6f,\"latency_std_us\":%.6f",
                  json_escape(cfg.kernel_name).c_str(),
                  ggml_type_name(cfg.quant_type),
                  (long long) cfg.batch_size,
                  (long long) cfg.dim_m,
                  (long long) cfg.dim_n,
                  (long long) cfg.dim_k,
+                 json_escape(cfg.tensor_name).c_str(),
+                 static_cast<long long>(cfg.tensor_instances),
                  layout_name(cfg.layout),
                  memory_mode_name(cfg.memory_mode),
                  res.throughput_tps,
+                 res.throughput_tops,
                  res.latency_us,
+                 res.latency_ns,
                  res.latency_std);
     if (cfg.include_percentiles) {
         std::fprintf(out,

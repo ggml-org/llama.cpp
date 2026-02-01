@@ -39,6 +39,19 @@ Fail fast when throughput falls below expected thresholds:
   --expect-bandwidth=50 --output=jsonl
 ```
 
+## Model-derived matmul shapes
+
+Compare kernels using actual GGUF weight shapes and emit a summary JSON:
+```bash
+./build/bin/sycl-kernel-bench \
+  --kernel=onednn_woq_gemm,onednn_fp16_gemm,unified_matmul \
+  --model=/Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  --batch=1,16,64 --sample-strategy=both \
+  --limit-shapes=10 \
+  --emit-json=/tmp/onednn_unified_bench.json \
+  --output=jsonl
+```
+
 ## Profiling helpers
 
 Dump zebin metadata and inspect kernel execution properties:

@@ -14,6 +14,11 @@
 #include "common.hpp"
 #include <random>
 
+template <typename T>
+static inline T * ggml_sycl_gpu_sampler_alloc(size_t count, sycl::queue & q) {
+    return ggml_sycl_malloc_device_t<T>(count, q, "gpu_sampler");
+}
+
 // Constants
 constexpr int GPU_SAMPLER_BLOCK_SIZE = 256;
 constexpr int GPU_SAMPLER_MAX_BLOCKS = 512;  // Max blocks for reduction
@@ -690,12 +695,12 @@ inline int32_t ggml_sycl_sample_token(
 
     // Lazy allocation of work buffers
     if (!state.initialized) {
-        state.block_max = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_sum = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_idx = sycl::malloc_device<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.selected = sycl::malloc_device<int32_t>(1, q);
-        state.random_val = sycl::malloc_device<float>(1, q);
-        state.token_buffer = sycl::malloc_device<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
+        state.block_max = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_sum = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_idx = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.selected = ggml_sycl_gpu_sampler_alloc<int32_t>(1, q);
+        state.random_val = ggml_sycl_gpu_sampler_alloc<float>(1, q);
+        state.token_buffer = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
         state.probs = nullptr;  // Only allocated if top-p is used
         state.rng_state = config.seed;
         state.initialized = true;
@@ -758,7 +763,7 @@ inline int32_t ggml_sycl_sample_token(
     if (!config.greedy && config.top_p > 0.0f && config.top_p < 1.0f) {
         // Allocate probs buffer if not done yet
         if (state.probs == nullptr) {
-            state.probs = sycl::malloc_device<float>(n_vocab, q);
+            state.probs = ggml_sycl_gpu_sampler_alloc<float>(n_vocab, q);
         }
 
         // First compute softmax to get probabilities
@@ -946,12 +951,12 @@ inline void ggml_sycl_sample_token_async(
 
     // Lazy allocation
     if (!state.initialized) {
-        state.block_max = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_sum = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_idx = sycl::malloc_device<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.selected = sycl::malloc_device<int32_t>(1, q);
-        state.random_val = sycl::malloc_device<float>(1, q);
-        state.token_buffer = sycl::malloc_device<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
+        state.block_max = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_sum = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_idx = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.selected = ggml_sycl_gpu_sampler_alloc<int32_t>(1, q);
+        state.random_val = ggml_sycl_gpu_sampler_alloc<float>(1, q);
+        state.token_buffer = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
         state.probs = nullptr;
         state.rng_state = config.seed;
         state.initialized = true;
@@ -1071,12 +1076,12 @@ inline int ggml_sycl_sample_token_to_buffer(
 
     // Lazy allocation
     if (!state.initialized) {
-        state.block_max = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_sum = sycl::malloc_device<float>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.block_idx = sycl::malloc_device<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
-        state.selected = sycl::malloc_device<int32_t>(1, q);
-        state.random_val = sycl::malloc_device<float>(1, q);
-        state.token_buffer = sycl::malloc_device<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
+        state.block_max = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_sum = ggml_sycl_gpu_sampler_alloc<float>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.block_idx = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_MAX_BLOCKS, q);
+        state.selected = ggml_sycl_gpu_sampler_alloc<int32_t>(1, q);
+        state.random_val = ggml_sycl_gpu_sampler_alloc<float>(1, q);
+        state.token_buffer = ggml_sycl_gpu_sampler_alloc<int32_t>(GPU_SAMPLER_TOKEN_BUFFER_SIZE, q);
         state.probs = nullptr;
         state.rng_state = config.seed;
         state.initialized = true;
@@ -1391,7 +1396,7 @@ inline int ggml_sycl_verify_speculative(
         GPU_SAMPLER_MAX_BLOCKS >= n_draft) {
         matches = state.block_idx;
     } else {
-        matches = sycl::malloc_device<int32_t>(n_draft, q);
+        matches = ggml_sycl_gpu_sampler_alloc<int32_t>(n_draft, q);
         allocated_matches = true;
     }
 
@@ -1399,7 +1404,7 @@ inline int ggml_sycl_verify_speculative(
     if (state.initialized && state.selected) {
         n_accepted_dev = state.selected;
     } else {
-        n_accepted_dev = sycl::malloc_device<int32_t>(1, q);
+        n_accepted_dev = ggml_sycl_gpu_sampler_alloc<int32_t>(1, q);
         allocated_n_accepted = true;
     }
 
@@ -1452,7 +1457,7 @@ inline int ggml_sycl_verify_speculative_host(
     sycl::queue& q = *ctx.stream();
 
     // Copy draft tokens to device
-    int32_t* draft_tokens_dev = sycl::malloc_device<int32_t>(n_draft, q);
+    int32_t* draft_tokens_dev = ggml_sycl_gpu_sampler_alloc<int32_t>(n_draft, q);
     q.memcpy(draft_tokens_dev, draft_tokens_host, n_draft * sizeof(int32_t)).wait();
 
     // Call main function
@@ -1849,19 +1854,19 @@ inline void ggml_sycl_multi_seq_sampler_alloc(
     const int n_blocks_capped = std::min(n_blocks, GPU_SAMPLER_MAX_BLOCKS);
 
     // Per-sequence arrays [max_seqs]
-    state.temperatures = sycl::malloc_device<float>(max_seqs, q);
-    state.rng_states = sycl::malloc_device<uint32_t>(max_seqs, q);
-    state.sampled_tokens = sycl::malloc_device<int32_t>(max_seqs, q);
-    state.top_k_values = sycl::malloc_device<int32_t>(max_seqs, q);
-    state.top_p_values = sycl::malloc_device<float>(max_seqs, q);
-    state.min_p_values = sycl::malloc_device<float>(max_seqs, q);
-    state.greedy_flags = sycl::malloc_device<uint8_t>(max_seqs, q);
-    state.seq_ids = sycl::malloc_device<int>(max_seqs, q);
+    state.temperatures = ggml_sycl_gpu_sampler_alloc<float>(max_seqs, q);
+    state.rng_states = ggml_sycl_gpu_sampler_alloc<uint32_t>(max_seqs, q);
+    state.sampled_tokens = ggml_sycl_gpu_sampler_alloc<int32_t>(max_seqs, q);
+    state.top_k_values = ggml_sycl_gpu_sampler_alloc<int32_t>(max_seqs, q);
+    state.top_p_values = ggml_sycl_gpu_sampler_alloc<float>(max_seqs, q);
+    state.min_p_values = ggml_sycl_gpu_sampler_alloc<float>(max_seqs, q);
+    state.greedy_flags = ggml_sycl_gpu_sampler_alloc<uint8_t>(max_seqs, q);
+    state.seq_ids = ggml_sycl_gpu_sampler_alloc<int>(max_seqs, q);
 
     // Work buffers [max_seqs, n_blocks]
-    state.block_max = sycl::malloc_device<float>(max_seqs * n_blocks_capped, q);
-    state.block_sum = sycl::malloc_device<float>(max_seqs * n_blocks_capped, q);
-    state.block_idx = sycl::malloc_device<int32_t>(max_seqs * n_blocks_capped, q);
+    state.block_max = ggml_sycl_gpu_sampler_alloc<float>(max_seqs * n_blocks_capped, q);
+    state.block_sum = ggml_sycl_gpu_sampler_alloc<float>(max_seqs * n_blocks_capped, q);
+    state.block_idx = ggml_sycl_gpu_sampler_alloc<int32_t>(max_seqs * n_blocks_capped, q);
 
     // Initialize default values
     std::vector<float> h_temps(max_seqs, 1.0f);
@@ -2053,10 +2058,10 @@ inline int ggml_sycl_verify_speculative_with_tokens(
     sycl::queue& q = *ctx.stream();
 
     // Allocate temporary buffers
-    int32_t* draft_tokens_dev = sycl::malloc_device<int32_t>(n_draft, q);
-    int32_t* matches = sycl::malloc_device<int32_t>(n_draft, q);
-    int32_t* sampled_tokens_dev = sycl::malloc_device<int32_t>(n_draft, q);
-    int32_t* n_accepted_dev = sycl::malloc_device<int32_t>(1, q);
+    int32_t* draft_tokens_dev = ggml_sycl_gpu_sampler_alloc<int32_t>(n_draft, q);
+    int32_t* matches = ggml_sycl_gpu_sampler_alloc<int32_t>(n_draft, q);
+    int32_t* sampled_tokens_dev = ggml_sycl_gpu_sampler_alloc<int32_t>(n_draft, q);
+    int32_t* n_accepted_dev = ggml_sycl_gpu_sampler_alloc<int32_t>(1, q);
 
     // Copy draft tokens to device
     q.memcpy(draft_tokens_dev, draft_tokens_host, n_draft * sizeof(int32_t)).wait();

@@ -6,7 +6,6 @@
 #include <sycl/sycl.hpp>
 
 #include "ggml.h"
-#include "ggml-quants.h"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/ggml-sycl-bench.hpp"
 

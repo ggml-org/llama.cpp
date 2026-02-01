@@ -1,4 +1,5 @@
 #include "ccl-comm.hpp"
+#include "common.hpp"
 
 #if GGML_SYCL_CCL
 
@@ -328,7 +329,7 @@ void ggml_sycl_ccl_allreduce_sum_f32(const float* send_buf, float* recv_buf, siz
         if (need_staging) {
             // Allocate shared memory staging buffer
             size_t buf_size = count * sizeof(float);
-            float* staging = sycl::malloc_shared<float>(count, q);
+            float* staging = ggml_sycl_malloc_shared_t<float>(count, q, "ccl_allreduce_staging");
             if (!staging) {
                 fprintf(stderr, "SYCL CCL: ERROR - failed to allocate staging buffer (%zu bytes)\n", buf_size);
                 return;

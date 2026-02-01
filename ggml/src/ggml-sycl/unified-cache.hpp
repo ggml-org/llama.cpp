@@ -225,6 +225,7 @@ struct cache_ptr_view {
     void *                ptr      = nullptr;
     size_t                size     = 0;
     ggml_layout_mode      layout   = GGML_LAYOUT_AOS;
+    int64_t               onednn_pack_m = 0;
     cache_location        location = cache_location::DEVICE;
     cache_entry_type      type     = cache_entry_type::DENSE_WEIGHT;
     int                   layer_id = -1;
@@ -258,7 +259,9 @@ struct cache_layout_request {
     int                   layer_id         = -1;
     int                   expert_id        = -1;
     ggml_layout_mode      layout           = GGML_LAYOUT_AOS;
+    int64_t               onednn_pack_m    = 0;
     bool                  validate_content = false;
+    bool                  prefer_host      = false;
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
@@ -268,6 +271,7 @@ struct cache_layout_result {
     void *                device_ptr = nullptr;
     size_t                size       = 0;
     ggml_layout_mode      layout     = GGML_LAYOUT_AOS;
+    int64_t               onednn_pack_m = 0;
     cache_layout_xmx_info xmx_info   = {};
     sycl::event           event;
     cache_layout_status   status        = cache_layout_status::FAILED;
@@ -309,6 +313,7 @@ struct unified_cache_entry {
     int                   layer_id;         // Layer ID
     int                   expert_id;        // Expert ID (-1 for dense)
     ggml_layout_mode      layout;           // Target layout for this entry
+    int64_t               onednn_pack_m;    // M dimension used for ONEDNN_PACKED/ONEDNN_WOQ (0 when unused)
     cache_layout_xmx_info xmx_info;         // XMX metadata (when applicable)
     uint32_t              access_count;     // Access frequency for LFU
     int64_t               last_access;      // Timestamp for recency
@@ -394,6 +399,9 @@ class host_cache {
 
     size_t evict(size_t bytes_needed);
 
+    // Reserve non-cache runtime buffers (compute, KV, etc.)
+    void update_reserved_bytes(size_t reserved_bytes);
+
   private:
     size_t evict_one();
     float  compute_score(const host_cache_entry & entry) const;
@@ -401,6 +409,8 @@ class host_cache {
 
     sycl::queue &        queue_;
     size_t               budget_ = 0;
+    size_t               base_budget_ = 0;
+    size_t               reserved_ = 0;
     std::atomic<size_t>  used_{ 0 };
     std::atomic<int64_t> time_{ 0 };
 
@@ -438,7 +448,10 @@ class unified_cache {
     // Initialize with SYCL queue and memory budget
     // budget_bytes: total GPU memory for caching (dense + MoE combined)
     // staging_size: pinned host staging buffer size (default 64MB)
-    unified_cache(sycl::queue & queue, size_t budget_bytes, size_t staging_size = 64 * 1024 * 1024);
+    unified_cache(sycl::queue & queue,
+                  size_t       budget_bytes,
+                  size_t       staging_size       = 64 * 1024 * 1024,
+                  size_t       dma_reserved_bytes = 0);
     ~unified_cache();
 
     // Non-copyable, non-movable
@@ -613,12 +626,22 @@ class unified_cache {
                                  const std::vector<sycl::event> &   deps,
                                  dma_stream_copy_fn                copy_fn = nullptr);
 
+    // Defer freeing host allocations until the associated event completes.
+    void defer_host_free(void * ptr, size_t size, const sycl::event & event);
+
   private:
     // Evict lowest-scoring entry to make room for new_size bytes
     // Returns true if eviction succeeded, false if all entries are pinned
     size_t evict_one(size_t new_size);
 
     struct deferred_free_entry {
+        void *      ptr       = nullptr;
+        size_t      size      = 0;
+        bool        has_event = false;
+        sycl::event event;
+    };
+
+    struct deferred_host_free_entry {
         void *      ptr       = nullptr;
         size_t      size      = 0;
         bool        has_event = false;
@@ -637,6 +660,7 @@ class unified_cache {
     sycl::event submit_barrier_all();
     void        process_deferred_frees();
     void        enqueue_deferred_free(void * ptr, size_t size);
+    void        enqueue_deferred_host_free(void * ptr, size_t size, const sycl::event & event);
 
     sycl::queue &        queue_;
     size_t               budget_;       // Total GPU memory budget (after reservations)
@@ -667,10 +691,12 @@ class unified_cache {
     std::vector<void *> dma_staging_buffers_;
     size_t              dma_slice_bytes_   = 0;
     size_t              dma_buffer_count_  = 0;
+    size_t              dma_reserved_bytes_ = 0;
     std::mutex          dma_staging_mutex_;
 
     // Deferred frees to avoid releasing buffers while in flight.
     std::vector<deferred_free_entry> deferred_frees_;
+    std::vector<deferred_host_free_entry> deferred_host_frees_;
 
     struct inflight_unpin_entry {
         ggml_sycl_cache_id key     = {};
@@ -733,6 +759,10 @@ void set_unified_cache_host_budget_pct(int pct);
 void   unified_cache_add_runtime_bytes(int device, size_t bytes);
 void   unified_cache_sub_runtime_bytes(int device, size_t bytes);
 size_t unified_cache_get_runtime_bytes(int device);
+
+void   unified_cache_add_runtime_host_bytes(size_t bytes);
+void   unified_cache_sub_runtime_host_bytes(size_t bytes);
+size_t unified_cache_get_runtime_host_bytes();
 
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);

@@ -6,6 +6,7 @@
 
 #include "unified-tensor-cache.hpp"
 
+#include "common.hpp"
 #include "ggml-impl.h"
 
 #include <algorithm>
@@ -306,7 +307,7 @@ void * unified_tensor_cache::allocate_host(size_t size) {
     }
 
     try {
-        void * ptr = sycl::malloc_host(size, queue_);
+        void * ptr = ggml_sycl_malloc_host(size, queue_, "unified_tensor_cache:host");
         if (ptr) {
             host_used_ += size;
         }

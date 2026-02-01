@@ -9,8 +9,8 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "dpct/dpct.hpp"
 #include "ggml-sycl.h"
+#include "ggml-sycl/common.hpp"
 
 namespace ggml_sycl {
 
@@ -36,7 +36,7 @@ size_t ChunkManager::detect_optimal_chunk_size(int device_id) {
 
     // Auto-detect based on device global memory
     try {
-        sycl::queue& q = dpct::dev_mgr::instance().get_device(device_id).default_queue();
+        sycl::queue& q = ggml_sycl_get_device(device_id).default_queue();
         size_t global_mem = q.get_device().get_info<sycl::info::device::global_mem_size>();
 
         // Use ~1/128 of VRAM as chunk size (heuristic)

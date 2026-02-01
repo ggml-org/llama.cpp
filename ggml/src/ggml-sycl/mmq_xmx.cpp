@@ -4127,9 +4127,9 @@ bool ggml_sycl_xmx_supports_type(ggml_type type) {
 
 void xmx_test_kernel(sycl::queue & q) {
     constexpr int M = 8, N = 16, K = 32;
-    int8_t *      d_A = sycl::malloc_device<int8_t>(M * K, q);
-    int8_t *      d_B = sycl::malloc_device<int8_t>(K * N, q);
-    int32_t *     d_C = sycl::malloc_device<int32_t>(M * N, q);
+    int8_t *      d_A = ggml_sycl_malloc_device_tracked_t<int8_t>(M * K, q, "mmq_xmx_test");
+    int8_t *      d_B = ggml_sycl_malloc_device_tracked_t<int8_t>(K * N, q, "mmq_xmx_test");
+    int32_t *     d_C = ggml_sycl_malloc_device_tracked_t<int32_t>(M * N, q, "mmq_xmx_test");
 
     std::vector<int8_t> h_A(M * K, 1);
     std::vector<int8_t> h_B(K * N, 2);
@@ -4182,9 +4182,9 @@ void xmx_test_kernel(sycl::queue & q) {
         GGML_LOG_WARN("XMX Int8 test FAILED: got %d, expected %d\n", h_C[0], expected);
     }
 
-    sycl::free(d_A, q);
-    sycl::free(d_B, q);
-    sycl::free(d_C, q);
+    ggml_sycl_free_device_tracked_t(d_A, M * K, q);
+    ggml_sycl_free_device_tracked_t(d_B, K * N, q);
+    ggml_sycl_free_device_tracked_t(d_C, M * N, q);
 }
 
 void ggml_sycl_xmx_test_func(ggml_backend_sycl_context & ctx) {

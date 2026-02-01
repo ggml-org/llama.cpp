@@ -66,15 +66,17 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   const float* src1_d = nullptr;
   void* src1_staging = nullptr;
   void* host_staging = nullptr;
+  size_t src1_bytes = 0;
+  const int runtime_device = ggml_sycl_get_device_id_from_queue(q);
   sycl::event copy_event;
 
   if (src1_needs_staging) {
     // Non-device source - stage to device memory via pinned host buffer
     // Calculate total size of src1 tensor
-    const size_t src1_bytes = ggml_nbytes(src1);
+    src1_bytes = ggml_nbytes(src1);
 
     // Allocate pinned host staging buffer
-    host_staging = sycl::malloc_host(src1_bytes, q);
+    host_staging = ggml_sycl_malloc_host_tracked_bytes(src1_bytes, q, "add_id:host_staging");
     if (!host_staging) {
       GGML_LOG_ERROR("[ADD_ID] Failed to allocate host staging for mmap src1 (%zu bytes)\n", src1_bytes);
       return;
@@ -84,10 +86,12 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     std::memcpy(host_staging, src1->data, src1_bytes);
 
     // Allocate device staging buffer
-    src1_staging = sycl::malloc_device(src1_bytes, q);
+    ggml_sycl::unified_cache_add_runtime_bytes(runtime_device, src1_bytes);
+    src1_staging = ggml_sycl_malloc_device(src1_bytes, q, "add_id:device_staging");
     if (!src1_staging) {
+      ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
       GGML_LOG_ERROR("[ADD_ID] Failed to allocate device staging for mmap src1 (%zu bytes)\n", src1_bytes);
-      sycl::free(host_staging, q);
+      ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
       return;
     }
 
@@ -154,9 +158,10 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
   if (src1_staging) {
     q.submit([&](sycl::handler& cgh) {
       cgh.depends_on(kernel_event);
-      cgh.host_task([src1_staging, host_staging, &q]() {
+      cgh.host_task([src1_staging, host_staging, runtime_device, src1_bytes, &q]() {
+        ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
         sycl::free(src1_staging, q);
-        sycl::free(host_staging, q);
+        ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
       });
     });
   }

@@ -15,6 +15,8 @@ enum class KernelKind {
     MMQ,
     ONEDNN_FP16_GEMM,
     ONEDNN_INT8_GEMM,
+    ONEDNN_WOQ_GEMM,
+    UNIFIED_MATMUL,
     MEMORY_BANDWIDTH,
     ROOFLINE_COMPUTE,
     DPAS_EXPLORATION,
@@ -77,6 +79,8 @@ inline const std::vector<KernelInfo> & kernel_list() {
         { "mmvq",           GGML_LAYOUT_AOS,       KernelKind::MMVQ },
         { "onednn_fp16_gemm", GGML_LAYOUT_AOS, KernelKind::ONEDNN_FP16_GEMM },
         { "onednn_int8_gemm", GGML_LAYOUT_AOS, KernelKind::ONEDNN_INT8_GEMM },
+        { "onednn_woq_gemm", GGML_LAYOUT_AOS, KernelKind::ONEDNN_WOQ_GEMM },
+        { "unified_matmul", GGML_LAYOUT_AOS, KernelKind::UNIFIED_MATMUL },
         { "memory_bandwidth", GGML_LAYOUT_AOS, KernelKind::MEMORY_BANDWIDTH },
         { "roofline_compute", GGML_LAYOUT_AOS, KernelKind::ROOFLINE_COMPUTE },
     };

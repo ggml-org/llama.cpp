@@ -29,6 +29,7 @@ option(GGML_SYCL_XMX_GEMM "Enable experimental XMX GEMM for quantized matmul (kn
 option(GGML_SYCL_DEBUG_SOA_LAYOUT "Enable SoA layout verification debug checks" OFF)
 option(GGML_SYCL_QUANTIZER_DEBUG "Enable quantizer kernel debug output" OFF)
 option(GGML_SYCL_ASAN_PARTIAL "Enable ASan for ggml-sycl.cpp and unified-cache.cpp only" OFF)
+option(GGML_SYCL_PROFILING_DEBUG "Enable SYCL device debug info for VTune profiling" ON)
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
@@ -80,11 +81,18 @@ else()
 endif()
 
 # Add profiling-friendly compiler flags for VTune kernel name visibility
-# -fsycl-instrument-device-code: enables profiling tools to map GPU activities to kernel function names
-# -fdebug-info-for-profiling: generates debug info optimized for profilers (line tables, etc.)
-# -gline-tables-only: required for accurate source attribution in VTune
-target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing" "-fsycl-instrument-device-code" "-fdebug-info-for-profiling" "-gline-tables-only")
-target_link_options(ggml-sycl PRIVATE "-fsycl-instrument-device-code")
+if (GGML_SYCL_PROFILING_DEBUG)
+    message(STATUS "GGML_SYCL_PROFILING_DEBUG: enabling SYCL profiling debug flags")
+    # -fsycl-instrument-device-code: enables profiling tools to map GPU activities to kernel function names
+    # -fdebug-info-for-profiling: generates debug info optimized for profilers (line tables, etc.)
+    # -gline-tables-only: required for accurate source attribution in VTune
+    # Per-kernel device code split improves VTune kernel name mapping when debug info is present.
+    target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing" "-g" "-fsycl-device-code-split=per_kernel"
+                           "-fsycl-instrument-device-code" "-fdebug-info-for-profiling" "-gline-tables-only")
+    target_link_options(ggml-sycl PRIVATE "-fsycl-instrument-device-code")
+else()
+    target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
+endif()
 
 # Link against oneDNN (primary math backend for Intel targets)
 set(GGML_SYCL_DNNL 0)
@@ -523,6 +531,7 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     target_compile_definitions(test-unified-kernel PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
     )
     if (IntelSYCL_FOUND)
         target_link_libraries(test-unified-kernel PRIVATE IntelSYCL::SYCL_CXX)
@@ -549,6 +558,7 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     target_compile_definitions(test-xmx-compute PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
     )
     if (IntelSYCL_FOUND)
         target_link_libraries(test-xmx-compute PRIVATE IntelSYCL::SYCL_CXX)
@@ -575,6 +585,7 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     target_compile_definitions(test-xmx-default-enable PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
     )
     if (IntelSYCL_FOUND)
         target_link_libraries(test-xmx-default-enable PRIVATE IntelSYCL::SYCL_CXX)
@@ -601,6 +612,7 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     target_compile_definitions(test-xmx-optimization PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
     )
     if (IntelSYCL_FOUND)
         target_link_libraries(test-xmx-optimization PRIVATE IntelSYCL::SYCL_CXX)
@@ -686,7 +698,25 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         TIMEOUT 60
     )
 
-    # Test 15: ESIMD SLM Prefetch Optimization Tests (Task llama.cpp-attk)
+    # Test 15: Dispatch tuning mapping tests
+    # Verifies unified_matmul winners map to orchestrator entrypoint
+    add_executable(test-dispatch-tuning
+        tests/test-dispatch-tuning.cpp
+        dispatch-tuning.cpp
+    )
+    target_include_directories(test-dispatch-tuning PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_link_libraries(test-dispatch-tuning PRIVATE ggml)
+    add_test(NAME dispatch-tuning COMMAND test-dispatch-tuning)
+    set_tests_properties(dispatch-tuning PROPERTIES
+        LABELS "sycl;dispatch;tuning"
+        TIMEOUT 60
+    )
+
+    # Test 16: ESIMD SLM Prefetch Optimization Tests (Task llama.cpp-attk)
     # Tests LSC prefetch with cache hints for memory/compute overlap
     add_executable(test-esimd-prefetch
         tests/test-esimd-prefetch.cpp

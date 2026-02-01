@@ -1,4 +1,5 @@
 #include "convert.hpp"
+#include "common.hpp"
 #include "dmmv.hpp"
 #include "dequantize.hpp"
 #include "presets.hpp"
@@ -2736,11 +2737,11 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
 
     // Debug buffer for GPU-side debugging - no limit, always debug when env set
     static int aos_kernel_debug_count = 0;
-    float* debug_buf = nullptr;
+    float * debug_buf = nullptr;
     bool do_debug = std::getenv("GGML_SYCL_DMMV_SOA_DEBUG") != nullptr;
 
     if (do_debug) {
-        debug_buf = sycl::malloc_device<float>(256, *stream);
+        debug_buf = ggml_sycl_malloc_device_tracked_t<float>(256, *stream, "dmmv_debug");
         stream->memset(debug_buf, 0, 256 * sizeof(float)).wait();
     }
 
@@ -2749,13 +2750,19 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                                      {sycl::aspect::fp16});
 
         if (do_debug) {
-            stream->submit([&](sycl::handler &cgh) {
+            sycl::event debug_event = stream->submit([&](sycl::handler &cgh) {
                 cgh.parallel_for<class dmmv_q8_0_aos_debug_kernel>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         dequantize_mul_mat_vec_q8_0_aos_debug_kernel(
                             vx, y, dst, ncols, nrows, item_ct1, debug_buf);
                     });
+            });
+            stream->submit([&](sycl::handler & cgh) {
+                cgh.depends_on(debug_event);
+                cgh.host_task([debug_buf, stream]() {
+                    ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
+                });
             });
         } else {
             stream->parallel_for(
@@ -3392,6 +3399,38 @@ static sycl::event dmmv_stream_copy(sycl::queue &                    queue,
     const size_t row_count = slice_bytes / ctx->row_total_bytes;
     const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
 
+    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(ctx->src_base, queue.get_context());
+    if (src_alloc != sycl::usm::alloc::device) {
+        uint8_t * host_slice =
+            static_cast<uint8_t *>(ggml_sycl_malloc_host_tracked_bytes(slice_bytes, queue, "dmmv:host_stage"));
+        if (!host_slice) {
+            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                  "DMMV stream: host staging allocation failed");
+        }
+        size_t dst_offset = 0;
+        for (int i = 0; i < ctx->segment_count; ++i) {
+            const auto & seg   = ctx->segments[i];
+            const size_t bytes = row_count * seg.bytes_per_row;
+            if (bytes == 0) {
+                continue;
+            }
+            const uint8_t * src = ctx->src_base + seg.src_base + src_row * seg.bytes_per_row;
+            std::memcpy(host_slice + dst_offset, src, bytes);
+            dst_offset += bytes;
+        }
+        GGML_ASSERT(dst_offset == slice_bytes);
+        sycl::event evt = queue.memcpy(device_slice, host_slice, slice_bytes, deps);
+        if (auto * cache = ggml_sycl::get_unified_cache(queue)) {
+            cache->defer_host_free(host_slice, slice_bytes, evt);
+        } else {
+            if (!ggml_sycl_graph_recording_active()) {
+                evt.wait();
+            }
+            ggml_sycl_free_host_tracked_bytes(host_slice, slice_bytes, queue);
+        }
+        return evt;
+    }
+
     size_t                   dst_offset = 0;
     std::vector<sycl::event> cur_deps   = deps;
     sycl::event              last_evt;
@@ -3413,6 +3452,8 @@ static sycl::event dmmv_stream_copy(sycl::queue &                    queue,
     return last_evt;
 }
 
+struct ggml_sycl_dmmv_marker_kernel;
+
 static sycl::event dmmv_stream_slice(sycl::queue &                    queue,
                                      void *                           device_slice,
                                      size_t                           slice_bytes,
@@ -3421,7 +3462,7 @@ static sycl::event dmmv_stream_slice(sycl::queue &                    queue,
                                      const std::vector<sycl::event> & deps) {
     const auto * ctx = static_cast<const dmmv_stream_ctx *>(ctx_void);
     if (!ctx || ctx->row_total_bytes == 0) {
-        return queue.ext_oneapi_submit_barrier();
+        return ggml_sycl_submit_marker<ggml_sycl_dmmv_marker_kernel>(queue);
     }
     GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
     GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
@@ -3448,7 +3489,7 @@ static sycl::event dmmv_stream_slice(sycl::queue &                    queue,
                             &queue,
                             &deps);
 
-    return queue.ext_oneapi_submit_barrier();
+    return ggml_sycl_submit_marker<ggml_sycl_dmmv_marker_kernel>(queue);
 }
 
 void ggml_sycl_op_dequantize_mul_mat_vec(
@@ -3585,24 +3626,14 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         }
     }
 
-    const layout_mode dispatch_layout = layout;
-    const void *      dispatch_base   =
-        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_base : nullptr;
-    const char * dispatch_ptr   = src0_dd_i;
+    layout_mode dispatch_layout = layout;
+    const void *dispatch_base   = nullptr;
+    const char *dispatch_ptr    = src0_dd_i;
+    int64_t      build_rows     = 0;
+    bool         custom_copy    = false;
+    bool         forced_aos_for_mmap = false;
 
     dmmv_stream_ctx stream_ctx{};
-    const int64_t   build_rows  = (dispatch_layout == GGML_LAYOUT_AOS) ? src0->ne[1] : layout_rows;
-    const bool      custom_copy = dmmv_build_stream_segments(src0, dispatch_layout, ne00, build_rows, stream_ctx);
-    stream_ctx.device_id      = device_id;
-    stream_ctx.src0           = src0;
-    stream_ctx.src1_dfloat    = src1_dfloat;
-    stream_ctx.src1_ddf_i     = src1_ddf_i;
-    stream_ctx.dst_dd_i       = dst_dd_i;
-    stream_ctx.dst_row_stride = row_diff;
-    stream_ctx.ne00           = ne00;
-    stream_ctx.row_base       =
-        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_row_low : 0;
-    stream_ctx.layout          = dispatch_layout;
 
     auto infer_location = [&](const void * ptr) -> ggml_sycl::cache_location {
         if (!ptr) {
@@ -3623,18 +3654,53 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     ggml_sycl_cache_id         cache_key =
         cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : ggml_sycl_cache_id{};
     ggml_sycl::cache_ptr_view  view{};
-    if (cache && cache_key.valid) {
-        view = cache->get_view(cache_key, dispatch_layout);
+    for (int pass = 0; pass < 2; ++pass) {
+        dispatch_layout = layout;
+        dispatch_base =
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_base : nullptr;
+        build_rows  = (dispatch_layout == GGML_LAYOUT_AOS) ? src0->ne[1] : layout_rows;
+
+        stream_ctx = {};
+        custom_copy = dmmv_build_stream_segments(src0, dispatch_layout, ne00, build_rows, stream_ctx);
+        stream_ctx.device_id      = device_id;
+        stream_ctx.src0           = src0;
+        stream_ctx.src1_dfloat    = src1_dfloat;
+        stream_ctx.src1_ddf_i     = src1_ddf_i;
+        stream_ctx.dst_dd_i       = dst_dd_i;
+        stream_ctx.dst_row_stride = row_diff;
+        stream_ctx.ne00           = ne00;
+        stream_ctx.row_base       =
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_row_low : 0;
+        stream_ctx.layout         = dispatch_layout;
+
+        view = {};
+        if (cache && cache_key.valid) {
+            view = cache->get_view(cache_key, dispatch_layout);
+        }
+        const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
+        if (!view.ptr) {
+            view.ptr      = const_cast<void *>(view_ptr);
+            view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(build_rows);
+            view.layout   = dispatch_layout;
+            view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+            view.location = infer_location(view.ptr);
+        }
+        stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
+
+        if (!forced_aos_for_mmap &&
+            view.location == ggml_sycl::cache_location::HOST_MMAP &&
+            (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED)) {
+            GGML_SYCL_DEBUG("[DMMV] Host-mmap weights; forcing AoS streaming (layout=%d)\n",
+                            static_cast<int>(dispatch_layout));
+            forced_aos_for_mmap = true;
+            layout = GGML_LAYOUT_AOS;
+            layout_base = nullptr;
+            layout_rows = src0->ne[1];
+            layout_row_low = 0;
+            continue;
+        }
+        break;
     }
-    const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
-    if (!view.ptr) {
-        view.ptr      = const_cast<void *>(view_ptr);
-        view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(build_rows);
-        view.layout   = dispatch_layout;
-        view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
-        view.location = infer_location(view.ptr);
-    }
-    stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
 
     if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
         if (!cache) {

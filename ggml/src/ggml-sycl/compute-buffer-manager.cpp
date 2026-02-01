@@ -9,18 +9,26 @@
 
 #include "compute-buffer-manager.hpp"
 
+#include "common.hpp"
+#include "unified-cache.hpp"
+
 #include <algorithm>
 #include <cstdio>
 
+void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
+
 namespace ggml_sycl {
 
-ComputeBufferManager::ComputeBufferManager(sycl::queue & queue) : queue_(queue) {}
+ComputeBufferManager::ComputeBufferManager(sycl::queue & queue) :
+    queue_(queue),
+    device_id_(ggml_sycl_get_device_id_from_queue(queue)) {}
 
 ComputeBufferManager::~ComputeBufferManager() {
     // Free all pooled buffers
     std::lock_guard<std::mutex> lock(pool_mutex_);
     for (auto & buf : pool_) {
         if (buf.ptr != nullptr) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, buf.size);
             try {
                 sycl::free(buf.ptr, queue_);
             } catch (const sycl::exception & e) {
@@ -35,6 +43,7 @@ ComputeBufferManager::~ComputeBufferManager() {
     {
         std::lock_guard<std::mutex> scratch_lock(scratch_mutex_);
         if (scratch_ptr_ != nullptr) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_);
             try {
                 sycl::free(scratch_ptr_, queue_);
             } catch (const sycl::exception & e) {
@@ -240,11 +249,16 @@ ComputeBuffer * ComputeBufferManager::find_free_buffer(size_t size) {
 
 void * ComputeBufferManager::allocate_new_buffer(size_t size) {
     void * ptr = nullptr;
+    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size);
     try {
-        ptr = sycl::malloc_device(size, queue_);
+        ptr = ggml_sycl_malloc_device(size, queue_, "compute_buffer");
     } catch (const sycl::exception & e) {
         fprintf(stderr, "[ComputeBufferManager] SYCL allocation failed for %zu bytes: %s\n", size, e.what());
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
         return nullptr;
+    }
+    if (!ptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
     }
     return ptr;
 }
@@ -256,6 +270,7 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
 
     // Free old scratch if exists
     if (scratch_ptr_ != nullptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_);
         try {
             sycl::free(scratch_ptr_, queue_);
         } catch (const sycl::exception & e) {
@@ -266,12 +281,20 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
 
     // Allocate new scratch
     try {
-        scratch_ptr_      = sycl::malloc_device(new_size, queue_);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_size);
+        scratch_ptr_      = ggml_sycl_malloc_device(new_size, queue_, "compute_buffer_scratch");
+        if (!scratch_ptr_) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size);
+            scratch_capacity_ = 0;
+            scratch_size_     = 0;
+            return;
+        }
         scratch_capacity_ = new_size;
         scratch_size_     = new_size;
     } catch (const sycl::exception & e) {
         fprintf(stderr, "[ComputeBufferManager] SYCL scratch allocation failed for %zu bytes: %s\n", new_size,
                 e.what());
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size);
         scratch_ptr_      = nullptr;
         scratch_capacity_ = 0;
         scratch_size_     = 0;

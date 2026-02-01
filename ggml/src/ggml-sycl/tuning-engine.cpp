@@ -14,8 +14,31 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 
 namespace ggml_sycl_tuning {
+
+namespace {
+
+bool allow_dpas_small_batches() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_DPAS_SMALL");
+        cached = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
+        if (!cached) {
+            const char * env_force = std::getenv("GGML_SYCL_UNIFIED_FORCE_XMX");
+            const char * env_esimd = std::getenv("GGML_SYCL_FORCE_ESIMD");
+            const char * env_small = std::getenv("GGML_SYCL_XMX_ALLOW_SMALL_TILES");
+            const bool force_xmx = (env_force && std::atoi(env_force) != 0);
+            const bool force_esimd = (env_esimd && std::atoi(env_esimd) != 0);
+            const bool allow_small = (env_small && std::atoi(env_small) != 0);
+            cached = (force_xmx || force_esimd || allow_small) ? 1 : 0;
+        }
+    }
+    return cached != 0;
+}
+
+}  // namespace
 
 // =============================================================================
 // Constructor / Destructor
@@ -311,6 +334,12 @@ TunedParams TuningEngine::derive_heuristic_params(const TuningKey & key) const {
             params.use_dpas       = true;
             params.layout_mode    = 4;  // XMX_GEMM_TILED
             break;
+    }
+
+    // Optional: enable dpas for small batches when explicitly requested.
+    if (allow_dpas_small_batches() &&
+        (key.batch_bucket == BatchBucket::SINGLE || key.batch_bucket == BatchBucket::SMALL)) {
+        params.use_dpas = true;
     }
 
     // Adjust for quant type if needed
