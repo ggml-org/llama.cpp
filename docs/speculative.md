@@ -44,7 +44,7 @@ The number of accepted tokens is stored for each used n-gram.
 
 **Example:**
 ```
-llama-server [...] --spec-type ngram-map-k4v --draft-max 64
+llama-server [...] --spec-type ngram-map-k --draft-max 64
 ```
 
 #### n-gram Map Key-4-Values (`ngram-map-k4v`)
