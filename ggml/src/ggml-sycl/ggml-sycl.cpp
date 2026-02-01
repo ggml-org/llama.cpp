@@ -137,6 +137,9 @@ static std::mutex        g_sycl_graph_compute_mutex;
 static std::atomic<int>  g_sycl_graph_inflight{ 0 };
 static std::atomic<bool> g_sycl_graph_multithreaded{ false };
 std::atomic<bool>        g_ggml_sycl_debug_forced_off{ false };
+// Force VRAM placement override (GGML_SYCL_FORCE_VRAM=1)
+// When set, ignores g_model_exceeds_vram and always prefers VRAM placement
+static std::atomic<int>  g_ggml_sycl_force_vram{ -1 };  // -1 = not initialized, 0 = disabled, 1 = enabled
 
 int ggml_sycl_graph_inflight_count() {
     return g_sycl_graph_inflight.load(std::memory_order_acquire);
@@ -287,6 +290,19 @@ static bool ggml_sycl_unified_dispatch_enabled() {
         // Only one thread will successfully CAS from -1
         g_ggml_sycl_unified_dispatch.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
         val = g_ggml_sycl_unified_dispatch.load(std::memory_order_acquire);
+    }
+    return val != 0;
+}
+
+// Check if VRAM placement is forced via environment variable
+// When GGML_SYCL_FORCE_VRAM=1, ignores g_model_exceeds_vram and always prefers VRAM
+static bool ggml_sycl_force_vram_enabled() {
+    int val = g_ggml_sycl_force_vram.load(std::memory_order_acquire);
+    if (val < 0) {
+        const char * env = std::getenv("GGML_SYCL_FORCE_VRAM");
+        int new_val = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+        g_ggml_sycl_force_vram.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
+        val = g_ggml_sycl_force_vram.load(std::memory_order_acquire);
     }
     return val != 0;
 }
@@ -1992,17 +2008,20 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // This is the difference between total and free at this point
     const size_t already_allocated = base_mem > free_mem ? base_mem - free_mem : 0;
 
-    // Budget for weight cache = 90% of total VRAM minus already-allocated memory minus headroom
+    // Budget for weight cache = 90% of total VRAM minus headroom
     // Headroom = max(256MB, 10% of total) for runtime scratch space
+    // NOTE: We do NOT subtract already_allocated here. The unified cache tracks all
+    // allocations and will stream from host if VRAM is exhausted. Pre-subtracting
+    // already_allocated artificially reduces the budget, causing models that fit
+    // to be incorrectly marked as "exceeds VRAM" and placed in host memory.
     const size_t min_headroom = 256ull * 1024ull * 1024ull;
     const size_t base_headroom = std::max<size_t>(min_headroom, base_mem / 10);
 
-    // Tiered mode budget: total * 0.9 - already_allocated - headroom
-    // This gives the cache a fair budget based on what's actually available for weights
+    // Tiered mode budget: total * 0.9 - headroom (no already_allocated subtraction)
     size_t vram_budget_base = static_cast<size_t>(base_mem * 0.9);
     size_t vram_budget = 0;
-    if (vram_budget_base > already_allocated + base_headroom) {
-        vram_budget = vram_budget_base - already_allocated - base_headroom;
+    if (vram_budget_base > base_headroom) {
+        vram_budget = vram_budget_base - base_headroom;
     }
 
     // Enable tiered mode when unified cache is active (needed to upload weights to VRAM).
@@ -2011,6 +2030,14 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     const bool model_exceeds_vram = g_tensor_inventory_total_size > vram_budget;
     g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
+
+    // Diagnostic logging for VRAM budget calculation debugging
+    GGML_LOG_INFO("[SYCL-BUDGET] base_mem=%.1f MB, already_allocated=%.1f MB, headroom=%.1f MB\n",
+                  base_mem / (1024.0 * 1024.0), already_allocated / (1024.0 * 1024.0), base_headroom / (1024.0 * 1024.0));
+    GGML_LOG_INFO("[SYCL-BUDGET] vram_budget_base=%.1f MB, final_budget=%.1f MB, model_size=%.1f MB\n",
+                  vram_budget_base / (1024.0 * 1024.0), vram_budget / (1024.0 * 1024.0), g_tensor_inventory_total_size / (1024.0 * 1024.0));
+    GGML_LOG_INFO("[SYCL-BUDGET] g_model_exceeds_vram=%s\n",
+                  model_exceeds_vram ? "true (HOST placement)" : "false (VRAM placement)");
 
     // Reserve extra VRAM headroom for large models that exceed VRAM (onemath/DNN scratch)
     const size_t desired_headroom = std::max(base_headroom, base_mem / 4);
@@ -4517,13 +4544,28 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
          resolved == GGML_LAYOUT_XMX_GEMM_TILED || resolved == GGML_LAYOUT_XMX_TILED);
     // Only prefer host placement when model exceeds VRAM (streaming mode).
     // When model fits in VRAM, prefer device placement for best performance.
+    // GGML_SYCL_FORCE_VRAM=1 overrides this to always prefer VRAM (for debugging).
     bool prefer_host_default = ggml_backend_sycl_weights_evictable() && !src_is_device &&
-                               g_model_exceeds_vram.load(std::memory_order_acquire);
+                               g_model_exceeds_vram.load(std::memory_order_acquire) &&
+                               !ggml_sycl_force_vram_enabled();
     // For reordered/tiled layouts, prefer device placement to avoid non-USM host pointers
     // leaking into kernel dispatch when VRAM is available.
     if (resolved != GGML_LAYOUT_AOS) {
         prefer_host_default = false;
     }
+
+    // Log placement decision for debugging VRAM vs host placement issues
+    if (g_ggml_sycl_debug) {
+        GGML_SYCL_DEBUG("[SYCL-PLACEMENT] tensor=%s prefer_host=%s (evictable=%d, src_is_device=%d, exceeds_vram=%d, force_vram=%d, layout=%d)\n",
+                        tensor->name ? tensor->name : "(unnamed)",
+                        prefer_host_default ? "HOST" : "VRAM",
+                        ggml_backend_sycl_weights_evictable() ? 1 : 0,
+                        src_is_device ? 1 : 0,
+                        g_model_exceeds_vram.load(std::memory_order_acquire) ? 1 : 0,
+                        ggml_sycl_force_vram_enabled() ? 1 : 0,
+                        static_cast<int>(resolved));
+    }
+
     bool request_prefer_host =
         host_layout_supported && (prefer_host || prefer_host_default);
     if (request_prefer_host && resolved == GGML_LAYOUT_AOS && ggml_backend_sycl_weights_evictable() && !src_is_device) {
