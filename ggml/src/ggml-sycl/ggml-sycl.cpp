@@ -2063,8 +2063,8 @@ inline void ggml_sycl_op_mul_mat_sycl(
             const sycl::half alpha_f16 = 1.0f;
             const sycl::half beta_f16  = 0.0f;
             SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm(
-                *stream, oneapi::math::transpose::trans,
-                oneapi::math::transpose::nontrans, row_diff, src1_ncols, ne10,
+                *stream, oneapi::mkl::transpose::trans,
+                oneapi::mkl::transpose::nontrans, row_diff, src1_ncols, ne10,
                 &alpha_f16, src0_ptr, dpct::library_data_t::real_half, ne00,
                 src1_ptr, dpct::library_data_t::real_half, ne10, &beta_f16,
                 dst_f16.get(), dpct::library_data_t::real_half, ldc,
@@ -2107,8 +2107,8 @@ inline void ggml_sycl_op_mul_mat_sycl(
         {
             const float alpha = 1.0f;
             const float beta  = 0.0f;
-            SYCL_CHECK(CHECK_TRY_ERROR(oneapi::math::blas::column_major::gemm(
-                get_onemath_backend(*stream), oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, row_diff,
+            SYCL_CHECK(CHECK_TRY_ERROR(oneapi::mkl::blas::column_major::gemm(
+                *stream, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans, row_diff,
                 src1_ncols, ne10, dpct::get_value(&alpha, *stream), src0_ddf_i, ne00, src1_ddf1_i, ne10,
                 dpct::get_value(&beta, *stream), dst_dd_i, ldc)));
         }
@@ -3037,8 +3037,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             const int64_t smb = ne12 == 1 ? s13       : s12;
 
             // there is no broadcast and src0, src1 are contiguous across dims 2, 3
-            SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(*queue, oneapi::math::transpose::trans,
-                                                        oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
+            SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(*queue, oneapi::mkl::transpose::trans,
+                                                        oneapi::mkl::transpose::nontrans, ne01, ne11, ne10, alpha,
                                                         src0_f16, dpct::library_data_t::real_half, nb01 / nb00, sma,
                                                         src1_f16, dpct::library_data_t::real_half, s11, smb, beta, dst_ddf,
                                                         mkl_data_type, ne0, ne1 * ne0, ne12 * ne13, mkl_compute_type)));
@@ -3062,7 +3062,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             });
 
             SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
-                *queue, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
+                *queue, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans, ne01, ne11, ne10, alpha,
                 (const void **) (ptrs_src.get() + 0 * ne23), dpct::library_data_t::real_half, nb01 / nb00,
                 (const void **) (ptrs_src.get() + 1 * ne23), dpct::library_data_t::real_half, s11, beta,
                 (void **) (ptrs_dst.get() + 0 * ne23), mkl_data_type, ne0, ne23, mkl_compute_type, matrix_info.get())));
@@ -3396,12 +3396,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
-    // mmvq path is faster in the CUDA backend.
-    if (!g_ggml_sycl_prioritize_dmmv && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
-        // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
-        // is enabled takes precedence over DMMV, the current if-else implementation
-        // requires disabling DMMV if both conditions are met
-        || (should_reorder_tensor(ctx, dst) && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
+    // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
+    // is enabled takes precedence over DMMV, the current if-else implementation
+    // requires disabling DMMV if both conditions are met
+    if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
+                                          ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
 
@@ -4058,16 +4057,6 @@ void ggml_backend_sycl_get_device_memory(int device, size_t *free,
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
     ggml_sycl_set_device(device);
 
-    /*
-    DPCT1009:218: SYCL uses exceptions to report errors and does not use the
-    error codes. The original code was commented out and a warning string was
-    inserted. You need to rewrite this code.
-    */
-    /*
-    DPCT1106:217: 'cudaMemGetInfo' was migrated with the Intel extensions for
-    device information which may not be supported by all compilers or runtimes.
-    You may need to adjust the code.
-    */
     SYCL_CHECK(CHECK_TRY_ERROR(
         dpct::dev_mgr::instance().get_device(device).get_memory_info(*free, *total)));
 }

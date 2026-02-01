@@ -22,12 +22,11 @@
 - **DPCPP** *(Data Parallel C++)*: The primary oneAPI SYCL implementation, which includes the icpx/icx Compilers.
 - **oneAPI Libraries**: A set of highly optimized libraries targeting multiple domains *(e.g. Intel oneMKL, oneMath and oneDNN)*.
 - **oneAPI LevelZero**: A high performance low level interface for fine-grained control over Intel iGPUs and dGPUs.
-- **Nvidia & AMD Plugins**: These are plugins extending oneAPI's DPCPP support to SYCL on Nvidia and AMD GPU targets.
 
 ### Llama.cpp + SYCL
 
 The llama.cpp SYCL backend is primarily designed for **Intel GPUs**.
-SYCL cross-platform capabilities enable support for Nvidia GPUs as well, with limited support for AMD.
+SYCL cross-platform capabilities enable support for other vendor GPUs as well.
 
 ## Recommended Release
 
@@ -41,6 +40,9 @@ The following releases are verified and recommended:
 
 
 ## News
+
+- 2026.02
+  - Remove support for Nvidia & AMD GPU, because the oneAPI plugin for Nvidia & AMD GPU is unavailable: download/installation channels are out of work. User can't build up the software for Nvidia & AMD GPU.
 
 - 2025.11
   - Support malloc memory on device more than 4GB.
@@ -111,8 +113,8 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 |-------------------------------|---------|---------------------------------------|
 | Intel Data Center Max Series  | Support | Max 1550, 1100                        |
 | Intel Data Center Flex Series | Support | Flex 170                              |
-| Intel Arc A-Series              | Support | Arc A770, Arc A730M, Arc A750         |
-| Intel Arc B-Series              | Support | Arc B580         |
+| Intel Arc A-Series            | Support | Arc A770, Arc A730M, Arc A750         |
+| Intel Arc B-Series            | Support | Arc B580                              |
 | Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake, Lunar Lake |
 | Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7  |
 
@@ -127,20 +129,7 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 
 ### Other Vendor GPU
 
-**Verified devices**
-
-| Nvidia GPU               | Status    | Verified Model |
-|--------------------------|-----------|----------------|
-| Ampere Series            | Supported | A100, A4000    |
-| Ampere Series *(Mobile)* | Supported | RTX 40 Series  |
-
-| AMD GPU                  | Status       | Verified Model |
-|--------------------------|--------------|----------------|
-| Radeon Pro               | Experimental | W6800          |
-| Radeon RX                | Experimental | 6700 XT        |
-
-Note: AMD GPU support is highly experimental and is incompatible with F16.
-Additionally, it only supports GPUs with a sub_group_size (warp size) of 32.
+NA
 
 ## Docker
 
@@ -149,11 +138,11 @@ The docker build option is currently limited to *Intel GPU* targets.
 ### Build image
 
 ```sh
-# Using FP16
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
-
 # Using FP32
 docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=OFF" --target light -f .devops/intel.Dockerfile .
+
+# Using FP16
+docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
 ```
 
 *Notes*:
@@ -212,14 +201,6 @@ Platform #0: Intel(R) OpenCL HD Graphics
  `-- Device #0: Intel(R) Iris(R) Xe Graphics [0x9a49]
 ```
 
-- **Nvidia GPU**
-
-In order to target Nvidia GPUs through SYCL, please make sure the CUDA/CUBLAS native requirements *-found [here](README.md#cuda)-* are installed.
-
-- **AMD GPU**
-
-To target AMD GPUs with SYCL, the ROCm stack must be installed first.
-
 2. **Install Intel® oneAPI Base toolkit**
 
 SYCL backend depends on:
@@ -248,23 +229,6 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 |2025.1|
 |2024.1|
 
-- **Adding support to Nvidia GPUs**
-
-**oneAPI Plugin**: In order to enable SYCL support on Nvidia GPUs, please install the [Codeplay oneAPI Plugin for Nvidia GPUs](https://developer.codeplay.com/products/oneapi/nvidia/download). User should also make sure the plugin version matches the installed base toolkit one *(previous step)* for a seamless "oneAPI on Nvidia GPU" setup.
-
-**oneDNN**: The current oneDNN releases *(shipped with the oneAPI base-toolkit)* do not include the NVIDIA backend. Therefore, oneDNN must be compiled from source to enable the NVIDIA target:
-
-```sh
-git clone https://github.com/oneapi-src/oneDNN.git
-cd oneDNN
-cmake -GNinja -Bbuild-nvidia -DDNNL_CPU_RUNTIME=DPCPP -DDNNL_GPU_RUNTIME=DPCPP -DDNNL_GPU_VENDOR=NVIDIA -DONEDNN_BUILD_GRAPH=OFF -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
-cmake --build build-nvidia --config Release
-```
-
-- **Adding support to AMD GPUs**
-
-**oneAPI Plugin**: In order to enable SYCL support on AMD GPUs, please install the [Codeplay oneAPI Plugin for AMD GPUs](https://developer.codeplay.com/products/oneapi/amd/download). As with Nvidia GPUs, the user should also make sure the plugin version matches the installed base toolkit.
-
 3. **Verify installation and environment**
 
 In order to check the available SYCL devices on the machine, please use the `sycl-ls` command.
@@ -283,25 +247,6 @@ When targeting an intel GPU, the user should expect one or more devices among th
 [opencl:cpu][opencl:0] Intel(R) OpenCL, 13th Gen Intel(R) Core(TM) i5-13400 OpenCL 3.0 (Build 0) [2025.20.8.0.06_160000]
 [opencl:gpu][opencl:1] Intel(R) OpenCL Graphics, Intel(R) Arc(TM) A770 Graphics OpenCL 3.0 NEO  [24.39.31294]
 [opencl:gpu][opencl:2] Intel(R) OpenCL Graphics, Intel(R) UHD Graphics 730 OpenCL 3.0 NEO  [24.39.31294]
-```
-
-- **Nvidia GPU**
-
-Similarly, user targeting Nvidia GPUs should expect at least one SYCL-CUDA device [`cuda:gpu`] as below:
-
-```
-[opencl:acc][opencl:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.12.0.12_195853.xmain-hotfix]
-[opencl:cpu][opencl:1] Intel(R) OpenCL, Intel(R) Xeon(R) Gold 6326 CPU @ 2.90GHz OpenCL 3.0 (Build 0) [2023.16.12.0.12_195853.xmain-hotfix]
-[cuda:gpu][cuda:0] NVIDIA CUDA BACKEND, NVIDIA A100-PCIE-40GB 8.0 [CUDA 12.5]
-```
-
-- **AMD GPU**
-
-For AMD GPUs we should expect at least one SYCL-HIP device [`hip:gpu`]:
-
-```
-[opencl:cpu][opencl:0] Intel(R) OpenCL, 12th Gen Intel(R) Core(TM) i9-12900K OpenCL 3.0 (Build 0) [2024.18.6.0.02_160000]
-[hip:gpu][hip:0] AMD HIP BACKEND, AMD Radeon PRO W6800 gfx1030 [HIP 60140.9]
 ```
 
 ### II. Build llama.cpp
@@ -331,47 +276,6 @@ cmake --build build --config Release -j -v
 It is possible to come across some precision issues when running tests that stem from using faster
 instructions, which can be circumvented by setting the environment variable `SYCL_PROGRAM_COMPILE_OPTIONS`
 as `-cl-fp32-correctly-rounded-divide-sqrt`
-
-#### Nvidia GPU
-
-The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
-By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
-
-```sh
-# Build LLAMA with Nvidia BLAS acceleration through SYCL
-# Setting GGML_SYCL_DEVICE_ARCH is optional but can improve performance
-GGML_SYCL_DEVICE_ARCH=sm_80 # Example architecture
-
-# Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DGGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DDNNL_DIR=/path/to/oneDNN/build-nvidia/install/lib/cmake/dnnl
-
-# Option 2: Use FP16
-cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DGGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DDNNL_DIR=/path/to/oneDNN/build-nvidia/install/lib/cmake/dnnl
-
-# build all binary
-cmake --build build --config Release -j -v
-```
-
-It is possible to come across some precision issues when running tests that stem from using faster
-instructions, which can be circumvented by passing the `-fno-fast-math` flag to the compiler.
-
-#### AMD GPU
-
-The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
-By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
-
-```sh
-# Build LLAMA with rocBLAS acceleration through SYCL
-
-## AMD
-# Use FP32, FP16 is not supported
-# Find your GGML_SYCL_DEVICE_ARCH with rocminfo, under the key 'Name:'
-GGML_SYCL_DEVICE_ARCH=gfx90a # Example architecture
-cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=AMD -DGGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
-
-# build all binary
-cmake --build build --config Release -j -v
-```
 
 ### III. Run the inference
 
@@ -766,15 +670,15 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | Name               | Value                                 | Function                                    |
 |--------------------|---------------------------------------|---------------------------------------------|
 | GGML_SYCL          | ON (mandatory)                        | Enable build with SYCL code path.           |
-| GGML_SYCL_TARGET   | INTEL *(default)* \| NVIDIA \| AMD    | Set the SYCL target device type.            |
-| GGML_SYCL_DEVICE_ARCH | Optional (except for AMD)             | Set the SYCL device architecture, optional except for AMD. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
+| GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
+| GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
-| GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
+| GGML_SYCL_GRAPH    | OFF *(default)* \|ON *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
-1. FP16 is recommended for better prompt processing performance on quantized models. Performance is equivalent in text generation but set `GGML_SYCL_F16=OFF` if you are experiencing issues with FP16 builds.
+1. FP32 or FP16 have different performance impact to LLM. Recommended to test them for better prompt processing performance on your models. You need to rebuild the code after change `GGML_SYCL_F16=OFF/ON`.
 
 #### Runtime
 
@@ -782,7 +686,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
 | GGML_SYCL_DISABLE_OPT | 0 (default) or 1 | Disable optimize features for Intel GPUs. (Recommended to 1 for intel devices older than Gen 10) |
-| GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because graph performance isn't yet better than non-graph performance. |
+| GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because SYCL Graph is still on development, no better performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
