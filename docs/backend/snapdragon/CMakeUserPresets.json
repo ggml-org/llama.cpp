@@ -1,10 +1,5 @@
 {
   "version": 5,
-  "cmakeMinimumRequired": {
-      "major": 3,
-      "minor": 28,
-      "patch": 0
-  },
   "configurePresets": [
     {
         "name": "arm64-android-snapdragon",

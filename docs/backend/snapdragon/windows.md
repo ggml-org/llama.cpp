@@ -128,7 +128,7 @@ However, additional settings are required for generating and signing HTP Ops lib
 > $env:HEXAGON_HTP_CERT="c:\Users\MyUsers\Certs\ggml-htp-v1.pfx"
 > $env:WINDOWS_SDK_BIN="C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\arm64"
 
-> cmake --preset arm64-windows-snapdragon -B build-wos
+> cmake --preset arm64-windows-snapdragon-release -B build-wos
 ...
 > cmake --install build-wos --prefix pkg-snapdragon
 ```
