@@ -58,7 +58,7 @@ The number of accepted tokens is stored for each used n-gram.
 llama-server [...] --spec-type ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2 --draft-max 64
 ```
 
-#### n-gram Mod (`ngram-mod`)
+### n-gram Mod (`ngram-mod`)
 
 Add basic ngram hasher for speculative decoding:
 
@@ -94,6 +94,12 @@ Applications:
 Example Video:
 
 - See #19164
+
+### Differences between ngram-simple, ngram-map and ngram-mod
+
+- ngram-simple looks for a previous matching n-gram and inserts the following m-gram.
+- ngram-map-k looks for a previous matching n-gram and inserts the following m-gram but uses an internal hash-map of n-grams in the current context window.
+- ngram-mod uses a hash pool which is shared across all server slots. The hash pool is a map from n-gram hash to the next token (not the next m-gram as in ngram-map).
 
 ## Command-Line Options
 
