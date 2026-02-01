@@ -850,10 +850,15 @@ dequant_q8_0_tile_vectorized(
 // The prefetch distance is passed in via args.prefetch_depth from the host.
 
 /**
- * Prefetch Q4_0 weights for a future K-tile.
+ * Prefetch Q4_0 weights for a future K-tile using LSC prefetch with cache hints.
  *
- * Prefetches weight data asynchronously. Data will be in cache when
- * the load is executed later in the K-loop.
+ * Prefetches weight data asynchronously using Intel LSC (Load/Store Cache)
+ * prefetch intrinsics. Data will be in cache when the load is executed
+ * later in the K-loop.
+ *
+ * Cache hint strategy for weights:
+ * - L1: streaming - weights are used once per output element, don't pollute L1
+ * - L2: uncached  - weights have poor temporal locality, don't cache in L2
  *
  * @param weights          Pointer to Q4_0 weight blocks
  * @param n_global         Global N index for this weight row
@@ -881,24 +886,48 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block(
     const int k_block_idx = static_cast<int>(k_tile_start / UNIFIED_QK4_0);
     const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
 
-    // Prefetch the Q4_0 block - use gather to fetch the block data
-    // This brings the block into L2 cache ahead of the actual load
+    // Prefetch the Q4_0 block using LSC prefetch with streaming cache hints
+    // This brings the block into cache ahead of the actual load without
+    // occupying registers or polluting cache with data that's only used once.
     const block_q4_0_unified * block_ptr = &weights[global_block_idx];
 
-    // Use ESIMD scalar prefetch by reading into a register and discarding
-    // This triggers the memory subsystem to fetch the cache line
-    esimd::simd<uint8_t, 32> prefetch_data;
-    prefetch_data = esimd::block_load<uint8_t, 32>(
-        reinterpret_cast<const uint8_t *>(block_ptr));
-    // The load brings data into cache; we don't use the result
-    (void)prefetch_data;
+    // Use LSC prefetch with streaming hints for weights:
+    // - L1 streaming: evict-first policy to minimize cache pollution
+    // - L2 uncached: don't cache in L2 since weights have poor temporal locality
+    //
+    // NOTE: Alignment is critical for LSC prefetch:
+    // - block_q4_0_unified is 18 bytes (2 bytes scale + 16 bytes quants)
+    // - Array of 18-byte blocks is at offsets 0, 18, 36, ... (≡ 2 mod 4)
+    // - This violates DWORD (4-byte) alignment required by uint32_t prefetch
+    //
+    // Solution: Align to 16-byte boundary and prefetch that aligned portion.
+    // This covers the entire 18-byte block within a 32-byte range.
+    // Calculate 16-byte aligned address (align down)
+    constexpr int ALIGN_SIZE = 16;  // 16-byte alignment for proper DWORD-aligned access
+    const uint8_t * byte_ptr = reinterpret_cast<const uint8_t *>(block_ptr);
+    const uint64_t addr = reinterpret_cast<uint64_t>(byte_ptr);
+    const uint64_t aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
+    const uint32_t * aligned_ptr = reinterpret_cast<const uint32_t *>(aligned_addr);
+
+    constexpr auto props = esimd::properties{
+        esimd::cache_hint_L1<esimd::cache_hint::streaming>,
+        esimd::cache_hint_L2<esimd::cache_hint::uncached>
+    };
+    // Prefetch 4 uint32_t values (16 bytes, covers the entire 18-byte block within aligned boundary)
+    esimd::prefetch<uint32_t, 4>(
+        aligned_ptr, 0, esimd::simd_mask<1>(1), props);
 }
 
 /**
- * Prefetch activations for a future K-tile.
+ * Prefetch activations for a future K-tile using LSC prefetch with cache hints.
  *
- * Prefetches activation data asynchronously. Activations benefit more
- * from caching as they are reused across N columns.
+ * Prefetches activation data asynchronously using Intel LSC (Load/Store Cache)
+ * prefetch intrinsics. Activations benefit more from caching as they are
+ * reused across N columns.
+ *
+ * Cache hint strategy for activations:
+ * - L1: cached - activations are reused across multiple output columns
+ * - L2: cached - activations have good temporal locality
  *
  * @param activations      Pointer to activation matrix
  * @param m_global         Global M index for this activation row
@@ -922,11 +951,15 @@ SYCL_ESIMD_FUNCTION void prefetch_activations_block(
     // Calculate address for this K-tile
     const float * tile_ptr = activations + m_global * K + k_tile_start;
 
-    // Use ESIMD block load to prefetch - this brings data into cache
-    esimd::simd<float, K_TILE_SIZE> prefetch_data;
-    prefetch_data = esimd::block_load<float, K_TILE_SIZE>(tile_ptr);
-    // The load brings data into cache; we don't use the result
-    (void)prefetch_data;
+    // Use LSC prefetch with cached hints for activations:
+    // - L1 cached: activations are reused across N columns
+    // - L2 cached: activations have good temporal locality
+    // Prefetch K_TILE_SIZE floats (typically 16 floats = 64 bytes)
+    constexpr auto props = esimd::properties{
+        esimd::cache_hint_L1<esimd::cache_hint::cached>,
+        esimd::cache_hint_L2<esimd::cache_hint::cached>
+    };
+    esimd::prefetch<float, K_TILE_SIZE>(tile_ptr, 0, esimd::simd_mask<1>(1), props);
 }
 
 /**
@@ -1918,7 +1951,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
         // Fence and barrier to ensure all loading is complete
         // named_barrier_signal(barrier_id, producer_consumer_mode, num_producers, num_consumers)
-        // Mode: 0 = both producer and consumer
+        // Note: Mode=0 acts as simple barrier on Arc/Xe2 (all work-items sync without role tracking).
+        // PVC docs say 0x1=producer, 0x2=consumer, 0x3=both, but mode=3 hangs on Arc.
+        // Keep mode=0 for Arc compatibility - all WG_SIZE work-items participate as peers.
         esimd::fence<esimd::fence_mask::local_barrier>();
         esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
         esimd::named_barrier_wait(0);
@@ -1986,6 +2021,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
         }
 
         // Barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
+        // Mode=0 for Arc/Xe2 compatibility (see note above)
         if (kt + 1 < k_tiles) {
             esimd::fence<esimd::fence_mask::local_barrier>();
             esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);

@@ -644,6 +644,7 @@ struct block_q4_0_unified {
 };
 
 static_assert(sizeof(block_q4_0_unified) == sizeof(sycl::half) + UNIFIED_QK4_0 / 2, "wrong q4_0 block size");
+static_assert(sizeof(block_q4_0_unified) == 18, "block_q4_0_unified must be exactly 18 bytes for correct prefetch behavior");
 
 // =============================================================================
 // UnifiedKernelArgs: Kernel launch parameters
