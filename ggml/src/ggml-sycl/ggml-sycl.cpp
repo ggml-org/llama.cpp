@@ -3469,7 +3469,7 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
         }
     }
 
-    // Copy reordered data to device and wait for completion.
+    // Copy reordered data to destination and wait for completion.
     // NOTE: We do synchronous wait and free to avoid host_task issues with Level Zero driver.
     GGML_SYCL_DEBUG("[DEBUG-FILL] memcpy dst=%p src=%p size=%zu\n", dst, reorder_buf, dst_size);
 
@@ -3481,8 +3481,21 @@ static sycl::event ggml_sycl_fill_reordered_host(sycl::queue &                  
     GGML_SYCL_DEBUG("[DEBUG-FILL] dst_align64=%zu dst_align4096=%zu\n", static_cast<size_t>(dst_addr % 64),
                     static_cast<size_t>(dst_addr % 4096));
 
-    sycl::event copy_event = queue.memcpy(dst, reorder_buf, dst_size);
-    copy_event.wait();
+    // For host→host copies, use CPU memcpy to avoid device staging (prevents OOM when device is full)
+    const bool dst_is_host = (dst_type == sycl::usm::alloc::host || dst_type == sycl::usm::alloc::shared);
+    sycl::event copy_event;
+    if (dst_is_host) {
+        // CPU memcpy for host→host: faster and doesn't require device memory staging
+        GGML_SYCL_DEBUG("[DEBUG-FILL] Using CPU memcpy for host→host copy\n");
+        std::memcpy(dst, reorder_buf, dst_size);
+        // Return a completed barrier event since no async work was done
+        std::vector<sycl::event> empty_deps;
+        copy_event = queue.ext_oneapi_submit_barrier(empty_deps);
+    } else {
+        // GPU memcpy for host→device
+        copy_event = queue.memcpy(dst, reorder_buf, dst_size);
+        copy_event.wait();
+    }
 
     const size_t reorder_alloc_size = dst_size + (reorder_guard * 2);
     ggml_sycl_free_host_tracked_bytes(reorder_buf_raw ? reorder_buf_raw : reorder_buf, reorder_alloc_size, queue);
@@ -18811,6 +18824,17 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const int64_t K = src0->ne[0];  // reduction dimension - from src0
             const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
 
+            // Batch-size gating: route batch=1 to legacy DMMV for better performance.
+            // The unified kernel's scalar path is ~60x slower than DMMV for decode.
+            // Set GGML_SYCL_UNIFIED_FORCE_ALL=1 to disable this optimization.
+            static bool force_unified_all = (std::getenv("GGML_SYCL_UNIFIED_FORCE_ALL") != nullptr);
+            const bool batch1_prefer_dmmv = (M == 1) && !force_unified_all &&
+                                            can_use_dequantize_mul_mat_vec(src0, src1, dst, ctx.device);
+            if (batch1_prefer_dmmv) {
+                GGML_SYCL_DEBUG("[UNIFIED] Routing batch=1 to DMMV for better performance (M=%lld)\n",
+                                (long long) M);
+                // Fall through to legacy dispatch below
+            } else {
             // IMPORTANT: unified kernel must use device-accessible pointers.
             // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
             const char * src0_ptr_source = nullptr;
@@ -19112,6 +19136,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     }
                 }
             }
+            }  // end batch1_prefer_dmmv else
             }
 #endif
             if (unified_dispatched) {
