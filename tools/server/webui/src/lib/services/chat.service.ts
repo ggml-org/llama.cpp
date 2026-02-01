@@ -3,6 +3,7 @@ import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
 	private static stripReasoningContent(
@@ -124,18 +125,16 @@ export class ChatService {
 			normalizedMessages.forEach((msg) => {
 				if (Array.isArray(msg.content)) {
 					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
-						if (part.type === ContentPartType.IMAGE_URL) {
+						if (part.type === 'image_url') {
 							console.info(
 								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
 							);
-
 							return false;
 						}
-
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
-					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
+					if (msg.content.length === 1 && msg.content[0].type === 'text') {
 						msg.content = msg.content[0].text;
 					}
 				}
