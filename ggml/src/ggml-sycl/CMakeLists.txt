@@ -131,6 +131,10 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+if (GGML_SYCL_HAS_BF16)
+    add_compile_definitions(GGML_SYCL_HAS_BF16)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
