@@ -393,6 +393,30 @@ const func_builtins & global_builtins() {
         {"test_is_lt", test_compare_fn<value_compare_op::lt>},
         {"test_is_lessthan", test_compare_fn<value_compare_op::lt>},
         {"test_is_ne", test_compare_fn<value_compare_op::ne>},
+        {"test_is_in", [](const func_args & args) -> value {
+            args.ensure_count(2);
+            auto needle   = args.get_pos(0);
+            auto haystack = args.get_pos(1);
+            if (is_val<value_undefined>(haystack)) {
+                return mk_val<value_bool>(false);
+            }
+            if (is_val<value_array>(haystack)) {
+                for (const auto & item : haystack->as_array()) {
+                    if (*needle == *item) {
+                        return mk_val<value_bool>(true);
+                    }
+                }
+                return mk_val<value_bool>(false);
+            }
+            if (is_val<value_string>(haystack) && is_val<value_string>(needle)) {
+                return mk_val<value_bool>(
+                    haystack->as_string().str().find(needle->as_string().str()) != std::string::npos);
+            }
+            if (is_val<value_object>(haystack)) {
+                return mk_val<value_bool>(haystack->has_key(needle));
+            }
+            throw raised_exception("'in' test expects an iterable");
+        }},
         {"test_is_test", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
             auto & builtins = global_builtins();
