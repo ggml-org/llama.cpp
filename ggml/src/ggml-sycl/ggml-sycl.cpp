@@ -8508,7 +8508,16 @@ static void ggml_sycl_alloc_trace_dump_if_requested(const char * reason) {
 }
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag) {
     void * ptr = nullptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_device(size, queue)));
+    try {
+        ptr = sycl::malloc_device(size, queue);
+    } catch (const sycl::exception & e) {
+        // OOM or other allocation failure - return nullptr to allow caller fallback
+        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    } catch (const std::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_device failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    }
     if (ptr != nullptr) {
         ggml_sycl_alloc_trace_record("device", size, tag);
     }
@@ -8516,7 +8525,15 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
 }
 void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char * tag) {
     void * ptr = nullptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, queue)));
+    try {
+        ptr = sycl::malloc_host(size, queue);
+    } catch (const sycl::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_host failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    } catch (const std::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_host failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    }
     if (ptr != nullptr) {
         ggml_sycl_alloc_trace_record("host", size, tag);
     }
@@ -8524,7 +8541,15 @@ void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char 
 }
 void * ggml_sycl_malloc_shared(size_t size, const sycl::queue & queue, const char * tag) {
     void * ptr = nullptr;
-    SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_shared(size, queue)));
+    try {
+        ptr = sycl::malloc_shared(size, queue);
+    } catch (const sycl::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_shared failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    } catch (const std::exception & e) {
+        GGML_SYCL_DEBUG("[SYCL] malloc_shared failed (%zu bytes, %s): %s\n", size, tag ? tag : "unknown", e.what());
+        return nullptr;
+    }
     if (ptr != nullptr) {
         ggml_sycl_alloc_trace_record("shared", size, tag);
     }
