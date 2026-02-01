@@ -11,6 +11,7 @@
 	import type { Root as MdastRoot } from 'mdast';
 	import { browser } from '$app/environment';
 	import { onDestroy, tick } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
@@ -40,6 +41,7 @@
 	interface MarkdownBlock {
 		id: string;
 		html: string;
+		contentHash?: string;
 	}
 
 	let { content, message, class: className = '', disableMath = false }: Props = $props();
@@ -58,6 +60,10 @@
 
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
+
+	// Incremental parsing cache, avoids re-transforming stable blocks
+	const transformCache = new SvelteMap<string, string>();
+	let previousContent = '';
 
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
@@ -182,6 +188,65 @@
 	}
 
 	/**
+	 * Generates a hash for MDAST node based on its position.
+	 * Used for cache lookup during incremental rendering.
+	 */
+	function getMdastNodeHash(node: unknown, index: number): string {
+		const n = node as {
+			type?: string;
+			position?: { start?: { offset?: number }; end?: { offset?: number } };
+		};
+		if (n.position?.start?.offset != null && n.position?.end?.offset != null) {
+			return `${n.type}-${n.position.start.offset}-${n.position.end.offset}`;
+		}
+		return `${n.type}-idx${index}`;
+	}
+
+	/**
+	 * Check if we're in append-only mode (streaming).
+	 */
+	function isAppendMode(newContent: string): boolean {
+		return previousContent.length > 0 && newContent.startsWith(previousContent);
+	}
+
+	/**
+	 * Transforms a single MDAST node to HTML string with caching.
+	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
+	 * on an isolated single-node tree, then stringifies the resulting HAST to HTML.
+	 * Results are cached by node position hash for streaming performance.
+	 * @param processorInstance - The remark/rehype processor instance
+	 * @param node - The MDAST node to transform
+	 * @param index - Node index for hash fallback
+	 * @returns Object containing the HTML string and cache hash
+	 */
+	async function transformMdastNode(
+		processorInstance: ReturnType<typeof processor>,
+		node: unknown,
+		index: number
+	): Promise<{ html: string; hash: string }> {
+		const hash = getMdastNodeHash(node, index);
+
+		const cached = transformCache.get(hash);
+		if (cached) {
+			return { html: cached, hash };
+		}
+
+		const singleNodeRoot = { type: 'root', children: [node] };
+		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
+		const html = processorInstance.stringify(transformedRoot);
+
+		transformCache.set(hash, html);
+
+		// Limit cache size (generous limit for 200K token contexts)
+		if (transformCache.size > 5000) {
+			const keysToDelete = Array.from(transformCache.keys()).slice(0, 1000);
+			keysToDelete.forEach((k) => transformCache.delete(k));
+		}
+
+		return { html, hash };
+	}
+
+	/**
 	 * Handles click events on copy buttons within code blocks.
 	 * Copies the raw code content to the clipboard.
 	 * @param event - The click event from the copy button
@@ -260,6 +325,7 @@
 			renderedBlocks = [];
 			unstableBlockHtml = '';
 			incompleteCodeBlock = null;
+			previousContent = '';
 			return;
 		}
 
@@ -274,23 +340,34 @@
 				const normalizedPrefix = preprocessLaTeX(prefixMarkdown);
 				const processorInstance = processor();
 				const ast = processorInstance.parse(normalizedPrefix) as MdastRoot;
-				const processedRoot = (await processorInstance.run(ast)) as HastRoot;
-				const processedChildren = processedRoot.children ?? [];
+				const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
 				const nextBlocks: MarkdownBlock[] = [];
 
-				// All prefix blocks are now stable since code block is separate
-				for (let index = 0; index < processedChildren.length; index++) {
-					const hastChild = processedChildren[index];
-					const id = getHastNodeId(hastChild, index);
-					const existing = renderedBlocks[index];
+				// Check if we're in append mode for cache reuse
+				const appendMode = isAppendMode(prefixMarkdown);
+				const previousBlockCount = appendMode ? renderedBlocks.length : 0;
 
-					if (existing && existing.id === id) {
-						nextBlocks.push(existing);
-						continue;
+				// All prefix blocks are now stable since code block is separate
+				for (let index = 0; index < mdastChildren.length; index++) {
+					const child = mdastChildren[index];
+
+					// In append mode, reuse previous blocks if unchanged
+					if (appendMode && index < previousBlockCount) {
+						const prevBlock = renderedBlocks[index];
+						const currentHash = getMdastNodeHash(child, index);
+						if (prevBlock?.contentHash === currentHash) {
+							nextBlocks.push(prevBlock);
+							continue;
+						}
 					}
 
-					const html = stringifyProcessedNode(processorInstance, processedRoot, hastChild);
-					nextBlocks.push({ id, html });
+					// Transform this block (with caching)
+					const { html, hash } = await transformMdastNode(processorInstance, child, index);
+					const id = getHastNodeId(
+						{ position: (child as { position?: unknown }).position } as HastRootContent,
+						index
+					);
+					nextBlocks.push({ id, html, contentHash: hash });
 				}
 
 				renderedBlocks = nextBlocks;
@@ -298,6 +375,7 @@
 				renderedBlocks = [];
 			}
 
+			previousContent = prefixMarkdown;
 			unstableBlockHtml = '';
 			incompleteCodeBlock = incompleteBlock;
 			return;
@@ -309,38 +387,49 @@
 		const normalized = preprocessLaTeX(markdown);
 		const processorInstance = processor();
 		const ast = processorInstance.parse(normalized) as MdastRoot;
-		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
-		const processedChildren = processedRoot.children ?? [];
-		const stableCount = Math.max(processedChildren.length - 1, 0);
+		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
+		const stableCount = Math.max(mdastChildren.length - 1, 0);
 		const nextBlocks: MarkdownBlock[] = [];
 
-		for (let index = 0; index < stableCount; index++) {
-			const hastChild = processedChildren[index];
-			const id = getHastNodeId(hastChild, index);
-			const existing = renderedBlocks[index];
+		// Check if we're in append mode for cache reuse
+		const appendMode = isAppendMode(markdown);
+		const previousBlockCount = appendMode ? renderedBlocks.length : 0;
 
-			if (existing && existing.id === id) {
-				nextBlocks.push(existing);
-				continue;
+		for (let index = 0; index < stableCount; index++) {
+			const child = mdastChildren[index];
+
+			// In append mode, reuse previous blocks if unchanged
+			if (appendMode && index < previousBlockCount) {
+				const prevBlock = renderedBlocks[index];
+				const currentHash = getMdastNodeHash(child, index);
+				if (prevBlock?.contentHash === currentHash) {
+					nextBlocks.push(prevBlock);
+					continue;
+				}
 			}
 
-			const html = stringifyProcessedNode(
-				processorInstance,
-				processedRoot,
-				processedChildren[index]
+			// Transform this block (with caching)
+			const { html, hash } = await transformMdastNode(processorInstance, child, index);
+			const id = getHastNodeId(
+				{ position: (child as { position?: unknown }).position } as HastRootContent,
+				index
 			);
-
-			nextBlocks.push({ id, html });
+			nextBlocks.push({ id, html, contentHash: hash });
 		}
 
 		let unstableHtml = '';
 
-		if (processedChildren.length > stableCount) {
-			const unstableChild = processedChildren[stableCount];
-			unstableHtml = stringifyProcessedNode(processorInstance, processedRoot, unstableChild);
+		if (mdastChildren.length > stableCount) {
+			const unstableChild = mdastChildren[stableCount];
+			const singleNodeRoot = { type: 'root', children: [unstableChild] };
+			const transformedRoot = (await processorInstance.run(
+				singleNodeRoot as MdastRoot
+			)) as HastRoot;
+			unstableHtml = processorInstance.stringify(transformedRoot);
 		}
 
 		renderedBlocks = nextBlocks;
+		previousContent = markdown;
 		await tick(); // Force DOM sync before updating unstable HTML block
 		unstableBlockHtml = unstableHtml;
 	}
@@ -405,27 +494,6 @@
 
 		// Replace image with fallback
 		img.parentNode?.replaceChild(fallback, img);
-	}
-
-	/**
-	 * Converts a single HAST node to an enhanced HTML string.
-	 * Applies link and code block enhancements to the output.
-	 * @param processorInstance - The remark/rehype processor instance
-	 * @param processedRoot - The full processed HAST root (for context)
-	 * @param child - The specific HAST child node to stringify
-	 * @returns Enhanced HTML string representation of the node
-	 */
-	function stringifyProcessedNode(
-		processorInstance: ReturnType<typeof processor>,
-		processedRoot: HastRoot,
-		child: unknown
-	) {
-		const root: HastRoot = {
-			...(processedRoot as HastRoot),
-			children: [child as never]
-		};
-
-		return processorInstance.stringify(root);
 	}
 
 	/**
