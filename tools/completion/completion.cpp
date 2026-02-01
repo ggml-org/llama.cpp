@@ -311,7 +311,6 @@ int main(int argc, char ** argv) {
         } else {
             // otherwise use the prompt as is
             prompt = params.prompt;
-            prompt += "; ignore; the capital of France is:";
         }
 
         if (params.interactive_first || !prompt.empty() || session_tokens.empty()) {

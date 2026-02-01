@@ -1,23 +1,24 @@
 #include "server-context.h"
+#include "server-common.h"
+#include "server-http.h"
+#include "server-task.h"
+#include "server-queue.h"
 
 #include "common.h"
 #include "llama.h"
 #include "log.h"
-#include "mtmd-helper.h"
-#include "mtmd.h"
 #include "sampling.h"
-#include "server-common.h"
-#include "server-http.h"
-#include "server-queue.h"
-#include "server-task.h"
 #include "speculative.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
+
+#include <cstddef>
 
 #include <bsm/audit.h>
 
 #include <cinttypes>
-#include <cstddef>
-#include <filesystem>
 #include <memory>
+#include <filesystem>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -1127,7 +1128,7 @@ private:
 
         if (task.params.n_token_healing_enabled) {
             task.token_healing_params.healing_token = task.tokens.back();
-            task.token_healing_params.healing_token_text = ltrim( common_token_to_piece(ctx, task.token_healing_params.healing_token));
+            task.token_healing_params.healing_token_text = ltrim(common_token_to_piece(ctx, task.token_healing_params.healing_token));
             task.tokens.pop_back();
             SLT_DBG(slot, "Token healing enabled, removed last token: %d ('%s')\n",task.token_healing_params.healing_token, task.token_healing_params.healing_token_text.c_str());
         }
@@ -3007,8 +3008,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         std::vector<server_task> tasks;
 
         const auto & prompt = data.at("prompt");
-
-        SRV_INF("\n\nYOOO (UPDATED) this is the System Prompt: %s\n\n", prompt.get<std::string>().c_str());
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
