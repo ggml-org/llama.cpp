@@ -20,6 +20,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, AGENTIC_TAGS } from '$lib/constants/agentic';
 import { AttachmentType, MessageRole } from '$lib/enums';
@@ -529,10 +530,16 @@ class AgenticStore {
 				const contentParts: ApiChatMessageContentPart[] = [{ type: 'text', text: cleanedResult }];
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.IMAGE) {
-						contentParts.push({
-							type: 'image_url',
-							image_url: { url: (attachment as DatabaseMessageExtraImageFile).base64Url }
-						});
+						if (modelsStore.modelSupportsVision(options.model ?? '')) {
+							contentParts.push({
+								type: 'image_url',
+								image_url: { url: (attachment as DatabaseMessageExtraImageFile).base64Url }
+							});
+						} else {
+							console.info(
+								`[AgenticStore] Skipping image attachment (model "${options.model}" does not support vision)`
+							);
+						}
 					}
 				}
 
