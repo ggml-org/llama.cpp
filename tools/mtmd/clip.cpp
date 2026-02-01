@@ -710,6 +710,83 @@ ggml_tensor * clip_graph::build_rope_2d(
     return cur;
 }
 
+// 2D RoPE with interleaved frequency
+// Pattern: [x_freq0, y_freq0, x_freq1, y_freq1, ...]
+// build_rope_2d uses split pattern: [x_freq0, x_freq1, ..., y_freq0, y_freq1, ...]
+ggml_tensor * clip_graph::build_rope_2d_interleaved(
+    ggml_context * ctx0,
+    ggml_tensor * cur,      // [n_dim, n_head, n_pos]
+    ggml_tensor * pos_w,    // [n_pos] - X/width positions
+    ggml_tensor * pos_h,    // [n_pos] - Y/height positions
+    const float freq_base
+) {
+    const int64_t n_dim  = cur->ne[0];
+    const int64_t n_head = cur->ne[1];
+    const int64_t n_pos  = cur->ne[2];
+
+    GGML_ASSERT(n_dim % 4 == 0);  // Must be divisible by 4 for interleaved x,y pairs
+
+    // Step 1: Reshape to expose interleaved structure
+    // cur: [n_dim, n_head, n_pos] -> [4, n_dim/4, n_head, n_pos]
+    ggml_tensor * reshaped = ggml_reshape_4d(ctx0, cur, 4, n_dim/4, n_head, n_pos);
+
+    // Step 2: Extract X pairs (elements 0,1 of each group of 4)
+    // x_pairs: [2, n_dim/4, n_head, n_pos]
+    ggml_tensor * x_pairs = ggml_view_4d(ctx0, reshaped,
+        2, n_dim/4, n_head, n_pos,
+        reshaped->nb[1], reshaped->nb[2], reshaped->nb[3],
+        0);
+
+    // Step 3: Extract Y pairs (elements 2,3 of each group of 4)
+    // y_pairs: [2, n_dim/4, n_head, n_pos]
+    ggml_tensor * y_pairs = ggml_view_4d(ctx0, reshaped,
+        2, n_dim/4, n_head, n_pos,
+        reshaped->nb[1], reshaped->nb[2], reshaped->nb[3],
+        2 * ggml_element_size(reshaped));
+
+    // Step 4: Make contiguous and reshape for rope_ext
+    // [2, n_dim/4, n_head, n_pos] -> [n_dim/2, n_head, n_pos]
+    x_pairs = ggml_cont(ctx0, x_pairs);
+    x_pairs = ggml_reshape_3d(ctx0, x_pairs, n_dim/2, n_head, n_pos);
+
+    y_pairs = ggml_cont(ctx0, y_pairs);
+    y_pairs = ggml_reshape_3d(ctx0, y_pairs, n_dim/2, n_head, n_pos);
+
+    // Step 5: Apply RoPE to X pairs using pos_w, Y pairs using pos_h
+    x_pairs = ggml_rope_ext(
+        ctx0,
+        x_pairs,
+        pos_w,
+        nullptr,
+        n_dim/2,
+        0, 0, freq_base,
+        1.0f, 0.0f, 1.0f, 0.0f, 0.0f
+    );
+
+    y_pairs = ggml_rope_ext(
+        ctx0,
+        y_pairs,
+        pos_h,
+        nullptr,
+        n_dim/2,
+        0, 0, freq_base,
+        1.0f, 0.0f, 1.0f, 0.0f, 0.0f
+    );
+
+    // Step 6: Reshape back to [2, n_dim/4, n_head, n_pos] for interleaving
+    x_pairs = ggml_reshape_4d(ctx0, x_pairs, 2, n_dim/4, n_head, n_pos);
+    y_pairs = ggml_reshape_4d(ctx0, y_pairs, 2, n_dim/4, n_head, n_pos);
+
+    // Step 7: Interleave X and Y pairs back together
+    // Concatenate along dimension 0: [4, n_dim/4, n_head, n_pos]
+    ggml_tensor * result = ggml_concat(ctx0, x_pairs, y_pairs, 0);
+
+    // Step 8: Reshape back to original: [n_dim, n_head, n_pos]
+    result = ggml_reshape_3d(ctx0, result, n_dim, n_head, n_pos);
+
+    return result;
+}
+
 // Generic function to stack frames for audio processing
 // Abstracts out the StackAudioFrames logic used by ultravox
 ggml_tensor * clip_graph::build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed) {
@@ -824,6 +901,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_KIMIVL:
             {
                 builder = std::make_unique<clip_graph_kimivl>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_KIMIK25:
+            {
+                builder = std::make_unique<clip_graph_kimik25>(ctx, img);
             } break;
         case PROJECTOR_TYPE_COGVLM:
             {
@@ -1138,6 +1219,13 @@ struct clip_model_loader {
                         // TODO: check kimivl preprocessor for exact values
                         hparams.set_limit_image_tokens(8, 1024);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_KIMIK25:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        hparams.set_limit_image_tokens(8, 4096);
+                        hparams.set_warmup_n_tokens(256);
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
                     {
@@ -1668,6 +1756,7 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_KIMIVL:
+            case PROJECTOR_TYPE_KIMIK25:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
@@ -3039,6 +3128,23 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->entries.push_back(std::move(res));
             } break;
 
+        case PROJECTOR_TYPE_KIMIK25:
+            {
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
+                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+                    original_size,
+                    params.patch_size * params.n_merge,
+                    params.image_min_pixels,
+                    params.image_max_pixels);
+                const std::array<uint8_t, 3> pad_color = {0, 0, 0};
+
+                clip_image_u8 resized_img;
+                img_tool::resize(*img, resized_img, target_size, img_tool::RESIZE_ALGO_BICUBIC, true, pad_color);
+                clip_image_f32_ptr res(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_img, *res, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(res));
+            } break;
+
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -3247,6 +3353,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * ctx->model.hparams.n_merge;
@@ -3588,6 +3695,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // set the 2D positions
@@ -3770,6 +3878,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_KIMIK25:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_COGVLM:
             return ctx->model.mm_4h_to_h_w->ne[1];
