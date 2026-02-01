@@ -1918,6 +1918,7 @@ static std::vector<std::pair<std::string, size_t>> g_tensor_inventory;
 static std::unordered_map<std::string, size_t>     g_tensor_inventory_index;  // name -> index for O(1) lookup
 static size_t                                      g_tensor_inventory_total_size = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
+std::atomic<bool>                                  g_model_exceeds_vram{ false };  // True when model > VRAM budget
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
 
@@ -2004,12 +2005,16 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         vram_budget = vram_budget_base - already_allocated - base_headroom;
     }
 
-    // Enable tiered mode if total model size exceeds available VRAM budget
-    g_tiered_enabled.store(g_tensor_inventory_total_size > vram_budget, std::memory_order_release);
+    // Enable tiered mode when unified cache is active (needed to upload weights to VRAM).
+    // Previously only enabled when model > VRAM, but that left small models in host memory.
+    // Now always enabled so the cache can manage VRAM placement for all model sizes.
+    const bool model_exceeds_vram = g_tensor_inventory_total_size > vram_budget;
+    g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
+    g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
-    // Reserve extra VRAM headroom for large tiered models (onemath/DNN scratch)
+    // Reserve extra VRAM headroom for large models that exceed VRAM (onemath/DNN scratch)
     const size_t desired_headroom = std::max(base_headroom, base_mem / 4);
-    const size_t desired_extra = g_tiered_enabled.load(std::memory_order_acquire) && desired_headroom > base_headroom
+    const size_t desired_extra = model_exceeds_vram && desired_headroom > base_headroom
                                     ? (desired_headroom - base_headroom)
                                     : 0;
     size_t & prev_extra = g_tiered_headroom_reserve[ctx->device];
@@ -4497,7 +4502,10 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
     const bool host_layout_supported =
         (resolved == GGML_LAYOUT_AOS || resolved == GGML_LAYOUT_SOA || resolved == GGML_LAYOUT_COALESCED ||
          resolved == GGML_LAYOUT_XMX_GEMM_TILED || resolved == GGML_LAYOUT_XMX_TILED);
-    bool prefer_host_default = ggml_backend_sycl_weights_evictable() && !src_is_device;
+    // Only prefer host placement when model exceeds VRAM (streaming mode).
+    // When model fits in VRAM, prefer device placement for best performance.
+    bool prefer_host_default = ggml_backend_sycl_weights_evictable() && !src_is_device &&
+                               g_model_exceeds_vram.load(std::memory_order_acquire);
     // For reordered/tiled layouts, prefer device placement to avoid non-USM host pointers
     // leaking into kernel dispatch when VRAM is available.
     if (resolved != GGML_LAYOUT_AOS) {
