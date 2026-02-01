@@ -6,7 +6,7 @@
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
-	import { AgenticSectionType } from '$lib/enums';
+	import { AgenticSectionType, AttachmentType } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
 	import { parseAgenticContent, type AgenticSection } from '$lib/utils/agentic';
 	import type { DatabaseMessage } from '$lib/types/database';
@@ -148,6 +148,22 @@
 							<!-- prettier-ignore -->
 							<pre class="m-0 overflow-x-auto whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed"><code>{section.toolResult}</code></pre>
 						</div>
+
+						{#if message?.extra}
+							{@const images = message.extra.filter((e) => e.type === AttachmentType.IMAGE)}
+							{#if images.length > 0}
+								<div class="mt-3 flex flex-col gap-2">
+									{#each images as image (image.name)}
+										<img
+											src={image.base64Url}
+											alt={image.name}
+											class="h-auto max-w-full rounded-lg"
+											loading="lazy"
+										/>
+									{/each}
+								</div>
+							{/if}
+						{/if}
 					{:else if isPending}
 						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
 							Waiting for result...
