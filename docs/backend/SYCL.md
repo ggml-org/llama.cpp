@@ -119,7 +119,7 @@ On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the 
 *Notes:*
 
 - **Memory**
-  - The device memory is a limitation when running a large model. The loaded model size, *`llm_load_tensors: buffer_size`*, is displayed in the log when running `./bin/llama-cli`.
+  - The device memory is a limitation when running a large model. The loaded model size, *`llm_load_tensors: buffer_size`*, is displayed in the log when running `./bin/llama-completion`.
   - Please make sure the GPU shared memory from the host is large enough to account for the model's size. For e.g. the *llama-2-7b.Q4_0* requires at least 8.0GB for integrated GPU and 4.0GB for discrete GPU.
 
 - **Execution Unit (EU)**
@@ -423,16 +423,12 @@ Choose one of following methods to run.
 - Use device 0:
 
 ```sh
-./examples/sycl/run-llama2.sh 0
-# OR
-./examples/sycl/run-llama3.sh 0
+./examples/sycl/test.sh -mg 0
 ```
 - Use multiple devices:
 
 ```sh
-./examples/sycl/run-llama2.sh
-# OR
-./examples/sycl/run-llama3.sh
+./examples/sycl/test.sh
 ```
 
 2. Command line
@@ -455,13 +451,13 @@ Examples:
 - Use device 0:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm none -mg 0
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-completion -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm none -mg 0 --mmap
 ```
 
 - Use multiple devices:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm layer
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-completion -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm layer --mmap
 ```
 
 *Notes:*
@@ -577,13 +573,13 @@ Or, use CMake presets to build:
 
 ```sh
 cmake --preset x64-windows-sycl-release
-cmake --build build-x64-windows-sycl-release -j --target llama-cli
+cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
 cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
-cmake --build build-x64-windows-sycl-release -j --target llama-cli
+cmake --build build-x64-windows-sycl-release -j --target llama-completion
 
 cmake --preset x64-windows-sycl-debug
-cmake --build build-x64-windows-sycl-debug -j --target llama-cli
+cmake --build build-x64-windows-sycl-debug -j --target llama-completion
 ```
 
 #### 3. Visual Studio
@@ -608,7 +604,7 @@ You can use Visual Studio to open the `llama.cpp` folder directly as a CMake pro
 - For a minimal experimental setup, you can build only the inference executable using:
 
     ```Powershell
-    cmake --build build --config Release -j --target llama-cli
+    cmake --build build --config Release -j --target llama-completion
     ```
 
 ##### - Generating a Visual Studio Solution
@@ -714,13 +710,7 @@ Choose one of following methods to run.
 1. Script
 
 ```
-examples\sycl\win-run-llama-2.bat
-```
-
-or
-
-```
-examples\sycl\win-run-llama-3.bat
+examples\sycl\win-test.bat
 ```
 
 2. Command line
@@ -744,13 +734,13 @@ Examples:
 - Use device 0:
 
 ```
-build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm none -mg 0
+build\bin\llama-completion.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm none -mg 0 --mmap
 ```
 
 - Use multiple devices:
 
 ```
-build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm layer
+build\bin\llama-completion.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm layer --mmap
 ```
 
 
