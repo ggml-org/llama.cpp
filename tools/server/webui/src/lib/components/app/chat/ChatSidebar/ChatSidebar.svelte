@@ -118,17 +118,6 @@
 		<ChatSidebarActions {handleMobileSidebarItemClick} bind:isSearchModeActive bind:searchQuery />
 	</Sidebar.Header>
 
-	<div class="px-4 py-2">
-		<a
-			href="#/notebook"
-			class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium hover:bg-accent hover:text-accent-foreground"
-			onclick={handleMobileSidebarItemClick}
-		>
-			<span class="i-lucide-file-text h-4 w-4"></span>
-			Notebook
-		</a>
-	</div>
-
 	<Sidebar.Group class="mt-4 space-y-2 p-0 px-4">
 		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 			<Sidebar.GroupLabel>

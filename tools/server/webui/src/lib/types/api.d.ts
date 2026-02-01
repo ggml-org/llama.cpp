@@ -23,12 +23,12 @@ export interface ApiContextSizeError {
 
 export interface ApiErrorResponse {
 	error:
-	| ApiContextSizeError
-	| {
-		code: number;
-		message: string;
-		type?: string;
-	};
+		| ApiContextSizeError
+		| {
+				code: number;
+				message: string;
+				type?: string;
+		  };
 }
 
 export interface ApiChatMessageData {
