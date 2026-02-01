@@ -69,14 +69,15 @@ ggml_cgraph * clip_graph_kimik25::build() {
 
         // projection norm
         int proj_inp_dim = cur->ne[0];
+        int n_merged_patches = cur->ne[1];
         cur = ggml_view_2d(ctx0, cur,
-            n_embd, cur->ne[1] * scale_factor * scale_factor,
+            n_embd, n_merged_patches * scale_factor * scale_factor,
             ggml_row_size(cur->type, n_embd), 0);
         cur = ggml_norm(ctx0, cur, hparams.eps);
         cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
         cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
         cur = ggml_view_2d(ctx0, cur,
-            proj_inp_dim, cur->ne[1],
+            proj_inp_dim, n_merged_patches,
             ggml_row_size(cur->type, proj_inp_dim), 0);
         cb(cur, "proj_inp_normed", -1);
 
