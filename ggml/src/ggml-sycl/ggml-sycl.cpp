@@ -130,7 +130,7 @@ int g_ggml_sycl_use_xmx_gemm  = 0;     // Enable XMX-accelerated GEMM (experimen
 int g_ggml_sycl_xmx_threshold = 1024;  // Max batch size for XMX (XMX faster for N < threshold)
 #endif
 // Unified dispatch: Set GGML_SYCL_UNIFIED_DISPATCH=1 to use the unified kernel dispatch path
-static int g_ggml_sycl_unified_dispatch = -1;  // -1 = not initialized, 0 = disabled, 1 = enabled
+static std::atomic<int> g_ggml_sycl_unified_dispatch{-1};  // -1 = not initialized, 0 = disabled, 1 = enabled
 thread_local bool        g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 std::atomic<int>         g_ggml_sycl_graph_recording_depth{ 0 };
 static std::mutex        g_sycl_graph_compute_mutex;
@@ -280,11 +280,15 @@ static bool ggml_sycl_get_canonical_checksum(const char * name, ggml_sycl_canoni
 // Check if unified dispatch is enabled via environment variable
 // Unified dispatch defaults to enabled; set GGML_SYCL_UNIFIED_DISPATCH=0 to disable.
 static bool ggml_sycl_unified_dispatch_enabled() {
-    if (g_ggml_sycl_unified_dispatch < 0) {
+    int val = g_ggml_sycl_unified_dispatch.load(std::memory_order_acquire);
+    if (val < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
-        g_ggml_sycl_unified_dispatch = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
+        int new_val = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
+        // Only one thread will successfully CAS from -1
+        g_ggml_sycl_unified_dispatch.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire);
+        val = g_ggml_sycl_unified_dispatch.load(std::memory_order_acquire);
     }
-    return g_ggml_sycl_unified_dispatch != 0;
+    return val != 0;
 }
 
 // Unified kernel requires AoS inputs and performs its own internal reordering.
@@ -5165,22 +5169,24 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     std::exit(1);
 }
 // Check if double-buffering is enabled (cached)
-static bool g_pp_double_buffer_enabled = false;
-static bool g_pp_double_buffer_checked = false;
+// Use atomic with -1 = not initialized, 0 = disabled, 1 = enabled
+static std::atomic<int> g_pp_double_buffer_state{-1};
 
 static bool is_pp_double_buffer_enabled() {
-    if (!g_pp_double_buffer_checked) {
-
-        const char * env           = std::getenv("GGML_SYCL_PP_DOUBLE_BUFFER");
-        g_pp_double_buffer_enabled = (env != nullptr && std::string(env) == "1");
-        g_pp_double_buffer_checked = true;
-
-        if (g_pp_double_buffer_enabled) {
-            GGML_SYCL_DEBUG("SYCL PP: Double-buffering enabled\n");
+    int val = g_pp_double_buffer_state.load(std::memory_order_acquire);
+    if (val < 0) {
+        const char * env = std::getenv("GGML_SYCL_PP_DOUBLE_BUFFER");
+        int new_val = (env != nullptr && std::string(env) == "1") ? 1 : 0;
+        // Only one thread will successfully CAS from -1
+        if (g_pp_double_buffer_state.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire)) {
+            if (new_val == 1) {
+                GGML_SYCL_DEBUG("SYCL PP: Double-buffering enabled\n");
+            }
         }
+        val = g_pp_double_buffer_state.load(std::memory_order_acquire);
     }
 
-    return g_pp_double_buffer_enabled;
+    return val == 1;
 }
 static void dev2dev_memcpy(sycl::queue & q_dst,
                            sycl::queue & q_src,
@@ -17140,10 +17146,13 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Unified cache disabled, skipping MoE prep\n");
         return true;
     }
-    static int routing_prestage_enabled = -1;
-    if (routing_prestage_enabled < 0) {
-        const char * env         = getenv("GGML_SYCL_ROUTING_PRESTAGE");
-        routing_prestage_enabled = env ? atoi(env) : 1;  // Default: enabled
+    static std::atomic<int> routing_prestage_enabled{-1};
+    int routing_prestage_val = routing_prestage_enabled.load(std::memory_order_acquire);
+    if (routing_prestage_val < 0) {
+        const char * env = getenv("GGML_SYCL_ROUTING_PRESTAGE");
+        int new_val = env ? atoi(env) : 1;  // Default: enabled
+        routing_prestage_enabled.compare_exchange_strong(routing_prestage_val, new_val, std::memory_order_release, std::memory_order_acquire);
+        routing_prestage_val = routing_prestage_enabled.load(std::memory_order_acquire);
     }
     GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Preparing MoE pointer tables for graph (nodes=%d device=%d)\n", cgraph->n_nodes,
                     ctx.device);
@@ -17185,7 +17194,7 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
                     src0->name ? src0->name : "(unknown)");
             }
         }
-        const bool use_routing_prestage = routing_prestage_enabled && (skip_blind_preload || prefer_routing);
+        const bool use_routing_prestage = (routing_prestage_val != 0) && (skip_blind_preload || prefer_routing);
         if ((skip_blind_preload || prefer_routing) && !use_routing_prestage) {
             const int layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
             GGML_LOG_WARN("[GRAPH-PRELOAD] Blind preload disabled for layer %d (%lld experts) and routing prestage "
@@ -20671,16 +20680,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     // Routing-aware pre-staging environment variable check
-    static int routing_prestage_enabled = -1;
-    if (routing_prestage_enabled < 0) {
-        const char * env         = getenv("GGML_SYCL_ROUTING_PRESTAGE");
-        routing_prestage_enabled = env ? atoi(env) : 1;  // Default: enabled
+    static std::atomic<int> routing_prestage_enabled{-1};
+    int routing_prestage_val = routing_prestage_enabled.load(std::memory_order_acquire);
+    if (routing_prestage_val < 0) {
+        const char * env = getenv("GGML_SYCL_ROUTING_PRESTAGE");
+        int new_val = env ? atoi(env) : 1;  // Default: enabled
+        routing_prestage_enabled.compare_exchange_strong(routing_prestage_val, new_val, std::memory_order_release, std::memory_order_acquire);
+        routing_prestage_val = routing_prestage_enabled.load(std::memory_order_acquire);
     }
 
     // Detect if routing-aware prestage should be used (>64 experts)
     const int64_t n_experts              = src0->ne[2];
     const int     max_blind_threshold    = ggml_sycl_get_blind_preload_threshold();
-    const bool    use_routing_prestage_candidate = routing_prestage_enabled && (n_experts > max_blind_threshold);
+    const bool    use_routing_prestage_candidate = (routing_prestage_val != 0) && (n_experts > max_blind_threshold);
 
     layout_mode override_layout = GGML_LAYOUT_AOS;
     const bool  has_override    = ggml_sycl_layout_override_active(override_layout);

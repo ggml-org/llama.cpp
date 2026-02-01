@@ -17,6 +17,7 @@
 #include "ggml-impl.h"
 #include "unified-cache.hpp"
 
+#include <atomic>
 #include <cstdlib>
 #include <mutex>
 #include <unordered_map>
@@ -1271,39 +1272,48 @@ static ggml_sycl_tp_quant_comm_buffers g_tp_quant_comm_bufs = {};
 static std::mutex                      g_tp_quant_comm_mutex;
 
 bool ggml_sycl_quant_allreduce_enabled() {
-    static int enabled = -1;
-    if (enabled < 0) {
+    static std::atomic<int> enabled{-1};
+    int val = enabled.load(std::memory_order_acquire);
+    if (val < 0) {
         const char * env = getenv("GGML_SYCL_QUANT_ALLREDUCE");
         // Enable by default for TP mode (33% bandwidth reduction)
         // Disable with GGML_SYCL_QUANT_ALLREDUCE=0
-        enabled          = (env != nullptr) ? atoi(env) : 1;
+        int new_val = (env != nullptr) ? atoi(env) : 1;
 
-        if (enabled) {
-            GGML_LOG_INFO("SYCL TP: INT16 Quantized AllReduce enabled (33%% bandwidth reduction)\n");
+        // Only one thread will successfully CAS from -1
+        if (enabled.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire)) {
+            if (new_val != 0) {
+                GGML_LOG_INFO("SYCL TP: INT16 Quantized AllReduce enabled (33%% bandwidth reduction)\n");
+            }
         }
+        val = enabled.load(std::memory_order_acquire);
     }
-    return enabled != 0;
+    return val != 0;
 }
 
 // Get the minimum tensor size threshold for quantized allreduce
 // Returns threshold from GGML_SYCL_QUANT_THRESHOLD env var, or default
 static size_t get_quant_allreduce_threshold() {
-    static size_t threshold   = 0;
-    static bool   initialized = false;
-    if (!initialized) {
+    // Use atomic with sentinel value (SIZE_MAX) for uninitialized state
+    static std::atomic<size_t> threshold{SIZE_MAX};
+    size_t val = threshold.load(std::memory_order_acquire);
+    if (val == SIZE_MAX) {
         const char * env = getenv("GGML_SYCL_QUANT_THRESHOLD");
         // Default: 65536 elements (256KB FP32)
         // Benchmarks show quant overhead hurts small tensors (tg128: 8.1 -> 6.3 t/s)
         // but helps or is neutral for larger tensors (pp512: ~same performance)
         // Crossover is around 32K-64K elements
-        threshold        = (env != nullptr) ? (size_t) atol(env) : 65536;
-        initialized      = true;
-        if (ggml_sycl_quant_allreduce_enabled()) {
-            GGML_LOG_INFO("SYCL TP: Quant AllReduce threshold = %zu elements (%.1f KB FP32)\n", threshold,
-                          (float) (threshold * sizeof(float)) / 1024.0f);
+        size_t new_val = (env != nullptr) ? (size_t) atol(env) : 65536;
+        // Only one thread will successfully CAS from SIZE_MAX
+        if (threshold.compare_exchange_strong(val, new_val, std::memory_order_release, std::memory_order_acquire)) {
+            if (ggml_sycl_quant_allreduce_enabled()) {
+                GGML_LOG_INFO("SYCL TP: Quant AllReduce threshold = %zu elements (%.1f KB FP32)\n", new_val,
+                              (float) (new_val * sizeof(float)) / 1024.0f);
+            }
         }
+        val = threshold.load(std::memory_order_acquire);
     }
-    return threshold;
+    return val;
 }
 
 bool ggml_sycl_should_use_quant_allreduce(size_t n_elements) {
