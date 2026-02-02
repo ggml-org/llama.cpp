@@ -767,7 +767,7 @@ static bool router_validate_model(const std::string & name, server_models & mode
     }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
-        res_err(res, format_error_response("model not found", ERROR_TYPE_INVALID_REQUEST));
+        res_err(res, format_error_response(string_format("model '%s' not found", name.c_str()), ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
     if (models_autoload) {
