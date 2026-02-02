@@ -71,6 +71,12 @@ export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAtta
 export { default as ChatAttachmentPreview } from './ChatAttachments/ChatAttachmentPreview.svelte';
 
 /**
+ * Displays MCP Resource attachments as a horizontal carousel.
+ * Shows resource name, URI, and allows clicking to view resource content.
+ */
+export { default as ChatAttachmentMcpResources } from './ChatAttachments/ChatAttachmentMcpResources.svelte';
+
+/**
  * Thumbnail for non-image file attachments. Displays file type icon based on extension,
  * file name (truncated), and file size.
  * Handles text files, PDFs, audio, and other document types.

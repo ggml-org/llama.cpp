@@ -37,6 +37,7 @@
 			aria-label={ariaLabel || tooltip}
 		>
 			{@const IconComponent = icon}
+
 			<IconComponent class="h-3 w-3" />
 		</Button>
 	</Tooltip.Trigger>

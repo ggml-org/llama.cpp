@@ -1,13 +1,13 @@
 <script lang="ts">
 	import {
 		ChatAttachmentsList,
+		ChatAttachmentMcpResources,
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormPromptPicker,
 		ChatFormTextarea,
 		McpResourcePicker
 	} from '$lib/components/app';
-	import ChatFormResourceAttachments from '../ChatFormResourceAttachments.svelte';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { MimeTypeText, SpecialFileType } from '$lib/enums';
@@ -509,7 +509,7 @@
 			/>
 
 			{#if mcpHasResourceAttachments()}
-				<ChatFormResourceAttachments
+				<ChatAttachmentMcpResources
 					class="mb-3"
 					onResourceClick={(uri) => {
 						preSelectedResourceUri = uri;
