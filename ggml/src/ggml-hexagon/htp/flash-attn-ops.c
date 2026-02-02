@@ -89,12 +89,11 @@ static inline void hvx_dot_f16_f16_aa_rx2(float * restrict r,
     }
 
     if (nloe) {
-        HVX_Vector y_hf = vy[i];
-
-        // Load x (fp16) and zero-out unused elements
+        // Load x (fp16) and zero-out unused y elements
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector     x0_hf = Q6_V_vand_QV(bmask, vx0[i]);
-        HVX_Vector     x1_hf = Q6_V_vand_QV(bmask, vx1[i]);
+        HVX_Vector     x0_hf = vx0[i];
+        HVX_Vector     x1_hf = vx1[i];
+        HVX_Vector y_hf      = Q6_V_vand_QV(bmask, vy[i]);
 
         HVX_VectorPair xy0_qf = Q6_Wqf32_vmpy_VhfVhf(x0_hf, y_hf);
         HVX_VectorPair xy1_qf = Q6_Wqf32_vmpy_VhfVhf(x1_hf, y_hf);
