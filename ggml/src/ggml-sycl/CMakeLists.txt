@@ -700,18 +700,18 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
 
     # Test 15: Dispatch tuning mapping tests
     # Verifies unified_matmul winners map to orchestrator entrypoint
-    add_executable(test-dispatch-tuning
+    add_executable(test-sycl-dispatch-tuning
         tests/test-dispatch-tuning.cpp
         dispatch-tuning.cpp
     )
-    target_include_directories(test-dispatch-tuning PRIVATE
+    target_include_directories(test-sycl-dispatch-tuning PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/..
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
-    target_link_libraries(test-dispatch-tuning PRIVATE ggml)
-    add_test(NAME dispatch-tuning COMMAND test-dispatch-tuning)
-    set_tests_properties(dispatch-tuning PROPERTIES
+    target_link_libraries(test-sycl-dispatch-tuning PRIVATE ggml)
+    add_test(NAME sycl-dispatch-tuning COMMAND test-sycl-dispatch-tuning)
+    set_tests_properties(sycl-dispatch-tuning PROPERTIES
         LABELS "sycl;dispatch;tuning"
         TIMEOUT 60
     )
@@ -742,5 +742,33 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
     set_tests_properties(esimd-prefetch PROPERTIES
         LABELS "sycl;xmx;esimd;prefetch;lsc"
         TIMEOUT 180
+    )
+
+    # Test 17: Unified Cache Fast Path Tests (TDD)
+    # Tests reader-writer lock optimization for cache hit fast path
+    add_executable(test-unified-cache-fast-path
+        tests/test-unified-cache-fast-path.cpp
+        unified-cache.cpp
+        pinned-pool.cpp
+    )
+    target_include_directories(test-unified-cache-fast-path PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-unified-cache-fast-path PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-unified-cache-fast-path PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-unified-cache-fast-path PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    target_link_libraries(test-unified-cache-fast-path PRIVATE ggml-base ggml)
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-unified-cache-fast-path PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME unified-cache-fast-path COMMAND test-unified-cache-fast-path)
+    set_tests_properties(unified-cache-fast-path PROPERTIES
+        LABELS "sycl;cache;fast-path;tdd"
+        TIMEOUT 120
     )
 endif()

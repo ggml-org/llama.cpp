@@ -1324,7 +1324,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     process_deferred_frees();
 
     // Create key for lookup (identity-only, no layout)
@@ -1530,7 +1530,7 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     process_deferred_frees();
 
     unified_cache_key key{ type, key_id, layer_id, expert_id };
@@ -1750,8 +1750,39 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     }
 
     const unified_cache_key key{ request.type, request.key, request.layer_id, request.expert_id };
+
+    // Fast path: try read-only lookup first to avoid mutex contention
+    // This uses shared_lock internally, allowing concurrent readers
+    if (!ggml_sycl_graph_recording_active()) {
+        std::shared_lock<std::shared_mutex> read_lock(rw_mutex_);
+        auto id_it = id_to_key_.find(request.key);
+        if (id_it != id_to_key_.end()) {
+            auto entry_it = entries_.find(id_it->second);
+            if (entry_it != entries_.end()) {
+                const auto & entry = entry_it->second;
+                // Fast path: entry exists, is READY, and layout matches
+                if (entry.state == cache_entry_state::READY &&
+                    entry.layout == request.layout &&
+                    entry.size == request.dst_size &&
+                    !onednn_pack_m_mismatch(entry, request)) {
+                    // Update hit count atomically (acceptable perf tradeoff vs full LRU update)
+                    hits_++;
+                    result.device_ptr    = entry.device_ptr;
+                    result.size          = entry.size;
+                    result.status        = cache_layout_status::READY;
+                    result.host_resident = entry.host_resident;
+                    result.location      = entry.location;
+                    result.onednn_pack_m = entry.onednn_pack_m;
+                    result.event         = submit_barrier(deps);
+                    return result;
+                }
+            }
+        }
+    }
+    // Fall through to slow path with exclusive lock
+
     if (ggml_sycl_graph_recording_active()) {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end() && it->second.state == cache_entry_state::READY &&
             it->second.size == request.dst_size) {
@@ -1816,7 +1847,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             return false;
         }
         {
-            std::lock_guard<std::mutex> lock(mutex_);
+            std::unique_lock<std::shared_mutex> lock(rw_mutex_);
             auto                        it = entries_.find(key);
             if (it != entries_.end()) {
                 if (!it->second.host_resident && it->second.device_ptr) {
@@ -1905,7 +1936,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     bool   needs_fill = false;
 
     {
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         process_deferred_frees();
 
         auto it = entries_.find(key);
@@ -2378,7 +2409,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 std::abort();
             }
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end()) {
             // Mark entry as FAILED instead of deleting it immediately.
@@ -2414,7 +2445,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         if (try_host_fallback("std_fill")) {
             return result;
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end()) {
             it->second.state           = cache_entry_state::FAILED;
@@ -2442,7 +2473,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         if (try_host_fallback("unknown_fill")) {
             return result;
         }
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end()) {
             it->second.state           = cache_entry_state::FAILED;
@@ -2471,7 +2502,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     // We avoid returning events because Level Zero driver has issues with event handling
     // that can cause crashes when events are waited on multiple times or in certain patterns.
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end()) {
             it->second.has_ready_event = false;
@@ -2493,7 +2524,7 @@ bool unified_cache::is_cached(const ggml_sycl_cache_id & key_id, ggml_layout_mod
     if (!key_id.valid) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return false;
@@ -2512,7 +2543,7 @@ bool unified_cache::is_cached_any(const ggml_sycl_cache_id & key_id) const {
     if (!key_id.valid) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return false;
@@ -2524,7 +2555,7 @@ void * unified_cache::get(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
     if (!key_id.valid) {
         return nullptr;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return nullptr;
@@ -2555,12 +2586,35 @@ void * unified_cache::get(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
     return entry.device_ptr;
 }
 
+void * unified_cache::try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
+    if (!key_id.valid) {
+        return nullptr;
+    }
+    std::shared_lock<std::shared_mutex> lock(rw_mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return nullptr;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return nullptr;
+    }
+    const auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return nullptr;
+    }
+    if (entry.state != cache_entry_state::READY) {
+        return nullptr;
+    }
+    return entry.device_ptr;
+}
+
 void * unified_cache::get_or_wait(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
     if (!key_id.valid) {
         return nullptr;
     }
 
-    std::unique_lock<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return nullptr;
@@ -2640,7 +2694,7 @@ void * unified_cache::get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layou
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
     // Search all entries for one that matches by source pointer and size.
     // This is O(N) but only used as a fallback during graph recording when
@@ -2670,7 +2724,7 @@ cache_ptr_view unified_cache::get_view(const ggml_sycl_cache_id & key_id, ggml_l
     if (!key_id.valid) {
         return view;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return view;
@@ -2711,7 +2765,7 @@ void unified_cache::remove(const ggml_sycl_cache_id & key_id,
     if (!key_id.valid) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     process_deferred_frees();
     unified_cache_key key{ type, key_id, layer_id, expert_id };
 
@@ -2749,7 +2803,7 @@ void unified_cache::pin(const ggml_sycl_cache_id & key_id, ggml_layout_mode layo
     if (!key_id.valid) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return;
@@ -2779,7 +2833,7 @@ void unified_cache::unpin(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
     if (!key_id.valid) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return;
@@ -2806,7 +2860,7 @@ void unified_cache::unpin(const ggml_sycl_cache_id & key_id, ggml_layout_mode la
 }
 
 void unified_cache::unpin_experts() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     for (auto & pair : entries_) {
         if (pair.second.type == cache_entry_type::MOE_EXPERT) {
             pair.second.pinned = false;
@@ -2815,7 +2869,7 @@ void unified_cache::unpin_experts() {
 }
 
 void unified_cache::unpin_all() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     for (auto & pair : entries_) {
         pair.second.pinned = false;
     }
@@ -2825,7 +2879,7 @@ bool unified_cache::is_pinned(const ggml_sycl_cache_id & key_id, ggml_layout_mod
     if (!key_id.valid) {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     auto id_it = id_to_key_.find(key_id);
     if (id_it == id_to_key_.end()) {
         return false;
@@ -2849,7 +2903,7 @@ bool unified_cache::is_pinned(const ggml_sycl_cache_id & key_id, ggml_layout_mod
 }
 
 size_t unified_cache::evict(size_t bytes_needed) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     process_deferred_frees();
 
     size_t freed = 0;
@@ -3315,7 +3369,7 @@ void unified_cache::process_deferred_frees() {
 }
 
 size_t unified_cache::dense_count() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     size_t                      count = 0;
     for (const auto & pair : entries_) {
         if (pair.second.type == cache_entry_type::DENSE_WEIGHT) {
@@ -3326,7 +3380,7 @@ size_t unified_cache::dense_count() const {
 }
 
 size_t unified_cache::expert_count() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     size_t                      count = 0;
     for (const auto & pair : entries_) {
         if (pair.second.type == cache_entry_type::MOE_EXPERT) {
@@ -3337,7 +3391,7 @@ size_t unified_cache::expert_count() const {
 }
 
 size_t unified_cache::used_bytes(cache_entry_type type) const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     size_t                      total = 0;
     for (const auto & pair : entries_) {
         if (pair.second.type == type) {
@@ -3348,7 +3402,7 @@ size_t unified_cache::used_bytes(cache_entry_type type) const {
 }
 
 void unified_cache::print_stats() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
 
     size_t total = hits_.load() + misses_.load();
     float  rate  = total > 0 ? 100.0f * hits_.load() / total : 0.0f;
@@ -3396,7 +3450,7 @@ void unified_cache::reset_stats() {
 }
 
 bool unified_cache::validate() const {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     bool                        ok = true;
 
     for (const auto & pair : entries_) {
@@ -3435,7 +3489,7 @@ bool unified_cache::validate() const {
 void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
     size_t effective_budget = 0;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(rw_mutex_);
         reserved_ = reserved_bytes;
         if (reserved_ >= base_budget_) {
             budget_ = 0;
@@ -3468,7 +3522,7 @@ void unified_cache::unpin_on_event(const ggml_sycl_cache_id & key_id,
     if (!key_id.valid) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     inflight_unpin_entry        entry{};
     entry.key       = key_id;
     entry.layout    = layout;
@@ -3711,7 +3765,7 @@ void unified_cache::set_hot(const ggml_sycl_cache_id & key_id,
     if (!key_id.valid) {
         return;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     unified_cache_key           key{ type, key_id, layer_id, expert_id };
     auto                        it = entries_.find(key);
     if (it != entries_.end()) {
@@ -3731,7 +3785,7 @@ void unified_cache::set_hot(const ggml_sycl_cache_id & key_id,
 }
 
 void unified_cache::clear_hot_experts(int layer_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     for (auto & pair : entries_) {
         if (pair.second.type == cache_entry_type::MOE_EXPERT && pair.second.layer_id == layer_id) {
             pair.second.hot = false;

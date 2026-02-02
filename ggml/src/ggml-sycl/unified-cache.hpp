@@ -20,6 +20,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -511,6 +512,11 @@ class unified_cache {
     // This prevents returning mmap'd pointers when cache fill is in flight.
     void * get_or_wait(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
+    // Fast path for cache lookup using shared_lock (reader-writer lock).
+    // Returns device_ptr if entry exists, is READY, and layout matches.
+    // Otherwise returns nullptr. Does not update LRU/LFU stats.
+    void * try_get_cached_fast(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout);
+
     // Fallback lookup by data pointer (aux_id) when primary key lookup fails.
     // Used during graph recording to find entries with aliased tensor names.
     // Only searches entries where src_ptr matches the given data_ptr.
@@ -714,8 +720,8 @@ class unified_cache {
 
     static constexpr float DECAY_ALPHA = 0.01f;
 
-    mutable std::mutex              mutex_;
-    mutable std::condition_variable entry_cv_;
+    mutable std::shared_mutex       rw_mutex_;
+    mutable std::condition_variable_any entry_cv_;
 };
 
 // === Cache Mode ===
