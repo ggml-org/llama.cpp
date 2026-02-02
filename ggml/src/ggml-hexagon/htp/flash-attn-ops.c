@@ -405,7 +405,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     HVX_Vector m_vals_f32 = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(m_vals_f32_pair));
 
                     HVX_Vector add_val = Q6_Vqf32_vmpy_VsfVsf(m_vals_f32, slope_vec);
-                    scores = Q6_Vqf32_vadd_VsfVsf(scores, Q6_Vsf_equals_Vqf32(add_val));
+                    scores = Q6_Vqf32_vadd_Vqf32Vsf(add_val, scores);
                     scores = Q6_Vsf_equals_Vqf32(scores);
                 }
 
