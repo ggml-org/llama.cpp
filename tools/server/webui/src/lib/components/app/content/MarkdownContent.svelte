@@ -316,6 +316,11 @@
 	 * @param markdown - The raw markdown string to process
 	 */
 	async function processMarkdown(markdown: string) {
+		// Early exit if content unchanged (can happen with rapid coalescing)
+		if (markdown === previousContent) {
+			return;
+		}
+
 		if (!markdown) {
 			renderedBlocks = [];
 			unstableBlockHtml = '';
@@ -513,8 +518,8 @@
 
 				await processMarkdown(nextMarkdown);
 
-				// Yield to browser for paint before processing next batch
-				// This prevents UI freeze at high token rates (250+ tok/s)
+				// Yield to browser for paint. During this, new chunks coalesce
+				// into pendingMarkdown, so we always render the latest state.
 				if (pendingMarkdown !== null) {
 					await new Promise((resolve) => requestAnimationFrame(resolve));
 				}
