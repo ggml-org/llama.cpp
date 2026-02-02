@@ -65,7 +65,7 @@
 
 		<Button
 			class="w-full justify-between hover:[&>kbd]:opacity-100"
-			href="#/notebook"
+			href="/#/notebook"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>
