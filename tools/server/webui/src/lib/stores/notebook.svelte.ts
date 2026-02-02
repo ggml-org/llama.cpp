@@ -18,9 +18,14 @@ export class NotebookStore {
 		contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 	} | null>(null);
 
+	previousContent = $state<string | null>(null);
+	undoneContent = $state<string | null>(null);
+
 	async generate(model?: string) {
 		if (this.isGenerating) return;
 
+		this.previousContent = this.content;
+		this.undoneContent = null;
 		this.isGenerating = true;
 		this.abortController = new AbortController();
 		this.error = null;
@@ -88,6 +93,27 @@ export class NotebookStore {
 
 	dismissError() {
 		this.error = null;
+	}
+
+	undo() {
+		if (this.previousContent !== null) {
+			this.undoneContent = this.content;
+			this.content = this.previousContent;
+			this.previousContent = null;
+		}
+	}
+
+	redo() {
+		if (this.undoneContent !== null) {
+			this.previousContent = this.content;
+			this.content = this.undoneContent;
+			this.undoneContent = null;
+		}
+	}
+
+	resetUndoRedo() {
+		this.previousContent = null;
+		this.undoneContent = null;
 	}
 
 	stop() {

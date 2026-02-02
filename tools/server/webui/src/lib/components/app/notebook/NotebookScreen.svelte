@@ -2,7 +2,7 @@
 	import { notebookStore } from '$lib/stores/notebook.svelte';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
-	import { Play, Square, Settings } from '@lucide/svelte';
+	import { Play, Square, Settings, Undo, Redo } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
 	import { ModelsSelector, ChatMessageStatistics, DialogChatError } from '$lib/components/app';
@@ -35,6 +35,8 @@
 	let isRouter = $derived(isRouterMode());
 
 	let errorDialog = $derived(notebookStore.error);
+	let canUndo = $derived(notebookStore.previousContent !== null && !notebookStore.isGenerating);
+	let canRedo = $derived(notebookStore.undoneContent !== null && !notebookStore.isGenerating);
 
 	// Sync local input with store content
 	$effect(() => {
@@ -44,6 +46,7 @@
 	function handleInput(e: Event) {
 		const target = e.target as HTMLTextAreaElement;
 		notebookStore.content = target.value;
+		notebookStore.resetUndoRedo();
 	}
 
 	function handleErrorDialogOpenChange(open: boolean) {
@@ -65,6 +68,13 @@
 		await notebookStore.generate(notebookModel);
 	}
 
+	function handleUndo() {
+		notebookStore.undo();
+	}
+
+	function handleRedo() {
+		notebookStore.redo();
+	}
 
 	function handleStop() {
 		notebookStore.stop();
@@ -223,13 +233,45 @@
 	<div class="bg-background p-2 md:p-4">
 		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">
 			<div class="flex items-center gap-2">
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<Button
+							variant="ghost"
+							size="icon"
+							disabled={!canUndo}
+							onclick={handleUndo}
+						>
+							<Undo class="h-4 w-4" />
+						</Button>
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Undo last generation</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<Button
+							variant="ghost"
+							size="icon"
+							disabled={!canRedo}
+							onclick={handleRedo}
+						>
+							<Redo class="h-4 w-4" />
+						</Button>
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Redo last generation</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+
 				{#snippet generateButton(props = {})}
 					<Button
 						disabled={isDisabled}
 						onclick={notebookStore.isGenerating ? handleStop : handleGenerate}
 						size="sm"
 						variant={notebookStore.isGenerating ? 'destructive' : 'default'}
-						class="gap-2"
+						class="gap-2 min-w-[120px]"
 					>
 						{#if notebookStore.isGenerating}
 							<Square class="h-4 w-4 fill-current" />
