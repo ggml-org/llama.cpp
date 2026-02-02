@@ -70,7 +70,7 @@ export { default as McpServersSettings } from './McpServersSettings.svelte';
 export { default as McpActiveServersAvatars } from './McpActiveServersAvatars.svelte';
 
 /**
- * **McpServerSelector** - Quick MCP server toggle dropdown
+ * **McpServersSelector** - Quick MCP server toggle dropdown
  *
  * Compact dropdown for quickly enabling/disabling MCP servers for the current chat.
  * Uses McpActiveServersAvatars as trigger and shows searchable server list with switches.
@@ -89,12 +89,12 @@ export { default as McpActiveServersAvatars } from './McpActiveServersAvatars.sv
  *
  * @example
  * ```svelte
- * <McpServerSelector
+ * <McpServersSelector
  *   onSettingsClick={() => showMcpSettings = true}
  * />
  * ```
  */
-export { default as McpServerSelector } from './McpServerSelector.svelte';
+export { default as McpServersSelector } from './McpServersSelector.svelte';
 
 /**
  * **McpCapabilitiesBadges** - Server capabilities display

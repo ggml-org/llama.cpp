@@ -6,7 +6,7 @@
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		DialogMcpServersSettings,
-		McpServerSelector,
+		McpServersSelector,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -191,7 +191,7 @@
 			onMcpServersClick={() => (showMcpDialog = true)}
 		/>
 
-		<McpServerSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
+		<McpServersSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
