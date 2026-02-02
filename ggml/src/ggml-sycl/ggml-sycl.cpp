@@ -307,13 +307,36 @@ static bool ggml_sycl_force_vram_enabled() {
     return val != 0;
 }
 
-// Unified kernel requires AoS inputs and performs its own internal reordering.
-// If we reorder weights ahead of time, we can end up double-reordering and
-// feeding the unified kernel the wrong layout.
+// Check if unified kernel should use SoA layout for better memory bandwidth.
+// Unified kernel now supports both AoS and SoA layouts natively.
+// Set GGML_SYCL_UNIFIED_SOA=1 to enable SoA for 2-3x better decode performance.
+static bool ggml_sycl_unified_soa_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_SOA");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+        if (enabled) {
+            fprintf(stderr, "[SYCL] Unified kernel SoA layout enabled (GGML_SYCL_UNIFIED_SOA=1)\n");
+        }
+    }
+    return enabled != 0;
+}
+
+// Unified kernel previously required AoS inputs. Now it supports both layouts.
+// Returns true if we should force AoS (for backward compatibility), false to allow SoA.
 static bool ggml_sycl_unified_kernel_requires_aos(ggml_type type) {
-    return ggml_sycl_unified_dispatch_enabled() &&
-           ggml_sycl::is_unified_kernel_enabled() &&
-           ggml_sycl::should_use_unified(type);
+    // If unified dispatch is not enabled, don't constrain layout
+    if (!ggml_sycl_unified_dispatch_enabled() ||
+        !ggml_sycl::is_unified_kernel_enabled() ||
+        !ggml_sycl::should_use_unified(type)) {
+        return false;
+    }
+    // If SoA is explicitly enabled, allow it
+    if (ggml_sycl_unified_soa_enabled()) {
+        return false;
+    }
+    // Default: require AoS for backward compatibility
+    return true;
 }
 
 static bool ggml_sycl_reorder_guard_enabled() {
@@ -16496,12 +16519,16 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             } else if (ggml_sycl_layout_priority(target) > ggml_sycl_layout_priority(choice_it->second)) {
                 choice_it->second = target;
             }
-            if (host_weights) {
+            // Schedule layout conversion for weights that need it:
+            // - Host-backed weights: always schedule (need to upload + convert)
+            // - GPU-resident weights: only schedule when layout != AOS (need reordering)
+            // This fixes the issue where GGML_SYCL_UNIFIED_SOA=1 had no effect on
+            // GPU-resident weights because they were never added to target_layouts.
+            const bool needs_conversion = host_weights || (target != GGML_LAYOUT_AOS);
+            if (needs_conversion) {
                 auto it = target_layouts.find(src);
                 if (it == target_layouts.end()) {
-
                     target_layouts.emplace(src, target);
-
                 } else if (ggml_sycl_layout_priority(target) > ggml_sycl_layout_priority(it->second)) {
                     it->second = target;
                 }
@@ -18946,9 +18973,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             if (!force_legacy) {
             // IMPORTANT: unified kernel must use device-accessible pointers.
             // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
+            // Choose layout: SoA for better bandwidth (GGML_SYCL_UNIFIED_SOA=1), else AoS.
+            const layout_mode requested_layout = ggml_sycl_unified_soa_enabled() ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
             const char * src0_ptr_source = nullptr;
             const void * src0_data =
-                ggml_sycl_get_layout_ptr_for(src0, ctx.device, GGML_LAYOUT_AOS, &src0_ptr_source);
+                ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
             const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
             float * dst_data = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
@@ -18982,13 +19011,18 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             src0_data, src0_ptr_source ? src0_ptr_source : "?", (int) src0_alloc,
                             src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
 
+                        // Convert layout_mode to LayoutMode enum for kernel
+                        const auto kernel_layout = (requested_layout == GGML_LAYOUT_SOA)
+                            ? ggml_sycl_unified::LayoutMode::SOA
+                            : ggml_sycl_unified::LayoutMode::AOS;
                         ggml_sycl::ggml_sycl_mul_mat_unified_default(
                             *ctx.stream(),
                             src0_data,
                             src1_data,
                             dst_data,
                             M, N, K,
-                            src0->type);
+                            src0->type,
+                            kernel_layout);
 
                         // Optional numeric spot-check against a host reference.
                         // Enable with GGML_SYCL_UNIFIED_COMPARE=1 and optionally

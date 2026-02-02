@@ -603,13 +603,21 @@ struct layout_policy {
         // Unified kernel requires AoS layout for supported types (Q4_0 today).
         // It performs reordering internally, so pre-reordering here would
         // double-transform the weights and corrupt results.
+        // However, GGML_SYCL_UNIFIED_SOA=1 allows pre-reordering for DMMV SoA path.
         static int unified_dispatch_enabled = -1;
+        static int unified_soa_enabled = -1;
         if (unified_dispatch_enabled < 0) {
             const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
             // Default unified dispatch to ON unless explicitly disabled.
             unified_dispatch_enabled = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
         }
-        if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0) {
+        if (unified_soa_enabled < 0) {
+            const char * env = std::getenv("GGML_SYCL_UNIFIED_SOA");
+            unified_soa_enabled = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+        }
+        // When GGML_SYCL_UNIFIED_SOA=1, allow SoA layout for Q4_0 to enable
+        // the DMMV SoA kernel path which has better memory bandwidth.
+        if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0 && !unified_soa_enabled) {
             return GGML_LAYOUT_AOS;
         }
         return get_optimal(qtype, usage, device_id);
