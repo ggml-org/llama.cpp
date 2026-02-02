@@ -1537,20 +1537,12 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         }
     }
 
-    // Check if warmup should be skipped for SYCL tiered mode
-    // During warmup, n_expert_used is set to n_expert (ALL experts) which causes
-    // memory exhaustion for large MoE models (128 experts) in tiered mode.
-    // Skip warmup ONLY if model actually exceeds VRAM - otherwise warmup is
-    // beneficial for JIT compilation and buffer pre-allocation.
-    bool skip_warmup_tiered = false;
-#if defined(GGML_USE_SYCL)
-    if (params.warmup && ggml_backend_sycl_model_exceeds_vram(nullptr)) {
-        LOG_WRN("%s: skipping warmup for SYCL tiered mode (model > VRAM, weights streamed from host)\n", __func__);
-        skip_warmup_tiered = true;
-    }
-#endif
+    // Note: SYCL tiered mode warmup is now handled in llama-graph.cpp by using
+    // n_expert_used instead of n_expert when model exceeds VRAM. This prevents
+    // OOM from trying to stage all 128 experts simultaneously while still allowing
+    // JIT compilation during warmup.
 
-    if (params.warmup && !skip_warmup_tiered) {
+    if (params.warmup) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
         llama_set_warmup(lctx, true);

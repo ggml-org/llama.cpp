@@ -778,7 +778,14 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_embd_head_v    (hparams.n_embd_head_v),
     n_embd_v_gqa     (tp_local_n_embd_v_gqa(params)),
     n_expert         (hparams.n_expert),
+    // During warmup, use all experts to ensure JIT compilation of all code paths.
+    // Exception: when model exceeds VRAM (tiered mode), using all experts would cause
+    // OOM trying to stage 128+ experts simultaneously. Use normal n_expert_used instead.
+#ifdef GGML_USE_SYCL
+    n_expert_used    ((cparams.warmup && !ggml_backend_sycl_model_exceeds_vram(nullptr)) ? hparams.n_expert : hparams.n_expert_used),
+#else
     n_expert_used    (cparams.warmup ? hparams.n_expert : hparams.n_expert_used),
+#endif
     freq_base        (cparams.rope_freq_base),
     freq_scale       (cparams.rope_freq_scale),
     ext_factor       (cparams.yarn_ext_factor),
