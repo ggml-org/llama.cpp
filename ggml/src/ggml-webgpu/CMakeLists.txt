@@ -28,37 +28,13 @@ add_custom_command(
 
 add_custom_target(generate_shaders DEPENDS ${SHADER_HEADER})
 
-# Build the binary shader generator tool (uses pre_wgsl to preprocess binary.wgsl)
-set(BINARY_SHADER_HEADER "${SHADER_OUTPUT_DIR}/ggml-wgsl-binary-shaders.hpp")
-
-add_executable(gen_binary_shaders ${CMAKE_CURRENT_SOURCE_DIR}/gen_binary_shaders.cpp)
-target_include_directories(gen_binary_shaders PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-set_target_properties(gen_binary_shaders PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-add_custom_command(
-    OUTPUT ${BINARY_SHADER_HEADER}
-    COMMAND ${CMAKE_COMMAND} -E echo "Generating binary op shaders via pre_wgsl"
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
-    COMMAND gen_binary_shaders
-        "${SHADER_DIR}/binary.wgsl"
-        "${BINARY_SHADER_HEADER}"
-    DEPENDS gen_binary_shaders ${SHADER_DIR}/binary.wgsl
-    VERBATIM
-)
-
-add_custom_target(generate_binary_shaders DEPENDS ${BINARY_SHADER_HEADER})
-
 ggml_add_backend_library(ggml-webgpu
     ggml-webgpu.cpp
     ${SHADER_HEADER}
-    ${BINARY_SHADER_HEADER}
     ../../include/ggml-webgpu.h
 )
 
-add_dependencies(ggml-webgpu generate_shaders generate_binary_shaders)
+add_dependencies(ggml-webgpu generate_shaders)
 
 if(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")

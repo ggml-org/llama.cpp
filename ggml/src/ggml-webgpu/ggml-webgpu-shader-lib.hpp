@@ -465,4 +465,83 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_unary_shader(
     return result;
 }
 
+/** Binary **/
+
+struct ggml_webgpu_binary_pipeline_key {
+    int  type;
+    int  op;
+    bool inplace;
+    bool overlap;
+    bool overlap_src1_dst;
+
+    bool operator==(const ggml_webgpu_binary_pipeline_key & other) const {
+        return type == other.type && op == other.op && inplace == other.inplace && overlap == other.overlap &&
+               overlap_src1_dst == other.overlap_src1_dst;
+    }
+};
+
+struct ggml_webgpu_binary_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_binary_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        ggml_webgpu_hash_combine(seed, key.overlap);
+        ggml_webgpu_hash_combine(seed, key.overlap_src1_dst);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_binary_shader_lib_context {
+    ggml_webgpu_binary_pipeline_key key;
+    uint32_t                        max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_binary_shader(
+    pre_wgsl::Preprocessor &                      preprocessor,
+    const char *                                  shader_src,
+    const ggml_webgpu_binary_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              op_name = ggml_op_name((ggml_op) context.key.op);
+    std::string              variant = op_name;
+
+    defines.push_back(std::string("OP_") + op_name);
+
+    switch (context.key.type) {
+        case GGML_TYPE_F32:
+            defines.push_back("TYPE_F32");
+            variant += "_f32";
+            break;
+        case GGML_TYPE_F16:
+            defines.push_back("TYPE_F16");
+            variant += "_f16";
+            break;
+        default:
+            GGML_ABORT("Unsupported type for binary shader");
+    }
+
+    if (context.key.inplace && context.key.overlap) {
+        defines.push_back("INPLACE");
+        defines.push_back("OVERLAP");
+        variant += "_all";
+    } else if (context.key.inplace) {
+        defines.push_back("INPLACE");
+        variant += "_inplace";
+    } else if (context.key.overlap) {
+        defines.push_back("OVERLAP");
+        variant += "_overlap";
+    } else if (context.key.overlap_src1_dst) {
+        defines.push_back("SRC1_DST");
+        variant += "_src1dst";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+    ggml_webgpu_processed_shader result;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
+    ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
+    decisions->wg_size                               = context.max_wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP

@@ -56,10 +56,28 @@ fn src1_index(_i: u32) -> u32 {
 @group(0) @binding(0)
 var<storage, read_write> src0: array<DataType>;
 
+#if defined(INPLACE) && defined(OVERLAP)
+
+fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
+#ifdef OP_ADD
+    src0[dst_i] = src0[src0_i] + src0[src1_i];
+#elif defined(OP_SUB)
+    src0[dst_i] = src0[src0_i] - src0[src1_i];
+#elif defined(OP_MUL)
+    src0[dst_i] = src0[src0_i] * src0[src1_i];
+#elif defined(OP_DIV)
+    src0[dst_i] = src0[src0_i] / src0[src1_i];
+#endif
+}
+
+@group(0) @binding(1)
+var<uniform> params: Params;
+
+
+#elif defined(INPLACE)
+
 @group(0) @binding(1)
 var<storage, read_write> src1: array<DataType>;
-
-#ifdef INPLACE
 
 fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
 #ifdef OP_ADD
@@ -76,7 +94,52 @@ fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
 @group(0) @binding(2)
 var<uniform> params: Params;
 
+#elif defined(OVERLAP)
+
+@group(0) @binding(1)
+var<storage, read_write> dst: array<DataType>;
+
+fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
+#ifdef OP_ADD
+    dst[dst_i] = src0[src0_i] + src0[src1_i];
+#elif defined(OP_SUB)
+    dst[dst_i] = src0[src0_i] - src0[src1_i];
+#elif defined(OP_MUL)
+    dst[dst_i] = src0[src0_i] * src0[src1_i];
+#elif defined(OP_DIV)
+    dst[dst_i] = src0[src0_i] / src0[src1_i];
+#endif
+}
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+#elif defined(SRC1_DST)
+
+@group(0) @binding(1)
+var<storage, read_write> src1: array<DataType>;
+
+fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
+#ifdef OP_ADD
+    src1[dst_i] = src0[src0_i] + src1[src1_i];
+#elif defined(OP_SUB)
+    src1[dst_i] = src0[src0_i] - src1[src1_i];
+#elif defined(OP_MUL)
+    src1[dst_i] = src0[src0_i] * src1[src1_i];
+#elif defined(OP_DIV)
+    src1[dst_i] = src0[src0_i] / src1[src1_i];
+#endif
+}
+
+@group(0) @binding(2)
+var<uniform> params: Params;
 #else
+
+@group(0) @binding(1)
+var<storage, read_write> src1: array<DataType>;
+
+@group(0) @binding(2)
+var<storage, read_write> dst: array<DataType>;
 
 fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
 #ifdef OP_ADD
@@ -90,16 +153,12 @@ fn update(dst_i: u32, src0_i: u32, src1_i: u32) {
 #endif
 }
 
-@group(0) @binding(2)
-var<storage, read_write> dst: array<DataType>;
-
 @group(0) @binding(3)
 var<uniform> params: Params;
 
 #endif
 
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x < params.ne) {
         update(params.offset_dst + gid.x, params.offset_src0 + gid.x, params.offset_src1 + src1_index(gid.x));
