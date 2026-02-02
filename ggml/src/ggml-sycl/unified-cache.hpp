@@ -843,4 +843,15 @@ void shutdown_unified_cache();
 
 }  // namespace ggml_sycl
 
+// === Cross-module Budget Recalculation ===
+// These functions are defined in ggml-sycl.cpp but called from unified-cache.cpp
+// to recalculate model placement decisions when VRAM budget changes.
+
+// Recalculate g_model_exceeds_vram based on current effective budget.
+// Called when runtime reservations (KV cache, compute buffers) change.
+void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget);
+
+// Get the total model size from tensor inventory (for budget calculations)
+size_t ggml_sycl_get_model_size();
+
 #endif  // GGML_SYCL_UNIFIED_CACHE_HPP

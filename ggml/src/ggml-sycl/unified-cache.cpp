@@ -3433,26 +3433,33 @@ bool unified_cache::validate() const {
 }
 
 void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    reserved_ = reserved_bytes;
-    if (reserved_ >= base_budget_) {
-        budget_ = 0;
-        GGML_LOG_INFO("[UNIFIED-CACHE] Reserve %.1f MB >= base budget %.1f MB; cache budget now 0 (used %.1f MB)\n",
-                      reserved_ / (1024.0f * 1024.0f), base_budget_ / (1024.0f * 1024.0f),
-                      used_.load() / (1024.0f * 1024.0f));
-    } else {
-        budget_ = base_budget_ - reserved_;
-    }
-    while (used_.load() > budget_ && !entries_.empty()) {
-        if (evict_one(0) == 0) {
-            break;
+    size_t effective_budget = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        reserved_ = reserved_bytes;
+        if (reserved_ >= base_budget_) {
+            budget_ = 0;
+            GGML_LOG_INFO("[UNIFIED-CACHE] Reserve %.1f MB >= base budget %.1f MB; cache budget now 0 (used %.1f MB)\n",
+                          reserved_ / (1024.0f * 1024.0f), base_budget_ / (1024.0f * 1024.0f),
+                          used_.load() / (1024.0f * 1024.0f));
+        } else {
+            budget_ = base_budget_ - reserved_;
+        }
+        effective_budget = budget_;
+        while (used_.load() > budget_ && !entries_.empty()) {
+            if (evict_one(0) == 0) {
+                break;
+            }
+        }
+        const size_t used = used_.load();
+        if (used > budget_) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cache usage (%.1f MB) exceeds budget (%.1f MB) after reserving %.1f MB\n",
+                          used / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f), reserved_ / (1024.0f * 1024.0f));
         }
     }
-    const size_t used = used_.load();
-    if (used > budget_) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cache usage (%.1f MB) exceeds budget (%.1f MB) after reserving %.1f MB\n",
-                      used / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f), reserved_ / (1024.0f * 1024.0f));
-    }
+    // Recalculate model placement decision based on new effective budget.
+    // This ensures g_model_exceeds_vram reflects actual available VRAM after KV cache allocation.
+    ggml_sycl_recalc_model_exceeds_vram(effective_budget);
 }
 
 void unified_cache::unpin_on_event(const ggml_sycl_cache_id & key_id,

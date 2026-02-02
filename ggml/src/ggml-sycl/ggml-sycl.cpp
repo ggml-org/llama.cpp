@@ -2095,6 +2095,35 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                   g_tensor_inventory.size(), g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
                   free_mem / (1024.0 * 1024.0 * 1024.0), g_tiered_enabled.load() ? "enabled" : "disabled");
 }
+
+// Recalculate g_model_exceeds_vram based on current effective budget.
+// Called when runtime reservations (KV cache, compute buffers) change the available VRAM.
+// This ensures the model placement decision reflects actual available memory.
+void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
+    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+    if (g_tensor_inventory_total_size == 0) {
+        // No inventory set yet, nothing to recalculate
+        return;
+    }
+    const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
+    const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
+    if (old_exceeds != new_exceeds) {
+        g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
+        GGML_LOG_INFO("[SYCL-BUDGET] Recalculated g_model_exceeds_vram: %s -> %s "
+                      "(model=%.1f MB, effective_budget=%.1f MB)\n",
+                      old_exceeds ? "true" : "false",
+                      new_exceeds ? "true" : "false",
+                      g_tensor_inventory_total_size / (1024.0 * 1024.0),
+                      effective_budget / (1024.0 * 1024.0));
+    }
+}
+
+// Get the total model size from tensor inventory (for budget calculations)
+size_t ggml_sycl_get_model_size() {
+    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+    return g_tensor_inventory_total_size;
+}
+
 bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
     return g_tiered_enabled.load(std::memory_order_acquire);
@@ -5186,7 +5215,12 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         fprintf(stderr, "[SET_TENSOR-ERROR] reorder done but extra is NULL: %s\n", tensor->name);
     }
     // Ensure unified cache materializes the chosen layout during model load.
-    if (use_unified_cache && adjusted_layout != GGML_LAYOUT_AOS && !has_preconverted_tiled) {
+    // For non-AOS layouts: materialize to device for transformed layout benefits.
+    // For AOS layouts: DO NOT materialize eagerly here. The unified cache will
+    // handle AOS tensors on-demand during inference, checking live free memory
+    // to avoid OOM when KV cache and other buffers compete for VRAM.
+    const bool should_materialize = (adjusted_layout != GGML_LAYOUT_AOS);
+    if (use_unified_cache && should_materialize && !has_preconverted_tiled) {
         // Prefer existing layout choice if already finalized/registered.
 
         layout_mode chosen_layout = adjusted_layout;
@@ -5202,8 +5236,8 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
         void * layout_ptr = ggml_sycl_get_weight_layout_ptr(tensor, ctx->device, adjusted_layout);
         if (!layout_ptr) {
+            // Non-AOS layout failed to materialize - warn since these provide performance benefits
             GGML_LOG_WARN("[UNIFIED-CACHE] Failed to materialize layout=%d for %s during set_tensor\n",
-
                           (int) adjusted_layout, tensor->name ? tensor->name : "unknown");
         }
     }
