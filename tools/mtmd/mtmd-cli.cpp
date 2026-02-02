@@ -291,6 +291,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // Initialize console for advanced input (arrow keys, history, etc.)
+    console::init(params.simple_io, params.use_color);
+    atexit([]() { console::cleanup(); });
+
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
