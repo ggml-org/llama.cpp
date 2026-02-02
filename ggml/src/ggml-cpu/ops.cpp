@@ -8566,30 +8566,30 @@ static void ggml_flash_attn_ext_reduce_partials(
     const ggml_tensor * k = dst->src[1];
     const ggml_tensor * v = dst->src[2];
 
-    const int64_t DK = k->ne[0];
-    const int64_t DV = v->ne[0];
-    const int64_t nek1 = k->ne[1];
+    const int64_t DK        = k->ne[0];
+    const int64_t DV        = v->ne[0];
+    const int64_t nek1      = k->ne[1];
     const int64_t n_q_heads = q->ne[2];
 
     const int ith = params->ith;
     const int nth = params->nth;
 
     const int64_t wdata_per_thread = DK + 2*DV + CACHE_LINE_SIZE_F32;
-    float * thread_wdata = (float *) params->wdata + ith * wdata_per_thread;
+    float *       thread_wdata     = (float *) params->wdata + ith * wdata_per_thread;
 
-    const int64_t partials_offset = nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
-    const int64_t partial_size = 2 + DV;
-    const float * partials_base = (const float *) params->wdata + partials_offset;
+    const int64_t partials_offset  = nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
+    const int64_t partial_size     = 2 + DV;
+    const float * partials_base    = (const float *) params->wdata + partials_offset;
 
     // Output layout
     const int64_t ne1 = dst->ne[1];
     const int64_t ne2 = dst->ne[2];
-    const size_t nb1 = dst->nb[1];
+    const size_t  nb1 = dst->nb[1];
 
     // Each thread reduces a subset of query heads
     for (int64_t q_head = ith; q_head < n_q_heads; q_head += nth) {
-        float M_final = -INFINITY;
-        float S_final = 0.0f;
+        float   M_final   = -INFINITY;
+        float   S_final   = 0.0f;
         float * VKQ_final = thread_wdata;
         memset(VKQ_final, 0, DV * sizeof(float));
 
@@ -8598,14 +8598,14 @@ static void ggml_flash_attn_ext_reduce_partials(
             const int64_t ic_start = chunk_idx * chunk_size;
             if (ic_start >= nek1) continue;
 
-            const float * partial = partials_base + (q_head * n_chunks + chunk_idx) * partial_size;
-            const float M_chunk = partial[0];
-            const float S_chunk = partial[1];
+            const float * partial   = partials_base + (q_head * n_chunks + chunk_idx) * partial_size;
+            const float   M_chunk   = partial[0];
+            const float   S_chunk   = partial[1];
             const float * VKQ_chunk = partial + 2;
 
             if (S_chunk == 0.0f) continue;
 
-            const float M_new = fmaxf(M_final, M_chunk);
+            const float M_new     = fmaxf(M_final, M_chunk);
             const float scale_old = expf(M_final - M_new);
             const float scale_new = expf(M_chunk - M_new);
 
@@ -8671,21 +8671,24 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    // When use_ref is set, force the vec-only reference implementation (no tiling, no KV-chunking)
+    const bool use_ref = params->use_ref;
+
     const bool kv_is_f32_or_f16 = (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
-    const bool use_split_kv_path = (neq1 == 1 && neq3 == 1) && kv_is_f32_or_f16 && (k->type == v->type) && q->type == GGML_TYPE_F32 && nek1 >= 512;
+    const bool use_split_kv_path = !use_ref && (neq1 == 1 && neq3 == 1) && kv_is_f32_or_f16 && (k->type == v->type) && q->type == GGML_TYPE_F32 && nek1 >= 512;
 
     if (use_split_kv_path) {
         const int64_t chunk_size = (nek1 + nth - 1) / nth;
 
         // Partials buffer layout: [q_head][kv_chunk][M, S, VKQ]
-        const int64_t partial_size = 2 + DV;
-        float * partials_base = (float *) params->wdata + nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
+        const int64_t partial_size  = 2 + DV;
+        float *       partials_base = (float *) params->wdata + nth * (DK + 2*DV + CACHE_LINE_SIZE_F32);
 
         const int64_t ic_start = ith * chunk_size;
         const int64_t ic_end   = std::min(ic_start + chunk_size, nek1);
 
         const int64_t partial_stride = nth * partial_size;
-        float * chunk_partials       = partials_base + ith * partial_size;
+        float *       chunk_partials = partials_base + ith * partial_size;
 
         if (ic_start < nek1) {
             for (int64_t q_head = 0; q_head < neq2; q_head++) {
@@ -8730,7 +8733,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
         static constexpr int64_t KV_TILE_SZ = ggml_fa_tile_config::KV;
         static constexpr int64_t Q_TILE_SZ  = ggml_fa_tile_config::Q;
-        const bool use_tiled = (q->type == GGML_TYPE_F32 &&
+        const bool use_tiled = !use_ref &&
+                               (q->type == GGML_TYPE_F32 &&
                                 kv_is_f32_or_f16 &&
                                 k->type == v->type &&
                                 nek1 % KV_TILE_SZ == 0 &&

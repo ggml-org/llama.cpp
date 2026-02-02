@@ -8591,6 +8591,13 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
             output_printer->print_operation(info);
             return false;
         }
+        // Use reference implementation on the CPU backend for comparison
+        using ggml_backend_cpu_set_use_ref_t = void (*)(ggml_backend_t, bool);
+        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
+        auto * set_use_ref = (ggml_backend_cpu_set_use_ref_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_use_ref");
+        if (set_use_ref) {
+            set_use_ref(backend_cpu, true);
+        }
 
         size_t n_ok = 0;
         size_t                   tests_run = 0;
