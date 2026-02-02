@@ -105,9 +105,11 @@
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
 
 		let lastAssistantIndex = -1;
+
 		for (let i = filteredMessages.length - 1; i >= 0; i--) {
 			if (filteredMessages[i].role === MessageRole.ASSISTANT) {
 				lastAssistantIndex = i;
+
 				break;
 			}
 		}

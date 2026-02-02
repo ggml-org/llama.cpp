@@ -28,6 +28,7 @@
 				{:else}
 					<ChevronRight class="h-3.5 w-3.5" />
 				{/if}
+
 				<span>Connection Log ({logs.length})</span>
 
 				{#if connectionTimeMs !== undefined}

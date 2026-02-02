@@ -1,7 +1,4 @@
 <script lang="ts">
-	/**
-	 * TruncatedText - Shows tooltip only when text is actually truncated
-	 */
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
@@ -23,9 +20,10 @@
 	$effect(() => {
 		if (textElement) {
 			checkTruncation();
-			// Re-check on resize
+
 			const observer = new ResizeObserver(checkTruncation);
 			observer.observe(textElement);
+
 			return () => observer.disconnect();
 		}
 	});
@@ -38,6 +36,7 @@
 				{text}
 			</span>
 		</Tooltip.Trigger>
+
 		<Tooltip.Content class="z-[9999]">
 			<p>{text}</p>
 		</Tooltip.Content>

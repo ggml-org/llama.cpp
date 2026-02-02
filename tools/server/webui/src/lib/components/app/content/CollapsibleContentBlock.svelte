@@ -62,7 +62,9 @@
 				{#if Icon}
 					<Icon class={iconClass} />
 				{/if}
+
 				<span class="font-mono text-sm font-medium">{title}</span>
+
 				{#if subtitle}
 					<span class="text-xs italic">{subtitle}</span>
 				{/if}
@@ -76,6 +78,7 @@
 				})}
 			>
 				<ChevronsUpDownIcon class="h-4 w-4" />
+
 				<span class="sr-only">Toggle content</span>
 			</div>
 		</Collapsible.Trigger>

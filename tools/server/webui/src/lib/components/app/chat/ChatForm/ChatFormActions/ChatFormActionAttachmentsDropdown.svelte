@@ -94,6 +94,7 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.image class="h-4 w-4" />
+
 					<span>Images</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -104,9 +105,11 @@
 							disabled
 						>
 							<FILE_TYPE_ICONS.image class="h-4 w-4" />
+
 							<span>Images</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content side="right">
 						<p>Images require vision models to be processed</p>
 					</Tooltip.Content>
@@ -119,6 +122,7 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.audio class="h-4 w-4" />
+
 					<span>Audio Files</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -126,9 +130,11 @@
 					<Tooltip.Trigger class="w-full">
 						<DropdownMenu.Item class="audio-button flex cursor-pointer items-center gap-2" disabled>
 							<FILE_TYPE_ICONS.audio class="h-4 w-4" />
+
 							<span>Audio Files</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content side="right">
 						<p>Audio files require audio models to be processed</p>
 					</Tooltip.Content>
@@ -140,6 +146,7 @@
 				onclick={() => onFileUpload?.()}
 			>
 				<FILE_TYPE_ICONS.text class="h-4 w-4" />
+
 				<span>Text Files</span>
 			</DropdownMenu.Item>
 
@@ -149,6 +156,7 @@
 					onclick={() => onFileUpload?.()}
 				>
 					<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
+
 					<span>PDF Files</span>
 				</DropdownMenu.Item>
 			{:else}
@@ -159,9 +167,11 @@
 							onclick={() => onFileUpload?.()}
 						>
 							<FILE_TYPE_ICONS.pdf class="h-4 w-4" />
+
 							<span>PDF Files</span>
 						</DropdownMenu.Item>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content side="right">
 						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>
 					</Tooltip.Content>
@@ -175,9 +185,11 @@
 						onclick={() => onSystemPromptClick?.()}
 					>
 						<MessageSquare class="h-4 w-4" />
+
 						<span>System Message</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content side="right">
 					<p>{systemMessageTooltip}</p>
 				</Tooltip.Content>

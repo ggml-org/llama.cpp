@@ -19,6 +19,7 @@
 			servers.length > 0 &&
 			servers.every((server) => {
 				const state = mcpStore.getHealthCheckState(server.id);
+
 				return state.status === 'success' || state.status === 'error';
 			});
 
@@ -55,11 +56,13 @@
 
 	function saveNewServer() {
 		if (newServerUrlError) return;
+
 		mcpStore.addServer({
 			enabled: true,
 			url: newServerUrl.trim(),
 			headers: newServerHeaders.trim() || undefined
 		});
+
 		isAddingServer = false;
 		newServerUrl = '';
 		newServerHeaders = '';
@@ -75,6 +78,7 @@
 		{#if !isAddingServer}
 			<Button variant="outline" size="sm" class="shrink-0" onclick={showAddServerForm}>
 				<Plus class="h-4 w-4" />
+
 				Add New Server
 			</Button>
 		{/if}
@@ -85,6 +89,7 @@
 			<div class="space-y-4">
 				<div class="flex items-center justify-between">
 					<p class="font-medium">Add New Server</p>
+
 					<Button
 						variant="ghost"
 						size="icon"

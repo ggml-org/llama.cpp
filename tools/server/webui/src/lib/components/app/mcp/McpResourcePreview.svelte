@@ -94,18 +94,21 @@
 	{#if !resource}
 		<div class="flex flex-col items-center justify-center gap-2 py-8 text-muted-foreground">
 			<FileText class="h-8 w-8 opacity-50" />
+
 			<span class="text-sm">Select a resource to preview</span>
 		</div>
 	{:else}
-		<!-- Header -->
 		<div class="flex items-start justify-between gap-2">
 			<div class="min-w-0 flex-1">
 				<h3 class="truncate font-medium">{resource.title || resource.name}</h3>
+
 				<p class="truncate text-xs text-muted-foreground">{resource.uri}</p>
+
 				{#if resource.description}
 					<p class="mt-1 text-sm text-muted-foreground">{resource.description}</p>
 				{/if}
 			</div>
+
 			<div class="flex gap-1">
 				<Button
 					variant="ghost"
@@ -121,6 +124,7 @@
 						<Copy class="h-3.5 w-3.5" />
 					{/if}
 				</Button>
+
 				<Button
 					variant="ghost"
 					size="sm"
@@ -134,7 +138,6 @@
 			</div>
 		</div>
 
-		<!-- Content -->
 		<div class="min-h-[200px] overflow-auto rounded-md border bg-muted/30 p-3">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
@@ -143,6 +146,7 @@
 			{:else if error}
 				<div class="flex flex-col items-center justify-center gap-2 py-8 text-red-500">
 					<AlertCircle class="h-6 w-6" />
+
 					<span class="text-sm">{error}</span>
 				</div>
 			{:else if content}
@@ -163,6 +167,7 @@
 					{:else}
 						<div class="flex items-center gap-2 rounded bg-muted p-2 text-sm text-muted-foreground">
 							<FileText class="h-4 w-4" />
+
 							<span>Binary content ({blob.mimeType || 'unknown type'})</span>
 						</div>
 					{/if}
@@ -174,17 +179,18 @@
 			{/if}
 		</div>
 
-		<!-- Metadata -->
 		{#if resource.mimeType || resource.annotations}
 			<div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
 				{#if resource.mimeType}
 					<span class="rounded bg-muted px-1.5 py-0.5">{resource.mimeType}</span>
 				{/if}
+
 				{#if resource.annotations?.priority !== undefined}
 					<span class="rounded bg-muted px-1.5 py-0.5">
 						Priority: {resource.annotations.priority}
 					</span>
 				{/if}
+
 				<span class="rounded bg-muted px-1.5 py-0.5">
 					Server: {resource.serverName}
 				</span>

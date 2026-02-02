@@ -110,14 +110,18 @@
 								}}
 							/>
 						{/if}
+
 						<span class="truncate text-sm">{getServerLabel(server)}</span>
+
 						{#if hasError}
 							<span
 								class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-								>Error</span
 							>
+								Error
+							</span>
 						{/if}
 					</div>
+
 					<Switch
 						checked={isEnabledForChat}
 						disabled={hasError}
@@ -131,6 +135,7 @@
 		{#snippet footer()}
 			<DropdownMenu.Item class="flex cursor-pointer items-center gap-2" onclick={onSettingsClick}>
 				<Settings class="h-4 w-4" />
+
 				<span>Manage MCP Servers</span>
 			</DropdownMenu.Item>
 		{/snippet}
