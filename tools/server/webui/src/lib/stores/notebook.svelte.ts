@@ -12,11 +12,18 @@ export class NotebookStore {
 	predictedTokens = $state(0);
 	predictedMs = $state(0);
 
+	error = $state<{
+		message: string;
+		type: 'timeout' | 'server';
+		contextInfo?: { n_prompt_tokens: number; n_ctx: number };
+	} | null>(null);
+
 	async generate(model?: string) {
 		if (this.isGenerating) return;
 
 		this.isGenerating = true;
 		this.abortController = new AbortController();
+		this.error = null;
 
 		// Reset stats
 		this.promptTokens = 0;
@@ -59,6 +66,10 @@ export class NotebookStore {
 							// aborted by user
 						} else {
 							console.error('Notebook generation error:', error);
+							this.error = {
+								message: error instanceof Error ? error.message : String(error),
+								type: 'server'
+							};
 						}
 						this.isGenerating = false;
 					}
@@ -67,8 +78,16 @@ export class NotebookStore {
 			);
 		} catch (error) {
 			console.error('Notebook generation failed:', error);
+			this.error = {
+				message: error instanceof Error ? error.message : String(error),
+				type: 'server'
+			};
 			this.isGenerating = false;
 		}
+	}
+
+	dismissError() {
+		this.error = null;
 	}
 
 	stop() {

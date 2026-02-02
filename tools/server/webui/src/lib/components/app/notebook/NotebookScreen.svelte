@@ -5,7 +5,7 @@
 	import { Play, Square, Settings } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
-	import { ModelsSelector, ChatMessageStatistics } from '$lib/components/app';
+	import { ModelsSelector, ChatMessageStatistics, DialogChatError } from '$lib/components/app';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -34,6 +34,8 @@
 
 	let isRouter = $derived(isRouterMode());
 
+	let errorDialog = $derived(notebookStore.error);
+
 	// Sync local input with store content
 	$effect(() => {
 		inputContent = notebookStore.content;
@@ -42,6 +44,12 @@
 	function handleInput(e: Event) {
 		const target = e.target as HTMLTextAreaElement;
 		notebookStore.content = target.value;
+	}
+
+	function handleErrorDialogOpenChange(open: boolean) {
+		if (!open) {
+			notebookStore.dismissError();
+		}
 	}
 
 	async function handleGenerate() {
@@ -56,6 +64,7 @@
 		}
 		await notebookStore.generate(notebookModel);
 	}
+
 
 	function handleStop() {
 		notebookStore.stop();
@@ -271,4 +280,12 @@
 	</div>
 
 	<DialogChatSettings open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />
+
+	<DialogChatError
+		message={errorDialog?.message ?? ''}
+		contextInfo={errorDialog?.contextInfo}
+		onOpenChange={handleErrorDialogOpenChange}
+		open={Boolean(errorDialog)}
+		type={errorDialog?.type ?? 'server'}
+	/>
 </div>
