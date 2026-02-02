@@ -61,7 +61,8 @@
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
 
-	// Incremental parsing cache, avoids re-transforming stable blocks
+	// Per-instance transform cache, avoids re-transforming stable blocks during streaming
+	// Garbage collected when component is destroyed (on conversation change)
 	const transformCache = new SvelteMap<string, string>();
 	let previousContent = '';
 
@@ -236,12 +237,6 @@
 		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
-
-		// Limit cache size (generous limit for 200K token contexts)
-		if (transformCache.size > 5000) {
-			const keysToDelete = Array.from(transformCache.keys()).slice(0, 1000);
-			keysToDelete.forEach((k) => transformCache.delete(k));
-		}
 
 		return { html, hash };
 	}
