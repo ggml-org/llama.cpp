@@ -85,10 +85,10 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
                 gate = ggml_sigmoid(ctx0, gate);
                 cb(gate, "attn_gate_sigmoid", il);
 
-                // reshape + broadcast to [n_embd_head_v, n_head_l, n_tokens]
+                // reshape [n_embd_head_v, n_head_l, n_tokens]
+                // gate will auto-broadcast
                 ggml_tensor * attn_3d = ggml_reshape_3d(ctx0, attn_out, n_embd_head_v, n_head_l, n_tokens);
                 ggml_tensor * gate_3d = ggml_reshape_3d(ctx0, gate,       1,          n_head_l, n_tokens);
-                gate_3d = ggml_repeat(ctx0, gate_3d, attn_3d);
                 cb(gate_3d, "attn_gate_bcast", il);
 
                 attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
