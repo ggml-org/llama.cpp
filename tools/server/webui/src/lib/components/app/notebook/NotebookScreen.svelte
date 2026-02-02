@@ -16,6 +16,21 @@
 
 	let inputContent = $state(content);
 
+	import {
+		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
+		AUTO_SCROLL_INTERVAL,
+		INITIAL_SCROLL_DELAY
+	} from '$lib/constants/auto-scroll';
+	import { onMount } from 'svelte';
+
+	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let autoScrollEnabled = $state(true);
+	let scrollContainer: HTMLTextAreaElement | null = $state(null);
+	let lastScrollTop = $state(0);
+	let scrollInterval: ReturnType<typeof setInterval> | undefined;
+	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
+	let userScrolledUp = $state(false);
+
 	let isRouter = $derived(isRouterMode());
 
 	// Sync local input with store content
@@ -29,6 +44,12 @@
 	}
 
 	async function handleGenerate() {
+		if (!disableAutoScroll) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+			scrollToBottom();
+		}
+
 		if (notebookModel == null) {
 			notebookModel = activeModelId;
 		}
@@ -93,6 +114,68 @@
 			notebookModel = modelName;
 		}
 	});
+
+	function handleScroll() {
+		if (disableAutoScroll || !scrollContainer) return;
+
+		const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
+
+		if (scrollTop < lastScrollTop && !isAtBottom) {
+			userScrolledUp = true;
+			autoScrollEnabled = false;
+		} else if (isAtBottom && userScrolledUp) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+		}
+
+		if (scrollTimeout) {
+			clearTimeout(scrollTimeout);
+		}
+
+		scrollTimeout = setTimeout(() => {
+			if (isAtBottom) {
+				userScrolledUp = false;
+				autoScrollEnabled = true;
+			}
+		}, AUTO_SCROLL_INTERVAL);
+
+		lastScrollTop = scrollTop;
+	}
+
+	function scrollToBottom(behavior: ScrollBehavior = 'smooth') {
+		if (disableAutoScroll) return;
+
+		scrollContainer?.scrollTo({
+			top: scrollContainer?.scrollHeight,
+			behavior
+		});
+	}
+
+	onMount(() => {
+		if (!disableAutoScroll) {
+			setTimeout(() => scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
+		}
+	});
+
+	$effect(() => {
+		if (disableAutoScroll) {
+			autoScrollEnabled = false;
+			if (scrollInterval) {
+				clearInterval(scrollInterval);
+				scrollInterval = undefined;
+			}
+			return;
+		}
+
+		if (notebookStore.isGenerating && autoScrollEnabled) {
+			scrollInterval = setInterval(() => scrollToBottom(), AUTO_SCROLL_INTERVAL);
+		} else if (scrollInterval) {
+			clearInterval(scrollInterval);
+			scrollInterval = undefined;
+		}
+	});
 </script>
 
 <div class="flex h-full flex-col">
@@ -109,6 +192,8 @@
 
 	<div class="flex-1 overflow-y-auto p-4 md:p-6">
 		<Textarea
+			bind:ref={scrollContainer}
+			onscroll={handleScroll}
 			value={inputContent}
 			oninput={handleInput}
 			class="h-full min-h-[500px] w-full resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
