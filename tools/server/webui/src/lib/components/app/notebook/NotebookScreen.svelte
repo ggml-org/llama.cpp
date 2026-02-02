@@ -177,7 +177,16 @@
 			scrollInterval = undefined;
 		}
 	});
+
+	function handleBeforeUnload(event: BeforeUnloadEvent) {
+		if (inputContent.length > 0) {
+			event.preventDefault();
+			event.returnValue = '';
+		}
+	}
 </script>
+
+<svelte:window onbeforeunload={handleBeforeUnload} />
 
 <div class="flex h-full flex-col">
 	<header
