@@ -27,23 +27,9 @@ struct common_ngram_simple_config {
     uint16_t   check_rate;      // check for speculative decoding without draft model for each check_rate token
 };
 
-// current state (and config) of n-gram simple.
-struct common_ngram_simple_state {
-    common_ngram_simple_config config;
-
-    size_t check_id = 0; // used to control the frequency of generating drafts
-
-    common_ngram_simple_state(const common_ngram_simple_config & config)
-        : config(config) {}
-};
-
 // Searches for a n-gram in the history and checks whether a draft sequence should be generated.
-// state:              the ngram simple state to search in.
-// inp:                the tokens generated so far.
-// sampled:            the token that was just sampled.
-// draft:              vector to store the draft tokens, initially empty.
 llama_tokens common_ngram_simple_draft(
-        common_ngram_simple_state & state,
+        const common_ngram_simple_config & config,
         const llama_tokens & tokens, llama_token sampled);
 
 

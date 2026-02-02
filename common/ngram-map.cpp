@@ -47,22 +47,15 @@ static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, 
  * @return Vector of draft tokens, empty if no matching pattern is found
  */
 llama_tokens common_ngram_simple_draft(
-        common_ngram_simple_state & state,
+        const common_ngram_simple_config & config,
         const llama_tokens & tokens, llama_token sampled) {
 
     // Simple implementation of self-speculative decoding without a draft model.
     //
     const size_t cur_len = tokens.size();
 
-    // Only check every check_rate tokens to save compute
-    if (state.check_id++ >= state.config.check_rate) {
-        state.check_id = 0;
-
-        return {};
-    }
-
-    size_t n_draft_min = state.config.size_ngram; // size of n-gram to lookup in token history
-    size_t n_draft_max = state.config.size_mgram; // the m-gram following the found n-gram is used for draft
+    const size_t n_draft_min = config.size_ngram; // size of n-gram to lookup in token history
+    const size_t n_draft_max = config.size_mgram; // the m-gram following the found n-gram is used for draft
 
     // vector for tokens we want to verify.
     // return empty vector if there is no match.
