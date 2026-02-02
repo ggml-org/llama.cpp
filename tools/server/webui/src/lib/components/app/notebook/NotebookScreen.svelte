@@ -5,7 +5,7 @@
 	import { Play, Square, Settings, Undo, Redo } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
-	import { ModelsSelector, ChatMessageStatistics, DialogChatError } from '$lib/components/app';
+	import { ChatMessageStatistics, DialogChatError, KeyboardShortcutInfo, ModelsSelector } from '$lib/components/app';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -203,9 +203,36 @@
 			event.returnValue = '';
 		}
 	}
+
+	function handleKeydown(event: KeyboardEvent) {
+		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
+
+		if (event.shiftKey && event.key === 'Enter') {
+			event.preventDefault();
+			if (notebookStore.isGenerating) {
+				handleStop();
+			} else if (canGenerate) {
+				handleGenerate();
+			}
+		}
+
+		if (isCtrlOrCmd && event.key === 'z') {
+			event.preventDefault();
+			if (canUndo) {
+				handleUndo();
+			}
+		}
+
+		if (isCtrlOrCmd && event.key === 'y') {
+			event.preventDefault();
+			if (canRedo) {
+				handleRedo();
+			}
+		}
+	}
 </script>
 
-<svelte:window onbeforeunload={handleBeforeUnload} />
+<svelte:window onbeforeunload={handleBeforeUnload} onkeydown={handleKeydown} />
 
 <div class="flex h-full flex-col">
 	<header
@@ -219,7 +246,7 @@
 		</Button>
 	</header>
 
-	<div class="flex-1 overflow-y-auto p-2 md:p-4">
+	<div class="flex-1 overflow-y-auto pb-0 pt-2 md:pt-4 px-2 md:px-4">
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
@@ -246,6 +273,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Undo last generation</p>
+						<KeyboardShortcutInfo keys={['ctrl', 'z']} class="opacity-100 w-full justify-center" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 
@@ -262,6 +290,7 @@
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Redo last generation</p>
+						<KeyboardShortcutInfo keys={['ctrl', 'y']} class="opacity-100 w-full justify-center" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 
@@ -283,19 +312,19 @@
 					</Button>
 				{/snippet}
 
-				{#if generateTooltip}
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							{@render generateButton()}
-						</Tooltip.Trigger>
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						{@render generateButton()}
+					</Tooltip.Trigger>
 
-						<Tooltip.Content>
+					<Tooltip.Content>
+						{#if generateTooltip}
 							<p>{generateTooltip}</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{:else}
-					{@render generateButton()}
-				{/if}
+						{:else}
+							<KeyboardShortcutInfo keys={['shift', 'enter']} class="opacity-100 w-full justify-center" />
+						{/if}
+					</Tooltip.Content>
+				</Tooltip.Root>
 
 				<ModelsSelector
 					currentModel={notebookModel}
