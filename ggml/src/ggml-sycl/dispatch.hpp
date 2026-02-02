@@ -305,6 +305,7 @@ inline void ggml_sycl_mul_mat_unified(
     float* dst_data,            // Output
     int64_t M, int64_t N, int64_t K,
     ggml_type weight_type,
+    ggml_sycl_unified::LayoutMode data_layout = ggml_sycl_unified::LayoutMode::AOS,
     uint32_t device_id = 0)
 {
     // 1. Build tuning key for cache lookup
@@ -354,7 +355,10 @@ inline void ggml_sycl_mul_mat_unified(
     trace_dispatch(M, N, K, weight_type, params, confidence, source);
 
     // 4. Build kernel args and launch
+    // Override tuning engine layout with actual data layout
     auto args = build_kernel_args(M, N, K, weight_type, params, src0_data, src1_data, dst_data);
+    args.layout = data_layout;
+    args.layout_mode = static_cast<int>(data_layout);
     ggml_sycl_unified::launch_unified_matmul(queue, args);
 
     // 5. Record observation for tuning (non-blocking)
@@ -385,14 +389,15 @@ inline void ggml_sycl_mul_mat_unified_default(
     const float* src1_data,
     float* dst_data,
     int64_t M, int64_t N, int64_t K,
-    ggml_type weight_type)
+    ggml_type weight_type,
+    ggml_sycl_unified::LayoutMode data_layout = ggml_sycl_unified::LayoutMode::AOS)
 {
     // Thread-safe static initialization of default tuning engine
     static ggml_sycl_tuning::TuningEngine default_engine;
 
     ggml_sycl_mul_mat_unified(queue, default_engine,
                                src0_data, src1_data, dst_data,
-                               M, N, K, weight_type, 0);
+                               M, N, K, weight_type, data_layout, 0);
 }
 
 }  // namespace ggml_sycl

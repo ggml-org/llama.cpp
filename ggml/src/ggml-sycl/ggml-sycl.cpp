@@ -18973,8 +18973,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             if (!force_legacy) {
             // IMPORTANT: unified kernel must use device-accessible pointers.
             // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
-            // Choose layout: SoA for better bandwidth (GGML_SYCL_UNIFIED_SOA=1), else AoS.
-            const layout_mode requested_layout = ggml_sycl_unified_soa_enabled() ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
+            // Choose layout: SoA for better memory bandwidth (GGML_SYCL_UNIFIED_SOA=1), else AoS.
+            // CRITICAL: Only use SoA for batch=1 (DMMV path). Larger batches use ESIMD/XMX
+            // which requires AoS layout. Using SoA with ESIMD causes crashes.
+            const bool use_soa = ggml_sycl_unified_soa_enabled() && (M == 1);
+            const layout_mode requested_layout = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
             const char * src0_ptr_source = nullptr;
             const void * src0_data =
                 ggml_sycl_get_layout_ptr_for(src0, ctx.device, requested_layout, &src0_ptr_source);
