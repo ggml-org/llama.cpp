@@ -1026,11 +1026,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         llama_sampler_chain_n(sampler) > 0;
 
     if (sampler && can_offload) {
-        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(model.dev_output());
-        auto * host_buft = ggml_backend_dev_host_buffer_type(model.dev_output());
-        if (host_buft) {
-            buft = host_buft;
-        }
+        auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
         sampler->iface->backend_init(sampler, buft);
 
