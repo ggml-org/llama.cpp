@@ -91,7 +91,8 @@ struct llama_memory_i {
     virtual llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) = 0;
 
     // getters
-    virtual bool get_can_shift() const = 0;
+    virtual bool get_can_shift()     const = 0;
+    virtual bool get_can_rm_suffix() const = 0;
 
     //
     // ops

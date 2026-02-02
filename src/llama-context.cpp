@@ -3360,6 +3360,14 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     return mem->get_can_shift();
 }
 
+bool llama_memory_can_rm_suffix(llama_memory_t mem) {
+    if (!mem) {
+        return false;
+    }
+
+    return mem->get_can_rm_suffix();
+}
+
 // llama state API
 
 // deprecated
