@@ -205,7 +205,9 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
 //
 
 struct ggml_metal_device_props {
+    int device;
     char name[128];
+    char desc[128];
 
     size_t max_buffer_size;
     size_t max_working_set_size;
@@ -224,11 +226,15 @@ struct ggml_metal_device_props {
     int op_offload_min_batch_size;
 };
 
-ggml_metal_device_t ggml_metal_device_init(void);
+typedef struct ggml_metal_event * ggml_metal_event_t;
+
+void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
+void ggml_metal_event_encode_wait  (ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
+
+ggml_metal_device_t ggml_metal_device_init(int device);
 void ggml_metal_device_free(ggml_metal_device_t dev);
 
-// return a singleton that is automatically destroyed when the program exits
-ggml_metal_device_t ggml_metal_device_get(void);
+ggml_metal_device_t ggml_metal_device_get(int device);
 
 void * ggml_metal_device_get_obj  (ggml_metal_device_t dev); // id<MTLDevice>
 void * ggml_metal_device_get_queue(ggml_metal_device_t dev); // id<MTLCommandQueue>
@@ -239,6 +245,10 @@ void ggml_metal_device_rsets_add(ggml_metal_device_t dev, ggml_metal_rset_t rset
 void ggml_metal_device_rsets_rm (ggml_metal_device_t dev, ggml_metal_rset_t rset);
 
 void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev);
+
+ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev);
+void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev);
+void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev);
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total);
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op);
