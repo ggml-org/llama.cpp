@@ -76,6 +76,90 @@ const ggml_sycl_info_stub & ggml_sycl_info() {
 namespace ggml_sycl_unified {
 
 // =============================================================================
+// GPU Family Detection Helper
+// =============================================================================
+// Case-insensitive substring search for device name matching
+
+static bool name_contains(const char * name, const char * substr) {
+    if (!name || !substr) return false;
+
+    // Convert both to lowercase and search
+    std::string lower_name   = name;
+    std::string lower_substr = substr;
+    for (char & c : lower_name) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    for (char & c : lower_substr) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return lower_name.find(lower_substr) != std::string::npos;
+}
+
+// GPU family enumeration for hardware capability detection
+enum class GPUFamily {
+    UNKNOWN,
+    ARC_ALCHEMIST,   // A-series (A770, A750, A580, A380, A310)
+    ARC_BATTLEMAGE,  // B-series (B580, B570)
+    DATA_CENTER_MAX, // PVC (Ponte Vecchio)
+    DATA_CENTER_FLEX // Arctic Sound (Flex series)
+};
+
+// Detect GPU family from device name
+static GPUFamily detect_gpu_family_from_name(const char * name) {
+    if (!name) return GPUFamily::UNKNOWN;
+
+    // Arc Battlemage (B-series): B580, B570, etc.
+    if (name_contains(name, "B580") || name_contains(name, "B570") || name_contains(name, "B50") ||
+        (name_contains(name, "Arc") && name_contains(name, "Battlemage"))) {
+        return GPUFamily::ARC_BATTLEMAGE;
+    }
+
+    // Arc Alchemist (A-series): A770, A750, A580, A380, A310, etc.
+    if (name_contains(name, "A770") || name_contains(name, "A750") || name_contains(name, "A580") ||
+        name_contains(name, "A380") || name_contains(name, "A310") ||
+        (name_contains(name, "Arc") && name_contains(name, "Graphics"))) {
+        return GPUFamily::ARC_ALCHEMIST;
+    }
+
+    // Data Center GPU Max (PVC/Ponte Vecchio)
+    if (name_contains(name, "Max") || name_contains(name, "PVC") || name_contains(name, "Ponte")) {
+        return GPUFamily::DATA_CENTER_MAX;
+    }
+
+    // Data Center GPU Flex (Arctic Sound)
+    if (name_contains(name, "Flex") || name_contains(name, "Arctic")) {
+        return GPUFamily::DATA_CENTER_FLEX;
+    }
+
+    return GPUFamily::UNKNOWN;
+}
+
+// Determine max ESIMD work-group size from GPU family
+// ESIMD has stricter limits than regular SYCL kernels:
+// - Arc (Alchemist/Battlemage): max 64 work-items
+// - PVC (Ponte Vecchio/Data Center Max): up to 1024 work-items
+static int get_max_esimd_workgroup(GPUFamily family) {
+    switch (family) {
+        case GPUFamily::DATA_CENTER_MAX:
+            return 1024;  // Xe-HPC architecture
+        case GPUFamily::ARC_ALCHEMIST:
+        case GPUFamily::ARC_BATTLEMAGE:
+        case GPUFamily::DATA_CENTER_FLEX:
+        case GPUFamily::UNKNOWN:
+        default:
+            return 64;    // Conservative default
+    }
+}
+
+// Check if GPU family supports named barriers (nbarrier intrinsics)
+// Named barriers are advanced ESIMD features for fine-grained synchronization.
+// Only available on PVC (Xe-HPC), NOT on Arc (XeLPG/XeHPG).
+static bool supports_named_barriers(GPUFamily family) {
+    // Only Data Center Max (PVC) supports named barriers
+    return family == GPUFamily::DATA_CENTER_MAX;
+}
+
+// =============================================================================
 // XMXConfig::from_device() Implementation
 // =============================================================================
 // Queries hardware-specific XMX capabilities with robust edge case handling.
@@ -113,6 +197,19 @@ XMXConfig XMXConfig::from_device(int device_id) {
     // Edge case: slm_size = 0 should use default
     cfg.slm_size = xmx.slm_size > 0 ? xmx.slm_size : 65536;
 
+    // Detect GPU family for hardware capability settings
+    GPUFamily family = detect_gpu_family_from_name(dev.device_name);
+
+    // Query max work-group size for ESIMD kernels using device family
+    // ESIMD kernels have stricter limits than regular SYCL kernels:
+    // - Standard SYCL query returns 1024 for Arc B580, but ESIMD is limited to 64
+    // - PVC (Data Center Max) can use up to 1024 work-items for ESIMD
+    cfg.max_esimd_workgroup = get_max_esimd_workgroup(family);
+
+    // Named barriers (nbarrier) are only available on PVC, not on Arc
+    // The large-tile ESIMD kernel requires named barriers for inter-sub-group sync
+    cfg.supports_named_barrier = supports_named_barriers(family);
+
     // Edge case: M/N/K = 0 should use fallback defaults
     // XMX dimensions: Use queried values if valid, otherwise defaults
     cfg.xmx_m = (xmx.M > 0) ? xmx.M : 8;
@@ -135,10 +232,11 @@ XMXConfig XMXConfig::from_device(int device_id) {
     cfg.tiles_per_workitem = 1;
 
     GGML_SYCL_DEBUG("[XMXConfig] device=%d: M=%zu N=%zu K_INT8=%zu K_FP16=%zu SLM=%zu nsm=%d "
-                    "supported=%d int8=%d fp16=%d double_buf=%d\n",
+                    "supported=%d int8=%d fp16=%d double_buf=%d max_esimd_wg=%d nbarrier=%d\n",
                     device_id, cfg.xmx_m, cfg.xmx_n, cfg.xmx_k_int8, cfg.xmx_k_fp16,
                     cfg.slm_size, cfg.nsm, cfg.supported, cfg.supports_int8,
-                    cfg.supports_fp16, cfg.use_double_buffer);
+                    cfg.supports_fp16, cfg.use_double_buffer, cfg.max_esimd_workgroup,
+                    cfg.supports_named_barrier);
 
     return cfg;
 }
@@ -206,6 +304,43 @@ SYCL_EXTERNAL inline sycl::half dequant_q4_0_half(const block_q4_0_unified * blo
         qs_val = block->qs[i] & 0x0F;
     } else {
         qs_val = block->qs[i - 16] >> 4;
+    }
+    return static_cast<sycl::half>(qs_val - 8) * d;
+}
+
+/**
+ * Dequantize Q4_0 weight from SoA layout to half precision for XMX.
+ *
+ * SoA Layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
+ *
+ * @param qs_base     Base pointer to quantized values
+ * @param d_base      Base pointer to scale factors
+ * @param row         Row index (N dimension)
+ * @param k_blocks    Number of K blocks per row (K / 32)
+ * @param block_idx   Block index within the row (0 to k_blocks-1)
+ * @param idx_in_blk  Index within block (0..31)
+ * @return Dequantized half value
+ */
+SYCL_EXTERNAL inline sycl::half dequant_q4_0_half_soa(
+    const uint8_t * qs_base,
+    const sycl::half * d_base,
+    int64_t row,
+    int k_blocks,
+    int block_idx,
+    int idx_in_blk) {
+    // Each row has k_blocks * 16 bytes of quantized values
+    const int row_qs_bytes = k_blocks * 16;
+    const uint8_t * qs_row = qs_base + row * row_qs_bytes;
+    const sycl::half * d_row = d_base + row * k_blocks;
+
+    const sycl::half d = d_row[block_idx];
+    const uint8_t * qs = qs_row + block_idx * 16;
+
+    int qs_val;
+    if (idx_in_blk < 16) {
+        qs_val = qs[idx_in_blk] & 0x0F;
+    } else {
+        qs_val = qs[idx_in_blk - 16] >> 4;
     }
     return static_cast<sycl::half>(qs_val - 8) * d;
 }
@@ -283,8 +418,17 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
     const int k_tiles = (args.K + TILE_K - 1) / TILE_K;
     const int k_blocks_per_row = args.K / UNIFIED_QK4_0;
 
-    // Cast weight pointer
+    // Cast weight pointer (AoS layout)
     const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+
+    // SoA layout pointers
+    // SoA layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
+    const bool use_soa = (args.layout == LayoutMode::SOA);
+    const int64_t total_blocks = args.N * k_blocks_per_row;
+    const int64_t d_offset = total_blocks * (UNIFIED_QK4_0 / 2);  // Byte offset to scale values
+    const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
+    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+        static_cast<const char *>(args.weights) + d_offset);
 
     // XMX tile dimensions and counts
     constexpr int NUM_TILES_M = TILE_M / XMX_TILE_M;
@@ -337,9 +481,16 @@ SYCL_EXTERNAL void unified_matmul_xmx_kernel_impl(sycl::nd_item<2>              
             // - k_off < k_len (only load actual K data for this tile)
             if (n_global < args.N && k_off < k_len) {
                 const int64_t k_global = k_start + k_off;
-                const int block_idx = static_cast<int>(n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0);
+                const int block_in_row = static_cast<int>(k_global / UNIFIED_QK4_0);
                 const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
-                w = dequant_q4_0_half(&weights[block_idx], idx_in_block);
+                if (use_soa) {
+                    // SoA layout: separate qs and d arrays
+                    w = dequant_q4_0_half_soa(qs_base, d_base, n_global, k_blocks_per_row, block_in_row, idx_in_block);
+                } else {
+                    // AoS layout: contiguous block_q4_0_unified structs
+                    const int block_idx = static_cast<int>(n_global * k_blocks_per_row + block_in_row);
+                    w = dequant_q4_0_half(&weights[block_idx], idx_in_block);
+                }
             }
             slm_weights[n_off * TILE_K + k_off] = w;
         }
@@ -474,9 +625,17 @@ class esimd_fp16_double_buffered_kernel;
 template <int TILE_M, int TILE_N>
 class esimd_int8_kernel;
 
+#if GGML_SYCL_NAMED_BARRIER_KERNELS
 // Cooperative ESIMD kernel: multi-work-item with named barriers
+// NOTE: Named barriers are only available on PVC (Xe-HPC), not on Arc (XeLPG/XeHPG).
 template <int WG_SIZE>
 class esimd_fp16_cooperative_kernel;
+
+// Large-tile ESIMD kernel: 128 work-items for 32x64 output tiles
+// NOTE: This kernel uses named barriers which are only available on PVC (Xe-HPC).
+template <int WG_SIZE>
+class esimd_fp16_large_tile_kernel;
+#endif
 
 // =============================================================================
 // ESIMD dpas Constants - FP16
@@ -582,6 +741,51 @@ constexpr uint32_t COOP_SLM_ACTS_OFFSET = COOP_SLM_WEIGHTS_SIZE * sizeof(sycl::h
 
 // Legacy constant for backwards compatibility
 constexpr int COOP_WG_SIZE = COOP_WG_SIZE_DEFAULT;
+
+// =============================================================================
+// Large-Tile ESIMD Constants (32x64 output tiles with 128 work-items)
+// =============================================================================
+// Work-group configuration for large-tile prompt processing:
+// - 128 work-items per work-group (8 sub-groups of 16)
+// - Each sub-group computes 2 stacked 8x16 dpas tiles = 16x16 output
+// - 4 sub-groups per row covering 64 columns (4 × 16 = 64)
+// - 2 rows of sub-groups covering 32 rows (2 × 16 = 32)
+// - All work-items cooperate on loading larger tiles to SLM
+//
+// Sub-group layout (8 sub-groups in 4×2 grid):
+//   sg_row = sg_id / 4  (0 or 1 for rows of sub-groups)
+//   sg_col = sg_id % 4  (0-3 for columns of sub-groups)
+//
+// Output tile ownership:
+//   M range: [sg_row * 16 .. sg_row * 16 + 15] (16 rows per sg_row)
+//   N range: [sg_col * 16 .. sg_col * 16 + 15] (16 columns per sub-group)
+//
+// Note: Each sub-group actually computes 2 dpas tiles (8×16 each) stacked
+// vertically, for a total of 16 rows per sub-group row.
+
+constexpr int LARGE_WG_SIZE = 64;                           // Work-items per work-group (ESIMD limit)
+constexpr int LARGE_NUM_SUBGROUPS = LARGE_WG_SIZE / COOP_SUBGROUP_SIZE;  // 4 sub-groups
+constexpr int LARGE_SG_COLS = 2;                            // Sub-groups per row (covering N)
+constexpr int LARGE_SG_ROWS = 2;                            // Rows of sub-groups (covering M)
+
+// Output dimensions match header constants
+// LARGE_TILE_M = 32, LARGE_TILE_N = 32, LARGE_TILE_K = 32 (defined in hpp)
+
+// Each sub-group row handles 16 M-rows (2 dpas tiles of 8 rows each)
+constexpr int LARGE_SG_M = LARGE_TILE_M / LARGE_SG_ROWS;    // 16 rows per sub-group row
+
+// SLM sizes for large-tile kernel
+// Weights: 32 rows × 32 cols = 1024 half = 2048 bytes
+// Activations: 32 rows × 32 cols = 1024 half = 2048 bytes
+// Total: 2048 half = 4096 bytes (well under 64KB limit)
+constexpr int LARGE_SLM_WEIGHTS_SIZE = LARGE_TILE_N * LARGE_TILE_K;  // 32 × 32 = 1024 half
+constexpr int LARGE_SLM_ACTS_SIZE = LARGE_TILE_M * LARGE_TILE_K;     // 32 × 32 = 1024 half
+constexpr int LARGE_SLM_TOTAL_HALF = LARGE_SLM_WEIGHTS_SIZE + LARGE_SLM_ACTS_SIZE;  // 2048 half
+constexpr uint32_t LARGE_SLM_TOTAL_BYTES = LARGE_SLM_TOTAL_HALF * sizeof(sycl::half);  // 4096 bytes
+
+// SLM byte offsets for large-tile kernel
+constexpr uint32_t LARGE_SLM_WEIGHTS_OFFSET = 0;
+constexpr uint32_t LARGE_SLM_ACTS_OFFSET = LARGE_SLM_WEIGHTS_SIZE * sizeof(sycl::half);  // 2048 bytes
 
 // =============================================================================
 // Vectorized Q4_0 Dequantization using ESIMD SIMD Operations
@@ -1764,9 +1968,14 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     }
 }
 
+#if GGML_SYCL_NAMED_BARRIER_KERNELS
 // =============================================================================
-// Cooperative ESIMD FP16 Kernel Implementation
+// Cooperative ESIMD FP16 Kernel Implementation (Named Barriers Required)
 // =============================================================================
+// NOTE: This kernel uses named barriers which are only available on PVC (Xe-HPC).
+// Disabled by default to avoid JIT compilation errors on Arc (XeLPG/XeHPG).
+// Enable with -DGGML_SYCL_NAMED_BARRIER_KERNELS=1 for PVC builds.
+//
 // Uses multiple work-items with named barriers for work-group level loading.
 // Each sub-group (16 work-items) owns one 8x16 output tile.
 // All work-items cooperate on loading data to SLM using strided pattern.
@@ -2051,6 +2260,363 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
         }
     }
 }
+
+/**
+ * Large-tile ESIMD kernel implementation for 32×64 output tiles.
+ *
+ * This kernel processes larger output tiles (32×64) using 128 work-items
+ * (8 sub-groups of 16). Designed for prompt processing where larger batches
+ * benefit from increased parallelism and better SLM utilization.
+ *
+ * Architecture:
+ * - 128 work-items = 8 sub-groups of 16 lanes each
+ * - 4×2 sub-group grid: 4 columns (covering 64 N) × 2 rows (covering 32 M)
+ * - Each sub-group computes 2 stacked 8×16 dpas tiles = 16×16 output
+ * - K-dimension tiled at 32 for efficient dpas chaining
+ *
+ * SLM Layout:
+ * - Weights: [64 rows × 32 cols] = 2048 half = 4096 bytes
+ * - Activations: [32 rows × 32 cols] = 1024 half = 2048 bytes
+ * - Total: 6144 bytes (well under 64KB limit)
+ *
+ * Cooperative Loading (128 work-items):
+ * - Work-items 0-63: Load weight rows (one row of 32 half each)
+ * - Work-items 64-127: Load activation rows (doubled up since 64 > 32)
+ *
+ * @tparam WG_SIZE  Work-group size (must be 128)
+ * @param item      ND-item for work distribution
+ * @param args      Kernel arguments
+ * @param local_id  Linear work-item ID within work-group [0..127]
+ * @param sg_id     Sub-group ID within work-group [0..7]
+ * @param lane      Lane ID within sub-group [0..15]
+ */
+template <int WG_SIZE>
+SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
+    sycl::nd_item<2>            item,
+    const UnifiedKernelArgs     args,
+    int                         local_id,
+    int                         sg_id,
+    int                         /* lane */) {  // lane unused in this kernel
+
+    // Compile-time validation of WG_SIZE constraints
+    static_assert(WG_SIZE == 64, "Large-tile kernel requires WG_SIZE=64 (ESIMD hw limit)");
+    static_assert(WG_SIZE % 16 == 0, "WG_SIZE must be multiple of 16 for sub-group size");
+
+    // Work-group coordinates (each work-group handles LARGE_TILE_M × LARGE_TILE_N output)
+    const int wg_row = item.get_group(0);  // M dimension
+    const int wg_col = item.get_group(1);  // N dimension
+
+    // Global output coordinates for this work-group
+    const int64_t m_wg_start = wg_row * LARGE_TILE_M;  // Starting output row (32 rows per WG)
+    const int64_t n_wg_start = wg_col * LARGE_TILE_N;  // Starting output column (64 cols per WG)
+
+    // Boundary check: skip if entire work-group is out of bounds
+    if (m_wg_start >= args.M || n_wg_start >= args.N) {
+        return;
+    }
+
+    // Sub-group grid position (2 columns × 2 rows of sub-groups)
+    // sg_id 0-1: row 0, sg_id 2-3: row 1
+    const int sg_row = sg_id / LARGE_SG_COLS;  // 0 or 1
+    const int sg_col = sg_id % LARGE_SG_COLS;  // 0 or 1
+
+    // This sub-group's output tile coordinates
+    // Each sub-group computes 2 stacked 8×16 tiles = 16×16 total output
+    const int64_t m_sg_start = m_wg_start + sg_row * LARGE_SG_M;  // 16 rows per sg_row
+    const int64_t n_sg_start = n_wg_start + sg_col * ESIMD_EXEC_SIZE;  // 16 cols per sub-group
+
+    // Check if this sub-group has work (boundary check)
+    const bool sg_has_work = (m_sg_start < args.M && n_sg_start < args.N);
+
+    // Number of Q4_0 blocks per weight row
+    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
+
+    // Cast weight pointer
+    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+
+    // Initialize SLM for this work-group
+    esimd::slm_init<LARGE_SLM_TOTAL_BYTES>();
+
+    // Initialize accumulators for this sub-group's output tiles
+    // Each sub-group computes 2 stacked 8×16 tiles = 16×16 = 256 outputs
+    // Use 2 separate accumulators for the 2 dpas tiles
+    esimd::simd<float, ESIMD_ACC_SIZE> acc_lo = 0.0f;  // Rows [0..7]
+    esimd::simd<float, ESIMD_ACC_SIZE> acc_hi = 0.0f;  // Rows [8..15]
+
+    // Initialize named barrier 0 for work-group synchronization
+    esimd::named_barrier_init<1>();  // 1 barrier with ID 0
+
+    // Number of K tiles (LARGE_TILE_K = 32, process 2 dpas K-tiles of 16 each)
+    const int64_t k_tiles = (args.K + LARGE_TILE_K - 1) / LARGE_TILE_K;
+
+    // K-loop: iterate over K dimension in tiles of 32
+    for (int64_t kt = 0; kt < k_tiles; kt++) {
+        const int64_t k_start = kt * LARGE_TILE_K;
+        const int64_t k_remaining = args.K - k_start;
+        const int k_len = static_cast<int>(k_remaining < LARGE_TILE_K ? k_remaining : LARGE_TILE_K);
+
+        // ================================================================
+        // Phase 1: Cooperative Loading with Block Operations
+        // ================================================================
+        // SLM layout: [weights: 32 rows x 32 cols][activations: 32 rows x 32 cols]
+        // 64 work-items load cooperatively:
+        // - Work-items 0-31: Load weight rows 0-31 (one row each, 32 half values)
+        // - Work-items 32-63: Load activation rows 0-31 (one row each, 32 half values)
+
+        constexpr int ELEMS_PER_ROW = LARGE_TILE_K;  // 32 half values per row
+
+        if (local_id < LARGE_TILE_N) {
+            // Work-items 0-31: Load weight row local_id
+            const int n_off = local_id;
+            const int64_t n_global = n_wg_start + n_off;
+
+            // Build row vector with dequantized weights
+            esimd::simd<sycl::half, ELEMS_PER_ROW> w_row = sycl::half(0.0f);
+
+            if (n_global < args.N) {
+                // Dequantize 32 elements (may span 1-2 Q4_0 blocks since Q4_0 has 32 elements)
+                // K_start should be aligned to 32 for LARGE_TILE_K=32
+
+                #pragma unroll
+                for (int k = 0; k < ELEMS_PER_ROW; k++) {
+                    if (k >= k_len) {
+                        w_row[k] = sycl::half(0.0f);
+                        continue;
+                    }
+                    const int64_t k_global = k_start + k;
+                    const int64_t block_idx = n_global * k_blocks_per_row + k_global / UNIFIED_QK4_0;
+                    const int idx_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+
+                    const block_q4_0_unified * blk = &weights[block_idx];
+                    const sycl::half d = blk->d;
+                    const int byte_idx = idx_in_block / 2;
+                    const int nibble_sel = idx_in_block % 2;
+                    const uint8_t packed = blk->qs[byte_idx];
+                    const int q_val = nibble_sel ? ((packed >> 4) & 0xF) : (packed & 0xF);
+                    w_row[k] = static_cast<sycl::half>(static_cast<float>(d) * (q_val - 8));
+                }
+            }
+
+            // Block store entire row to SLM
+            const uint32_t slm_off = LARGE_SLM_WEIGHTS_OFFSET + n_off * ELEMS_PER_ROW * sizeof(sycl::half);
+            esimd::slm_block_store<sycl::half, ELEMS_PER_ROW>(slm_off, w_row);
+
+        } else if (local_id < LARGE_TILE_N + LARGE_TILE_M) {
+            // Work-items 32-63: Load activation rows 0-31
+            const int m_off = local_id - LARGE_TILE_N;  // 0-31
+            const int64_t m_global = m_wg_start + m_off;
+
+            // Build row vector in registers, then block store
+            esimd::simd<sycl::half, ELEMS_PER_ROW> a_row = sycl::half(0.0f);
+
+            if (m_global < args.M) {
+                #pragma unroll
+                for (int k = 0; k < ELEMS_PER_ROW; k++) {
+                    if (k >= k_len) break;
+                    const int64_t k_global = k_start + k;
+                    a_row[k] = static_cast<sycl::half>(args.activations[m_global * args.K + k_global]);
+                }
+            }
+
+            // Block store entire row to SLM
+            const uint32_t slm_off = LARGE_SLM_ACTS_OFFSET + m_off * ELEMS_PER_ROW * sizeof(sycl::half);
+            esimd::slm_block_store<sycl::half, ELEMS_PER_ROW>(slm_off, a_row);
+        }
+        // All 64 work-items participate in loading (32 weights + 32 activations)
+
+        // Fence and barrier to ensure all loading is complete
+        esimd::fence<esimd::fence_mask::local_barrier>();
+        esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
+        esimd::named_barrier_wait(0);
+
+        // ================================================================
+        // Phase 2: Compute with Block Loads
+        // ================================================================
+        // Each sub-group computes its 16×16 output tile using 2 dpas operations
+        // (2 stacked 8×16 tiles, one for rows 0-7 and one for rows 8-15)
+        //
+        // We process K=32 in two K-tile iterations of 16 each
+
+        if (sg_has_work) {
+            // Process two K-subtiles of 16 each within the K=32 tile
+            #pragma unroll
+            for (int k_sub = 0; k_sub < 2; k_sub++) {
+                const int k_sub_start = k_sub * ESIMD_K_PER_DPAS;  // 0 or 16
+                const int k_sub_len = (k_sub_start + ESIMD_K_PER_DPAS <= k_len) ?
+                                      ESIMD_K_PER_DPAS :
+                                      (k_len > k_sub_start ? k_len - k_sub_start : 0);
+
+                if (k_sub_len == 0) continue;
+
+                // ---- Load weights for this sub-group's N-column ----
+                // SLM weight offset for this sub-group's 16 columns
+                const int n_local_base = sg_col * ESIMD_EXEC_SIZE;  // 0, 16, 32, or 48
+
+                // Load 16 weight rows × 16 K elements = 256 half
+                // Row-major in SLM: row n at offset [n * 32 + k_sub_start]
+                esimd::simd<sycl::half, ESIMD_B_SIZE> w_raw;  // 256 elements
+                #pragma unroll
+                for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                    const uint32_t row_offset = LARGE_SLM_WEIGHTS_OFFSET +
+                        (n_local_base + n) * LARGE_TILE_K * sizeof(sycl::half) +
+                        k_sub_start * sizeof(sycl::half);
+
+                    // Load 16 half values (one row slice)
+                    esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
+                        esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
+
+                    #pragma unroll
+                    for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                        w_raw[n * ESIMD_K_PER_DPAS + k] = row_slice[k];
+                    }
+                }
+
+                // Repack weights from row-major to VNNI format for dpas
+                esimd::simd<sycl::half, ESIMD_B_SIZE> b_vec;
+                #pragma unroll
+                for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                    #pragma unroll
+                    for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                        const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
+                        b_vec[vnni_idx] = w_raw[n * ESIMD_K_PER_DPAS + k];
+                    }
+                }
+
+                // Handle boundary: zero out weights beyond N
+                #pragma unroll
+                for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                    const int64_t n_global = n_sg_start + n;
+                    if (n_global >= args.N) {
+                        #pragma unroll
+                        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                            const int vnni_idx = (k / 2) * (ESIMD_EXEC_SIZE * 2) + n * 2 + (k % 2);
+                            b_vec[vnni_idx] = sycl::half(0.0f);
+                        }
+                    }
+                }
+
+                // ---- Process lower 8 rows (acc_lo) ----
+                {
+                    const int m_local_base = sg_row * LARGE_SG_M;  // 0 or 16
+
+                    // Load 8 activation rows × 16 K elements = 128 half
+                    esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec;
+                    #pragma unroll
+                    for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+                        const uint32_t row_offset = LARGE_SLM_ACTS_OFFSET +
+                            (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
+                            k_sub_start * sizeof(sycl::half);
+
+                        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
+                            esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
+
+                        #pragma unroll
+                        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                            a_vec[m * ESIMD_K_PER_DPAS + k] = row_slice[k];
+                        }
+                    }
+
+                    // Handle boundary: zero out rows beyond M
+                    #pragma unroll
+                    for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+                        const int64_t m_global = m_sg_start + m;
+                        if (m_global >= args.M) {
+                            #pragma unroll
+                            for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                                a_vec[m * ESIMD_K_PER_DPAS + k] = sycl::half(0.0f);
+                            }
+                        }
+                    }
+
+                    // Execute dpas: acc_lo += A @ B
+                    acc_lo = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                                       float, float, sycl::half, sycl::half>(acc_lo, b_vec, a_vec);
+                }
+
+                // ---- Process upper 8 rows (acc_hi) ----
+                {
+                    const int m_local_base = sg_row * LARGE_SG_M + ESIMD_REPEAT_COUNT;  // 8 or 24
+
+                    // Load 8 activation rows × 16 K elements = 128 half
+                    esimd::simd<sycl::half, ESIMD_A_SIZE> a_vec;
+                    #pragma unroll
+                    for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+                        const uint32_t row_offset = LARGE_SLM_ACTS_OFFSET +
+                            (m_local_base + m) * LARGE_TILE_K * sizeof(sycl::half) +
+                            k_sub_start * sizeof(sycl::half);
+
+                        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_slice =
+                            esimd::slm_block_load<sycl::half, ESIMD_K_PER_DPAS>(row_offset);
+
+                        #pragma unroll
+                        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                            a_vec[m * ESIMD_K_PER_DPAS + k] = row_slice[k];
+                        }
+                    }
+
+                    // Handle boundary: zero out rows beyond M
+                    #pragma unroll
+                    for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+                        const int64_t m_global = m_sg_start + ESIMD_REPEAT_COUNT + m;
+                        if (m_global >= args.M) {
+                            #pragma unroll
+                            for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+                                a_vec[m * ESIMD_K_PER_DPAS + k] = sycl::half(0.0f);
+                            }
+                        }
+                    }
+
+                    // Execute dpas: acc_hi += A @ B
+                    acc_hi = xmx::dpas<ESIMD_SYSTOLIC_DEPTH, ESIMD_REPEAT_COUNT,
+                                       float, float, sycl::half, sycl::half>(acc_hi, b_vec, a_vec);
+                }
+            }
+        }
+
+        // Barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
+        if (kt + 1 < k_tiles) {
+            esimd::fence<esimd::fence_mask::local_barrier>();
+            esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
+            esimd::named_barrier_wait(0);
+        }
+    }
+
+    // ================================================================
+    // Phase 3: Write output (each sub-group writes its 16×16 tile)
+    // ================================================================
+    if (sg_has_work) {
+        // Write lower 8 rows
+        #pragma unroll
+        for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+            const int64_t m_global = m_sg_start + m;
+            if (m_global >= args.M) continue;
+
+            #pragma unroll
+            for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                const int64_t n_global = n_sg_start + n;
+                if (n_global >= args.N) continue;
+
+                args.output[m_global * args.N + n_global] = acc_lo[m * ESIMD_EXEC_SIZE + n];
+            }
+        }
+
+        // Write upper 8 rows
+        #pragma unroll
+        for (int m = 0; m < ESIMD_REPEAT_COUNT; m++) {
+            const int64_t m_global = m_sg_start + ESIMD_REPEAT_COUNT + m;
+            if (m_global >= args.M) continue;
+
+            #pragma unroll
+            for (int n = 0; n < ESIMD_EXEC_SIZE; n++) {
+                const int64_t n_global = n_sg_start + n;
+                if (n_global >= args.N) continue;
+
+                args.output[m_global * args.N + n_global] = acc_hi[m * ESIMD_EXEC_SIZE + n];
+            }
+        }
+    }
+}
+#endif  // GGML_SYCL_NAMED_BARRIER_KERNELS
 
 /**
  * Check if INT8 ESIMD dpas path can be used for given dimensions.
@@ -2369,7 +2935,9 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // XMX Path: Use joint_matrix for dpas acceleration (optimized)
     // ==========================================================================
 #if GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
-    if (use_xmx_path) {
+    // XMX joint_matrix path should only run if ESIMD_LARGE_TILE was not selected
+    // (ESIMD_LARGE_TILE uses its own ESIMD-based large-tile implementation)
+    if (use_xmx_path && selected_path != KernelPath::ESIMD_LARGE_TILE) {
         // XMX path uses fixed tile sizes aligned to XMX dimensions
         constexpr int XMX_TM = 8;   // Must be multiple of XMX_TILE_M=8
         constexpr int XMX_TN = 16;  // Must be multiple of XMX_TILE_N=16
@@ -2429,8 +2997,64 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // Small batches should use scalar DMMV/MMVQ kernels instead.
 
 #if GGML_SYCL_ESIMD_AVAILABLE
-    // Only proceed with ESIMD paths if batch-size gating selected ESIMD_DPAS
+    // Only proceed with ESIMD paths if batch-size gating selected ESIMD_DPAS or ESIMD_LARGE_TILE
     const bool esimd_enabled_by_gating = (selected_path == KernelPath::ESIMD_DPAS);
+    const bool large_tile_selected     = (selected_path == KernelPath::ESIMD_LARGE_TILE);
+
+#if GGML_SYCL_NAMED_BARRIER_KERNELS
+    // Large-tile ESIMD path - adaptive based on hardware capabilities
+    // Uses cooperative loading with multiple sub-groups for better memory bandwidth
+    // Tile configuration selected based on max ESIMD work-group size:
+    // - Arc/DG2 (max 64):  32×32 tiles, 64 work-items, 4 sub-groups
+    // - PVC (max 256+):    64×64 tiles, 256 work-items, 16 sub-groups
+    if (large_tile_selected) {
+        // Get hardware-optimal tile configuration
+        LargeTileConfig tile_cfg = LargeTileConfig::for_hardware(cfg.max_esimd_workgroup);
+
+        // Check if dimensions are sufficient for this tile size
+        if (!tile_cfg.can_use(args.M, args.N, args.K)) {
+            // Fall through to cooperative ESIMD path for smaller dimensions
+            goto cooperative_path;
+        }
+
+        const int large_grid_m = (static_cast<int>(args.M) + tile_cfg.tile_m - 1) / tile_cfg.tile_m;
+        const int large_grid_n = (static_cast<int>(args.N) + tile_cfg.tile_n - 1) / tile_cfg.tile_n;
+
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] Large-tile ESIMD path: M=%lld N=%lld K=%lld "
+                    "grid=(%d,%d) tile=(%d,%d) wg=%d\n",
+                    static_cast<long long>(args.M), static_cast<long long>(args.N),
+                    static_cast<long long>(args.K), large_grid_m, large_grid_n,
+                    tile_cfg.tile_m, tile_cfg.tile_n, tile_cfg.wg_size);
+            fflush(stderr);
+        }
+
+        // Dispatch to appropriate kernel instantiation based on work-group size
+        // Each WG_SIZE requires a separate template instantiation
+        if (tile_cfg.wg_size == 64) {
+            q.submit([&](sycl::handler & cgh) {
+                constexpr int WG_SIZE = 64;
+                sycl::range<2> global(large_grid_m * WG_SIZE, large_grid_n);
+                sycl::range<2> local(WG_SIZE, 1);
+
+                cgh.parallel_for<esimd_fp16_large_tile_kernel<WG_SIZE>>(
+                    sycl::nd_range<2>(global, local),
+                    [=](sycl::nd_item<2> item) SYCL_ESIMD_KERNEL {
+                        const int local_id = item.get_local_id(0);
+                        const int sg_id    = local_id / 16;
+                        const int lane     = local_id % 16;
+                        large_tile_esimd_kernel_impl<WG_SIZE>(item, args, local_id, sg_id, lane);
+                    });
+            });
+            return;
+        }
+        // Note: WG_SIZE=128 and WG_SIZE=256 instantiations can be added here
+        // when validated on hardware that supports larger work-groups
+    }
+cooperative_path:
+#else
+    (void)large_tile_selected;  // Suppress unused variable warning when kernels disabled
+#endif
 
     // Try INT8 path first (requires both ESIMD and INT8 flags AND batch-size gating)
     if (esimd_enabled_by_gating && can_use_esimd_int8_dpas(args.M, args.N, args.K)) {
@@ -2472,7 +3096,9 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         return;
     }
 
+#if GGML_SYCL_NAMED_BARRIER_KERNELS
     // Cooperative ESIMD FP16 path (multi-work-item with named barriers)
+    // NOTE: Named barriers are only available on PVC (Xe-HPC), not on Arc.
     // Enabled by default while optimizing; set GGML_SYCL_XMX_COOPERATIVE=0 to disable
     // Work-group size configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
     if (esimd_enabled_by_gating && can_use_cooperative_esimd(args.M, args.N, args.K)) {
@@ -2514,6 +3140,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         });
         return;
     }
+#endif  // GGML_SYCL_NAMED_BARRIER_KERNELS
 
     // FP16 path (ESIMD enabled but INT8 not enabled)
     if (esimd_enabled_by_gating && can_use_esimd_dpas(args.M, args.N, args.K)) {
@@ -2600,6 +3227,7 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // - Threads in the warp cooperatively process K blocks
     // - Warp-level shuffle reduction (no SLM overhead)
     // - Vectorized Q4_0 dequantization within each thread
+    // - SoA layout support for better memory bandwidth on large K
     //
     // Work distribution:
     // - Grid: N work-groups (one per output column)
@@ -2615,13 +3243,21 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         // Grid: one work-group per output column (N dimension)
         // Each work-group computes the dot product for one output element
         const int grid_n = static_cast<int>(args.N);
+        const bool use_soa = (args.layout == LayoutMode::SOA);
 
         if (ggml_sycl_unified_debug_enabled()) {
-            fprintf(stderr, "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d\n",
+            fprintf(stderr, "[unified-kernel] DMMV path: M=%lld N=%lld K=%lld grid_n=%d warp_size=%d layout=%s\n",
                     static_cast<long long>(args.M), static_cast<long long>(args.N),
-                    static_cast<long long>(args.K), grid_n, DMMV_WARP_SIZE);
+                    static_cast<long long>(args.K), grid_n, DMMV_WARP_SIZE,
+                    use_soa ? "SOA" : "AOS");
             fflush(stderr);
         }
+
+        // SoA layout calculations (precomputed on host)
+        // SoA layout: [qs: N rows × K/32 blocks × 16 bytes/block] [d: N rows × K/32 blocks × sizeof(half)]
+        // Total sizes: qs = N * K/2 bytes, d = N * K/16 bytes
+        const int64_t total_blocks = args.N * (args.K / DMMV_BLOCK_SIZE);
+        const int64_t d_offset = total_blocks * (DMMV_BLOCK_SIZE / 2);  // Byte offset to scale values
 
         q.submit([&](sycl::handler & cgh) {
             sycl::nd_range<1> range(
@@ -2639,9 +3275,6 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
                     // Bounds check
                     if (n >= args.N) return;
 
-                    // Get weight pointer for row n (weights are [N, K])
-                    const block_q4_0_unified * weights =
-                        static_cast<const block_q4_0_unified *>(args.weights);
                     const int k_blocks_per_row = args.K / DMMV_BLOCK_SIZE;
 
                     // Activation pointer (activations are [M=1, K], so just a 1D array)
@@ -2650,36 +3283,85 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
                     // Each thread accumulates partial dot product over its assigned blocks
                     float partial_sum = 0.0f;
 
-                    // Thread tid processes blocks: tid, tid+WARP_SIZE, tid+2*WARP_SIZE, ...
-                    for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
-                        // Global block index for weight row n
-                        const int global_block_idx = n * k_blocks_per_row + block_idx;
-                        const block_q4_0_unified * blk = &weights[global_block_idx];
+                    if (use_soa) {
+                        // ==============================================
+                        // SoA Layout: Structure of Arrays
+                        // ==============================================
+                        // Layout: [all qs bytes contiguous][all d values contiguous]
+                        // qs: row n starts at qs_base + n * k_blocks_per_row * 16 bytes
+                        // d:  row n starts at d_base + n * k_blocks_per_row * sizeof(half)
+                        const uint8_t * qs_base = static_cast<const uint8_t *>(args.weights);
+                        const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+                            static_cast<const char *>(args.weights) + d_offset);
 
-                        // Get scale factor
-                        const float d = static_cast<float>(blk->d);
+                        // Calculate base pointers for row n
+                        const int row_qs_bytes = k_blocks_per_row * (DMMV_BLOCK_SIZE / 2);  // 16 bytes per block
+                        const uint8_t * qs_row = qs_base + n * row_qs_bytes;
+                        const sycl::half * d_row = d_base + n * k_blocks_per_row;
 
-                        // K offset for this block
-                        const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+                        // Thread tid processes blocks: tid, tid+WARP_SIZE, tid+2*WARP_SIZE, ...
+                        for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
+                            // Get scale factor from contiguous d array
+                            const float d = static_cast<float>(d_row[block_idx]);
 
-                        // Process all 32 weights in this block
-                        float block_sum = 0.0f;
-                        #pragma unroll
-                        for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
-                            // Each byte contains 2 nibbles
-                            const uint8_t qs_byte = blk->qs[i];
+                            // Get qs pointer for this block (16 bytes per block)
+                            const uint8_t * qs = qs_row + block_idx * (DMMV_BLOCK_SIZE / 2);
 
-                            // Low nibble -> position i, High nibble -> position i+16
-                            const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
-                            const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+                            // K offset for activations
+                            const int k_offset = block_idx * DMMV_BLOCK_SIZE;
 
-                            // Corresponding activation values
-                            const float a0 = activations[k_offset + i];
-                            const float a1 = activations[k_offset + i + 16];
-
-                            block_sum += w0 * a0 + w1 * a1;
+                            // Process all 32 weights in this block
+                            float block_sum = 0.0f;
+                            #pragma unroll
+                            for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
+                                const uint8_t qs_byte = qs[i];
+                                const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                                const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+                                const float a0 = activations[k_offset + i];
+                                const float a1 = activations[k_offset + i + 16];
+                                block_sum += w0 * a0 + w1 * a1;
+                            }
+                            partial_sum += block_sum;
                         }
-                        partial_sum += block_sum;
+                    } else {
+                        // ==============================================
+                        // AoS Layout: Array of Structures (original)
+                        // ==============================================
+                        // Each block is contiguous: [d: fp16][qs: 16 bytes]
+                        const block_q4_0_unified * weights =
+                            static_cast<const block_q4_0_unified *>(args.weights);
+
+                        // Thread tid processes blocks: tid, tid+WARP_SIZE, tid+2*WARP_SIZE, ...
+                        for (int block_idx = tid; block_idx < k_blocks_per_row; block_idx += DMMV_WARP_SIZE) {
+                            // Global block index for weight row n
+                            const int global_block_idx = n * k_blocks_per_row + block_idx;
+                            const block_q4_0_unified * blk = &weights[global_block_idx];
+
+                            // Get scale factor
+                            const float d = static_cast<float>(blk->d);
+
+                            // K offset for this block
+                            const int k_offset = block_idx * DMMV_BLOCK_SIZE;
+
+                            // Process all 32 weights in this block
+                            float block_sum = 0.0f;
+                            #pragma unroll
+                            for (int i = 0; i < DMMV_BLOCK_SIZE / 2; i++) {
+                                // Each byte contains 2 nibbles
+                                const uint8_t qs_byte = blk->qs[i];
+
+                                // Low nibble -> position i, High nibble -> position i+16
+                                const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                                const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+
+                                // Corresponding activation values
+                                const float a0 = activations[k_offset + i];
+                                const float a1 = activations[k_offset + i + 16];
+
+                                block_sum += w0 * a0 + w1 * a1;
+                            }
+                            partial_sum += block_sum;
+                        }
                     }
 
                     // Warp-level reduction using shuffle

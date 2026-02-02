@@ -65,9 +65,28 @@
 #    include <sycl/ext/intel/esimd/xmx/dpas.hpp>
 // Namespace aliases for cleaner ESIMD dpas code (in global namespace)
 namespace esimd = sycl::ext::intel::esimd;
-namespace xmx = sycl::ext::intel::esimd::xmx;
+namespace xmx   = sycl::ext::intel::esimd::xmx;
 #else
 #    define GGML_SYCL_ESIMD_AVAILABLE 0
+#endif
+
+// Named barrier kernel support (cooperative ESIMD and large-tile kernels)
+// These kernels use named barriers (nbarrier) which are only available on PVC/Xe-HPC.
+// Disabled by default since they cause JIT compilation errors on Arc (XeLPG/XeHPG).
+// Enable with -DGGML_SYCL_NAMED_BARRIER_KERNELS=1 for PVC builds.
+#ifndef GGML_SYCL_NAMED_BARRIER_KERNELS
+#    define GGML_SYCL_NAMED_BARRIER_KERNELS 0
+#endif
+
+// Large-tile ESIMD kernel support (subset of named barrier kernels)
+// Requires GGML_SYCL_NAMED_BARRIER_KERNELS=1 to be enabled.
+#if GGML_SYCL_NAMED_BARRIER_KERNELS
+#    ifndef GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#        define GGML_SYCL_LARGE_TILE_KERNEL_ENABLED 1
+#    endif
+#else
+#    undef GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+#    define GGML_SYCL_LARGE_TILE_KERNEL_ENABLED 0
 #endif
 
 namespace ggml_sycl_unified {
@@ -89,8 +108,91 @@ constexpr int XMX_TILE_M = 8;   // M dimension of XMX output tile
 constexpr int XMX_TILE_N = 16;  // N dimension of XMX output tile
 constexpr int XMX_TILE_K = 16;  // K step per dpas instruction (for half precision)
 
-// Sub-group size required for joint_matrix operations
+// Large-tile ESIMD kernel dimensions - these are the MAXIMUM values
+// Actual values used depend on hardware (see LargeTileConfig)
+constexpr int LARGE_TILE_M_MAX = 64;   // Max M dimension (limited by registers/SLM)
+constexpr int LARGE_TILE_N_MAX = 64;   // Max N dimension
+constexpr int LARGE_TILE_K     = 32;   // K step per iteration (fixed for Q4_0 alignment)
+
+// Legacy constants for backward compatibility (Arc B580 configuration)
+constexpr int LARGE_TILE_M = 32;  // M dimension for 64 work-item config
+constexpr int LARGE_TILE_N = 32;  // N dimension for 64 work-item config
+
+// Sub-group size required for ESIMD/joint_matrix operations (fixed by hardware)
 constexpr int XMX_SUBGROUP_SIZE = 16;
+
+// =============================================================================
+// Adaptive Large-Tile Configuration
+// =============================================================================
+// Hardware-aware tile configuration that adapts to device capabilities.
+// Different GPUs have different ESIMD work-group size limits:
+// - Arc B580/DG2: 64 work-items max -> 32×32 tiles (4 sub-groups)
+// - PVC: Up to 256+ work-items -> 64×64 tiles (16 sub-groups)
+//
+// The tile configuration is selected at runtime based on XMXConfig.
+
+/**
+ * Large-tile ESIMD configuration for a specific hardware target.
+ *
+ * Each sub-group computes 16×16 output (two 8×16 dpas tiles stacked).
+ * Sub-groups are arranged in a 2D grid to cover the full tile output.
+ */
+struct LargeTileConfig {
+    int wg_size;      // Total work-items per work-group
+    int sg_cols;      // Sub-groups per row (N dimension)
+    int sg_rows;      // Rows of sub-groups (M dimension)
+    int tile_m;       // Output M dimension (sg_rows × 16)
+    int tile_n;       // Output N dimension (sg_cols × 16)
+    int tile_k;       // K dimension per iteration (fixed 32)
+    int slm_weights;  // SLM size for weights (tile_n × tile_k × sizeof(half))
+    int slm_acts;     // SLM size for activations (tile_m × tile_k × sizeof(half))
+
+    /**
+     * Get optimal tile configuration for hardware.
+     *
+     * @param max_esimd_wg  Maximum ESIMD work-group size from XMXConfig
+     * @return LargeTileConfig optimized for the hardware
+     */
+    static LargeTileConfig for_hardware(int max_esimd_wg) {
+        LargeTileConfig cfg;
+        cfg.tile_k = LARGE_TILE_K;  // Fixed at 32
+
+        if (max_esimd_wg >= 256) {
+            // PVC-class: 256 work-items = 16 sub-groups = 4×4 grid = 64×64 output
+            cfg.wg_size  = 256;
+            cfg.sg_cols  = 4;
+            cfg.sg_rows  = 4;
+            cfg.tile_m   = 64;
+            cfg.tile_n   = 64;
+        } else if (max_esimd_wg >= 128) {
+            // Mid-range: 128 work-items = 8 sub-groups = 4×2 grid = 32×64 output
+            cfg.wg_size  = 128;
+            cfg.sg_cols  = 4;
+            cfg.sg_rows  = 2;
+            cfg.tile_m   = 32;
+            cfg.tile_n   = 64;
+        } else {
+            // Arc/DG2-class: 64 work-items = 4 sub-groups = 2×2 grid = 32×32 output
+            cfg.wg_size  = 64;
+            cfg.sg_cols  = 2;
+            cfg.sg_rows  = 2;
+            cfg.tile_m   = 32;
+            cfg.tile_n   = 32;
+        }
+
+        cfg.slm_weights = cfg.tile_n * cfg.tile_k;  // half count
+        cfg.slm_acts    = cfg.tile_m * cfg.tile_k;  // half count
+
+        return cfg;
+    }
+
+    /**
+     * Check if this configuration can be used for given dimensions.
+     */
+    bool can_use(int64_t M, int64_t N, int64_t K) const {
+        return M >= tile_m && N >= tile_n && K >= tile_k;
+    }
+};
 
 // =============================================================================
 // Environment Variable Checks for XMX Configuration
@@ -201,8 +303,12 @@ inline int get_prefetch_distance() {
         if (env) {
             int val = std::atoi(env);
             // Clamp to valid range [0, MAX_PREFETCH_DISTANCE]
-            if (val < 0) val = 0;
-            if (val > MAX_PREFETCH_DISTANCE) val = MAX_PREFETCH_DISTANCE;
+            if (val < 0) {
+                val = 0;
+            }
+            if (val > MAX_PREFETCH_DISTANCE) {
+                val = MAX_PREFETCH_DISTANCE;
+            }
             distance = val;
         } else {
             distance = DEFAULT_PREFETCH_DISTANCE;
@@ -250,15 +356,15 @@ inline CacheHintPolicy get_activations_cache_hint() {
  */
 inline size_t get_max_slm_usage_with_prefetch() {
     // Cooperative kernel tile dimensions
-    constexpr int TILE_M = 16;      // Work-group M dimension
-    constexpr int TILE_N = 16;      // Work-group N dimension
-    constexpr int K_TILE = 16;      // K dimension per dpas instruction
-    constexpr int NUM_BUFFERS = 2;  // Double-buffering
+    constexpr int TILE_M      = 16;  // Work-group M dimension
+    constexpr int TILE_N      = 16;  // Work-group N dimension
+    constexpr int K_TILE      = 16;  // K dimension per dpas instruction
+    constexpr int NUM_BUFFERS = 2;   // Double-buffering
 
     // Per-buffer sizes
-    constexpr size_t weights_size = TILE_N * K_TILE * sizeof(sycl::half);     // 512 bytes
-    constexpr size_t activations_size = TILE_M * K_TILE * sizeof(sycl::half); // 512 bytes
-    constexpr size_t buffer_size = weights_size + activations_size;           // 1024 bytes
+    constexpr size_t weights_size     = TILE_N * K_TILE * sizeof(sycl::half);  // 512 bytes
+    constexpr size_t activations_size = TILE_M * K_TILE * sizeof(sycl::half);  // 512 bytes
+    constexpr size_t buffer_size      = weights_size + activations_size;       // 1024 bytes
 
     // Total with double-buffering
     return NUM_BUFFERS * buffer_size;  // 2048 bytes - well under 64KB limit
@@ -286,9 +392,10 @@ inline size_t get_max_slm_usage_with_prefetch() {
  * to use based on batch size, hardware capabilities, and environment overrides.
  */
 enum class KernelPath {
-    DMMV,       ///< Dense matrix-vector multiply (batch=1, memory-bound)
-    MMVQ,       ///< Matrix-matrix vector quantized (small batch)
-    ESIMD_DPAS  ///< ESIMD dpas path (large batch, compute-bound)
+    DMMV,             ///< Dense matrix-vector multiply (batch=1, memory-bound)
+    MMVQ,             ///< Matrix-matrix vector quantized (small batch)
+    ESIMD_DPAS,       ///< ESIMD dpas path (large batch, compute-bound)
+    ESIMD_LARGE_TILE  ///< ESIMD large tile path (very large batch, 32x64 tiles)
 };
 
 /**
@@ -304,10 +411,10 @@ inline int get_esimd_min_batch() {
     if (min_batch < 0) {
         const char * env = std::getenv("GGML_SYCL_ESIMD_MIN_BATCH");
         if (env) {
-            int val = std::atoi(env);
+            int val   = std::atoi(env);
             min_batch = (val > 0) ? val : 8;  // Clamp to positive
         } else {
-            min_batch = 8;  // Default threshold
+            min_batch = 8;                    // Default threshold
         }
     }
     return min_batch;
@@ -325,7 +432,7 @@ inline bool prefer_esimd_small() {
     static int prefer = -1;
     if (prefer < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_PREFER_ESIMD_SMALL");
-        prefer = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
+        prefer           = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
     }
     return prefer != 0;
 }
@@ -343,7 +450,7 @@ inline int prefer_esimd_max_m() {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_PREFER_ESIMD_MAX_M");
         if (env) {
             int val = std::atoi(env);
-            max_m = (val > 0) ? val : 32;
+            max_m   = (val > 0) ? val : 32;
         } else {
             max_m = 32;
         }
@@ -385,13 +492,86 @@ inline bool env_force_esimd() {
     return forced != 0;
 }
 
+/**
+ * Get minimum batch size for large-tile ESIMD dispatch (cached).
+ *
+ * Reads GGML_SYCL_LARGE_TILE_MIN_BATCH environment variable once at initialization.
+ * Default value is 128 (empirically determined crossover point for 32x64 tiles).
+ *
+ * @return Minimum batch size for routing to ESIMD large-tile path
+ */
+inline int get_large_tile_min_batch() {
+    static int min_batch = -1;
+    if (min_batch < 0) {
+        const char * env = std::getenv("GGML_SYCL_LARGE_TILE_MIN_BATCH");
+        if (env) {
+            int val   = std::atoi(env);
+            min_batch = (val > 0) ? val : 128;  // Clamp to positive
+        } else {
+            min_batch = 128;                    // Default threshold
+        }
+    }
+    return min_batch;
+}
+
+/**
+ * Check if large-tile ESIMD path is enabled (cached).
+ *
+ * When GGML_SYCL_UNIFIED_LARGE_TILE=1 is set, the unified kernel will
+ * consider the large-tile ESIMD path (32x64 tiles) for very large batches.
+ * Default is disabled (0) until the kernel is validated.
+ *
+ * @return true if large-tile ESIMD path is enabled
+ */
+inline bool large_tile_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_UNIFIED_LARGE_TILE");
+        enabled          = env ? ((std::atoi(env) != 0) ? 1 : 0) : 0;
+    }
+    return enabled != 0;
+}
+
+/**
+ * Check if large-tile ESIMD kernel can be used for given dimensions.
+ *
+ * Large-tile ESIMD requires:
+ * - ESIMD available (GGML_SYCL_ESIMD_AVAILABLE macro)
+ * - Large-tile enabled via large_tile_enabled()
+ * - M >= LARGE_TILE_M (32) - enough rows for large tile
+ * - N >= LARGE_TILE_N (64) - enough columns for large tile
+ * - K >= LARGE_TILE_K (32) - minimum K for efficient dpas
+ *
+ * @param M  Output rows
+ * @param N  Output columns
+ * @param K  Reduction dimension
+ * @return true if large-tile ESIMD kernel can be used
+ */
+inline bool can_use_large_tile_esimd(int64_t M, int64_t N, int64_t K) {
+#if GGML_SYCL_ESIMD_AVAILABLE
+    if (!large_tile_enabled()) {
+        return false;
+    }
+    if (M <= 0 || N <= 0 || K <= 0) {
+        return false;
+    }
+    if (M < LARGE_TILE_M || N < LARGE_TILE_N || K < LARGE_TILE_K) {
+        return false;
+    }
+    return true;
+#else
+    GGML_UNUSED(M);
+    GGML_UNUSED(N);
+    GGML_UNUSED(K);
+    return false;  // ESIMD not available
+#endif
+}
+
 // Forward declaration for XMXConfig (defined below)
 struct XMXConfig;
 
 // Forward declaration for select_kernel_path (defined after XMXConfig)
-KernelPath select_kernel_path(
-    int batch_size, int64_t M, int64_t N, int64_t K,
-    int quant_type, const XMXConfig & cfg);
+KernelPath select_kernel_path(int batch_size, int64_t M, int64_t N, int64_t K, int quant_type, const XMXConfig & cfg);
 
 /**
  * Get kernel path name as string for debug logging.
@@ -401,10 +581,16 @@ KernelPath select_kernel_path(
  */
 inline const char * kernel_path_name(KernelPath path) {
     switch (path) {
-        case KernelPath::DMMV:       return "DMMV";
-        case KernelPath::MMVQ:       return "MMVQ";
-        case KernelPath::ESIMD_DPAS: return "ESIMD_DPAS";
-        default:                     return "UNKNOWN";
+        case KernelPath::DMMV:
+            return "DMMV";
+        case KernelPath::MMVQ:
+            return "MMVQ";
+        case KernelPath::ESIMD_DPAS:
+            return "ESIMD_DPAS";
+        case KernelPath::ESIMD_LARGE_TILE:
+            return "ESIMD_LARGE_TILE";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -434,8 +620,8 @@ struct XMXConfig {
     // These are hardware-defined constraints for dpas instructions.
     // Default values are for Intel Arc B580.
 
-    size_t xmx_m = 8;  // RepeatCount determines M (1-8, we use 8)
-    size_t xmx_n = 16; // ExecutionSize: 8 for DG2, 16 for PVC/Arc
+    size_t xmx_m      = 8;   // RepeatCount determines M (1-8, we use 8)
+    size_t xmx_n      = 16;  // ExecutionSize: 8 for DG2, 16 for PVC/Arc
     size_t xmx_k_fp16 = 16;  // K for FP16: SystolicDepth(8) x OpsPerChannel(2) = 16
     size_t xmx_k_int8 = 32;  // K for INT8: SystolicDepth(8) x OpsPerChannel(4) = 32
 
@@ -443,16 +629,18 @@ struct XMXConfig {
     // Hardware Resources
     // =========================================================================
 
-    size_t slm_size = 65536;  // SLM bytes per work-group (default 64KB)
-    int    nsm      = 20;     // Compute units (streaming multiprocessors)
+    size_t slm_size              = 65536;  // SLM bytes per work-group (default 64KB)
+    int    nsm                   = 20;     // Compute units (streaming multiprocessors)
+    int    max_esimd_workgroup   = 64;     // Max work-group size for ESIMD kernels (Arc: 64, PVC: 1024)
 
     // =========================================================================
     // Capability Flags (from hardware query)
     // =========================================================================
 
-    bool supported     = false;  // Hardware has XMX support
-    bool supports_int8 = false;  // INT8 dpas available
-    bool supports_fp16 = false;  // FP16 dpas available
+    bool supported              = false;  // Hardware has XMX support
+    bool supports_int8          = false;  // INT8 dpas available
+    bool supports_fp16          = false;  // FP16 dpas available
+    bool supports_named_barrier = false;  // Named barriers for ESIMD (PVC only, not Arc)
 
     // =========================================================================
     // Derived Configuration
@@ -514,14 +702,17 @@ struct XMXConfig {
  *
  * Performance: O(1) time, no memory allocation, simple integer comparisons only.
  */
-inline KernelPath select_kernel_path(
-    int batch_size, int64_t M, int64_t N, int64_t K,
-    int quant_type, const XMXConfig & cfg) {
+inline KernelPath select_kernel_path(int               batch_size,
+                                     int64_t           M,
+                                     int64_t           N,
+                                     int64_t           K,
+                                     int               quant_type,
+                                     const XMXConfig & cfg) {
     // Suppress unused parameter warnings (reserved for future use)
-    (void)M;
-    (void)N;
-    (void)K;
-    (void)quant_type;
+    (void) M;
+    (void) N;
+    (void) K;
+    (void) quant_type;
 
     // Environment override: Force MMVQ path
     if (env_force_mmvq()) {
@@ -547,7 +738,7 @@ inline KernelPath select_kernel_path(
     if (batch_size == 1) {
         static int force_esimd_batch1 = -1;
         if (force_esimd_batch1 < 0) {
-            const char * env = std::getenv("GGML_SYCL_FORCE_ESIMD_BATCH1");
+            const char * env   = std::getenv("GGML_SYCL_FORCE_ESIMD_BATCH1");
             force_esimd_batch1 = (env && std::atoi(env) != 0) ? 1 : 0;
         }
         if (force_esimd_batch1 && cfg.supported) {
@@ -570,6 +761,19 @@ inline KernelPath select_kernel_path(
         return KernelPath::MMVQ;
     }
 
+    // Large-tile path for very large batches (32x64 output tiles)
+    // Uses 128 work-items per work-group with cooperative loading
+    // Requires:
+    // - GGML_SYCL_LARGE_TILE_KERNEL_ENABLED=1 at compile time (disabled by default)
+    // - GGML_SYCL_UNIFIED_LARGE_TILE=1 environment variable
+    // - Named barrier support (PVC only - not available on Arc)
+#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+    if (cfg.supports_named_barrier &&
+        batch_size >= get_large_tile_min_batch() && can_use_large_tile_esimd(M, N, K)) {
+        return KernelPath::ESIMD_LARGE_TILE;
+    }
+#endif
+
     // Default: ESIMD dpas for compute-bound regime
     return KernelPath::ESIMD_DPAS;
 }
@@ -580,9 +784,9 @@ inline KernelPath select_kernel_path(
 // Different batch sizes benefit from different tiling strategies.
 
 enum class BatchStrategy {
-    WIDE_N,      // Batch 1-7: Wide N-tiles (single row, process multiple N columns per sub-group)
-    STANDARD,    // Batch 8-63: Standard tiling with multiple M and N tiles
-    PERSISTENT   // Batch 64+: Multiple tiles per workgroup with persistent threads
+    WIDE_N,     // Batch 1-7: Wide N-tiles (single row, process multiple N columns per sub-group)
+    STANDARD,   // Batch 8-63: Standard tiling with multiple M and N tiles
+    PERSISTENT  // Batch 64+: Multiple tiles per workgroup with persistent threads
 };
 
 /**
@@ -607,10 +811,10 @@ inline BatchStrategy get_batch_strategy(int batch_size) {
 // These mirror the reorder_mode enum from common.hpp
 // 0 = NONE (AoS), 1 = SOA, 2 = COALESCED, 3 = XMX_COALESCED, 4 = XMX_GEMM_TILED
 
-constexpr int LAYOUT_NONE          = 0;
-constexpr int LAYOUT_SOA           = 1;
-constexpr int LAYOUT_COALESCED     = 2;
-constexpr int LAYOUT_XMX_COALESCED = 3;
+constexpr int LAYOUT_NONE           = 0;
+constexpr int LAYOUT_SOA            = 1;
+constexpr int LAYOUT_COALESCED      = 2;
+constexpr int LAYOUT_XMX_COALESCED  = 3;
 constexpr int LAYOUT_XMX_GEMM_TILED = 4;
 
 // =============================================================================
@@ -620,9 +824,9 @@ constexpr int LAYOUT_XMX_GEMM_TILED = 4;
 // Values match LAYOUT_* constants above for interoperability.
 
 enum class LayoutMode : int {
-    AOS          = LAYOUT_NONE,           // Array of Structures (original contiguous blocks)
-    SOA          = LAYOUT_SOA,            // Structure of Arrays (qs bytes first, then scales)
-    COALESCED    = LAYOUT_COALESCED,      // Word-major interleaved for sub-group reads
+    AOS           = LAYOUT_NONE,          // Array of Structures (original contiguous blocks)
+    SOA           = LAYOUT_SOA,           // Structure of Arrays (qs bytes first, then scales)
+    COALESCED     = LAYOUT_COALESCED,     // Word-major interleaved for sub-group reads
     XMX_COALESCED = LAYOUT_XMX_COALESCED  // K_TILE=32 aligned for dpas instructions
 };
 
@@ -649,12 +853,13 @@ constexpr int QUANT_TYPE_Q6_K = 14;  // GGML_TYPE_Q6_K
 constexpr int UNIFIED_QK4_0 = 32;  // Weights per Q4_0 block
 
 struct block_q4_0_unified {
-    sycl::half d;                       // Scale factor
+    sycl::half d;                      // Scale factor
     uint8_t    qs[UNIFIED_QK4_0 / 2];  // Quantized values: 16 bytes = 32 nibbles
 };
 
 static_assert(sizeof(block_q4_0_unified) == sizeof(sycl::half) + UNIFIED_QK4_0 / 2, "wrong q4_0 block size");
-static_assert(sizeof(block_q4_0_unified) == 18, "block_q4_0_unified must be exactly 18 bytes for correct prefetch behavior");
+static_assert(sizeof(block_q4_0_unified) == 18,
+              "block_q4_0_unified must be exactly 18 bytes for correct prefetch behavior");
 
 // =============================================================================
 // UnifiedKernelArgs: Kernel launch parameters
@@ -835,13 +1040,25 @@ inline bool should_use_scalar_fallback(const UnifiedKernelArgs & args) {
  * @param K         Total K dimension
  * @return true if this tile is a partial tile requiring scalar fallback
  */
-inline bool is_partial_tile(int64_t m_start, int64_t n_start, int64_t k_start,
-                            int tile_m, int tile_n, int tile_k,
-                            int64_t M, int64_t N, int64_t K) {
+inline bool is_partial_tile(int64_t m_start,
+                            int64_t n_start,
+                            int64_t k_start,
+                            int     tile_m,
+                            int     tile_n,
+                            int     tile_k,
+                            int64_t M,
+                            int64_t N,
+                            int64_t K) {
     // Check if tile extends beyond matrix boundaries
-    if (m_start + tile_m > M) return true;
-    if (n_start + tile_n > N) return true;
-    if (k_start + tile_k > K) return true;
+    if (m_start + tile_m > M) {
+        return true;
+    }
+    if (n_start + tile_n > N) {
+        return true;
+    }
+    if (k_start + tile_k > K) {
+        return true;
+    }
     return false;
 }
 
@@ -873,22 +1090,20 @@ inline bool is_partial_tile(int64_t m_start, int64_t n_start, int64_t k_start,
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
-inline void compute_tile_scalar_bounded(
-    const float *                         /* activations */,  // Not used - data loaded to SLM
-    sycl::local_accessor<float, 1> &      slm_weights,
-    sycl::local_accessor<float, 1> &      slm_activations,
-    float *                               output,
-    int                                   M_actual,
-    int                                   N_actual,
-    int                                   K_actual,
-    int64_t                               m_offset,
-    int64_t                               n_offset,
-    int64_t                               /* K */,  // Not used - tile size TILE_K used for indexing
-    int64_t                               N,
-    const sycl::nd_item<2> &              item) {
-
-    const int local_row  = item.get_local_id(0);
-    const int local_col  = item.get_local_id(1);
+inline void compute_tile_scalar_bounded(const float * /* activations */,  // Not used - data loaded to SLM
+                                        sycl::local_accessor<float, 1> & slm_weights,
+                                        sycl::local_accessor<float, 1> & slm_activations,
+                                        float *                          output,
+                                        int                              M_actual,
+                                        int                              N_actual,
+                                        int                              K_actual,
+                                        int64_t                          m_offset,
+                                        int64_t                          n_offset,
+                                        int64_t /* K */,  // Not used - tile size TILE_K used for indexing
+                                        int64_t                  N,
+                                        const sycl::nd_item<2> & item) {
+    const int local_row      = item.get_local_id(0);
+    const int local_col      = item.get_local_id(1);
     const int local_size_row = item.get_local_range(0);
     const int local_size_col = item.get_local_range(1);
 
@@ -944,26 +1159,24 @@ inline void compute_tile_scalar_bounded(
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
-inline void compute_tile_scalar_subgroup(
-    const float *                         /* activations */,  // Not used - data loaded to SLM
-    sycl::local_accessor<float, 1> &      slm_weights,
-    sycl::local_accessor<float, 1> &      slm_activations,
-    float *                               output,
-    int                                   M_actual,
-    int                                   N_actual,
-    int                                   K_actual,
-    int64_t                               m_offset,
-    int64_t                               n_offset,
-    int64_t                               /* K */,  // Not used - tile size TILE_K used for indexing
-    int64_t                               N,
-    sycl::sub_group                       sg,
-    const sycl::nd_item<2> &              item) {
-
+inline void compute_tile_scalar_subgroup(const float * /* activations */,  // Not used - data loaded to SLM
+                                         sycl::local_accessor<float, 1> & slm_weights,
+                                         sycl::local_accessor<float, 1> & slm_activations,
+                                         float *                          output,
+                                         int                              M_actual,
+                                         int                              N_actual,
+                                         int                              K_actual,
+                                         int64_t                          m_offset,
+                                         int64_t                          n_offset,
+                                         int64_t /* K */,  // Not used - tile size TILE_K used for indexing
+                                         int64_t                  N,
+                                         sycl::sub_group          sg,
+                                         const sycl::nd_item<2> & item) {
     const int sg_id   = sg.get_local_id()[0];
     const int sg_size = sg.get_local_range()[0];
 
     // Work-group coordinates
-    const int wg_row = item.get_local_id(0);
+    const int wg_row      = item.get_local_id(0);
     const int wg_size_row = item.get_local_range(0);
 
     // Each row of work-items handles different M values
@@ -1016,20 +1229,18 @@ inline void compute_tile_scalar_subgroup(
  * @param item             ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
-inline void compute_tile_scalar_vectorized(
-    sycl::local_accessor<float, 1> &      slm_weights,
-    sycl::local_accessor<float, 1> &      slm_activations,
-    float *                               output,
-    int                                   M_actual,
-    int                                   N_actual,
-    int                                   K_actual,
-    int64_t                               m_offset,
-    int64_t                               n_offset,
-    int64_t                               N,
-    const sycl::nd_item<2> &              item) {
-
-    const int local_row  = item.get_local_id(0);
-    const int local_col  = item.get_local_id(1);
+inline void compute_tile_scalar_vectorized(sycl::local_accessor<float, 1> & slm_weights,
+                                           sycl::local_accessor<float, 1> & slm_activations,
+                                           float *                          output,
+                                           int                              M_actual,
+                                           int                              N_actual,
+                                           int                              K_actual,
+                                           int64_t                          m_offset,
+                                           int64_t                          n_offset,
+                                           int64_t                          N,
+                                           const sycl::nd_item<2> &         item) {
+    const int local_row      = item.get_local_id(0);
+    const int local_col      = item.get_local_id(1);
     const int local_size_row = item.get_local_range(0);
     const int local_size_col = item.get_local_range(1);
 
@@ -1083,7 +1294,7 @@ inline void compute_tile_scalar_vectorized(
 // All functions dequantize to sycl::half in SLM for XMX compatibility.
 
 // COALESCED layout constants (matches dmmv.cpp)
-constexpr int MMVQ_COALESCED_TILE_BLOCKS = 32;  // Blocks per tile
+constexpr int MMVQ_COALESCED_TILE_BLOCKS = 32;                                                // Blocks per tile
 constexpr int MMVQ_COALESCED_TILE_BYTES  = MMVQ_COALESCED_TILE_BLOCKS * (UNIFIED_QK4_0 / 2);  // 512 bytes
 
 // XMX constants for weight loading
@@ -1098,7 +1309,7 @@ constexpr int XMX_K_TILE_LOADING = 32;  // K dimension alignment for dpas
 SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block, sycl::half * output) {
     const sycl::half d = block->d;
 
-    #pragma unroll
+#pragma unroll
     for (int i = 0; i < 16; i++) {
         const uint8_t qs = block->qs[i];
         const int     lo = (qs & 0x0F) - 8;
@@ -1137,8 +1348,8 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
                              int64_t                               N,
                              int64_t                               K,
                              const sycl::nd_item<3> &              item) {
-    const block_q4_0_unified * blocks       = static_cast<const block_q4_0_unified *>(weights);
-    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
+    const block_q4_0_unified * blocks         = static_cast<const block_q4_0_unified *>(weights);
+    const int                  blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
@@ -1149,9 +1360,9 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
     const int total_blocks  = TILE_N * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
-        const int n_off     = idx / tile_k_blocks;
-        const int k_block   = idx % tile_k_blocks;
-        const int64_t n_global = n_start + n_off;
+        const int     n_off          = idx / tile_k_blocks;
+        const int     k_block        = idx % tile_k_blocks;
+        const int64_t n_global       = n_start + n_off;
         const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
         // Bounds check
@@ -1166,7 +1377,7 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
         // Load and dequantize block
         // GGML: weights[n_global, k] - row n_global
         const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
-        sycl::half        temp[UNIFIED_QK4_0];
+        sycl::half                 temp[UNIFIED_QK4_0];
         dequant_q4_0_to_half(block, temp);
 
         // Store to SLM: [n_off * TILE_K + k]
@@ -1207,9 +1418,9 @@ inline void load_weights_soa(sycl::local_accessor<sycl::half, 1> & slm,
                              int64_t                               K,
                              int64_t                               nrows_full,
                              const sycl::nd_item<3> &              item) {
-    const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
-    const int          row_qs_bytes = static_cast<int>(K / 2);
-    const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
+    const uint8_t *    qs_base        = static_cast<const uint8_t *>(weights);
+    const int          row_qs_bytes   = static_cast<int>(K / 2);
+    const sycl::half * d_base         = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
     const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
@@ -1289,9 +1500,9 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
                                    int64_t                               K,
                                    int64_t                               nrows_full,
                                    const sycl::nd_item<3> &              item) {
-    const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
-    const int          row_qs_bytes = static_cast<int>(K / 2);
-    const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
+    const uint8_t *    qs_base        = static_cast<const uint8_t *>(weights);
+    const int          row_qs_bytes   = static_cast<int>(K / 2);
+    const sycl::half * d_base         = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
     const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
@@ -1303,8 +1514,8 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
     const int total_weights = TILE_N * TILE_K;
 
     for (int idx = local_id; idx < total_weights; idx += local_size) {
-        const int     n_off   = idx / TILE_K;
-        const int     k_off   = idx % TILE_K;
+        const int     n_off    = idx / TILE_K;
+        const int     k_off    = idx % TILE_K;
         const int64_t n_global = n_start + n_off;
         const int64_t k_global = k_start + k_off;
 
@@ -1315,21 +1526,21 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
         }
 
         // Compute block and position within block
-        const int block_idx      = static_cast<int>(k_global / UNIFIED_QK4_0);
-        const int pos_in_block   = static_cast<int>(k_global % UNIFIED_QK4_0);
+        const int block_idx    = static_cast<int>(k_global / UNIFIED_QK4_0);
+        const int pos_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
         // Compute tile and position within tile
-        const int tile_idx        = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
-        const int block_in_tile   = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
+        const int tile_idx      = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
+        const int block_in_tile = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
 
         // Compute byte position within the 16-byte qs region
-        const int qs_byte_idx = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
-        const int word_idx    = qs_byte_idx / 4;
+        const int qs_byte_idx  = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
+        const int word_idx     = qs_byte_idx / 4;
         const int byte_in_word = qs_byte_idx % 4;
 
         // Compute coalesced offset
         // GGML: weights[n_global, k] - row n_global
-        const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+        const int64_t tile_base   = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
         const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
         // Load qs byte
@@ -1340,7 +1551,7 @@ inline void load_weights_coalesced(sycl::local_accessor<sycl::half, 1> & slm,
 
         // Dequantize and store to SLM: [n_off * TILE_K + k_off]
         const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
-        slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
+        slm[idx]         = static_cast<sycl::half>(nibble - 8) * d;
     }
 }
 
@@ -1379,9 +1590,9 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
     static_assert(TILE_K % XMX_K_TILE_LOADING == 0 || TILE_K < XMX_K_TILE_LOADING,
                   "TILE_K must be multiple of XMX_K_TILE_LOADING for XMX_COALESCED");
 
-    const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
-    const int          row_qs_bytes = static_cast<int>(K / 2);
-    const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
+    const uint8_t *    qs_base        = static_cast<const uint8_t *>(weights);
+    const int          row_qs_bytes   = static_cast<int>(K / 2);
+    const sycl::half * d_base         = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
     const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     const int local_id   = item.get_local_linear_id();
@@ -1407,8 +1618,8 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
         const int pos_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
 
         // Compute tile and position within tile (XMX tiles are K_TILE aligned)
-        const int tile_idx       = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
-        const int block_in_tile  = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
+        const int tile_idx      = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
+        const int block_in_tile = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
 
         // Compute byte position
         const int qs_byte_idx  = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
@@ -1419,7 +1630,7 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
 
         // Compute coalesced offset
         // GGML: weights[n_global, k] - row n_global
-        const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+        const int64_t tile_base   = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
         const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
         // Load qs byte
@@ -1430,7 +1641,7 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
 
         // Dequantize and store to SLM: [n_off * TILE_K + k_off]
         const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
-        slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
+        slm[idx]         = static_cast<sycl::half>(nibble - 8) * d;
     }
 }
 
@@ -1521,8 +1732,8 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
     const int local_id   = static_cast<int>(item2d.get_local_linear_id());
     const int local_size = static_cast<int>(item2d.get_local_range().size());
 
-    const block_q4_0_unified * blocks = static_cast<const block_q4_0_unified *>(weights);
-    const int          blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
+    const block_q4_0_unified * blocks         = static_cast<const block_q4_0_unified *>(weights);
+    const int                  blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
 
     // Handle based on layout
     if (layout == LayoutMode::AOS) {
@@ -1531,9 +1742,9 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
         const int total_blocks  = TILE_N * tile_k_blocks;
 
         for (int idx = local_id; idx < total_blocks; idx += local_size) {
-            const int     n_off       = idx / tile_k_blocks;
-            const int     k_block     = idx % tile_k_blocks;
-            const int64_t n_global    = n_start + n_off;
+            const int     n_off          = idx / tile_k_blocks;
+            const int     k_block        = idx % tile_k_blocks;
+            const int64_t n_global       = n_start + n_off;
             const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
 
             if (n_global >= N || k_block_global >= blocks_per_row) {
@@ -1545,7 +1756,7 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
 
             // GGML: weights[n_global, k] - row n_global
             const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
-            sycl::half         temp[UNIFIED_QK4_0];
+            sycl::half                 temp[UNIFIED_QK4_0];
             dequant_q4_0_to_half(block, temp);
 
             // Store to SLM: [n_off * TILE_K + k]
@@ -1578,27 +1789,27 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
             if (layout == LayoutMode::SOA) {
                 // SOA: qs bytes contiguous, then scales
                 // GGML: weights[n_global, k] - row n_global
-                const uint8_t qs_byte = qs_base[n_global * row_qs_bytes + k_global / 2];
-                const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
-                const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
-                slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
+                const uint8_t    qs_byte = qs_base[n_global * row_qs_bytes + k_global / 2];
+                const sycl::half d       = d_base[n_global * blocks_per_row + block_idx];
+                const int        nibble  = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
+                slm[idx]                 = static_cast<sycl::half>(nibble - 8) * d;
             } else {
                 // COALESCED / XMX_COALESCED: Word-interleaved
                 // GGML: weights[n_global, k] - row n_global
-                const int tile_idx       = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
-                const int block_in_tile  = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
-                const int qs_byte_idx    = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
-                const int word_idx       = qs_byte_idx / 4;
-                const int byte_in_word   = qs_byte_idx % 4;
-                constexpr int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;
+                const int     tile_idx      = block_idx / MMVQ_COALESCED_TILE_BLOCKS;
+                const int     block_in_tile = block_idx % MMVQ_COALESCED_TILE_BLOCKS;
+                const int     qs_byte_idx   = (pos_in_block < 16) ? pos_in_block : (pos_in_block - 16);
+                const int     word_idx      = qs_byte_idx / 4;
+                const int     byte_in_word  = qs_byte_idx % 4;
+                constexpr int word_stride   = MMVQ_COALESCED_TILE_BLOCKS * 4;
 
-                const int64_t tile_base = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
+                const int64_t tile_base   = n_global * row_qs_bytes + tile_idx * MMVQ_COALESCED_TILE_BYTES;
                 const int64_t word_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
 
-                const uint8_t qs_byte = qs_base[word_offset];
-                const sycl::half d = d_base[n_global * blocks_per_row + block_idx];
-                const int nibble = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
-                slm[idx] = static_cast<sycl::half>(nibble - 8) * d;
+                const uint8_t    qs_byte = qs_base[word_offset];
+                const sycl::half d       = d_base[n_global * blocks_per_row + block_idx];
+                const int        nibble  = (pos_in_block < 16) ? (qs_byte & 0x0F) : (qs_byte >> 4);
+                slm[idx]                 = static_cast<sycl::half>(nibble - 8) * d;
             }
         }
     }
@@ -1638,15 +1849,14 @@ namespace sycl_matrix = sycl::ext::oneapi::experimental::matrix;
  * @param slm_acc       SLM for accumulator extraction
  * @param item          ND-item for work distribution
  */
-template<int TILE_M, int TILE_N, int TILE_K>
-[[sycl::reqd_sub_group_size(XMX_SUBGROUP_SIZE)]]
-inline void compute_tile_xmx(
-    sycl::sub_group sg,
-    const sycl::half* weights_slm,  // Weights in SLM [TILE_N x TILE_K] row-major
-    const sycl::half* act_slm,      // Activations in SLM [TILE_M x TILE_K] row-major
-    float* c_regs,                  // Accumulator in registers [TILE_M x TILE_N]
-    sycl::local_accessor<float, 1>& slm_acc,  // SLM for accumulator extraction
-    const sycl::nd_item<2>& /* item */)       // Unused, kept for API consistency
+template <int TILE_M, int TILE_N, int TILE_K>
+[[sycl::reqd_sub_group_size(XMX_SUBGROUP_SIZE)]] inline void compute_tile_xmx(
+    sycl::sub_group                  sg,
+    const sycl::half *               weights_slm,  // Weights in SLM [TILE_N x TILE_K] row-major
+    const sycl::half *               act_slm,      // Activations in SLM [TILE_M x TILE_K] row-major
+    float *                          c_regs,       // Accumulator in registers [TILE_M x TILE_N]
+    sycl::local_accessor<float, 1> & slm_acc,      // SLM for accumulator extraction
+    const sycl::nd_item<2> & /* item */)           // Unused, kept for API consistency
 {
     // Number of XMX tiles needed to cover the full tile
     constexpr int NUM_TILES_M = TILE_M / XMX_TILE_M;
@@ -1662,19 +1872,18 @@ inline void compute_tile_xmx(
     // For C = B @ A^T, we load:
     // - mat_a from activations B[m, k] (row-major)
     // - mat_b from weights A[n, k]^T (col-major view of row-major data)
-    sycl_matrix::joint_matrix<sycl::sub_group, sycl::half,
-                              sycl_matrix::use::a, XMX_TILE_M, XMX_TILE_K,
-                              sycl_matrix::layout::row_major> mat_a;  // Activations
-    sycl_matrix::joint_matrix<sycl::sub_group, sycl::half,
-                              sycl_matrix::use::b, XMX_TILE_K, XMX_TILE_N,
-                              sycl_matrix::layout::col_major> mat_b;  // Weights transposed
-    sycl_matrix::joint_matrix<sycl::sub_group, float,
-                              sycl_matrix::use::accumulator, XMX_TILE_M, XMX_TILE_N> acc;
+    sycl_matrix::joint_matrix<sycl::sub_group, sycl::half, sycl_matrix::use::a, XMX_TILE_M, XMX_TILE_K,
+                              sycl_matrix::layout::row_major>
+        mat_a;  // Activations
+    sycl_matrix::joint_matrix<sycl::sub_group, sycl::half, sycl_matrix::use::b, XMX_TILE_K, XMX_TILE_N,
+                              sycl_matrix::layout::col_major>
+        mat_b;  // Weights transposed
+    sycl_matrix::joint_matrix<sycl::sub_group, float, sycl_matrix::use::accumulator, XMX_TILE_M, XMX_TILE_N> acc;
 
     // Get raw pointer to SLM accumulator region for this sub-group
-    float* acc_slm_ptr = const_cast<float*>(&slm_acc[0]);
-    auto acc_slm_cast = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                  sycl::access::decorated::no>(acc_slm_ptr);
+    float * acc_slm_ptr = const_cast<float *>(&slm_acc[0]);
+    auto    acc_slm_cast =
+        sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(acc_slm_ptr);
 
     // Process each XMX tile
     for (int tm = 0; tm < NUM_TILES_M; tm++) {
@@ -1692,18 +1901,18 @@ inline void compute_tile_xmx(
 
                 // Load activations tile (row-major: activations[m, k])
                 // Index: act_slm[m_base * TILE_K + k_base]
-                auto a_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                       sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(act_slm + m_base * TILE_K + k_base));
+                auto a_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        const_cast<sycl::half *>(act_slm + m_base * TILE_K + k_base));
                 sycl_matrix::joint_matrix_load(sg, mat_a, a_ptr, TILE_K);
 
                 // Load weights tile (transposed view: weights[n, k] loaded as col-major)
                 // Weights are stored row-major as [n * TILE_K + k]
                 // For col-major load of transposed matrix, we read from weights[n_base, k_base]
                 // The col-major load will read columns of weights (which are rows after transpose)
-                auto b_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                       sycl::access::decorated::no>(
-                    const_cast<sycl::half*>(weights_slm + n_base * TILE_K + k_base));
+                auto b_ptr =
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        const_cast<sycl::half *>(weights_slm + n_base * TILE_K + k_base));
                 sycl_matrix::joint_matrix_load(sg, mat_b, b_ptr, TILE_K);
 
                 // Compute: acc += A * B (where B is transposed weights)
@@ -1711,16 +1920,15 @@ inline void compute_tile_xmx(
             }
 
             // Store accumulator to SLM for extraction
-            sycl_matrix::joint_matrix_store(sg, acc, acc_slm_cast, XMX_TILE_N,
-                                            sycl_matrix::layout::row_major);
+            sycl_matrix::joint_matrix_store(sg, acc, acc_slm_cast, XMX_TILE_N, sycl_matrix::layout::row_major);
 
             // Sub-group barrier to ensure store is complete
             sycl::group_barrier(sg);
 
             // Extract and accumulate to output registers
             for (int i = lane; i < XMX_OUTPUT_SIZE; i += XMX_SUBGROUP_SIZE) {
-                int row = i / XMX_TILE_N;
-                int col = i % XMX_TILE_N;
+                int row     = i / XMX_TILE_N;
+                int col     = i % XMX_TILE_N;
                 int out_idx = (m_base + row) * TILE_N + (n_base + col);
                 c_regs[out_idx] += acc_slm_ptr[i];
             }
@@ -1744,7 +1952,7 @@ inline void compute_tile_xmx(
 inline bool is_xmx_unified_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
-        const char* env = std::getenv("GGML_SYCL_XMX_UNIFIED");
+        const char * env = std::getenv("GGML_SYCL_XMX_UNIFIED");
         if (!env) {
             enabled = 1;
         } else {
@@ -1763,11 +1971,11 @@ inline bool is_xmx_unified_enabled() {
 inline bool is_xmx_force_enabled() {
     static int forced = -1;
     if (forced < 0) {
-        const char * env_force = std::getenv("GGML_SYCL_UNIFIED_FORCE_XMX");
-        const char * env_esimd = std::getenv("GGML_SYCL_FORCE_ESIMD");
-        const bool   force_xmx = (env_force && std::atoi(env_force) != 0);
+        const char * env_force   = std::getenv("GGML_SYCL_UNIFIED_FORCE_XMX");
+        const char * env_esimd   = std::getenv("GGML_SYCL_FORCE_ESIMD");
+        const bool   force_xmx   = (env_force && std::atoi(env_force) != 0);
         const bool   force_esimd = (env_esimd && std::atoi(env_esimd) != 0);
-        forced = (force_xmx || force_esimd) ? 1 : 0;
+        forced                   = (force_xmx || force_esimd) ? 1 : 0;
     }
     return forced != 0;
 }
@@ -1782,7 +1990,7 @@ inline bool allow_small_xmx_tiles() {
     static int allow = -1;
     if (allow < 0) {
         const char * env = std::getenv("GGML_SYCL_XMX_ALLOW_SMALL_TILES");
-        allow = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
+        allow            = env ? ((std::atoi(env) != 0) ? 1 : 0) : 1;
         if (!allow && is_xmx_force_enabled()) {
             allow = 1;
         }
@@ -1820,7 +2028,7 @@ inline bool can_use_xmx(int64_t M, int64_t N, int64_t K) {
     return (K % XMX_TILE_K) == 0;
 }
 
-#else  // !GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
+#else   // !GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
 
 /**
  * Fallback when joint_matrix is not available.

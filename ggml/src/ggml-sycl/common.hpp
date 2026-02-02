@@ -525,6 +525,7 @@ struct sycl_device_info {
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
     bool            supports_soa_reorder = false;  // Device capability: can use SoA weight layout
     XMXCapabilities xmx_caps;                      // XMX matrix engine capabilities (queried at init)
+    char            device_name[256] = { 0 };      // Device name for GPU family detection
 };
 
 struct ggml_sycl_device_info {

@@ -2512,6 +2512,11 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].max_alloc_size       = std::min(prop.get_max_mem_alloc_size(), device_vram);
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
 
+        // Store device name for GPU family detection (used for ESIMD limits)
+        std::string name = device.get_info<sycl::info::device::name>();
+        std::strncpy(info.devices[i].device_name, name.c_str(), sizeof(info.devices[i].device_name) - 1);
+        info.devices[i].device_name[sizeof(info.devices[i].device_name) - 1] = '\0';
+
         size_t     free_vram           = 0;
         size_t     total_vram_reported = device_vram;
         dpct::err0 mem_err             = CHECK_TRY_ERROR(device_i.get_memory_info(free_vram, total_vram_reported));
