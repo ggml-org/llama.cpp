@@ -28,8 +28,7 @@ GRADER_PATTERNS = {
 }
 
 TEMPLATE_REGISTRY = {
-    "aime": """
-{question}
+    "aime": """{question}
 Please reason step by step, and put your final answer within \\boxed{{}}.
 """,
 }
