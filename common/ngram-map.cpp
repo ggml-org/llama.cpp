@@ -53,11 +53,12 @@ llama_tokens common_ngram_simple_draft(
     // Simple implementation of self-speculative decoding without a draft model.
     //
     const size_t cur_len = tokens.size();
+
     // Only check every check_rate tokens to save compute
-    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (state.idx_last_check + state.config.check_rate > cur_len) {
-        llama_tokens draft_tokens;
-        return draft_tokens;
+    if (state.check_id++ >= state.config.check_rate) {
+        state.check_id = 0;
+
+        return {};
     }
 
     size_t n_draft_min = state.config.size_ngram; // size of n-gram to lookup in token history
@@ -79,9 +80,6 @@ llama_tokens common_ngram_simple_draft(
         pattern.push_back(tokens[j]);
     }
     pattern.push_back(sampled); // add the last token to the pattern
-
-    // We do a search in the token history.
-    state.idx_last_check = cur_len;
 
     size_t match_pos = 0; // we ignore position 0, position 0 == no match
                           // search backwards, but skip the current match (we are currently there)

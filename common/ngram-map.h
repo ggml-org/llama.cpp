@@ -31,7 +31,7 @@ struct common_ngram_simple_config {
 struct common_ngram_simple_state {
     common_ngram_simple_config config;
 
-    size_t idx_last_check = 0; // index of last check in context history (mutable)
+    size_t check_id = 0; // used to control the frequency of generating drafts
 
     common_ngram_simple_state(const common_ngram_simple_config & config)
         : config(config) {}
