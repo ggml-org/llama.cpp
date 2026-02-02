@@ -2,6 +2,9 @@
 
 set -e
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "=== llama-server-simulator Test Script ==="
 echo ""
 
@@ -10,8 +13,8 @@ SUCCESS_RATE=0.8
 TEST_PORT=8034
 
 echo "Starting simulator on port $PORT with success rate $SUCCESS_RATE..."
-source venv/bin/activate
-python3 examples/llama-eval/llama-server-simulator.py --port $PORT --success-rate $SUCCESS_RATE > /tmp/simulator-test.log 2>&1 &
+source "$SCRIPT_DIR/venv/bin/activate"
+python3 "$SCRIPT_DIR/llama-server-simulator.py" --port $PORT --success-rate $SUCCESS_RATE > /tmp/simulator-test.log 2>&1 &
 SIMULATOR_PID=$!
 
 echo "Waiting for simulator to start..."
