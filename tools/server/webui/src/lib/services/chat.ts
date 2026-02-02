@@ -985,19 +985,27 @@ export class ChatService {
 		try {
 			let chunk = '';
 			while (true) {
-				if (abortSignal?.aborted) break;
+				if (abortSignal?.aborted) {
+					break;
+				}
 
 				const { done, value } = await reader.read();
-				if (done) break;
+				if (done) {
+					break;
+				}
 
-				if (abortSignal?.aborted) break;
+				if (abortSignal?.aborted) {
+					break;
+				}
 
 				chunk += decoder.decode(value, { stream: true });
 				const lines = chunk.split('\n');
 				chunk = lines.pop() || '';
 
 				for (const line of lines) {
-					if (abortSignal?.aborted) break;
+					if (abortSignal?.aborted) {
+						break;
+					}
 
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
@@ -1011,6 +1019,10 @@ export class ChatService {
 							const content = parsed.content;
 							const timings = parsed.timings;
 							const model = parsed.model;
+
+							if (parsed.stop) {
+								streamFinished = true;
+							}
 
 							if (model && !modelEmitted) {
 								modelEmitted = true;
@@ -1034,10 +1046,14 @@ export class ChatService {
 					}
 				}
 
-				if (abortSignal?.aborted) break;
+				if (streamFinished) {
+					break;
+				}
 			}
 
-			if (abortSignal?.aborted) return;
+			if (abortSignal?.aborted) {
+				return;
+			}
 
 			if (streamFinished) {
 				onComplete?.(aggregatedContent, undefined, lastTimings, undefined);
