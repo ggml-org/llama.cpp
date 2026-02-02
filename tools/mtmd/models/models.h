@@ -109,3 +109,8 @@ struct clip_graph_mobilenetv5 : clip_graph {
         ggml_tensor * inp,
         const mobilenetv5_block & block);
 };
+
+struct clip_graph_vaetki : clip_graph {
+    clip_graph_vaetki(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
