@@ -162,13 +162,16 @@
 						onclick={() => (activeView = ChatMessageStatsView.TOOLS)}
 					>
 						<Wrench class="h-3 w-3" />
+
 						<span class="sr-only">Tools</span>
 					</button>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>Tool calls</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
+
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<button
@@ -180,9 +183,11 @@
 						onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
 					>
 						<Layers class="h-3 w-3" />
+
 						<span class="sr-only">Summary</span>
 					</button>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>Agentic summary</p>
 				</Tooltip.Content>

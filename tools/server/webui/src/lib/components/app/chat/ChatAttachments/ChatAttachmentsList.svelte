@@ -171,6 +171,7 @@
 											arguments: item.uploadedFile.mcpPrompt.arguments
 										}
 									: null}
+
 						{#if mcpPrompt}
 							<ChatAttachmentMcpPrompt
 								class="max-w-[300px] min-w-[200px]"

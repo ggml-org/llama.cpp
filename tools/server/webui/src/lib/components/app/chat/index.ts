@@ -2,7 +2,7 @@
  *
  * ATTACHMENTS
  *
- * Components for displaying and managing file attachments in chat messages.
+ * Components for displaying and managing different attachment types in chat messages.
  * Supports two operational modes:
  * - **Readonly mode**: For displaying stored attachments in sent messages (DatabaseMessageExtra[])
  * - **Editable mode**: For managing pending uploads in the input form (ChatUploadedFile[])
@@ -96,7 +96,7 @@ export { default as ChatAttachmentsViewAll } from './ChatAttachments/ChatAttachm
  * FORM
  *
  * Components for the chat input area. The form handles user input, file attachments,
- * audio recording, and MCP prompt selection. It integrates with multiple stores:
+ * audio recording, and MCP prompts & resources selection. It integrates with multiple stores:
  * - `chatStore` for message submission and generation control
  * - `modelsStore` for model selection and validation
  * - `mcpStore` for MCP prompt browsing and loading
@@ -130,6 +130,7 @@ export { default as ChatAttachmentsViewAll } from './ChatAttachments/ChatAttachm
  * - File upload via button dropdown (images/text/PDF), drag-drop, or paste
  * - Audio recording with WAV conversion (when model supports audio)
  * - MCP prompt picker with search and argument forms
+ * - MCP reource picker with component to list attached resources at the bottom of Chat Form
  * - Model selector integration (router mode)
  * - Loading state with stop button, disabled state for errors
  *

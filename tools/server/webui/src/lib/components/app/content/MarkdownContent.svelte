@@ -197,9 +197,11 @@
 			type?: string;
 			position?: { start?: { offset?: number }; end?: { offset?: number } };
 		};
+
 		if (n.position?.start?.offset != null && n.position?.end?.offset != null) {
 			return `${n.type}-${n.position.start.offset}-${n.position.end.offset}`;
 		}
+
 		return `${n.type}-idx${index}`;
 	}
 
@@ -414,6 +416,7 @@
 				{ position: (child as { position?: unknown }).position } as HastRootContent,
 				index
 			);
+
 			nextBlocks.push({ id, html, contentHash: hash });
 		}
 
@@ -425,6 +428,7 @@
 			const transformedRoot = (await processorInstance.run(
 				singleNodeRoot as MdastRoot
 			)) as HastRoot;
+
 			unstableHtml = processorInstance.stringify(transformedRoot);
 		}
 

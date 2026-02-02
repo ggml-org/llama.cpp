@@ -60,6 +60,7 @@
 			role="alert"
 		>
 			<span class="shrink-0">⚠</span>
+
 			<span>{promptError}</span>
 		</div>
 	{/if}

@@ -200,7 +200,9 @@ export class MCPService {
 			)
 		);
 
-		console.log(`[MCPService][${serverName}] Creating transport...`);
+		if (import.meta.env.DEV) {
+			console.log(`[MCPService][${serverName}] Creating transport...`);
+		}
 		const { transport, type: transportType } = this.createTransport(serverConfig);
 
 		// Phase: Transport ready
@@ -414,8 +416,10 @@ export class MCPService {
 
 		if (content.type === 'resource' && content.resource) {
 			const resource = content.resource;
+
 			if (resource.text) return resource.text;
 			if (resource.blob) return resource.blob;
+
 			return JSON.stringify(resource);
 		}
 
@@ -453,9 +457,11 @@ export class MCPService {
 				ref,
 				argument
 			});
+
 			return result.completion;
 		} catch (error) {
 			console.error(`[MCPService] Failed to get completions:`, error);
+
 			return null;
 		}
 	}
@@ -480,12 +486,14 @@ export class MCPService {
 	): Promise<{ resources: MCPResource[]; nextCursor?: string }> {
 		try {
 			const result = await connection.client.listResources(cursor ? { cursor } : undefined);
+
 			return {
 				resources: (result.resources ?? []) as MCPResource[],
 				nextCursor: result.nextCursor
 			};
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Failed to list resources:`, error);
+
 			return { resources: [] };
 		}
 	}
@@ -520,6 +528,7 @@ export class MCPService {
 	): Promise<{ resourceTemplates: MCPResourceTemplate[]; nextCursor?: string }> {
 		try {
 			const result = await connection.client.listResourceTemplates(cursor ? { cursor } : undefined);
+
 			return {
 				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[],
 				nextCursor: result.nextCursor
@@ -529,6 +538,7 @@ export class MCPService {
 				`[MCPService][${connection.serverName}] Failed to list resource templates:`,
 				error
 			);
+
 			return { resourceTemplates: [] };
 		}
 	}
@@ -563,12 +573,14 @@ export class MCPService {
 	): Promise<MCPReadResourceResult> {
 		try {
 			const result = await connection.client.readResource({ uri });
+
 			return {
 				contents: (result.contents ?? []) as MCPResourceContent[],
 				_meta: result._meta
 			};
 		} catch (error) {
 			console.error(`[MCPService][${connection.serverName}] Failed to read resource:`, error);
+
 			throw error;
 		}
 	}
@@ -582,12 +594,14 @@ export class MCPService {
 	static async subscribeResource(connection: MCPConnection, uri: string): Promise<void> {
 		try {
 			await connection.client.subscribeResource({ uri });
+
 			console.log(`[MCPService][${connection.serverName}] Subscribed to resource: ${uri}`);
 		} catch (error) {
 			console.error(
 				`[MCPService][${connection.serverName}] Failed to subscribe to resource:`,
 				error
 			);
+
 			throw error;
 		}
 	}
@@ -600,12 +614,14 @@ export class MCPService {
 	static async unsubscribeResource(connection: MCPConnection, uri: string): Promise<void> {
 		try {
 			await connection.client.unsubscribeResource({ uri });
+
 			console.log(`[MCPService][${connection.serverName}] Unsubscribed from resource: ${uri}`);
 		} catch (error) {
 			console.error(
 				`[MCPService][${connection.serverName}] Failed to unsubscribe from resource:`,
 				error
 			);
+
 			throw error;
 		}
 	}

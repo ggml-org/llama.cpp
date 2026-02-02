@@ -65,6 +65,7 @@
 					checked={useProxy}
 					onCheckedChange={(checked) => onUseProxyChange?.(checked)}
 				/>
+
 				<span class="text-xs text-muted-foreground">Use llama-server proxy</span>
 			</label>
 		{/if}

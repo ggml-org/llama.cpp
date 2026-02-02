@@ -7,14 +7,6 @@
  */
 
 /**
- * **TruncatedText** - Text with ellipsis and tooltip
- *
- * Displays text with automatic truncation and full content in tooltip.
- * Useful for long names or paths in constrained spaces.
- */
-export { default as TruncatedText } from './TruncatedText.svelte';
-
-/**
  * **ConversationSelection** - Multi-select conversation picker
  *
  * List of conversations with checkboxes for multi-selection.
@@ -35,3 +27,11 @@ export { default as ConversationSelection } from './ConversationSelection.svelte
  * with left/right navigation buttons that appear on hover.
  */
 export { default as HorizontalScrollCarousel } from './HorizontalScrollCarousel.svelte';
+
+/**
+ * **TruncatedText** - Text with ellipsis and tooltip
+ *
+ * Displays text with automatic truncation and full content in tooltip.
+ * Useful for long names or paths in constrained spaces.
+ */
+export { default as TruncatedText } from './TruncatedText.svelte';
