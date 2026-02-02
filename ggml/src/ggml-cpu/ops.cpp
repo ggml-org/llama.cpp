@@ -8239,8 +8239,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             }
         }
 
-        // sinks - skip when writing partials, reduce function will apply once
-        if (sinks && !write_partials) {
+        // sinks - apply only on the first kv-chunk
+        if (sinks && ic_start == 0) {
             const float s = ((float *)((char *) sinks->data))[h];
 
             float ms = 1.0f;
@@ -8248,6 +8248,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
             if (s > M) {
                 ms = expf(M - s);
+                M = s;
                 ggml_vec_scale_f32(DV, VKQ32, ms);
             } else {
                 vs = expf(s - M);
@@ -8564,7 +8565,6 @@ static void ggml_flash_attn_ext_reduce_partials(
     const ggml_tensor * q = dst->src[0];
     const ggml_tensor * k = dst->src[1];
     const ggml_tensor * v = dst->src[2];
-    const ggml_tensor * sinks = dst->src[4];
 
     const int64_t DK = k->ne[0];
     const int64_t DV = v->ne[0];
@@ -8614,20 +8614,6 @@ static void ggml_flash_attn_ext_reduce_partials(
             }
             S_final = S_final * scale_old + S_chunk * scale_new;
             M_final = M_new;
-        }
-
-        // Apply sinks once after combining all chunks
-        if (sinks) {
-            const float s = ((float *) sinks->data)[q_head];
-
-            if (s > M_final) {
-                const float ms = expf(M_final - s);
-                ggml_vec_scale_f32(DV, VKQ_final, ms);
-                S_final = S_final * ms + 1.0f;
-                M_final = s;
-            } else {
-                S_final = S_final + expf(s - M_final);
-            }
         }
 
         // Normalize and write to output
