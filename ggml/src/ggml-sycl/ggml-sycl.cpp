@@ -18663,7 +18663,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         static int output_weight_cpu_fallback = -1;
         if (output_weight_cpu_fallback < 0) {
             const char * env = std::getenv("GGML_SYCL_OUTPUT_WEIGHT_CPU_FALLBACK");
-            output_weight_cpu_fallback = env ? std::atoi(env) : 1;
+            // Default OFF: CPU fallback was a workaround for host-resident weights, but now that
+            // weights load to VRAM properly, GPU kernel should be used directly.
+            // Enable with GGML_SYCL_OUTPUT_WEIGHT_CPU_FALLBACK=1 if needed for debugging.
+            output_weight_cpu_fallback = env ? std::atoi(env) : 0;
         }
         if (output_weight_cpu_fallback != 0) {
 #ifdef GGML_SYCL_GRAPH
