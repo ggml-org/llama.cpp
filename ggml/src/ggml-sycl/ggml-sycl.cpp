@@ -1469,13 +1469,17 @@ bool ggml_backend_sycl_weights_evictable(void) {
         return cached != 0;
     }
 
+    // Default OFF: weights_evictable places model in HOST memory, causing slow performance.
+    // Only enable when model exceeds VRAM and needs streaming from host.
+    // Users can explicitly enable with GGML_SYCL_WEIGHTS_EVICTABLE=1 for large models.
     int resolved = 0;
     if (ggml_sycl::unified_cache_enabled()) {
         const char * env = std::getenv("GGML_SYCL_WEIGHTS_EVICTABLE");
         if (env != nullptr) {
             resolved = std::atoi(env) != 0 ? 1 : 0;
         } else {
-            resolved = 1;  // Default ON when unified cache is enabled
+            // Default OFF - models that fit in VRAM should use VRAM, not host memory
+            resolved = 0;
         }
     }
 
@@ -2176,8 +2180,8 @@ void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * 
     if (!tensor_name) {
         return nullptr;
     }
-    if (!g_tiered_enabled.load(std::memory_order_acquire)) {
-
+    // Only check tiered cache when model exceeds VRAM - otherwise weights are in device memory
+    if (!g_model_exceeds_vram.load(std::memory_order_acquire)) {
         return nullptr;
     }
     // First check inventory index (fast path for inventory check)
@@ -2227,9 +2231,9 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     if (!tensor || tensor->name[0] == '\0') {
         return nullptr;
     }
-    if (!g_tiered_enabled.load(std::memory_order_acquire)) {
+    // Only check tiered cache when model exceeds VRAM
+    if (!g_model_exceeds_vram.load(std::memory_order_acquire)) {
         return nullptr;
-
     }
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         return nullptr;
@@ -11256,14 +11260,12 @@ static void ggml_sycl_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor *
 static void ggml_sycl_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     const ggml_tensor *  src0 = dst->src[0];  // Weight tensor
-    // Check for tiered dispatch
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
-
+    // Check for tiered dispatch - only when model exceeds VRAM
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
         ggml_sycl::memory_tier tier;
         bool                   in_inventory = false;
         void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
         if (cached_ptr != nullptr) {
-
             GGML_LOG_DEBUG("[SYCL] get_rows tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
             // Future: use cached_ptr for tiered path
         }
@@ -14454,19 +14456,15 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    // Tiered dispatch check for batched matmul
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
-
+    // Tiered dispatch check for batched matmul - only when model exceeds VRAM
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
         ggml_sycl::memory_tier tier;
         bool                   in_inventory = false;
         void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
         if (cached_ptr != nullptr) {
-
             GGML_LOG_DEBUG("[SYCL] batched_sycl tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
         } else if (in_inventory) {
-
             GGML_LOG_DEBUG("[SYCL] batched_sycl tiered pending: %s\n", src0->name);
-
         }
     }
 
@@ -18610,9 +18608,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     };
     const bool kqv_matmul       = is_kqv_matmul(src0, src1, dst);
     const bool force_simple_kqv = (g_ggml_sycl_kqv_force_simple || g_ggml_sycl_kqv_disable_fp16) && kqv_matmul;
-    // Check if weight tensor is tracked for tiered memory dispatch
-    // Single mutex acquisition provides both cached pointer and inventory status
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+    // Check if weight tensor is tracked for tiered memory dispatch.
+    // Only do this when model EXCEEDS VRAM - otherwise weights are already in device memory
+    // via the normal buffer system and this check is wasted overhead.
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
         ggml_sycl::memory_tier tier;
 
         bool                   in_inventory = false;
@@ -19856,10 +19855,9 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[XMX MoE] %s is not marked as weights, skipping XMX path\n", src0->name);
         return false;
     }
-    // Check tiered dispatch for MoE expert weights
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+    // Check tiered dispatch for MoE expert weights - only when model exceeds VRAM
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
         ggml_sycl::memory_tier tier;
-
         bool                   in_inventory = false;
         void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
         if (cached_ptr != nullptr) {
@@ -20825,18 +20823,15 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         src0->name);
         call_count++;
     }
-    // Check for tiered dispatch on expert weights
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+    // Check for tiered dispatch on expert weights - only when model exceeds VRAM
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
         ggml_sycl::memory_tier tier;
         bool                   in_inventory = false;
         void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
         if (cached_ptr != nullptr) {
-
             GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-
         } else if (in_inventory) {
             GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered pending: %s\n", src0->name);
-
         }
     }
 
