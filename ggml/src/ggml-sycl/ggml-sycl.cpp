@@ -5285,7 +5285,8 @@ static bool is_pp_double_buffer_enabled() {
 
     return val == 1;
 }
-static void dev2dev_memcpy(sycl::queue & q_dst,
+// Returns true on success, false on failure (OOM or other error)
+static bool dev2dev_memcpy(sycl::queue & q_dst,
                            sycl::queue & q_src,
                            void *        ptr_dst,
                            const void *  ptr_src,
@@ -5304,35 +5305,72 @@ static void dev2dev_memcpy(sycl::queue & q_dst,
             goto single_buffer;
         }
         // Copy src -> host buffer (wait for completion since we need data in buffer)
-
-        q_src.memcpy(shared_buf, (const char *) ptr_src, size).wait();
-        // Copy host buffer -> dst (don't wait - record event for next use of this buffer)
-        sycl::event evt = q_dst.memcpy((char *) ptr_dst, shared_buf, size);
-        ggml_sycl_set_dev2dev_transfer_event(buf_idx, evt);
-        // Note: The next transfer will use the other buffer, and only wait if
-        // that buffer's previous transfer isn't complete yet
-        return;
+        try {
+            q_src.memcpy(shared_buf, (const char *) ptr_src, size).wait();
+            // Copy host buffer -> dst (don't wait - record event for next use of this buffer)
+            sycl::event evt = q_dst.memcpy((char *) ptr_dst, shared_buf, size);
+            ggml_sycl_set_dev2dev_transfer_event(buf_idx, evt);
+            // Note: The next transfer will use the other buffer, and only wait if
+            // that buffer's previous transfer isn't complete yet
+            return true;
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("SYCL: dev2dev_memcpy (double-buffer) failed: %s\n", e.what());
+            // Fall through to single-buffer mode
+        }
     }
 single_buffer:
     void * shared_buf = ggml_sycl_get_dev2dev_transfer_buffer(size);
     if (shared_buf == nullptr) {
-
         // Fallback to a temporary pinned host buffer
         char * host_buf = (char *) ggml_sycl_host_malloc(size);
         if (!host_buf) {
             GGML_LOG_ERROR("SYCL PP: Failed to allocate %zu bytes for dev2dev staging\n", size);
-            return;
+            return false;
         }
-        q_src.memcpy(host_buf, (const char *) ptr_src, size).wait();
-        q_dst.memcpy((char *) ptr_dst, host_buf, size).wait();
-        ggml_sycl_host_free(host_buf);
-        return;
+        try {
+            q_src.memcpy(host_buf, (const char *) ptr_src, size).wait();
+            q_dst.memcpy((char *) ptr_dst, host_buf, size).wait();
+            ggml_sycl_host_free(host_buf);
+            return true;
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("SYCL: dev2dev_memcpy (temp host) failed: %s\n", e.what());
+            ggml_sycl_host_free(host_buf);
+            return false;
+        }
     }
-    // Use pinned host buffer: accessible from both host and all devices
-    // Copy: src_device -> shared_buf -> dst_device
-    q_src.memcpy(shared_buf, (const char *) ptr_src, size).wait();
-    q_dst.memcpy((char *) ptr_dst, shared_buf, size).wait();
-    // No free - buffer is persistent and reused
+    // Try using pinned host buffer first
+    // This may fail if src and dst are on different SYCL platforms (context mismatch)
+    try {
+        q_src.memcpy(shared_buf, (const char *) ptr_src, size).wait();
+        q_dst.memcpy((char *) ptr_dst, shared_buf, size).wait();
+        // No free - buffer is persistent and reused
+        return true;
+    } catch (const sycl::exception & e) {
+        // Pinned buffer failed (likely cross-platform transfer)
+        // Fall back to using regular malloc for cross-platform compatibility
+        GGML_SYCL_DEBUG("SYCL: dev2dev_memcpy (shared buf) failed: %s - trying unpinned fallback\n", e.what());
+    }
+
+    // Cross-platform fallback: use regular malloc (always accessible from any device)
+    // This is slower than pinned memory but works across all platforms
+    void * unpinned_buf = std::malloc(size);
+    if (!unpinned_buf) {
+        GGML_LOG_ERROR("SYCL: dev2dev_memcpy fallback malloc failed (%zu bytes)\n", size);
+        return false;
+    }
+
+    try {
+        // Copy: src_device -> unpinned_host -> dst_device
+        q_src.memcpy(unpinned_buf, (const char *) ptr_src, size).wait();
+        q_dst.memcpy((char *) ptr_dst, unpinned_buf, size).wait();
+        std::free(unpinned_buf);
+        return true;
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("SYCL: dev2dev_memcpy (unpinned fallback) failed: %s\n", e.what());
+        GGML_LOG_ERROR("  src_ptr=%p dst_ptr=%p size=%zu\n", ptr_src, ptr_dst, size);
+        std::free(unpinned_buf);
+        return false;
+    }
 }
 static bool ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   src,
@@ -5374,28 +5412,20 @@ static bool ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
         queue_ptr stream_src = src_ctx->stream;
         size_t    size       = ggml_nbytes(src);
 
-        //todo. it's dirty solutino to walkaroud known issue:device2device cross GPUs.
-        dev2dev_memcpy(*stream_dst, *stream_src, dst->data, src->data, size);
-//todo, it's known issue：error in device2device cross GPUs. reused when the issue is fixed. DON"T remove
-#if 0
-        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(
-
-            (char *)dst->data, (const char *)src->data, size).wait()));
-        /*
-        DPCT1009:201: SYCL uses exceptions to report errors and does not use the
-        error codes. The original code was commented out and a warning string
-        was inserted. You need to rewrite this code.
-        */
-        SYCL_CHECK(CHECK_TRY_ERROR(
-            ggml_sycl_get_device(dst_ctx->device).queues_wait_and_throw()));
-#endif
+        // Device-to-device copy via host-staged transfer
+        // Returns false on OOM or other failure
+        if (!dev2dev_memcpy(*stream_dst, *stream_src, dst->data, src->data, size)) {
+            GGML_LOG_ERROR("SYCL: buffer_cpy_tensor failed: src=%s (%zu bytes) to dst device %d\n",
+                          src->name, size, dst_ctx->device);
+            return false;  // Signal copy failure to ggml backend
+        }
         return true;
     }
     return false;
     GGML_UNUSED(buffer);
 } catch (const sycl::exception & exc) {
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
+    GGML_LOG_ERROR("SYCL: buffer_cpy_tensor exception: %s (file:%s line:%d)\n", exc.what(), __FILE__, __LINE__);
+    return false;  // Return failure instead of aborting
 }
 static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) try {
     GGML_SYCL_DEBUG("[SYCL] call %s: size=%zu\n", __func__, buffer->size);

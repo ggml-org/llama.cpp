@@ -1648,37 +1648,132 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
 // 1. sycl::malloc_host for pinned memory (faster DMA transfers)
 // 2. Two buffers for double-buffering (overlap src->host with host->dst)
 // 3. Event tracking to know when each buffer is safe to reuse
+//
+// CRITICAL: For cross-device transfers to work, host memory must be allocated
+// in a shared context that includes ALL devices. Otherwise, a queue from one
+// device's context cannot access host memory allocated in another context.
 
 static void *                     g_pp_transfer_buf[2]   = { nullptr, nullptr };  // Double buffers
 static size_t                     g_pp_transfer_buf_size = 0;
 static std::mutex                 g_pp_transfer_mutex;
 static int                        g_pp_current_buf  = 0;  // Which buffer to use next (0 or 1)
 static std::optional<sycl::event> g_pp_pending_event[2];  // Pending events for each buffer
+static sycl::context *            g_pp_shared_context    = nullptr;  // Shared context for multi-device PP
 
-// Internal: allocate double buffers
+// Forward declaration (defined in ggml-sycl.cpp)
+int ggml_backend_sycl_get_device_count();
+
+// Internal: Initialize PP shared context for multi-device transfers
+// Creates a context containing devices from the SAME platform so host memory
+// allocated in this context can be accessed from any device's queue on that platform.
+// NOTE: SYCL requires all devices in a context to be from the same platform.
+static void ggml_sycl_init_pp_shared_context() {
+    if (g_pp_shared_context != nullptr) {
+        return;  // Already initialized
+    }
+
+    // Get all SYCL devices and group them by platform
+    int num_devices = ggml_backend_sycl_get_device_count();
+    if (num_devices <= 1) {
+        // Single device: no need for shared context, default context works
+        return;
+    }
+
+    // Group devices by platform
+    std::unordered_map<std::string, std::vector<sycl::device>> platform_devices;
+    for (int i = 0; i < num_devices; i++) {
+        sycl::device dev = ggml_sycl_get_device(i);
+        std::string platform_name = dev.get_platform().get_info<sycl::info::platform::name>();
+        platform_devices[platform_name].push_back(dev);
+    }
+
+    // Find the platform with the most devices
+    std::string best_platform;
+    size_t max_devices = 0;
+    for (const auto & [platform, devices] : platform_devices) {
+        if (devices.size() > max_devices) {
+            max_devices = devices.size();
+            best_platform = platform;
+        }
+    }
+
+    if (max_devices <= 1) {
+        // No platform has multiple devices, shared context not needed
+        GGML_SYCL_DEBUG("SYCL PP: Devices are on different platforms, shared context not possible\n");
+        return;
+    }
+
+    // Create shared context with all devices from the best platform
+    const auto & devices = platform_devices[best_platform];
+    try {
+        g_pp_shared_context = new sycl::context(devices);
+        GGML_LOG_INFO("SYCL PP: Created shared context for %zu devices on platform '%s'\n",
+                      devices.size(), best_platform.c_str());
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("SYCL PP: Failed to create shared context: %s (falling back to per-transfer staging)\n", e.what());
+        g_pp_shared_context = nullptr;
+    }
+}
+
+// Internal: allocate double buffers using PP shared context if available
 static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     // Free old buffers if they exist
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            ggml_sycl_host_free(g_pp_transfer_buf[i]);
+            // Free in the context where it was allocated
+            if (g_pp_shared_context != nullptr) {
+                sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
+            } else {
+                ggml_sycl_host_free(g_pp_transfer_buf[i]);
+            }
             g_pp_transfer_buf[i] = nullptr;
         }
         g_pp_pending_event[i].reset();
     }
     g_pp_transfer_buf_size = 0;
 
+    // Initialize shared context for multi-device transfers
+    ggml_sycl_init_pp_shared_context();
+
     // Allocate with 25% headroom to reduce reallocations
     size_t alloc_size = bytes + (bytes / 4);
 
-    // Allocate pinned host memory for faster transfers
-    g_pp_transfer_buf[0] = ggml_sycl_host_malloc(alloc_size);
-    g_pp_transfer_buf[1] = ggml_sycl_host_malloc(alloc_size);
+    // Allocate pinned host memory in the shared context if available
+    if (g_pp_shared_context != nullptr) {
+        try {
+            g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
+            g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("SYCL PP: Failed to allocate host buffers in shared context: %s\n", e.what());
+            if (g_pp_transfer_buf[0]) {
+                sycl::free(g_pp_transfer_buf[0], *g_pp_shared_context);
+            }
+            if (g_pp_transfer_buf[1]) {
+                sycl::free(g_pp_transfer_buf[1], *g_pp_shared_context);
+            }
+            g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
+            return false;
+        }
+    } else {
+        // Fallback to ggml_sycl_host_malloc (single-device or context creation failed)
+        g_pp_transfer_buf[0] = ggml_sycl_host_malloc(alloc_size);
+        g_pp_transfer_buf[1] = ggml_sycl_host_malloc(alloc_size);
+    }
+
     if (g_pp_transfer_buf[0] == nullptr || g_pp_transfer_buf[1] == nullptr) {
         if (g_pp_transfer_buf[0]) {
-            ggml_sycl_host_free(g_pp_transfer_buf[0]);
+            if (g_pp_shared_context) {
+                sycl::free(g_pp_transfer_buf[0], *g_pp_shared_context);
+            } else {
+                ggml_sycl_host_free(g_pp_transfer_buf[0]);
+            }
         }
         if (g_pp_transfer_buf[1]) {
-            ggml_sycl_host_free(g_pp_transfer_buf[1]);
+            if (g_pp_shared_context) {
+                sycl::free(g_pp_transfer_buf[1], *g_pp_shared_context);
+            } else {
+                ggml_sycl_host_free(g_pp_transfer_buf[1]);
+            }
         }
         g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
         GGML_LOG_ERROR("SYCL PP: Failed to allocate 2x %zu bytes pinned host buffers\n", alloc_size);
@@ -1686,7 +1781,9 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     }
 
     g_pp_transfer_buf_size = alloc_size;
-    GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes pinned host memory for double-buffered transfer\n", alloc_size);
+    GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory%s\n",
+                  alloc_size / 1024.0,
+                  g_pp_shared_context ? " (shared context)" : " (default context)");
     return true;
 }
 
@@ -1760,15 +1857,25 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
         }
     }
 
-    // Free buffers
+    // Free buffers (use shared context if it was used for allocation)
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            ggml_sycl_host_free(g_pp_transfer_buf[i]);
+            if (g_pp_shared_context != nullptr) {
+                sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
+            } else {
+                ggml_sycl_host_free(g_pp_transfer_buf[i]);
+            }
             g_pp_transfer_buf[i] = nullptr;
         }
     }
     g_pp_transfer_buf_size = 0;
     g_pp_current_buf       = 0;
+
+    // Clean up shared context
+    if (g_pp_shared_context != nullptr) {
+        delete g_pp_shared_context;
+        g_pp_shared_context = nullptr;
+    }
     GGML_SYCL_DEBUG("SYCL PP: Freed double-buffered transfer buffers\n");
 }
 
