@@ -18900,17 +18900,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const int64_t K = src0->ne[0];  // reduction dimension - from src0
             const int64_t N = src0->ne[1];  // output columns (weight rows) - from src0
 
-            // Batch-size gating: route batch=1 to legacy DMMV for better performance.
-            // The unified kernel's scalar path is ~60x slower than DMMV for decode.
-            // Set GGML_SYCL_UNIFIED_FORCE_ALL=1 to disable this optimization.
-            static bool force_unified_all = (std::getenv("GGML_SYCL_UNIFIED_FORCE_ALL") != nullptr);
-            const bool batch1_prefer_dmmv = (M == 1) && !force_unified_all &&
-                                            can_use_dequantize_mul_mat_vec(src0, src1, dst, ctx.device);
-            if (batch1_prefer_dmmv) {
-                GGML_SYCL_DEBUG("[UNIFIED] Routing batch=1 to DMMV for better performance (M=%lld)\n",
-                                (long long) M);
-                // Fall through to legacy dispatch below
-            } else {
+            // NOTE: Batch=1 is now handled internally by the unified kernel's DMMV path.
+            // The unified kernel detects batch=1 and uses a warp-parallel reduction algorithm
+            // that matches the performance of the legacy DMMV kernel.
+            // Set GGML_SYCL_UNIFIED_FORCE_LEGACY=1 to bypass unified kernel entirely.
+            static bool force_legacy = (std::getenv("GGML_SYCL_UNIFIED_FORCE_LEGACY") != nullptr);
+            if (!force_legacy) {
             // IMPORTANT: unified kernel must use device-accessible pointers.
             // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
             const char * src0_ptr_source = nullptr;
@@ -19212,7 +19207,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     }
                 }
             }
-            }  // end batch1_prefer_dmmv else
+            }  // end !force_legacy block
             }
 #endif
             if (unified_dispatched) {

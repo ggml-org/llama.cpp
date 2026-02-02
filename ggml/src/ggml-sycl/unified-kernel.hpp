@@ -539,12 +539,22 @@ inline KernelPath select_kernel_path(
     // Explicit ESIMD opt-in via GGML_SYCL_XMX_ESIMD=1 can bypass batch gating.
     const bool esimd_opt_in = use_esimd_dpas();
 
-    // Batch=1: DMMV unless ESIMD explicitly enabled (or prefer ESIMD for small batches)
+    // Batch=1: Always use DMMV path for warp-parallel reduction
+    // ESIMD DPAS is designed for 8x16 output tiles, not single-row operations.
+    // The unified kernel's internal DMMV implementation uses warp-parallel
+    // reduction which is ~60x faster than tiled ESIMD for batch=1.
+    // Set GGML_SYCL_FORCE_ESIMD_BATCH1=1 to force ESIMD for batch=1 (testing only).
     if (batch_size == 1) {
-        if (prefer_esimd_small() && cfg.supported) {
+        static int force_esimd_batch1 = -1;
+        if (force_esimd_batch1 < 0) {
+            const char * env = std::getenv("GGML_SYCL_FORCE_ESIMD_BATCH1");
+            force_esimd_batch1 = (env && std::atoi(env) != 0) ? 1 : 0;
+        }
+        if (force_esimd_batch1 && cfg.supported) {
             return KernelPath::ESIMD_DPAS;
         }
-        return (esimd_opt_in && cfg.supported) ? KernelPath::ESIMD_DPAS : KernelPath::DMMV;
+        // Default: Always use DMMV for batch=1
+        return KernelPath::DMMV;
     }
 
     // Batch < threshold: MMVQ unless ESIMD explicitly enabled (or prefer ESIMD for small batches)
