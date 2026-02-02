@@ -1019,6 +1019,7 @@ export class ChatService {
 							const content = parsed.content;
 							const timings = parsed.timings;
 							const model = parsed.model;
+							const promptProgress = parsed.prompt_progress;
 
 							if (parsed.stop) {
 								streamFinished = true;
@@ -1029,8 +1030,12 @@ export class ChatService {
 								onModel?.(model);
 							}
 
+							if (promptProgress) {
+								ChatService.notifyTimings(undefined, promptProgress, onTimings);
+							}
+
 							if (timings) {
-								ChatService.notifyTimings(timings, undefined, onTimings);
+								ChatService.notifyTimings(timings, promptProgress, onTimings);
 								lastTimings = timings;
 							}
 

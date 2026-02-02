@@ -32,21 +32,29 @@ export class NotebookStore {
 					...currentConfig,
 					model: model ?? currentConfig.model,
 					stream: true,
-					onChunk: (chunk) => {
+					timings_per_token: true,
+					onChunk: (chunk: string) => {
 						this.content += chunk;
 					},
-					onTimings: (timings) => {
+					onTimings: (timings: ChatMessageTimings, promptProgress: ChatMessagePromptProgress) => {
 						if (timings) {
 							if (timings.prompt_n) this.promptTokens = timings.prompt_n;
 							if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
 							if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
 							if (timings.predicted_ms) this.predictedMs = timings.predicted_ms;
 						}
+
+						if (promptProgress) {
+							// Update prompt stats from progress
+							const { processed, time_ms } = promptProgress;
+							if (processed > 0) this.promptTokens = processed;
+							if (time_ms > 0) this.promptMs = time_ms;
+						}
 					},
 					onComplete: () => {
 						this.isGenerating = false;
 					},
-					onError: (error) => {
+					onError: (error: unknown) => {
 						if (error instanceof Error && error.name === 'AbortError') {
 							// aborted by user
 						} else {

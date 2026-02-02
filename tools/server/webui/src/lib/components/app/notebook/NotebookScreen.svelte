@@ -5,7 +5,7 @@
 	import { Play, Square, Settings } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
-	import { ModelsSelector } from '$lib/components/app';
+	import { ModelsSelector, ChatMessageStatistics } from '$lib/components/app';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -24,6 +24,7 @@
 	import { onMount } from 'svelte';
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let showMessageStats = $derived(config().showMessageStats);
 	let autoScrollEnabled = $state(true);
 	let scrollContainer: HTMLTextAreaElement | null = $state(null);
 	let lastScrollTop = $state(0);
@@ -190,19 +191,19 @@
 		</Button>
 	</header>
 
-	<div class="flex-1 overflow-y-auto p-4 md:p-6">
+	<div class="flex-1 overflow-y-auto p-2 md:p-4">
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
 			value={inputContent}
 			oninput={handleInput}
-			class="h-full min-h-[500px] w-full resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
+			class="h-full min-h-[100px] w-full resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
 			placeholder="Enter your text here..."
 		/>
 	</div>
 
-	<div class="border-t border-border/40 bg-background p-4 md:px-6 md:py-4">
-		<div class="flex items-center justify-between gap-4">
+	<div class="bg-background p-2 md:p-4">
+		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">
 			<div class="flex items-center gap-2">
 				{#snippet generateButton(props = {})}
 					<Button
@@ -244,6 +245,19 @@
 					disabled={notebookStore.isGenerating}
 				/>
 			</div>
+
+			{#if showMessageStats && (notebookStore.promptTokens > 0 || notebookStore.predictedTokens > 0)}
+				<div class="flex w-full justify-end md:w-auto">
+					<ChatMessageStatistics
+						promptTokens={notebookStore.promptTokens}
+						promptMs={notebookStore.promptMs}
+						predictedTokens={notebookStore.predictedTokens}
+						predictedMs={notebookStore.predictedMs}
+						isLive={notebookStore.isGenerating}
+						isProcessingPrompt={notebookStore.isGenerating && notebookStore.predictedTokens === 0}
+					/>
+				</div>
+			{/if}
 		</div>
 	</div>
 
