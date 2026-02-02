@@ -147,9 +147,17 @@ struct ggml_sycl_tensor_inventory {
 GGML_BACKEND_API void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t                            backend,
                                                              const struct ggml_sycl_tensor_inventory * inventory);
 
-// Check if tiered memory is enabled for this backend.
-// Returns true if model size exceeds VRAM and tiered mode was auto-enabled.
+// Check if tiered memory mode is enabled for this backend.
+// Returns true if the unified cache system is active (always true by default).
+// Note: This does NOT indicate whether the model exceeds VRAM - use
+// ggml_backend_sycl_model_exceeds_vram() for that check.
 GGML_BACKEND_API bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend);
+
+// Check if the model size exceeds available VRAM budget.
+// Returns true if model weights need to be streamed from host memory.
+// Use this to decide whether warmup should be skipped (warmup is harmful
+// when weights are streamed, as it triggers unnecessary host->device copies).
+GGML_BACKEND_API bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend);
 
 // Check if the unified tensor cache instance is available.
 // Returns true if tiered mode is enabled AND the cache has been created.

@@ -2128,6 +2128,12 @@ bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
     return g_tiered_enabled.load(std::memory_order_acquire);
 }
+
+bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend) {
+    (void) backend;  // Backend context not needed for current implementation
+    return g_model_exceeds_vram.load(std::memory_order_acquire);
+}
+
 bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
     (void) backend;
     std::lock_guard<std::mutex> lock(g_tensor_cache_mutex);
