@@ -8,7 +8,7 @@ Download [MiniCPM-Llama3-V-2_5](https://huggingface.co/openbmb/MiniCPM-Llama3-V-
 ### Build llama.cpp
 Readme modification time: 20250206
 
-If there are differences in usage, please refer to the official build [documentation](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md)
+If there are differences in usage, please refer to the official build [documentation](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
 
 Clone llama.cpp:
 ```bash

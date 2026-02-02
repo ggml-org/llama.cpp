@@ -6562,7 +6562,7 @@ static void ggml_compute_backward(
         case GGML_OP_DIAG_MASK_INF: {
             if (src0_needs_grads) {
                 /* ggml_diag_mask_inf_impl() shouldn't be here */
-                /* ref:  https://github.com/ggerganov/llama.cpp/pull/4203#discussion_r1412377992 */
+                /* ref:  https://github.com/ggml-org/llama.cpp/pull/4203#discussion_r1412377992 */
                 const int n_past = ((const int32_t *) tensor->op_params)[0];
                 ggml_add_or_set(ctx, cgraph, isrc0, ggml_diag_mask_zero_impl(ctx, grad, n_past, false));
             }
