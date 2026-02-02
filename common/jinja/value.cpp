@@ -408,14 +408,17 @@ const func_builtins & global_builtins() {
                 }
                 return mk_val<value_bool>(false);
             }
-            if (is_val<value_string>(haystack) && is_val<value_string>(needle)) {
+            if (is_val<value_string>(haystack)) {
+                if (!is_val<value_string>(needle)) {
+                    throw raised_exception("'in' test expects args[1] as string when args[0] is string, got args[1] as " + needle->type());
+                }
                 return mk_val<value_bool>(
                     haystack->as_string().str().find(needle->as_string().str()) != std::string::npos);
             }
             if (is_val<value_object>(haystack)) {
                 return mk_val<value_bool>(haystack->has_key(needle));
             }
-            throw raised_exception("'in' test expects an iterable");
+            throw raised_exception("'in' test expects iterable as first argument, got " + haystack->type());
         }},
         {"test_is_test", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();

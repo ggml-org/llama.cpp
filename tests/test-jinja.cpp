@@ -189,9 +189,21 @@ static void test_conditionals(testing & t) {
         "negated"
     );
 
-    test_template(t, "in operator",
+    test_template(t, "in operator (element in array)",
         "{% if 'x' in items %}found{% endif %}",
         {{"items", json::array({"x", "y"})}},
+        "found"
+    );
+
+    test_template(t, "in operator (substring)",
+        "{% if 'bc' in 'abcd' %}found{% endif %}",
+        json::object(),
+        "found"
+    );
+
+    test_template(t, "in operator (object key)",
+        "{% if 'key' in obj %}found{% endif %}",
+        {{"obj", {{"key", 1}, {"other", 2}}}},
         "found"
     );
 
