@@ -90,8 +90,10 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
+#define VK_VENDOR_ID_ARM 0x13B5
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
+#define VK_VENDOR_ID_QUALCOMM 0x5143
 
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
@@ -3035,6 +3037,25 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+        } else if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            uint32_t s = device->subgroup_size;
+            m_warptile = m_warptile_mmq = m_warptile_mmq_int = m_warptile_mmq_k = m_warptile_mmq_int_k = 
+                m_warptile_id = m_warptile_mmqid = m_warptile_mmqid_int = m_warptile_mmqid_int_k = 
+                { 64, 64, 64, s, s, 16, 8, 8, 1, 1, s };
+            s_warptile = s_warptile_mmq = s_warptile_mmq_int = s_warptile_mmq_k = s_warptile_mmq_int_k = 
+                s_warptile_id = s_warptile_mmqid = s_warptile_mmqid_int = s_warptile_mmqid_int_k = 
+                { 32, 32, 64, s, s, 16, 8, 8, 1, 1, s };
+        } else if (device->vendor_id == VK_VENDOR_ID_ARM && device->subgroup_size >= 16) {
+            uint32_t s = device->subgroup_size;
+            s_warptile = s_warptile_mmq = s_warptile_mmq_int = s_warptile_mmq_k = s_warptile_mmq_int_k = 
+                s_warptile_id = s_warptile_mmqid = s_warptile_mmqid_int = s_warptile_mmqid_int_k = 
+                { 32, 32, 64, s, s, 16, 4, 4, 1, 1, s };
+            m_warptile = m_warptile_mmq = m_warptile_mmq_int = m_warptile_mmq_k = m_warptile_mmq_int_k = 
+                m_warptile_id = m_warptile_mmqid = m_warptile_mmqid_int = m_warptile_mmqid_int_k = 
+                { 64, 64, 64, s, s, 16, 4, 4, 1, 1, s };
+            l_warptile = l_warptile_mmq = l_warptile_mmq_int = l_warptile_mmq_k = l_warptile_mmq_int_k = 
+                l_warptile_id = l_warptile_mmqid = l_warptile_mmqid_int = l_warptile_mmqid_int_k = 
+                { 64, 64, 64, s, s, 16, 4, 4, 1, 1, s };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -3043,6 +3064,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
         l_align = 128;
         m_align =  64;
         s_align =  32;
+
+        if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            m_align = 128;
+        }
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
@@ -4676,6 +4701,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
             // Limit batching of allocations to 1GB by default to avoid fragmentation issues
             device->suballocation_block_size = 1024*1024*1024;
         }
+
+        if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            // ARM Mali optimization: disable fp16-matrix to prevent crashes, limit memory blocks
+            device->coopmat_support = false;
+            device->suballocation_block_size = 256 * 1024 * 1024;
+        } else if (device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+            // Qualcomm Adreno optimization: disable fp16-matrix and int8-dotprod to prevent crashes, limit memory blocks
+            device->coopmat_support = false;
+            device->integer_dot_product = false;
+            device->suballocation_block_size = 256 * 1024 * 1024;
+        }
         device->suballocation_block_size = std::min(device->suballocation_block_size, device->max_memory_allocation_size);
 
         device->subgroup_size = subgroup_props.subgroupSize;
@@ -5149,6 +5185,15 @@ static vk_device ggml_vk_get_device(size_t idx) {
                     device->mul_mat_l[i] = true;  // if coopmat & XE2+, allow large matmul warptile config for Intel
                     device->mul_mat_id_l[i] = true;
                 }
+                device->mul_mat_m[i] = true;
+                device->mul_mat_s[i] = true;
+                device->mul_mat_id_m[i] = true;
+                device->mul_mat_id_s[i] = true;
+                break;
+            case VK_VENDOR_ID_ARM:
+            case VK_VENDOR_ID_QUALCOMM:
+                device->mul_mat_l[i] = false;
+                device->mul_mat_id_l[i] = false;
                 device->mul_mat_m[i] = true;
                 device->mul_mat_s[i] = true;
                 device->mul_mat_id_m[i] = true;
@@ -13728,6 +13773,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     // (and scaled down based on model size, so smaller models submit earlier).
     // Also submit at least every 100 nodes, in case there are workloads without as much matmul.
     int nodes_per_submit = 100;
+    if (ctx->device->vendor_id == VK_VENDOR_ID_QUALCOMM) {
+        nodes_per_submit = 1000;
+    }
     int submitted_nodes = 0;
     int submit_count = 0;
     uint64_t mul_mat_bytes = 0;
