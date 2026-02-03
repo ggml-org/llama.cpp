@@ -24520,6 +24520,31 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 break;  // Only need to check first MUL_MAT
             }
         }
+
+        // Track node counts across iterations to detect instability.
+        // Variance in node counts prevents graph replay (cache miss on n_nodes).
+        // Common causes: dynamic tensor shapes, conditional dispatch, debug kernels.
+        static thread_local int last_decode_nodes = 0;
+        static thread_local int last_prompt_nodes = 0;
+        static thread_local int decode_variance_count = 0;
+        static thread_local int prompt_variance_count = 0;
+
+        if (is_decode_phase) {
+            if (last_decode_nodes != 0 && cgraph->n_nodes != last_decode_nodes) {
+                decode_variance_count++;
+                GGML_LOG_DEBUG("SYCL Graph: decode node count changed %d -> %d (variance #%d)\n",
+                               last_decode_nodes, cgraph->n_nodes, decode_variance_count);
+            }
+            last_decode_nodes = cgraph->n_nodes;
+        } else if (is_prompt_phase) {
+            if (last_prompt_nodes != 0 && cgraph->n_nodes != last_prompt_nodes) {
+                prompt_variance_count++;
+                GGML_LOG_DEBUG("SYCL Graph: prompt node count changed %d -> %d (variance #%d)\n",
+                               last_prompt_nodes, cgraph->n_nodes, prompt_variance_count);
+            }
+            last_prompt_nodes = cgraph->n_nodes;
+        }
+
         // Original code with update disabled for now:
         // if (!sycl_ctx->exec_graph || !graph_update_support) {
 
