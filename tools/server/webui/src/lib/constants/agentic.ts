@@ -21,6 +21,9 @@ export const REASONING_TAGS = {
 	END: '<<<reasoning_content_end>>>'
 } as const;
 
+// Regex for trimming leading/trailing newlines
+export const TRIM_NEWLINES_REGEX = /^\n+|\n+$/g;
+
 // Regex patterns for parsing agentic content
 export const AGENTIC_REGEX = {
 	// Matches completed tool calls (with END marker)

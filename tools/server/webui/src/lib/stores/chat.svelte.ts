@@ -44,7 +44,7 @@ import type {
 	ErrorDialogState
 } from '$lib/types/chat';
 import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
-import { MessageRole, MessageType } from '$lib/enums';
+import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -497,7 +497,9 @@ class ChatStore {
 			console.error('Failed to send message:', error);
 			this.setChatLoading(currentConv.id, false);
 			const dialogType =
-				error instanceof Error && error.name === 'TimeoutError' ? 'timeout' : 'server';
+				error instanceof Error && error.name === 'TimeoutError'
+					? ErrorDialogType.TIMEOUT
+					: ErrorDialogType.SERVER;
 			const contextInfo = (
 				error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 			).contextInfo;
@@ -677,7 +679,7 @@ class ChatStore {
 					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
 				).contextInfo;
 				this.showErrorDialog({
-					type: error.name === 'TimeoutError' ? 'timeout' : 'server',
+					type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
 					message: error.message,
 					contextInfo
 				});
@@ -1083,7 +1085,8 @@ class ChatStore {
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
 						this.showErrorDialog({
-							type: error.name === 'TimeoutError' ? 'timeout' : 'server',
+							type:
+								error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER,
 							message: error.message
 						});
 					}

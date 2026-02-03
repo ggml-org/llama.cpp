@@ -32,6 +32,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
@@ -565,7 +566,7 @@
 	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? 'server'}
+	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
 
 <style>

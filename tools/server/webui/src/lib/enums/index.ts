@@ -5,6 +5,7 @@ export { AgenticSectionType } from './agentic';
 export {
 	ChatMessageStatsView,
 	ContentPartType,
+	ErrorDialogType,
 	MessageRole,
 	MessageType,
 	ReasoningFormat
