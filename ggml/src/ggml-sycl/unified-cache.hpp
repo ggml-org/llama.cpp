@@ -635,6 +635,38 @@ class unified_cache {
     // Defer freeing host allocations until the associated event completes.
     void defer_host_free(void * ptr, size_t size, const sycl::event & event);
 
+    // === OneDNN FP16 Scratch Buffers ===
+    // Pre-allocated buffers for dequantized weights and converted activations.
+    // These avoid per-op allocations that cause OOM with large KV caches.
+
+    struct onednn_scratch_buffers {
+        void * weights     = nullptr;  // Dequantized weights (N*K*2 bytes)
+        void * activations = nullptr;  // Converted activations (M*K*2 bytes)
+        size_t weights_size     = 0;
+        size_t activations_size = 0;
+    };
+
+    // Reserve scratch buffers for oneDNN FP16 path.
+    // Call once during model load with max dimensions.
+    // weights_size: max(N*K*2) across all layers (usually FFN down: 14336*4096*2)
+    // activations_size: max(M*K*2) where M=max_batch, K=max_dim
+    bool reserve_onednn_scratch(size_t weights_size, size_t activations_size);
+
+    // Get scratch buffers. Returns false if not reserved or sizes exceed reserved.
+    // Caller must hold onednn_scratch_mutex_ via lock_onednn_scratch().
+    bool get_onednn_scratch(size_t weights_needed, size_t activations_needed,
+                            onednn_scratch_buffers & out);
+
+    // Lock/unlock for scratch buffer access (RAII recommended)
+    std::unique_lock<std::mutex> lock_onednn_scratch() { return std::unique_lock<std::mutex>(onednn_scratch_mutex_); }
+
+    // Check if scratch is reserved
+    bool has_onednn_scratch() const { return onednn_weights_scratch_ != nullptr; }
+
+    // Get reserved sizes
+    size_t onednn_weights_scratch_size() const { return onednn_weights_scratch_size_; }
+    size_t onednn_activations_scratch_size() const { return onednn_activations_scratch_size_; }
+
   private:
     // Evict lowest-scoring entry to make room for new_size bytes
     // Returns true if eviction succeeded, false if all entries are pinned
@@ -699,6 +731,16 @@ class unified_cache {
     size_t              dma_buffer_count_  = 0;
     size_t              dma_reserved_bytes_ = 0;
     std::mutex          dma_staging_mutex_;
+
+    // OneDNN FP16 scratch buffers for prompt processing.
+    // Pre-allocated to avoid per-op allocations that cause OOM with large contexts.
+    // weights_scratch_: holds dequantized weights (max N*K*2 bytes)
+    // activations_scratch_: holds converted activations (max M*K*2 bytes)
+    void *     onednn_weights_scratch_     = nullptr;
+    void *     onednn_activations_scratch_ = nullptr;
+    size_t     onednn_weights_scratch_size_     = 0;
+    size_t     onednn_activations_scratch_size_ = 0;
+    std::mutex onednn_scratch_mutex_;
 
     // Deferred frees to avoid releasing buffers while in flight.
     std::vector<deferred_free_entry> deferred_frees_;
@@ -776,6 +818,33 @@ host_cache * get_host_cache_for_device(int device_id);
 int host_cache_guard_error_count();
 void host_cache_guard_reset();
 bool host_cache_guard_check_all(int device_id, const char * where);
+
+// === OneDNN FP16 Scratch Buffer API ===
+// Reserve pre-allocated scratch buffers for oneDNN FP16 prompt processing.
+// This avoids per-op allocations that cause OOM when KV cache is large.
+//
+// Call during model load with:
+//   weights_size: max(N*K*2) across all matmuls (typically FFN: 14336*4096*2 = 117MB)
+//   activations_size: max_batch * max_K * 2 (e.g., 512*14336*2 = 14.6MB)
+//
+// The buffers are reserved from the unified cache budget and reused across all matmuls.
+bool unified_cache_reserve_onednn_scratch(int device_id, size_t weights_size, size_t activations_size);
+
+// Get scratch buffers for oneDNN FP16 path. Returns pointers and acquires lock.
+// Caller must call unified_cache_release_onednn_scratch() when done.
+// Returns false if scratch not reserved or sizes exceed reserved.
+struct onednn_scratch_result {
+    void * weights     = nullptr;
+    void * activations = nullptr;
+    bool   ok          = false;
+};
+onednn_scratch_result unified_cache_get_onednn_scratch(int device_id, size_t weights_needed, size_t activations_needed);
+
+// Release scratch buffers (unlocks mutex for other threads)
+void unified_cache_release_onednn_scratch(int device_id);
+
+// Check if scratch buffers are reserved
+bool unified_cache_has_onednn_scratch(int device_id);
 
 // === MoE Cache Helpers ===
 // Unpin all experts

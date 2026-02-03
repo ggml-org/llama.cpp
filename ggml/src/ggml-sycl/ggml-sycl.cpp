@@ -82,6 +82,7 @@
 #include "ggml-sycl/fused-ffn.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
+#include "ggml-sycl/layer-prefetch.hpp"
 
 // Forward declarations for layout helpers used before definition.
 static const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode);
@@ -18640,6 +18641,30 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     };
     const bool kqv_matmul       = is_kqv_matmul(src0, src1, dst);
     const bool force_simple_kqv = (g_ggml_sycl_kqv_force_simple || g_ggml_sycl_kqv_disable_fp16) && kqv_matmul;
+
+    // Inter-layer weight prefetch for TG (batch=1) workloads
+    // When we detect a layer transition, async prefetch next layer's first weight.
+    // Only active when model exceeds VRAM (weights in host memory need prefetching).
+    //
+    // Design: The prefetch tracker identifies layer transitions by parsing tensor names.
+    // When we see attn_q of layer N, we prefetch attn_q of layer N+1 asynchronously.
+    // This overlaps memory transfer with computation, improving TG throughput for
+    // models that don't fit in VRAM.
+    //
+    // Implementation status: Layer tracking infrastructure is in place. Full prefetch
+    // integration requires building cache_id from tensor names to interface with
+    // unified_cache. For models that fit in VRAM, prefetch is a no-op anyway.
+    if (src0->name && src1->ne[1] == 1 && g_model_exceeds_vram.load(std::memory_order_acquire) &&
+        ggml_sycl::layer_prefetch_tracker::is_enabled()) {
+        int next_layer_id = -1;
+        if (ggml_sycl::get_prefetch_tracker().record_access(src0->name, next_layer_id)) {
+            // Layer transition detected - prefetch opportunity identified
+            // For now, just log the opportunity. Full prefetch requires cache_id lookup.
+            GGML_SYCL_DEBUG("[PREFETCH] Layer transition at %s -> prefetch layer %d\n",
+                            src0->name, next_layer_id);
+        }
+    }
+
     // Check if weight tensor is tracked for tiered memory dispatch.
     // Only do this when model EXCEEDS VRAM - otherwise weights are already in device memory
     // via the normal buffer system and this check is wasted overhead.
@@ -19012,6 +19037,136 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
                         // Fall through to legacy dispatch below
                     } else {
+                        // =============================================================
+                        // OneDNN FP16 Matmul Path: Use oneDNN's optimized FP16 matmul
+                        // for large prompt processing batches.
+                        //
+                        // This path dequantizes weights to FP16, then uses oneDNN's
+                        // highly optimized jit:gemm kernel which achieves ~6x better
+                        // performance than joint_matrix for PP on Arc GPUs.
+                        //
+                        // Uses pre-allocated scratch buffers from unified cache to avoid
+                        // per-op allocations that cause OOM with large KV caches.
+                        //
+                        // Note: oneDNN s4 WoQ is NOT supported on Arc B580 (Xe2).
+                        // =============================================================
+#if GGML_SYCL_DNNL
+                        // Check if we should use oneDNN FP16 for large batches
+                        // Default threshold: M >= 64 (can be tuned via env var)
+                        static int onednn_pp_threshold = -1;
+                        if (onednn_pp_threshold < 0) {
+                            const char * env = std::getenv("GGML_SYCL_ONEDNN_PP_MIN_BATCH");
+                            onednn_pp_threshold = env ? std::atoi(env) : 64;
+                            if (onednn_pp_threshold < 1) onednn_pp_threshold = 64;
+                        }
+                        // Enabled by default when scratch buffers are available.
+                        // Disable with GGML_SYCL_ONEDNN_PP=0 to force unified kernel path.
+                        static bool onednn_pp_enabled = true;
+                        static bool onednn_pp_checked = false;
+                        if (!onednn_pp_checked) {
+                            const char * env = std::getenv("GGML_SYCL_ONEDNN_PP");
+                            onednn_pp_enabled = (env == nullptr || std::atoi(env) != 0);
+                            onednn_pp_checked = true;
+                        }
+
+                        bool used_onednn_fp16 = false;
+                        if (onednn_pp_enabled && M >= onednn_pp_threshold &&
+                            ggml_is_quantized(src0->type) && ggml_is_contiguous(src0)) {
+                            // Get dequantization function for the weight type
+                            const to_fp16_sycl_t dequant_to_fp16 = ggml_get_to_fp16_sycl(src0->type, dst);
+                            if (dequant_to_fp16) {
+                                // Calculate buffer sizes needed
+                                const size_t src0_elems = static_cast<size_t>(N) * static_cast<size_t>(K);
+                                const size_t src1_elems = static_cast<size_t>(M) * static_cast<size_t>(K);
+                                const size_t weights_bytes = src0_elems * sizeof(sycl::half);
+                                const size_t activations_bytes = src1_elems * sizeof(sycl::half);
+
+                                // Try to get scratch buffers from unified cache
+                                const int device_id = ctx.device;
+                                sycl::half * weights_scratch = nullptr;
+                                sycl::half * activations_scratch = nullptr;
+                                bool using_scratch = false;
+
+                                // Auto-reserve scratch buffers on first use
+                                // Reserve 150% of current need to handle varying sizes
+                                if (!ggml_sycl::unified_cache_has_onednn_scratch(device_id)) {
+                                    // Calculate generous scratch sizes based on typical model dimensions
+                                    // FFN is usually the largest: up to 14336*4096 for weights
+                                    // Activations: max_batch * max_K
+                                    const size_t reserve_weights = std::max(weights_bytes * 3 / 2, size_t(128 * 1024 * 1024));
+                                    const size_t reserve_activations = std::max(activations_bytes * 3 / 2, size_t(32 * 1024 * 1024));
+                                    ggml_sycl::unified_cache_reserve_onednn_scratch(device_id, reserve_weights, reserve_activations);
+                                }
+
+                                auto scratch = ggml_sycl::unified_cache_get_onednn_scratch(device_id, weights_bytes, activations_bytes);
+                                if (scratch.ok) {
+                                    weights_scratch = static_cast<sycl::half *>(scratch.weights);
+                                    activations_scratch = static_cast<sycl::half *>(scratch.activations);
+                                    using_scratch = true;
+                                }
+
+                                // Fall back to per-op allocation if scratch not available
+                                ggml_sycl_pool_alloc<sycl::half> src0_f16_fallback(ctx.pool());
+                                ggml_sycl_pool_alloc<sycl::half> src1_f16_fallback(ctx.pool());
+                                if (!using_scratch) {
+                                    // Try per-op allocation (may fail with large contexts)
+                                    try {
+                                        src0_f16_fallback.alloc(src0_elems);
+                                        src1_f16_fallback.alloc(src1_elems);
+                                        weights_scratch = src0_f16_fallback.get();
+                                        activations_scratch = src1_f16_fallback.get();
+                                    } catch (...) {
+                                        // Allocation failed, fall back to unified kernel
+                                        weights_scratch = nullptr;
+                                        activations_scratch = nullptr;
+                                    }
+                                }
+
+                                if (weights_scratch && activations_scratch) {
+                                    // Dequantize weights (Q4_0 etc.) to FP16
+                                    dequant_to_fp16(src0_data, weights_scratch, src0_elems, ctx.stream());
+
+                                    // Convert activations (F32) to FP16
+                                    const to_fp16_sycl_t f32_to_fp16 = ggml_get_to_fp16_sycl(GGML_TYPE_F32, dst);
+                                    if (f32_to_fp16) {
+                                        f32_to_fp16(src1_data, activations_scratch, src1_elems, ctx.stream());
+
+                                        // OneDNN FP16 GEMM: C[M,N] = A[M,K] * B[K,N]^T
+                                        // A = src1 (activations) [M, K]
+                                        // B = src0 (weights) [N, K] - needs transpose
+                                        // C = dst [M, N]
+                                        // Use row_gemm which handles the transpose correctly
+                                        DnnlGemmWrapper::row_gemm(
+                                            ctx,
+                                            static_cast<int>(N),   // row_diff = N (output cols)
+                                            static_cast<int>(M),   // src1_ncols = M (batch)
+                                            static_cast<int>(K),   // ne10 = K (reduction)
+                                            weights_scratch,
+                                            DnnlGemmWrapper::to_dt<sycl::half>(),
+                                            activations_scratch,
+                                            DnnlGemmWrapper::to_dt<sycl::half>(),
+                                            dst_data,
+                                            DnnlGemmWrapper::to_dt<float>(),
+                                            ctx.stream());
+
+                                        used_onednn_fp16 = true;
+                                        GGML_SYCL_DEBUG(
+                                            "[UNIFIED] OneDNN FP16: M=%lld K=%lld N=%lld type=%d scratch=%s\n",
+                                            (long long) M, (long long) K, (long long) N, src0->type,
+                                            using_scratch ? "yes" : "no");
+                                    }
+                                }
+
+                                // Release scratch lock if we acquired it
+                                if (using_scratch) {
+                                    ggml_sycl::unified_cache_release_onednn_scratch(device_id);
+                                }
+                            }
+                        }
+
+                        if (!used_onednn_fp16)
+#endif  // GGML_SYCL_DNNL
+                        {
                         // Call unified dispatch
                         GGML_SYCL_DEBUG(
                             "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d src0=%p(%s,%d) src1=%p(%d) dst=%p(%d)\n",
@@ -19031,6 +19186,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                             M, N, K,
                             src0->type,
                             kernel_layout);
+                        }
 
                         // Optional numeric spot-check against a host reference.
                         // Enable with GGML_SYCL_UNIFIED_COMPARE=1 and optionally

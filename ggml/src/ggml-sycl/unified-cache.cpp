@@ -371,6 +371,22 @@ unified_cache::~unified_cache() {
         }
     }
     deferred_frees_.clear();
+
+    // Free oneDNN scratch buffers
+    if (onednn_weights_scratch_) {
+        try {
+            sycl::free(onednn_weights_scratch_, queue_);
+        } catch (...) {
+        }
+        onednn_weights_scratch_ = nullptr;
+    }
+    if (onednn_activations_scratch_) {
+        try {
+            sycl::free(onednn_activations_scratch_, queue_);
+        } catch (...) {
+        }
+        onednn_activations_scratch_ = nullptr;
+    }
 }
 
 // Fast 64-bit hash of entire data buffer (xxHash-style)
@@ -1374,46 +1390,96 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                     it->second.size,
                     size);
 
-                const bool   was_pinned = it->second.pinned;
-                const size_t old_size   = it->second.size;
-                it->second.pinned       = true;
+                const bool   was_pinned        = it->second.pinned;
+                const size_t old_size          = it->second.size;
+                bool         use_host_fallback = false;
+                it->second.pinned              = true;
                 while (used_.load() - old_size + size > budget_) {
                     if (evict_one(size) == 0) {
-                        it->second.pinned = was_pinned;
-                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict for realloc (used=%.1f MB, need=%.1f MB)\n",
+                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict for realloc (used=%.1f MB, need=%.1f MB), trying host fallback\n",
                                       used_.load() / (1024.0f * 1024.0f), size / (1024.0f * 1024.0f));
-                        return nullptr;
+                        use_host_fallback = true;
+                        break;
                     }
                 }
 
                 // Allocate new buffer with correct size
-                void * new_device_ptr = nullptr;
-                try {
-                    new_device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:realloc");
-                } catch (const sycl::exception & e) {
-                    GGML_LOG_ERROR("[UNIFIED-CACHE] realloc malloc_device failed: %s\n", e.what());
-                    it->second.pinned = was_pinned;
-                    return nullptr;
+                void *         new_device_ptr   = nullptr;
+                bool           is_host_resident = false;
+                cache_location new_location     = cache_location::DEVICE;
+
+                if (!use_host_fallback) {
+                    try {
+                        new_device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:realloc");
+                    } catch (const sycl::exception & e) {
+                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] realloc malloc_device failed: %s, trying host fallback\n", e.what());
+                        use_host_fallback = true;
+                    }
+
+                    if (!new_device_ptr && !use_host_fallback) {
+                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] realloc malloc_device returned nullptr, trying host fallback\n");
+                        use_host_fallback = true;
+                    }
                 }
 
-                if (!new_device_ptr) {
-                    GGML_LOG_ERROR("[UNIFIED-CACHE] realloc malloc_device returned nullptr\n");
-                    it->second.pinned = was_pinned;
-                    return nullptr;
+                // Host fallback for realloc
+                if (use_host_fallback) {
+                    host_cache * hcache = get_host_cache(queue_);
+                    if (hcache) {
+                        bool           needs_host_fill = false;
+                        bool           pinned_alloc    = false;
+                        cache_location host_loc        = cache_location::HOST_MMAP;
+                        void *         host_ptr        = hcache->ensure_cached_alloc(
+                            key_id, src_ptr, size, size, type, layer_id, expert_id, layout, validate_content,
+                            &needs_host_fill, &pinned_alloc, &host_loc, nullptr);
+
+                        if (host_ptr) {
+                            if (needs_host_fill) {
+                                std::memcpy(host_ptr, src_ptr, size);
+                            }
+
+                            GGML_SYCL_DEBUG(
+                                "[UNIFIED-CACHE] Realloc to host-resident for model=%llu name_hash=0x%llx (%.2f MB)\n",
+                                (unsigned long long) key_id.model_id,
+                                (unsigned long long) key_id.name_hash,
+                                size / (1024.0f * 1024.0f));
+
+                            new_device_ptr   = host_ptr;
+                            is_host_resident = true;
+                            new_location     = host_loc;
+                        }
+                    }
+
+                    if (!new_device_ptr) {
+                        GGML_LOG_ERROR("[UNIFIED-CACHE] Both device and host realloc failed\n");
+                        it->second.pinned = was_pinned;
+                        return nullptr;
+                    }
                 }
 
-                // Release old buffer after new allocation succeeds
-                enqueue_deferred_free(it->second.device_ptr, it->second.size);
+                // Release old buffer after new allocation succeeds (only if it was on device)
+                if (!it->second.host_resident && it->second.device_ptr) {
+                    enqueue_deferred_free(it->second.device_ptr, it->second.size);
+                }
 
-                // Copy new data
-                copy_to_device(new_device_ptr, src_ptr, size);
+                // Copy new data (only if on device, host_cache already filled host buffer)
+                if (!is_host_resident) {
+                    copy_to_device(new_device_ptr, src_ptr, size);
+                }
 
                 // Update entry with new allocation
                 it->second.device_ptr   = new_device_ptr;
                 it->second.size         = size;
                 it->second.content_hash = new_hash;
                 it->second.src_ptr      = src_ptr;
-                used_ += (size - old_size);
+                it->second.host_resident = is_host_resident;
+                it->second.location     = new_location;
+                if (!is_host_resident) {
+                    used_ += (size - old_size);
+                } else if (!it->second.host_resident) {
+                    // Migrated from device to host, reduce device usage
+                    used_ -= old_size;
+                }
                 it->second.pinned = was_pinned;
             } else if (content_changed) {
                 // Same size but content changed - just re-upload
@@ -1441,32 +1507,75 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
     misses_++;
 
     // Need to allocate - check if we have space
+    bool use_host_fallback = false;
     while (used_.load() + size > budget_) {
         // Need to evict
         if (evict_one(size) == 0) {
-            // All entries pinned, cannot evict
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict: all entries pinned (used=%.1f MB, need=%.1f MB)\n",
+            // All entries pinned, cannot evict - try host fallback
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict: all entries pinned (used=%.1f MB, need=%.1f MB), trying host fallback\n",
                           used_.load() / (1024.0f * 1024.0f), size / (1024.0f * 1024.0f));
-            return nullptr;
+            use_host_fallback = true;
+            break;
         }
     }
 
-    // Allocate device memory
-    void * device_ptr = nullptr;
-    try {
-        device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:alloc");
-    } catch (const sycl::exception & e) {
-        GGML_LOG_ERROR("[UNIFIED-CACHE] malloc_device failed: %s\n", e.what());
-        return nullptr;
+    // Allocate device memory (unless we need host fallback)
+    void *         device_ptr       = nullptr;
+    bool           is_host_resident = false;
+    cache_location entry_location   = cache_location::DEVICE;
+
+    if (!use_host_fallback) {
+        try {
+            device_ptr = ggml_sycl_malloc_device(size, queue_, "unified_cache:alloc");
+        } catch (const sycl::exception & e) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] malloc_device failed: %s, trying host fallback\n", e.what());
+            use_host_fallback = true;
+        }
+
+        if (!device_ptr && !use_host_fallback) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] malloc_device returned nullptr, trying host fallback\n");
+            use_host_fallback = true;
+        }
     }
 
-    if (!device_ptr) {
-        GGML_LOG_ERROR("[UNIFIED-CACHE] malloc_device returned nullptr\n");
-        return nullptr;
-    }
+    // Host fallback when device allocation fails or eviction is impossible
+    if (use_host_fallback) {
+        host_cache * hcache = get_host_cache(queue_);
+        if (hcache) {
+            // For simple ensure_cached, src_size == dst_size == size
+            bool           needs_host_fill = false;
+            bool           pinned_alloc    = false;
+            cache_location host_loc        = cache_location::HOST_MMAP;
+            void *         host_ptr        = hcache->ensure_cached_alloc(
+                key_id, src_ptr, size, size, type, layer_id, expert_id, layout, validate_content,
+                &needs_host_fill, &pinned_alloc, &host_loc, nullptr);
 
-    // Copy data from source to device
-    copy_to_device(device_ptr, src_ptr, size);
+            if (host_ptr) {
+                // Fill host buffer if needed (synchronous since host memory)
+                if (needs_host_fill) {
+                    std::memcpy(host_ptr, src_ptr, size);
+                }
+
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] Device full, using host-resident for model=%llu name_hash=0x%llx (%.2f MB)\n",
+                    (unsigned long long) key_id.model_id,
+                    (unsigned long long) key_id.name_hash,
+                    size / (1024.0f * 1024.0f));
+
+                device_ptr       = host_ptr;
+                is_host_resident = true;
+                entry_location   = host_loc;
+            }
+        }
+
+        if (!device_ptr) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] Both device and host allocation failed\n");
+            return nullptr;
+        }
+    } else {
+        // Copy data from source to device
+        copy_to_device(device_ptr, src_ptr, size);
+    }
 
     // Compute content hash for new entry (only computed once on cache miss)
     uint64_t content_hash = compute_content_hash(src_ptr, size);
@@ -1487,8 +1596,8 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
     entry.hot             = false;
     entry.state           = cache_entry_state::READY;
     entry.has_ready_event = false;
-    entry.host_resident   = false;
-    entry.location        = cache_location::DEVICE;
+    entry.host_resident   = is_host_resident;
+    entry.location        = entry_location;
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 
     // Store in cache
@@ -1504,10 +1613,16 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
             GGML_ABORT("unified_cache id_to_key mismatch");
         }
     }
-    used_ += size;
 
-    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cached %s: %.2f MB (used=%.1f/%.1f MB)\n",
-                    type == cache_entry_type::DENSE_WEIGHT ? "dense" : "expert", size / (1024.0f * 1024.0f),
+    // Only track device memory usage, not host-resident entries
+    if (!is_host_resident) {
+        used_ += size;
+    }
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cached %s%s: %.2f MB (used=%.1f/%.1f MB)\n",
+                    type == cache_entry_type::DENSE_WEIGHT ? "dense" : "expert",
+                    is_host_resident ? " (host-resident)" : "",
+                    size / (1024.0f * 1024.0f),
                     used_.load() / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f));
 
     return device_ptr;
@@ -3920,6 +4035,14 @@ static unified_cache * create_cache_for_device(int device_id) {
             budget = base_mem - headroom;
         }
 
+        // Cap budget to actual free VRAM at startup to account for system overhead
+        // (display compositor, driver structures, etc.) which can be 1-2 GB
+        if (free_mem > 0 && budget > free_mem) {
+            GGML_LOG_INFO("[UNIFIED-CACHE] Capping budget from %.1f MB to %.1f MB (actual free VRAM)\n",
+                          budget / (1024.0f * 1024.0f), free_mem / (1024.0f * 1024.0f));
+            budget = free_mem;
+        }
+
         char desc[256] = { 0 };
         ggml_backend_sycl_get_device_description(device_id, desc, sizeof(desc));
         GGML_LOG_INFO("[UNIFIED-CACHE] Device %d (%s): total=%.1f MB free=%.1f MB budget=%.1f MB (%d%%, headroom=%.1f MB)\n",
@@ -4382,6 +4505,158 @@ void unpin_routed_experts(const int32_t * expert_ids,
     }
 
     GGML_SYCL_DEBUG("[UNPIN] Layer %d: Unpinned %zu experts\n", layer_id, unique_experts.size());
+}
+
+// === OneDNN FP16 Scratch Buffer Implementation ===
+
+bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activations_size) {
+    std::lock_guard<std::mutex> lock(onednn_scratch_mutex_);
+
+    // Already reserved with sufficient size?
+    if (onednn_weights_scratch_ && onednn_activations_scratch_ &&
+        onednn_weights_scratch_size_ >= weights_size &&
+        onednn_activations_scratch_size_ >= activations_size) {
+        return true;
+    }
+
+    // Free existing if resizing
+    if (onednn_weights_scratch_) {
+        try {
+            sycl::free(onednn_weights_scratch_, queue_);
+        } catch (...) {}
+        onednn_weights_scratch_ = nullptr;
+        onednn_weights_scratch_size_ = 0;
+    }
+    if (onednn_activations_scratch_) {
+        try {
+            sycl::free(onednn_activations_scratch_, queue_);
+        } catch (...) {}
+        onednn_activations_scratch_ = nullptr;
+        onednn_activations_scratch_size_ = 0;
+    }
+
+    // Check if we have budget
+    const size_t total_needed = weights_size + activations_size;
+    if (total_needed > available()) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot reserve oneDNN scratch: need %.1f MB, available %.1f MB\n",
+                      total_needed / (1024.0f * 1024.0f), available() / (1024.0f * 1024.0f));
+        return false;
+    }
+
+    // Allocate weights scratch
+    try {
+        onednn_weights_scratch_ = sycl::malloc_device(weights_size, queue_);
+        if (!onednn_weights_scratch_) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN weights scratch (%.1f MB)\n",
+                          weights_size / (1024.0f * 1024.0f));
+            return false;
+        }
+        onednn_weights_scratch_size_ = weights_size;
+    } catch (const sycl::exception & e) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN weights scratch allocation failed: %s\n", e.what());
+        return false;
+    }
+
+    // Allocate activations scratch
+    try {
+        onednn_activations_scratch_ = sycl::malloc_device(activations_size, queue_);
+        if (!onednn_activations_scratch_) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to allocate oneDNN activations scratch (%.1f MB)\n",
+                          activations_size / (1024.0f * 1024.0f));
+            // Cleanup weights
+            sycl::free(onednn_weights_scratch_, queue_);
+            onednn_weights_scratch_ = nullptr;
+            onednn_weights_scratch_size_ = 0;
+            return false;
+        }
+        onednn_activations_scratch_size_ = activations_size;
+    } catch (const sycl::exception & e) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] oneDNN activations scratch allocation failed: %s\n", e.what());
+        sycl::free(onednn_weights_scratch_, queue_);
+        onednn_weights_scratch_ = nullptr;
+        onednn_weights_scratch_size_ = 0;
+        return false;
+    }
+
+    // Track in budget
+    used_.fetch_add(total_needed);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved oneDNN scratch: weights=%.1f MB, activations=%.1f MB\n",
+                  weights_size / (1024.0f * 1024.0f), activations_size / (1024.0f * 1024.0f));
+    return true;
+}
+
+bool unified_cache::get_onednn_scratch(size_t weights_needed, size_t activations_needed,
+                                       onednn_scratch_buffers & out) {
+    // Note: caller must hold onednn_scratch_mutex_ via lock_onednn_scratch()
+    if (!onednn_weights_scratch_ || !onednn_activations_scratch_) {
+        return false;
+    }
+    if (weights_needed > onednn_weights_scratch_size_ ||
+        activations_needed > onednn_activations_scratch_size_) {
+        return false;
+    }
+    out.weights = onednn_weights_scratch_;
+    out.activations = onednn_activations_scratch_;
+    out.weights_size = onednn_weights_scratch_size_;
+    out.activations_size = onednn_activations_scratch_size_;
+    return true;
+}
+
+// Global scratch buffer state for lock management
+static std::mutex g_onednn_scratch_lock_mutex;
+static std::unordered_map<int, std::unique_lock<std::mutex>> g_onednn_scratch_locks;
+
+bool unified_cache_reserve_onednn_scratch(int device_id, size_t weights_size, size_t activations_size) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return false;
+    }
+    return cache->reserve_onednn_scratch(weights_size, activations_size);
+}
+
+onednn_scratch_result unified_cache_get_onednn_scratch(int device_id, size_t weights_needed, size_t activations_needed) {
+    onednn_scratch_result result;
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return result;
+    }
+
+    // Acquire lock and store it for later release
+    auto lock = cache->lock_onednn_scratch();
+
+    unified_cache::onednn_scratch_buffers buffers;
+    if (!cache->get_onednn_scratch(weights_needed, activations_needed, buffers)) {
+        return result;
+    }
+
+    // Store lock for release
+    {
+        std::lock_guard<std::mutex> guard(g_onednn_scratch_lock_mutex);
+        g_onednn_scratch_locks[device_id] = std::move(lock);
+    }
+
+    result.weights = buffers.weights;
+    result.activations = buffers.activations;
+    result.ok = true;
+    return result;
+}
+
+void unified_cache_release_onednn_scratch(int device_id) {
+    std::lock_guard<std::mutex> guard(g_onednn_scratch_lock_mutex);
+    auto it = g_onednn_scratch_locks.find(device_id);
+    if (it != g_onednn_scratch_locks.end()) {
+        // Unlock by destroying the unique_lock
+        g_onednn_scratch_locks.erase(it);
+    }
+}
+
+bool unified_cache_has_onednn_scratch(int device_id) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) {
+        return false;
+    }
+    return cache->has_onednn_scratch();
 }
 
 void shutdown_unified_cache() {
