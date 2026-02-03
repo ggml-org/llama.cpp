@@ -1,6 +1,6 @@
 //
 // MIT license
-// Copyright (C) 2024-2026 Intel Corporation
+// Copyright (C) 2024-2025 Intel Corporation
 // SPDX-License-Identifier: MIT
 //
 
@@ -20,8 +20,7 @@
 //
 
 #include "persistent-tg-kernel.hpp"
-
-#include "unified-kernel.hpp"  // Full XMXConfig definition (ggml_sycl_unified::XMXConfig)
+#include "ggml.h"  // For GGML_TYPE_* constants
 
 #include <algorithm>
 
@@ -312,13 +311,9 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &              q,
 // can_use_persistent_tg Implementation
 // =============================================================================
 
-// Implementation note: The header forward-declares XMXConfig at global scope,
-// but the actual definition is ggml_sycl_unified::XMXConfig.
-// We cast the parameter to access the real struct members.
-bool can_use_persistent_tg(int n_layers, int hidden_dim, int quant_type, const XMXConfig & xmx_config) {
-    // Cast to the real type (ggml_sycl_unified::XMXConfig has identical layout)
-    // This is safe because the header's forward declaration matches our intended type
-    const auto & cfg = reinterpret_cast<const ggml_sycl_unified::XMXConfig &>(xmx_config);
+bool can_use_persistent_tg(int n_layers, int hidden_dim, int quant_type,
+                           const ggml_sycl_unified::XMXConfig & xmx_config) {
+    const auto & cfg = xmx_config;
 
     // Check basic hardware support
     if (!cfg.supported) {
@@ -342,9 +337,9 @@ bool can_use_persistent_tg(int n_layers, int hidden_dim, int quant_type, const X
     // Check quantization type is supported
     // Currently support Q4_0, Q4_K, Q6_K as per spec
     switch (quant_type) {
-        case 2:   // GGML_TYPE_Q4_0
-        case 12:  // GGML_TYPE_Q4_K
-        case 14:  // GGML_TYPE_Q6_K
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
             break;
         default:
             return false;

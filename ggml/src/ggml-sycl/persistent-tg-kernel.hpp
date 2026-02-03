@@ -24,9 +24,7 @@
 #include <cstdint>
 #include <sycl/sycl.hpp>
 
-// Forward declarations to avoid circular includes
-// Include "unified-kernel.hpp" for full XMXConfig definition
-struct XMXConfig;
+#include "unified-kernel.hpp"  // For ggml_sycl_unified::XMXConfig
 
 namespace ggml_sycl {
 
@@ -207,9 +205,9 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &             q,
  *
  * Performance: O(1) time, no memory allocation.
  */
-bool can_use_persistent_tg(int                                    n_layers,
-                           int                                    hidden_dim,
-                           int                                    quant_type,
-                           const XMXConfig & xmx_config);
+bool can_use_persistent_tg(int                                                  n_layers,
+                           int                                                  hidden_dim,
+                           int                                                  quant_type,
+                           const ggml_sycl_unified::XMXConfig & xmx_config);
 
 }  // namespace ggml_sycl
