@@ -34,7 +34,10 @@
 		[MCPTransportType.SSE]: 'SSE'
 	};
 
-	const transportIcons: Record<MCPTransportType, typeof Cable> = {
+	const transportIcons: Record<
+		MCPTransportType,
+		typeof Cable | typeof Zap | typeof Globe | typeof Radio
+	> = {
 		[MCPTransportType.WEBSOCKET]: Zap,
 		[MCPTransportType.STREAMABLE_HTTP]: Globe,
 		[MCPTransportType.SSE]: Radio

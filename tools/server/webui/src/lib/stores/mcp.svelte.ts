@@ -279,6 +279,30 @@ class MCPStore {
 		return this.getServers().find((s) => s.id === serverId);
 	}
 
+	/**
+	 * Get display name for an MCP server by its ID.
+	 * Falls back to the server ID if server is not found.
+	 */
+	getServerDisplayName(serverId: string): string {
+		const server = this.getServerById(serverId);
+		return server ? this.getServerLabel(server) : serverId;
+	}
+
+	/**
+	 * Get favicon URL for an MCP server by its ID.
+	 * Returns null if server is not found.
+	 */
+	getServerFavicon(serverId: string): string | null {
+		const server = this.getServerById(serverId);
+		if (!server) return null;
+		try {
+			const url = new URL(server.url);
+			return `${url.origin}/favicon.ico`;
+		} catch {
+			return null;
+		}
+	}
+
 	isAnyServerLoading(): boolean {
 		return this.getServers().some((s) => {
 			const state = this.getHealthCheckState(s.id);

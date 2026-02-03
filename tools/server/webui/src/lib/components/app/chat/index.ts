@@ -59,7 +59,9 @@ export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachment
 export { default as ChatAttachmentMcpPrompt } from './ChatAttachments/ChatAttachmentMcpPrompt.svelte';
 
 /**
- * Todo - add description
+ * Displays a single MCP Resource attachment with icon, name, and server info.
+ * Shows loading/error states and supports remove action.
+ * Used within ChatAttachmentMcpResources for individual resource display.
  */
 export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAttachmentMcpResource.svelte';
 

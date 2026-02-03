@@ -5,9 +5,9 @@
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormPromptPicker,
-		ChatFormTextarea,
-		McpResourcePicker
+		ChatFormTextarea
 	} from '$lib/components/app';
+	import { DialogMcpResources } from '$lib/components/app/dialogs';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import {
@@ -542,10 +542,10 @@
 	</div>
 </form>
 
-<McpResourcePicker
+<DialogMcpResources
 	bind:open={isResourcePickerOpen}
 	preSelectedUri={preSelectedResourceUri}
-	onOpenChange={(newOpen) => {
+	onOpenChange={(newOpen: boolean) => {
 		if (!newOpen) {
 			preSelectedResourceUri = undefined;
 		}

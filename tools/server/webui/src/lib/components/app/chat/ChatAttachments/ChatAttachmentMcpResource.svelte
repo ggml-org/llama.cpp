@@ -2,7 +2,6 @@
 	import { FileText, Loader2, AlertCircle, Database, Image, Code, File } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFaviconUrl } from '$lib/utils';
 	import type { MCPResourceAttachment, MCPResourceInfo } from '$lib/types';
 	import {
 		IMAGE_FILE_EXTENSION_REGEX,
@@ -52,19 +51,9 @@
 		return 'border-border/50 bg-muted/30';
 	}
 
-	function getServerDisplayName(serverId: string): string {
-		const server = mcpStore.getServerById(serverId);
-		return server ? mcpStore.getServerLabel(server) : serverId;
-	}
-
-	function getServerFavicon(serverId: string): string | null {
-		const server = mcpStore.getServerById(serverId);
-		return server ? getFaviconUrl(server.url) : null;
-	}
-
 	const ResourceIcon = $derived(getResourceIcon(attachment.resource));
-	const serverName = $derived(getServerDisplayName(attachment.resource.serverName));
-	const favicon = $derived(getServerFavicon(attachment.resource.serverName));
+	const serverName = $derived(mcpStore.getServerDisplayName(attachment.resource.serverName));
+	const favicon = $derived(mcpStore.getServerFavicon(attachment.resource.serverName));
 </script>
 
 <Tooltip.Root>

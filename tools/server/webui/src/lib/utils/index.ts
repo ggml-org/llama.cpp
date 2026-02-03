@@ -108,7 +108,8 @@ export {
 	detectMcpTransportFromUrl,
 	parseMcpServerSettings,
 	getMcpLogLevelIcon,
-	getMcpLogLevelClass
+	getMcpLogLevelClass,
+	isImageMimeType
 } from './mcp';
 
 // Header utilities
