@@ -26,7 +26,7 @@
  *
  * @example
  * ```svelte
- * <MarkdownContent content={message.content} {message} />
+ * <MarkdownContent content={message.content} attachments={message.extra} />
  * ```
  */
 export { default as MarkdownContent } from './MarkdownContent.svelte';

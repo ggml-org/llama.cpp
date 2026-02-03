@@ -36,10 +36,10 @@
 	import { mode } from 'mode-watcher';
 	import { ActionIconsCodeBlock, DialogCodePreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import type { DatabaseMessage } from '$lib/types/database';
+	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {
-		message?: DatabaseMessage;
+		attachments?: DatabaseMessageExtra[];
 		content: string;
 		class?: string;
 		disableMath?: boolean;
@@ -51,7 +51,7 @@
 		contentHash?: string;
 	}
 
-	let { content, message, class: className = '', disableMath = false }: Props = $props();
+	let { content, attachments, class: className = '', disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -76,7 +76,7 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
-		void message;
+		void attachments;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
@@ -98,7 +98,7 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
-			.use(rehypeResolveAttachmentImages, { message })
+			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
