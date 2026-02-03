@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
-	import { BadgeModality, CopyToClipboardIcon } from '$lib/components/app';
+	import { BadgeModality, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
 	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
@@ -73,7 +73,7 @@
 											{modelName}
 										</span>
 
-										<CopyToClipboardIcon
+										<ActionIconCopyToClipboard
 											text={modelName || ''}
 											canCopy={!!modelName}
 											ariaLabel="Copy model name to clipboard"
@@ -97,7 +97,7 @@
 										{serverProps.model_path}
 									</span>
 
-									<CopyToClipboardIcon
+									<ActionIconCopyToClipboard
 										text={serverProps.model_path}
 										ariaLabel="Copy model path to clipboard"
 									/>

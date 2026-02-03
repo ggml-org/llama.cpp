@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
 	import {
-		ActionButton,
+		ActionIcon,
 		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
@@ -72,21 +72,21 @@
 		<div
 			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150"
 		>
-			<ActionButton icon={Copy} tooltip="Copy" onclick={onCopy} />
+			<ActionIcon icon={Copy} tooltip="Copy" onclick={onCopy} />
 
 			{#if onEdit}
-				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
+				<ActionIcon icon={Edit} tooltip="Edit" onclick={onEdit} />
 			{/if}
 
 			{#if role === MessageRole.ASSISTANT && onRegenerate}
-				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
+				<ActionIcon icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
-				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 
-			<ActionButton icon={Trash2} tooltip="Delete" onclick={onDelete} />
+			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
 		</div>
 	</div>
 
