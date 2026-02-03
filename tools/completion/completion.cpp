@@ -678,6 +678,7 @@ int main(int argc, char ** argv) {
                 int n_eval = (int) embd.size();
                 LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
 
+                GGML_ASSERT(n_eval <= params.n_batch);
                 if (llama_decode(ctx, llama_batch_get_one(embd.data(), n_eval))) {
                     LOG_ERR("%s : failed to eval\n", __func__);
                     return 1;
