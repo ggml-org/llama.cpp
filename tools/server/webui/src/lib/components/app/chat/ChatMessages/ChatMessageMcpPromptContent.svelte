@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
-	import type { DatabaseMessageExtraMcpPrompt, MCPServerSettingsEntry } from '$lib/types';
+	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { McpPromptVariant } from '$lib/enums';

@@ -229,7 +229,7 @@ export { default as McpServerInfo } from './McpServerInfo.svelte';
  * - Refresh all resources action
  * - Loading states per server
  */
-export { default as McpResourceBrowser } from './McpResourceBrowser.svelte';
+export { default as McpResourceBrowser } from './McpResourceBrowser/McpResourceBrowser.svelte';
 
 /**
  * **McpResourcePreview** - MCP resource content preview
