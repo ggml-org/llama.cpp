@@ -12,7 +12,6 @@
 #include <set>
 #include <sstream>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 namespace jinja {
@@ -502,21 +501,12 @@ struct value_object_t : public value_t {
     virtual bool is_immutable() const override { return false; }
     virtual const std::vector<std::pair<value, value>> & as_ordered_object() const override { return val_obj; }
     virtual string as_string() const override {
-        // Use JSON format for object string representation to ensure compatibility
-        // when concatenated in templates (e.g., '{"name": ' + arguments + '}')
         std::ostringstream ss;
         ss << "{";
         for (size_t i = 0; i < val_obj.size(); i++) {
             if (i > 0) ss << ", ";
             auto & [key, val] = val_obj.at(i);
-            // Use double quotes for keys (JSON format)
-            ss << "\"" << key->as_string().str() << "\": ";
-            if (is_val<value_string>(val)) {
-                // Strings need to be quoted in JSON
-                ss << "\"" << val->as_string().str() << "\"";
-            } else {
-                ss << val->as_string().str();
-            }
+            ss << value_to_string_repr(key) << ": " << value_to_string_repr(val);
         }
         ss << "}";
         return ss.str();
@@ -626,8 +616,6 @@ struct value_undefined_t : public value_t {
     value_undefined_t(const std::string & h = "") : hint(h) {}
     virtual std::string type() const override { return hint.empty() ? "Undefined" : "Undefined (hint: '" + hint + "')"; }
     virtual bool is_undefined() const override { return true; }
-    // note: some templates use "is none" as equivalent to "is undefined"
-    virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
     virtual std::string as_repr() const override { return type(); }
     virtual const func_builtins & get_builtins() const override;

@@ -130,7 +130,7 @@
         {%- if tool_calls and tool_calls|length > 0 -%}
             {{ '\n<tool_calls>[' }}
             {%- for tool_call in tool_calls -%}
-                {{ '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|string }}
+                {{ '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|tojson }}
                 {%- if add_tool_id == true and 'id' in tool_call -%}
                     {{ ', "id": "' + tool_call['id'] + '"' }}
                 {%- endif -%}

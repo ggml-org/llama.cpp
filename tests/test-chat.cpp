@@ -776,6 +776,9 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     auto parser = make_peg_parser(tmpls, tc.params, detailed_debug);
+    if (detailed_debug) {
+        LOG_DBG("Using parser: \n%s\n", parser.arena_.dump(parser.arena_.root()).c_str());
+    }
 
     common_chat_msg msg_accum;
     common_chat_msg msg_prev;
@@ -2066,6 +2069,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
             })
             .run();
+    }
+
+    {
+        auto tst = peg_tester("models/templates/StepFun3.5-Flash.jinja", detailed_debug);
+        tst.test("I was thinking</think>Now I'm not.").
+            enable_thinking(true).
+            reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK).
+            expect_reasoning("I was thinking").
+            expect_content("Now I'm not.")
+        .run();
     }
 }
 

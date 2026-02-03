@@ -1287,7 +1287,7 @@ static void test_nemotron_tool_format(testing & t) {
     // Check function markers
     t.assert_equal("func_name_prefix should be '<function='", "<function=", analysis.markers.func_name_prefix);
     t.assert_equal("func_name_suffix should be '>\\n'", ">\n", analysis.markers.func_name_suffix);
-    t.assert_equal("func_close should be '</function>'", "</function>", analysis.markers.func_close);
+    t.assert_equal("func_close should be '</function>\\n'", "</function>\n", analysis.markers.func_close);
 
     // Check argument markers (note: markers retain trailing newlines for proper parsing)
     t.assert_equal("arg_name_prefix should be '<parameter='", "<parameter=", analysis.markers.arg_name_prefix);
