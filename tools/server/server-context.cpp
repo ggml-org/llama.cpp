@@ -155,7 +155,7 @@ struct server_slot {
     double t_prompt_processing; // ms
     double t_token_generation;  // ms
 
-    std::function<void(int /* slot_id */)> callback_on_release;
+    std::function<void(int /* id_slot */)> callback_on_release;
 
     // Speculative decoding stats
     int32_t n_draft_total = 0;      // Total draft tokens generated
@@ -705,6 +705,11 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+
+            if (params_base.speculative.type != COMMON_SPECULATIVE_TYPE_NONE) {
+                params_base.speculative.type =  COMMON_SPECULATIVE_TYPE_NONE;
+                SRV_WRN("%s\n", "speculative decoding is not supported by multimodal, it will be disabled");
+            }
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx))) {
@@ -754,16 +759,16 @@ private:
                         SRV_ERR("%s\n", "speculative decoding is not supported with multimodal");
                         return false;
                     }
-                    SRV_WRN("%s", "speculative decoding context initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context initialized\n");
                 } else {
-                    SRV_WRN("%s", "speculative decoding context not initialized\n");
+                    SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
                 }
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
-            slot.callback_on_release = [this](int slot_id) {
-                queue_tasks.pop_deferred_task(slot_id);
+            slot.callback_on_release = [this](int id_slot) {
+                queue_tasks.pop_deferred_task(id_slot);
             };
 
             slot.reset();
@@ -891,6 +896,9 @@ private:
     }
 
     server_slot * get_slot_by_id(int id_slot) {
+        // note: allow id_slot to be out of bounds (wrap around)
+        id_slot = id_slot % slots.size();
+
         for (server_slot & slot : slots) {
             if (slot.id == id_slot) {
                 return &slot;
@@ -1760,7 +1768,7 @@ private:
                         break;
                     }
 
-                    int id_slot = task.slot_action.slot_id;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -1798,7 +1806,7 @@ private:
             case SERVER_TASK_TYPE_SLOT_RESTORE:
                 {
                     if (!check_no_mtmd(task.id)) break;
-                    int id_slot = task.slot_action.slot_id;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -1847,7 +1855,7 @@ private:
                     if (!check_no_mtmd(task.id)) {
                         break;
                     }
-                    int id_slot = task.slot_action.slot_id;
+                    const int id_slot = task.slot_action.id_slot;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
@@ -3312,7 +3320,7 @@ void server_routes::init_routes() {
         }
 
         // TODO: get rid of this dynamic_cast
-        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        auto * res_task = dynamic_cast<server_task_result_metrics*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
         // optionally return "fail_on_no_slot" error
@@ -3335,8 +3343,8 @@ void server_routes::init_routes() {
         }
 
         std::string id_slot_str = req.get_param("id_slot");
-        int id_slot;
 
+        int id_slot;
         try {
             id_slot = std::stoi(id_slot_str);
         } catch (const std::exception &) {
@@ -3348,14 +3356,16 @@ void server_routes::init_routes() {
 
         if (action == "save") {
             return handle_slots_save(req, id_slot);
-        } else if (action == "restore") {
-            return handle_slots_restore(req, id_slot);
-        } else if (action == "erase") {
-            return handle_slots_erase(req, id_slot);
-        } else {
-            res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
-            return res;
         }
+        if (action == "restore") {
+            return handle_slots_restore(req, id_slot);
+        }
+        if (action == "erase") {
+            return handle_slots_erase(req, id_slot);
+        }
+
+        res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
+        return res;
     };
 
     this->get_props = [this](const server_http_req &) {
@@ -3898,7 +3908,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
     {
         server_task task(SERVER_TASK_TYPE_SLOT_SAVE);
         task.id = rd.get_new_id();
-        task.slot_action.slot_id  = id_slot;
+        task.slot_action.id_slot  = id_slot;
         task.slot_action.filename = filename;
         task.slot_action.filepath = filepath;
         rd.post_task(std::move(task));
@@ -3934,7 +3944,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
     {
         server_task task(SERVER_TASK_TYPE_SLOT_RESTORE);
         task.id = rd.get_new_id();
-        task.slot_action.slot_id  = id_slot;
+        task.slot_action.id_slot  = id_slot;
         task.slot_action.filename = filename;
         task.slot_action.filepath = filepath;
         rd.post_task(std::move(task));
@@ -3963,7 +3973,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
     {
         server_task task(SERVER_TASK_TYPE_SLOT_ERASE);
         task.id = rd.get_new_id();
-        task.slot_action.slot_id = id_slot;
+        task.slot_action.id_slot = id_slot;
         rd.post_task(std::move(task));
     }
 

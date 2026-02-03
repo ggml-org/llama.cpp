@@ -2279,13 +2279,19 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        if (ne2 == 1) {
+        static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
+        if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
-                ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
+                if (ne2 <= 4) {
+                    ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
+                    return;
+                }
             } else {
-                ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
+                if (GGML_CUDA_CC_IS_AMD(cc)) {
+                    ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
+                    return;
+                }
             }
-            return;
         }
 
         if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
@@ -2920,6 +2926,7 @@ static void ggml_cuda_graph_node_set_properties(ggml_cuda_graph_node_properties 
     memset(props, 0, sizeof(ggml_cuda_graph_node_properties));
     props->node_data = node->data;
     props->node_op = node->op;
+    props->node_type = node->type;
     props->flags = node->flags;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         props->ne[i] = node->ne[i];
@@ -2941,6 +2948,10 @@ static bool ggml_cuda_graph_node_properties_match(ggml_tensor * node, ggml_cuda_
     }
 
     if (node->op != props->node_op) {
+        return false;
+    }
+
+    if (node->type != props->node_type) {
         return false;
     }
 
@@ -3905,14 +3916,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
 #else
+        GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
 #endif  // USE_CUDA_GRAPH
     }
 }
 
-static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
-
 #ifdef USE_CUDA_GRAPH
+static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
 
     if (graph->graph == nullptr) {
@@ -3925,12 +3936,8 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, co
     }
 
     return graph->is_enabled();
-#else
-    GGML_UNUSED(cuda_ctx);
-    GGML_UNUSED(graph_key);
-    return false;
-#endif // USE_CUDA_GRAPH
 }
+#endif // USE_CUDA_GRAPH
 
 static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
@@ -5048,16 +5055,6 @@ ggml_backend_reg_t ggml_backend_cuda_reg() {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
-            // Set CUDA_SCALE_LAUNCH_QUEUES before any CUDA API call to improve multi-GPU pipeline parallelism performance
-            // PR: https://github.com/ggml-org/llama.cpp/pull/19042
-            if (getenv("CUDA_SCALE_LAUNCH_QUEUES") == nullptr) {
-#ifdef _WIN32
-                _putenv_s("CUDA_SCALE_LAUNCH_QUEUES", "4x");
-#else
-                setenv("CUDA_SCALE_LAUNCH_QUEUES", "4x", 0); // don't overwrite if already set
-#endif // _WIN32
-            }
-
             ggml_backend_cuda_reg_context * ctx = new ggml_backend_cuda_reg_context;
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 

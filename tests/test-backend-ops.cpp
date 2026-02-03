@@ -8213,11 +8213,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                         if (!mask && max_bias > 0.0f) continue;
                         for (float logit_softcap : {0.0f, 10.0f}) {
                             if (hsk != 128 && logit_softcap != 0.0f) continue;
-                            for (int nh : { 4, }) {
+                            for (int nh : { 1, 4 }) {
+                                if (nh == 1 && hsk != 576) continue; // GLM 4.7 Flash
                                 for (int nr3 : { 1, 3, }) {
                                     if (hsk > 64 && nr3 > 1) continue; // skip broadcast for large head sizes
-                                    for (int nr2 : { 1, 4, 12 }) {
+                                    for (int nr2 : { 1, 4, 12, 20 }) {
                                         if (nr2 == 12 && hsk != 128) continue;
+                                        if (nr2 == 20 && (nh != 1 || hsk != 576)) continue;
                                         //for (int kv : { 1, 17, 31, 33, 61, 113, 65, 127, 129, 130, 255, 260, 371, 380, 407, 512, 1024, }) {
                                         for (int kv : { 113, 512, 1024, }) {
                                             if (nr2 != 1 && kv != 512) continue;
@@ -8588,6 +8590,13 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
             info.set_error("backend", "Failed to initialize CPU backend");
             output_printer->print_operation(info);
             return false;
+        }
+        // Use reference implementation on the CPU backend for comparison
+        using ggml_backend_cpu_set_use_ref_t = void (*)(ggml_backend_t, bool);
+        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
+        auto * set_use_ref = (ggml_backend_cpu_set_use_ref_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_use_ref");
+        if (set_use_ref) {
+            set_use_ref(backend_cpu, true);
         }
 
         size_t n_ok = 0;
