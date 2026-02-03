@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 namespace jinja {
 
@@ -126,27 +127,27 @@ struct value_t {
     // Note: only for debugging and error reporting purposes
     virtual std::string type() const { return ""; }
 
-    virtual int64_t as_int() const { throw std::runtime_error(type() + " is not an int value"); }
-    virtual double as_float() const { throw std::runtime_error(type() + " is not a float value"); }
-    virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
-    virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
-    virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
-    virtual const std::vector<std::pair<value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
+    [[noreturn]] virtual int64_t as_int() const { throw std::runtime_error(type() + " is not an int value"); }
+    [[noreturn]] virtual double as_float() const { throw std::runtime_error(type() + " is not a float value"); }
+    [[noreturn]] virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
+    [[noreturn]] virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
+    [[noreturn]] virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
+    [[noreturn]] virtual const std::vector<std::pair<value, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
     virtual bool is_none() const { return false; }
     virtual bool is_undefined() const { return false; }
-    virtual const func_builtins & get_builtins() const {
+    [[noreturn]] virtual const func_builtins & get_builtins() const {
         throw std::runtime_error("No builtins available for type " + type());
     }
 
-    virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual void insert(const value & /* key */, const value & /* val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const value & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(const std::string & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
-    virtual value & at(int64_t /* idx */, value & /* default_val */) { throw std::runtime_error(type() + " is not an array value"); }
-    virtual value & at(int64_t /* idx */) { throw std::runtime_error(type() + " is not an array value"); }
+    [[noreturn]] virtual bool has_key(const value &) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual void insert(const value & /* key */, const value & /* val */) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value & at(const value & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value & at(const value & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value & at(const std::string & /* key */, value & /* default_val */) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value & at(const std::string & /* key */) { throw std::runtime_error(type() + " is not an object value"); }
+    [[noreturn]] virtual value & at(int64_t /* idx */, value & /* default_val */) { throw std::runtime_error(type() + " is not an array value"); }
+    [[noreturn]] virtual value & at(int64_t /* idx */) { throw std::runtime_error(type() + " is not an array value"); }
 
     virtual bool is_numeric() const { return false; }
     virtual bool is_hashable() const { return false; }

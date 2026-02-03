@@ -428,22 +428,6 @@ const func_builtins & global_builtins() {
             bool res = it != builtins.end();
             return mk_val<value_bool>(res);
         }},
-        {"test_is_in", [](const func_args & args) -> value {
-            args.ensure_count(2, 2);
-            value val_needle = args.get_pos(0);
-            value val_haystack = args.get_pos(1);
-            const auto & haystack = is_val<value_array>(val_haystack) ? val_haystack->as_array() : std::vector<value>(1, val_haystack);
-            for (auto it = haystack.cbegin(); it != haystack.cend(); it++) {
-                if ((*it)->type() == val_needle->type()) {
-                    if (is_val<value_string>(val_haystack) ?
-                        (*it)->as_string().str().find(val_needle->as_string().str()) != std::string::npos :
-                        value_compare(*it, val_needle, value_compare_op::eq)) {
-                        return mk_val<value_bool>(true);
-                    }
-                }
-            }
-            return mk_val<value_bool>(false);
-        }},
         {"test_is_sameas", [](const func_args & args) -> value {
             // Check if an object points to the same memory address as another object
             (void)args;
