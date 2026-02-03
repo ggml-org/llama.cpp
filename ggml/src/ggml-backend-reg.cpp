@@ -462,6 +462,11 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 #ifdef GGML_BACKEND_DIR
         search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
 #endif
+        const char * backend_dir = getenv("GGML_BACKEND_DIR");
+        if (backend_dir) {
+            search_paths.push_back(fs::u8path(backend_dir));
+        }
+
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
         search_paths.push_back(fs::current_path());
