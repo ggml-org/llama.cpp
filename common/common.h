@@ -5,6 +5,7 @@
 #include "ggml-opt.h"
 #include "llama-cpp.h"
 
+#include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
@@ -778,6 +779,20 @@ void common_batch_add(
                           llama_pos   pos,
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits);
+
+// decodes a single batch of tokens for a prompt and manages session tokens
+//
+// Note: We save state before the last token so that we can replay it to ensure
+// compatibility with all memory types. Recurrent/hybrid models cannot remove
+// tokens from memory, so this approach works across all model architectures.
+bool common_prompt_batch_decode(
+              struct llama_context * ctx,
+    const std::vector<llama_token> & embd,
+                               int & n_past,
+                               int   n_batch,
+       const std::filesystem::path & state_path,
+                              bool   save_state,
+                              bool   is_last_batch = true);
 
 //
 // Vocab utils

@@ -1788,3 +1788,56 @@ float lr_opt::get_lr(float epoch) const {
     LOG_INF("epoch %.2g lr=%.2g\n", epoch, r);
     return r;
 }
+
+bool common_prompt_batch_decode(
+              struct llama_context * ctx,
+    const std::vector<llama_token> & tokens,
+                               int & n_past,
+                               int   n_batch,
+       const std::filesystem::path & state_path,
+                              bool   save_state,
+                              bool   is_last_batch) {
+    const int n_eval = tokens.size();
+    if (n_eval == 0) {
+        return true;
+    }
+
+    if (save_state && is_last_batch && n_eval > 1) {
+        const int n_tokens_before_last = n_eval - 1;
+
+        GGML_ASSERT(n_eval <= n_batch);
+
+        // Decode all but the last token so we can save the memory state before decoding the last token.
+        // This is done so we can restore the session state later and replay the last token.
+        // Memory implementations in recurrent/hybrid models don't support removing tokens from their
+        // memory, so we can't just remove the last token from the memory and replay the last token which
+        // is the reason for this logic.
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_tokens_before_last))) {
+            LOG_ERR("%s : failed to eval\n", __func__);
+            return false;
+        }
+        n_past += n_tokens_before_last;
+
+        llama_state_save_file(ctx, state_path.string().c_str(), tokens.data(), n_tokens_before_last);
+        LOG_INF("saved session before last token to %s, n_tokens = %d\n", state_path.string().c_str(), n_tokens_before_last);
+
+        llama_token last_token = tokens.back();
+        llama_batch batch = llama_batch_get_one(&last_token, 1);
+        int32_t pos = n_past;
+        batch.pos = &pos;
+
+        if (llama_decode(ctx, batch)) {
+            LOG_ERR("%s : failed to eval last token\n", __func__);
+            return false;
+        }
+        n_past++;
+    } else {
+        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(tokens.data()), n_eval))) {
+            LOG_ERR("%s : failed to eval\n", __func__);
+            return false;
+        }
+        n_past += n_eval;
+    }
+
+    return true;
+}
