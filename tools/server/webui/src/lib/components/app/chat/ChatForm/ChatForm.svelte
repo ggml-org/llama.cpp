@@ -10,7 +10,8 @@
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { MimeTypeText, SpecialFileType } from '$lib/enums';
+	import { INITIAL_FILE_SIZE, PROMPT_CONTENT_SEPARATOR } from '$lib/constants/chat-form';
+	import { ContentPartType, KeyboardKey, MimeTypeText, SpecialFileType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -232,13 +233,13 @@
 			return;
 		}
 
-		if (event.key === 'Escape' && isPromptPickerOpen) {
+		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
 			return;
 		}
 
-		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
 
 			if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
@@ -289,7 +290,7 @@
 						name: att.name,
 						size: att.content.length,
 						type: SpecialFileType.MCP_PROMPT,
-						file: new File([att.content], `${att.name}.txt`, { type: 'text/plain' }),
+						file: new File([att.content], `${att.name}.txt`, { type: MimeTypeText.PLAIN }),
 						isLoading: false,
 						textContent: att.content,
 						mcpPrompt: {
@@ -348,7 +349,7 @@
 		const placeholder: ChatUploadedFile = {
 			id: placeholderId,
 			name: promptName,
-			size: 0,
+			size: INITIAL_FILE_SIZE,
 			type: SpecialFileType.MCP_PROMPT,
 			file: new File([], 'loading'),
 			isLoading: true,
@@ -370,13 +371,13 @@
 				if (typeof msg.content === 'string') {
 					return msg.content;
 				}
-				if (msg.content.type === 'text') {
+				if (msg.content.type === ContentPartType.TEXT) {
 					return msg.content.text;
 				}
 				return '';
 			})
 			.filter(Boolean)
-			.join('\n\n');
+			.join(PROMPT_CONTENT_SEPARATOR);
 
 		uploadedFiles = uploadedFiles.map((f) =>
 			f.id === placeholderId
@@ -385,7 +386,7 @@
 						isLoading: false,
 						textContent: promptText,
 						size: promptText.length,
-						file: new File([promptText], `${f.name}.txt`, { type: 'text/plain' })
+						file: new File([promptText], `${f.name}.txt`, { type: MimeTypeText.PLAIN })
 					}
 				: f
 		);

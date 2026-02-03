@@ -2,6 +2,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { debounce } from '$lib/utils';
+	import { KeyboardKey } from '$lib/enums';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ChatFormPromptPickerList from './ChatFormPromptPickerList.svelte';
@@ -213,17 +214,17 @@
 
 		if (argSuggestions.length === 0 || activeAutocomplete !== argName) return;
 
-		if (event.key === 'ArrowDown') {
+		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			autocompleteIndex = Math.min(autocompleteIndex + 1, argSuggestions.length - 1);
-		} else if (event.key === 'ArrowUp') {
+		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			autocompleteIndex = Math.max(autocompleteIndex - 1, 0);
-		} else if (event.key === 'Enter' && argSuggestions[autocompleteIndex]) {
+		} else if (event.key === KeyboardKey.ENTER && argSuggestions[autocompleteIndex]) {
 			event.preventDefault();
 			event.stopPropagation();
 			selectSuggestion(argName, argSuggestions[autocompleteIndex]);
-		} else if (event.key === 'Escape') {
+		} else if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			suggestions[argName] = [];
 			activeAutocomplete = null;
@@ -255,7 +256,7 @@
 	export function handleKeydown(event: KeyboardEvent): boolean {
 		if (!isOpen) return false;
 
-		if (event.key === 'Escape') {
+		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			if (selectedPrompt) {
 				selectedPrompt = null;
@@ -267,7 +268,7 @@
 			return true;
 		}
 
-		if (event.key === 'ArrowDown') {
+		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			if (selectedIndex < filteredPrompts.length - 1) {
 				selectedIndex++;
@@ -276,7 +277,7 @@
 			return true;
 		}
 
-		if (event.key === 'ArrowUp') {
+		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			if (selectedIndex > 0) {
 				selectedIndex--;
@@ -285,7 +286,7 @@
 			return true;
 		}
 
-		if (event.key === 'Enter' && !selectedPrompt) {
+		if (event.key === KeyboardKey.ENTER && !selectedPrompt) {
 			event.preventDefault();
 			if (filteredPrompts[selectedIndex]) {
 				handlePromptClick(filteredPrompts[selectedIndex]);

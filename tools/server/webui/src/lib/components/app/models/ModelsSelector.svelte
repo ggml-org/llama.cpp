@@ -12,7 +12,7 @@
 		routerModels,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { ServerModelStatus } from '$lib/enums';
+	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
@@ -133,7 +133,7 @@
 	function handleSearchKeyDown(event: KeyboardEvent) {
 		if (event.isComposing) return;
 
-		if (event.key === 'ArrowDown') {
+		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			if (filteredOptions.length === 0) return;
 
@@ -142,7 +142,7 @@
 			} else {
 				highlightedIndex += 1;
 			}
-		} else if (event.key === 'ArrowUp') {
+		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
 			if (filteredOptions.length === 0) return;
 
@@ -151,7 +151,7 @@
 			} else {
 				highlightedIndex -= 1;
 			}
-		} else if (event.key === 'Enter') {
+		} else if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 			if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
 				const option = filteredOptions[highlightedIndex];
