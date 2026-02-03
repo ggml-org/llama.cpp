@@ -95,8 +95,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
-	showMessageStats:
-		'Display generation statistics (tokens/second, token count, duration).',
+	showMessageStats: 'Display generation statistics (tokens/second, token count, duration).',
 	askForTitleConfirmation:
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage:

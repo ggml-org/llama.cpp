@@ -5,7 +5,12 @@
 	import { Play, Square, Settings, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
-	import { ChatMessageStatistics, DialogChatError, KeyboardShortcutInfo, ModelsSelector } from '$lib/components/app';
+	import {
+		ChatMessageStatistics,
+		DialogChatError,
+		KeyboardShortcutInfo,
+		ModelsSelector
+	} from '$lib/components/app';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -250,7 +255,7 @@
 		</Button>
 	</header>
 
-	<div class="flex-1 overflow-y-auto pb-0 pt-2 md:pt-4 px-2 md:px-4">
+	<div class="flex-1 overflow-y-auto px-2 pt-2 pb-0 md:px-4 md:pt-4">
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
@@ -266,35 +271,25 @@
 			<div class="flex items-center gap-2">
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled={!canUndo}
-							onclick={handleUndo}
-						>
+						<Button variant="ghost" size="icon" disabled={!canUndo} onclick={handleUndo}>
 							<Undo class="h-4 w-4" />
 						</Button>
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Undo last generation</p>
-						<KeyboardShortcutInfo keys={['ctrl', 'z']} class="opacity-100 w-full justify-center" />
+						<KeyboardShortcutInfo keys={['ctrl', 'z']} class="w-full justify-center opacity-100" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<Button
-							variant="ghost"
-							size="icon"
-							disabled={!canRedo}
-							onclick={handleRedo}
-						>
+						<Button variant="ghost" size="icon" disabled={!canRedo} onclick={handleRedo}>
 							<Redo class="h-4 w-4" />
 						</Button>
 					</Tooltip.Trigger>
 					<Tooltip.Content>
 						<p>Redo last generation</p>
-						<KeyboardShortcutInfo keys={['ctrl', 'y']} class="opacity-100 w-full justify-center" />
+						<KeyboardShortcutInfo keys={['ctrl', 'y']} class="w-full justify-center opacity-100" />
 					</Tooltip.Content>
 				</Tooltip.Root>
 
@@ -304,7 +299,7 @@
 						onclick={notebookStore.isGenerating ? handleStop : handleGenerate}
 						size="sm"
 						variant={notebookStore.isGenerating ? 'destructive' : 'default'}
-						class="gap-2 min-w-[120px]"
+						class="min-w-[120px] gap-2"
 					>
 						{#if notebookStore.isGenerating}
 							<Square class="h-4 w-4 fill-current" />
@@ -346,7 +341,7 @@
 					{#if notebookStore.totalTokens > 0}
 						<Tooltip.Root>
 							<Tooltip.Trigger>
-								<div class="pr-3.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+								<div class="flex items-center gap-1.5 pr-3.5 text-xs text-muted-foreground">
 									<RulerDimensionLine class="h-3.5 w-3.5" />
 									<span>{notebookStore.totalTokens} tokens</span>
 								</div>
