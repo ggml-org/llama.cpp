@@ -97,7 +97,7 @@
 	{#each sectionsParsed as section, index (index)}
 		{#if section.type === AgenticSectionType.TEXT}
 			<div class="agentic-text">
-				<MarkdownContent content={section.content} {message} />
+				<MarkdownContent content={section.content} attachments={message?.extra} />
 			</div>
 		{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 			{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}

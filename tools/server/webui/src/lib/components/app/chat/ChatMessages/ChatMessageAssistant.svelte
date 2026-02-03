@@ -208,7 +208,7 @@
 				{message}
 			/>
 		{:else}
-			<MarkdownContent content={messageContent || ''} {message} />
+			<MarkdownContent content={messageContent || ''} attachments={message.extra} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">

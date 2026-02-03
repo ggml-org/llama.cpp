@@ -1,13 +1,13 @@
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
-import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
+import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
 import { AttachmentType, UrlPrefix } from '$lib/enums';
 
 /**
  * Rehype plugin to resolve attachment image sources.
  * Converts attachment names (e.g., "mcp-attachment-xxx.png") to base64 data URLs.
  */
-export function rehypeResolveAttachmentImages(options: { message?: DatabaseMessage }) {
+export function rehypeResolveAttachmentImages(options: { attachments?: DatabaseMessageExtra[] }) {
 	return (tree: HastRoot) => {
 		visit(tree, 'element', (node) => {
 			if (node.tagName === 'img' && node.properties?.src) {
@@ -19,7 +19,7 @@ export function rehypeResolveAttachmentImages(options: { message?: DatabaseMessa
 				}
 
 				// Find matching attachment
-				const attachment = options.message?.extra?.find(
+				const attachment = options.attachments?.find(
 					(a): a is DatabaseMessageExtraImageFile =>
 						a.type === AttachmentType.IMAGE && a.name === src
 				);
