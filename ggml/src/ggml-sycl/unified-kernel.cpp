@@ -21,6 +21,8 @@
 
 #include "unified-kernel.hpp"
 
+#include <chrono>
+
 // =============================================================================
 // Standalone Test Mode Support
 // =============================================================================
@@ -3900,6 +3902,225 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
 namespace ggml_sycl {
 
+// =============================================================================
+// Device-Side Persistent Kernel Structures
+// =============================================================================
+
+// Packed operation descriptor for device access (aligned for efficient global reads)
+struct alignas(64) DeviceOperation {
+    int          type;           // OperationType as int
+    int          layer;
+    const void * weights;
+    const void * input;
+    void *       output;
+    void *       aux;
+    int          M, N, K;
+    int          hidden_dim;
+    int          intermediate_dim;
+    float        eps;
+    float        scale;
+    int          quant_type;
+    int          n_tiles;        // Number of tiles for this operation
+    int          pad[2];         // Padding to 64-byte alignment
+};
+
+// Arguments passed to the persistent kernel
+struct PersistentKernelArgs {
+    const DeviceOperation * operations;
+    int                     n_operations;
+    int *                   tile_counter;
+    void *                  scratch_buffers[4];
+    int                     hidden_dim;
+    int                     intermediate_dim;
+};
+
+// =============================================================================
+// Persistent Kernel Implementation
+// =============================================================================
+// This class encapsulates the persistent kernel's work-stealing loop.
+// Each work-group processes all operations sequentially, work-stealing tiles
+// within each operation. Split barriers synchronize between operations.
+
+template<int BLOCK_SIZE>
+class PersistentTGKernelImpl {
+public:
+    PersistentTGKernelImpl(const PersistentKernelArgs & args,
+                           sycl::local_accessor<float, 1> slm,
+                           sycl::nd_item<1> item)
+        : args_(args), slm_(slm), item_(item) {}
+
+    void run() {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+        const int n_wgs    = item_.get_group_range(0);
+        (void)n_wgs;
+
+        for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
+            const DeviceOperation & op = args_.operations[op_idx];
+
+            // Work-stealing: each work-group claims tiles atomically
+            while (true) {
+                int tile_idx = -1;
+
+                // Thread 0 claims the next tile
+                if (local_id == 0) {
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        counter(*args_.tile_counter);
+                    tile_idx = counter.fetch_add(1);
+                }
+
+                // Broadcast to all threads in the work-group
+                tile_idx = sycl::group_broadcast(item_.get_group(), tile_idx, 0);
+
+                if (tile_idx >= op.n_tiles) break;
+
+                // Dispatch to the appropriate operation handler
+                dispatch_operation(op, tile_idx);
+            }
+
+            // Synchronize all work-groups between operations:
+            // Each work-group waits at a workgroup barrier to ensure its own threads
+            // are done, then uses device-scope split barrier to wait for ALL work-groups
+            sycl::group_barrier(item_.get_group());
+
+            // Device-scope split barrier: ensures all work-groups have finished
+            // the current operation before any starts the next
+            split_barrier_arrive(ScopeDevice, SemanticsGlobalMem);
+            split_barrier_wait(ScopeDevice, SemanticsGlobalMem);
+
+            // Reset tile counter for next operation (one thread globally)
+            if (local_id == 0 && wg_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    counter(*args_.tile_counter);
+                counter.store(0);
+            }
+
+            // Ensure counter reset is visible to all work-groups
+            split_barrier_arrive(ScopeDevice, SemanticsGlobalMem);
+            split_barrier_wait(ScopeDevice, SemanticsGlobalMem);
+        }
+    }
+
+private:
+    const PersistentKernelArgs &    args_;
+    sycl::local_accessor<float, 1> slm_;
+    sycl::nd_item<1>               item_;
+
+    void dispatch_operation(const DeviceOperation & op, int tile_idx) {
+        switch (static_cast<OperationType>(op.type)) {
+            case OperationType::RMS_NORM:
+                compute_rms_norm_tile(op, tile_idx);
+                break;
+            case OperationType::SILU_MUL:
+                compute_silu_mul_tile(op, tile_idx);
+                break;
+            case OperationType::MATMUL_Q_PROJ:
+            case OperationType::MATMUL_K_PROJ:
+            case OperationType::MATMUL_V_PROJ:
+            case OperationType::MATMUL_OUT_PROJ:
+            case OperationType::MATMUL_GATE:
+            case OperationType::MATMUL_UP:
+            case OperationType::MATMUL_DOWN:
+                compute_matmul_tile(op, tile_idx);
+                break;
+            case OperationType::ATTENTION:
+                compute_attention_tile(op, tile_idx);
+                break;
+            case OperationType::ROPE:
+                // RoPE not yet implemented in persistent kernel
+                break;
+            case OperationType::SOFTMAX:
+                break;
+        }
+    }
+
+    void compute_rms_norm_tile(const DeviceOperation & op, int tile_idx) {
+        // RMS norm is a single-tile cooperative operation (tile_idx ignored)
+        (void)tile_idx;
+
+        const int     tid        = item_.get_local_id(0);
+        const int     hidden_dim = op.hidden_dim;
+        const float   eps        = op.eps;
+        const float * input      = static_cast<const float *>(op.input);
+        const float * weights    = static_cast<const float *>(op.weights);
+        float *       output     = static_cast<float *>(op.output);
+
+        auto      sg      = item_.get_sub_group();
+        const int warp_id = sg.get_group_linear_id();
+        const int lane_id = sg.get_local_linear_id();
+        constexpr int sg_size = 16;
+        constexpr int n_warps = BLOCK_SIZE / sg_size;
+
+        // Sum of squares
+        float sum_sq = 0.0f;
+        for (int i = tid; i < hidden_dim; i += BLOCK_SIZE) {
+            float val = input[i];
+            sum_sq += val * val;
+        }
+
+        // Subgroup reduction
+        sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+
+        // Cross-subgroup reduction via SLM
+        if (lane_id == 0) {
+            slm_[warp_id] = sum_sq;
+        }
+        sycl::group_barrier(item_.get_group());
+
+        if (warp_id == 0) {
+            sum_sq = (lane_id < n_warps) ? slm_[lane_id] : 0.0f;
+            sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+            if (lane_id == 0) {
+                slm_[0] = sum_sq;
+            }
+        }
+        sycl::group_barrier(item_.get_group());
+
+        // Normalize
+        const float rms   = sycl::sqrt(slm_[0] / hidden_dim + eps);
+        const float scale = 1.0f / rms;
+
+        for (int i = tid; i < hidden_dim; i += BLOCK_SIZE) {
+            output[i] = input[i] * scale * weights[i];
+        }
+    }
+
+    void compute_silu_mul_tile(const DeviceOperation & op, int tile_idx) {
+        const int     tid              = item_.get_local_id(0);
+        const int     intermediate_dim = op.intermediate_dim;
+        const int     tile_size        = BLOCK_SIZE;  // Elements per tile = work-group size
+        const int     start            = tile_idx * tile_size;
+
+        const float * gate   = static_cast<const float *>(op.input);
+        const float * up     = static_cast<const float *>(op.aux);
+        float *       output = static_cast<float *>(op.output);
+
+        const int idx = start + tid;
+        if (idx < intermediate_dim) {
+            const float g         = gate[idx];
+            const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+            output[idx] = g * sigmoid_g * up[idx];
+        }
+    }
+
+    void compute_matmul_tile(const DeviceOperation & op, int tile_idx) {
+        // TODO: Implement dequantizing matmul tile
+        // This will integrate with existing DMMV code for Q4_0, Q4_K, Q6_K
+        (void)op;
+        (void)tile_idx;
+    }
+
+    void compute_attention_tile(const DeviceOperation & op, int tile_idx) {
+        // TODO: Implement attention tile (score, softmax, value aggregation)
+        (void)op;
+        (void)tile_idx;
+    }
+};
+
 // -----------------------------------------------------------------------------
 // Constructor, Destructor, Configuration
 // -----------------------------------------------------------------------------
@@ -4123,20 +4344,123 @@ void UnifiedKernel::execute_persistent() {
         return;
     }
 
-    GGML_LOG_WARN("UnifiedKernel: persistent execution not yet implemented, "
-                  "falling back to individual ops\n");
+    // Launch the persistent kernel
+    launch_persistent_kernel();
 
-    last_stats_.n_operations = static_cast<int>(current_plan_->operations.size());
-    last_stats_.n_layers = current_plan_->n_layers;
-    last_stats_.total_tiles = 0;
-    last_stats_.kernel_time_ms = 0.0;
-    last_stats_.memory_bandwidth_gbps = 0.0;
-
+    // Clear the plan after execution
     current_plan_.reset();
 }
 
 void UnifiedKernel::launch_persistent_kernel() {
-    // Will be implemented in Phase 4
+    if (!current_plan_ || current_plan_->operations.empty()) {
+        return;
+    }
+
+    // Build device-side operation table
+    const size_t n_ops = current_plan_->operations.size();
+    std::vector<DeviceOperation> host_ops(n_ops);
+
+    int total_tiles = 0;
+    for (size_t i = 0; i < n_ops; i++) {
+        const auto & src = current_plan_->operations[i];
+        auto &       dst = host_ops[i];
+
+        dst.type             = static_cast<int>(src.type);
+        dst.layer            = src.layer;
+        dst.weights          = src.weights;
+        dst.input            = src.input;
+        dst.output           = src.output;
+        dst.aux              = src.aux;
+        dst.M                = src.M;
+        dst.N                = src.N;
+        dst.K                = src.K;
+        dst.hidden_dim       = src.hidden_dim;
+        dst.intermediate_dim = src.intermediate_dim;
+        dst.eps              = src.eps;
+        dst.scale            = src.scale;
+        dst.quant_type       = src.quant_type;
+        memset(dst.pad, 0, sizeof(dst.pad));
+
+        // Calculate tiles for this operation
+        switch (src.type) {
+            case OperationType::RMS_NORM:
+                dst.n_tiles = 1;  // Single cooperative operation
+                break;
+            case OperationType::SILU_MUL:
+                dst.n_tiles = (src.intermediate_dim + 255) / 256;
+                break;
+            case OperationType::MATMUL_Q_PROJ:
+            case OperationType::MATMUL_K_PROJ:
+            case OperationType::MATMUL_V_PROJ:
+            case OperationType::MATMUL_OUT_PROJ:
+            case OperationType::MATMUL_GATE:
+            case OperationType::MATMUL_UP:
+            case OperationType::MATMUL_DOWN:
+                dst.n_tiles = (src.N + 63) / 64;  // 64 output columns per tile
+                break;
+            case OperationType::ATTENTION:
+                dst.n_tiles = src.N;  // One tile per head
+                break;
+            default:
+                dst.n_tiles = 1;
+        }
+        total_tiles += dst.n_tiles;
+    }
+
+    // Copy operation table to device
+    DeviceOperation * d_ops = sycl::malloc_device<DeviceOperation>(n_ops, queue_);
+    queue_.memcpy(d_ops, host_ops.data(), n_ops * sizeof(DeviceOperation)).wait();
+
+    // Reset tile counter
+    queue_.memset(tile_counter_, 0, sizeof(int)).wait();
+
+    // Build kernel args
+    PersistentKernelArgs args = {};
+    args.operations           = d_ops;
+    args.n_operations         = static_cast<int>(n_ops);
+    args.tile_counter         = tile_counter_;
+    for (int i = 0; i < 4; i++) {
+        args.scratch_buffers[i] = persistent_buffers_[i];
+    }
+    args.hidden_dim       = current_plan_->hidden_dim;
+    args.intermediate_dim = current_plan_->intermediate_dim;
+
+    // Kernel configuration
+    constexpr int BLOCK_SIZE = 256;
+    // Start with a reasonable number of work-groups
+    // For device-scope barriers, all work-groups must participate
+    const int n_workgroups = 16;
+    const int slm_floats   = std::max(BLOCK_SIZE / 16,              // At least n_warps for reduction
+                                      current_plan_->hidden_dim);   // For RMS norm
+
+    // Launch persistent kernel - single kernel for all operations
+    auto start = std::chrono::high_resolution_clock::now();
+
+    queue_.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+        auto args_copy = args;
+
+        cgh.parallel_for(
+            sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                kernel.run();
+            });
+    });
+
+    queue_.wait();
+
+    auto end        = std::chrono::high_resolution_clock::now();
+    double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+
+    // Record stats
+    last_stats_.n_operations         = static_cast<int>(n_ops);
+    last_stats_.n_layers             = current_plan_->n_layers;
+    last_stats_.total_tiles          = total_tiles;
+    last_stats_.kernel_time_ms       = elapsed_ms;
+
+    // Cleanup device operation table
+    sycl::free(d_ops, queue_);
 }
 
 // -----------------------------------------------------------------------------

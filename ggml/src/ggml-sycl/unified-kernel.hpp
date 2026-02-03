@@ -134,10 +134,12 @@ enum class SPIRVMemorySemantics : int {
 };
 
 // Convenience aliases
-constexpr int ScopeWorkgroup = static_cast<int>(SPIRVScope::Workgroup);
-constexpr int ScopeSubgroup  = static_cast<int>(SPIRVScope::Subgroup);
-constexpr int SemanticsNone  = static_cast<int>(SPIRVMemorySemantics::None);
-constexpr int SemanticsWGMem = static_cast<int>(SPIRVMemorySemantics::WorkgroupMemory);
+constexpr int ScopeWorkgroup    = static_cast<int>(SPIRVScope::Workgroup);
+constexpr int ScopeSubgroup     = static_cast<int>(SPIRVScope::Subgroup);
+constexpr int ScopeDevice       = static_cast<int>(SPIRVScope::Device);
+constexpr int SemanticsNone     = static_cast<int>(SPIRVMemorySemantics::None);
+constexpr int SemanticsWGMem    = static_cast<int>(SPIRVMemorySemantics::WorkgroupMemory);
+constexpr int SemanticsGlobalMem = static_cast<int>(SPIRVMemorySemantics::CrossWorkgroup);
 
 // Split barrier helper functions for cleaner kernel code
 // These wrap the SPIR-V intrinsics with meaningful names
