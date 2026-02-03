@@ -2,7 +2,7 @@
 	import { notebookStore } from '$lib/stores/notebook.svelte';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
-	import { Play, Square, Settings, Undo, Redo } from '@lucide/svelte';
+	import { Play, Square, Settings, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import DialogChatSettings from '$lib/components/app/dialogs/DialogChatSettings.svelte';
 	import { ChatMessageStatistics, DialogChatError, KeyboardShortcutInfo, ModelsSelector } from '$lib/components/app';
@@ -41,6 +41,7 @@
 	// Sync local input with store content
 	$effect(() => {
 		inputContent = notebookStore.content;
+		notebookStore.updateTokenCount();
 	});
 
 	function handleInput(e: Event) {
@@ -335,16 +336,32 @@
 				/>
 			</div>
 
-			{#if showMessageStats && (notebookStore.promptTokens > 0 || notebookStore.predictedTokens > 0)}
-				<div class="flex w-full justify-end md:w-auto">
-					<ChatMessageStatistics
-						promptTokens={notebookStore.promptTokens}
-						promptMs={notebookStore.promptMs}
-						predictedTokens={notebookStore.predictedTokens}
-						predictedMs={notebookStore.predictedMs}
-						isLive={notebookStore.isGenerating}
-						isProcessingPrompt={notebookStore.isGenerating && notebookStore.predictedTokens === 0}
-					/>
+			{#if showMessageStats}
+				<div class="flex w-full flex-col items-end justify-center gap-0.5 md:w-auto">
+					{#if notebookStore.totalTokens > 0}
+						<Tooltip.Root>
+							<Tooltip.Trigger>
+								<div class="pr-3.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+									<RulerDimensionLine class="h-3.5 w-3.5" />
+									<span>{notebookStore.totalTokens} tokens</span>
+								</div>
+							</Tooltip.Trigger>
+							<Tooltip.Content>
+								<p>Total tokens</p>
+							</Tooltip.Content>
+						</Tooltip.Root>
+					{/if}
+
+					{#if notebookStore.promptTokens > 0 || notebookStore.predictedTokens > 0}
+						<ChatMessageStatistics
+							promptTokens={notebookStore.promptTokens}
+							promptMs={notebookStore.promptMs}
+							predictedTokens={notebookStore.predictedTokens}
+							predictedMs={notebookStore.predictedMs}
+							isLive={notebookStore.isGenerating}
+							isProcessingPrompt={notebookStore.isGenerating && notebookStore.predictedTokens === 0}
+						/>
+					{/if}
 				</div>
 			{/if}
 		</div>

@@ -11,6 +11,9 @@ export class NotebookStore {
 	promptMs = $state(0);
 	predictedTokens = $state(0);
 	predictedMs = $state(0);
+	totalTokens = $state(0);
+	generationStartTokens = $state(0);
+	tokenizeTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	error = $state<{
 		message: string;
@@ -35,6 +38,9 @@ export class NotebookStore {
 		this.promptMs = 0;
 		this.predictedTokens = 0;
 		this.predictedMs = 0;
+
+		// Snapshot the current total tokens as the baseline for this generation
+		this.generationStartTokens = this.totalTokens;
 
 		try {
 			const currentConfig = config();
@@ -62,9 +68,13 @@ export class NotebookStore {
 							if (processed > 0) this.promptTokens = processed;
 							if (time_ms > 0) this.promptMs = time_ms;
 						}
+
+						// Update totalTokens live
+						this.totalTokens = this.generationStartTokens + this.predictedTokens;
 					},
 					onComplete: () => {
 						this.isGenerating = false;
+						this.totalTokens = this.generationStartTokens + this.predictedTokens;
 					},
 					onError: (error: unknown) => {
 						if (error instanceof Error && error.name === 'AbortError') {
@@ -122,6 +132,17 @@ export class NotebookStore {
 			this.abortController = null;
 		}
 		this.isGenerating = false;
+	}
+
+	updateTokenCount() {
+		if (this.tokenizeTimeout) {
+			clearTimeout(this.tokenizeTimeout);
+		}
+
+		this.tokenizeTimeout = setTimeout(async () => {
+			const tokens = await ChatService.tokenize(this.content);
+			this.totalTokens = tokens.length;
+		}, 500);
 	}
 }
 
