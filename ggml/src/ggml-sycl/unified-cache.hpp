@@ -431,6 +431,19 @@ class host_cache {
     mutable std::mutex mutex_;
 };
 
+// Weight set for a transformer layer (for bulk pinning)
+// Supports standard dense transformer architecture with attention + FFN blocks.
+// For MoE models, use pin/unpin directly with expert_id.
+struct layer_weight_set {
+    ggml_sycl_cache_id attn_norm;                                    // Attention layer norm
+    ggml_sycl_cache_id q_proj, k_proj, v_proj, o_proj;               // Attention projections
+    ggml_sycl_cache_id ffn_norm;                                     // FFN layer norm
+    ggml_sycl_cache_id gate_proj, up_proj, down_proj;                // FFN projections (SwiGLU)
+    // Optional: Some architectures have additional weights
+    ggml_sycl_cache_id attn_qkv_proj;                                // Fused QKV for some models
+    ggml_sycl_cache_id ffn_gate_up_proj;                             // Fused gate+up for some models
+};
+
 // Unified GPU cache for both dense weights and MoE experts
 //
 // Design principles:
@@ -535,6 +548,18 @@ class unified_cache {
     void unpin_experts();
     void unpin_all();
     bool is_pinned(const ggml_sycl_cache_id & key, ggml_layout_mode layout) const;
+
+    // === Bulk Pinning for Persistent Kernels ===
+    // Pin all weights for a layer at once. Returns count of successfully pinned entries.
+    // Only pins entries that exist in cache with matching layout.
+    int pin_layer_weights(int layer_id, const layer_weight_set & weights, ggml_layout_mode layout);
+
+    // Unpin all weights for a layer. Requires the same weight set used for pinning.
+    void unpin_layer_weights(int layer_id, const layer_weight_set & weights, ggml_layout_mode layout);
+
+    // Pin entire model weights (all layers). Returns total count of pinned entries.
+    // layers: vector of layer_weight_set for each layer (index = layer_id)
+    int pin_model_weights(int n_layers, const std::vector<layer_weight_set> & layers, ggml_layout_mode layout);
 
     // === Memory Management ===
 
@@ -886,6 +911,24 @@ void * unified_cache_get_persistent_scratch(int device_id, const char* buffer_na
 void unified_cache_release_persistent_scratch(int device_id, const char* buffer_name);
 bool unified_cache_has_persistent_scratch(int device_id, const char* buffer_name);
 size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buffer_name);
+
+// === Bulk Weight Pinning API ===
+// Pin/unpin all weights for a layer or entire model at once.
+// Used by persistent kernels to ensure weights are not evicted during kernel lifetime.
+
+// Pin all weights in a layer_weight_set. Returns count of successfully pinned entries.
+// weights: pointer to layer_weight_set (opaque in C API, cast to layer_weight_set* internally)
+int unified_cache_pin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout);
+
+// Unpin all weights in a layer_weight_set.
+void unified_cache_unpin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout);
+
+// Pin entire model weights. Returns total count of pinned entries.
+// layers: array of layer_weight_set, n_layers elements
+int unified_cache_pin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout);
+
+// Unpin entire model weights.
+void unified_cache_unpin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout);
 
 // === MoE Cache Helpers ===
 // Unpin all experts

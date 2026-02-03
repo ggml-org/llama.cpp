@@ -3028,6 +3028,97 @@ bool unified_cache::is_pinned(const ggml_sycl_cache_id & key_id, ggml_layout_mod
     return entry_it->second.pinned;
 }
 
+// === Bulk Pinning Implementation ===
+
+int unified_cache::pin_layer_weights(int layer_id, const layer_weight_set & weights, ggml_layout_mode layout) {
+    int pinned = 0;
+
+    // Helper lambda to try pinning a single key
+    auto try_pin = [&](const ggml_sycl_cache_id & key) {
+        if (!key.valid) {
+            return;
+        }
+        // Use fast path to check if entry exists with correct layout
+        void * ptr = try_get_cached_fast(key, layout);
+        if (ptr) {
+            pin(key, layout);
+            pinned++;
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] bulk pin layer=%d model=%llu name_hash=0x%llx layout=%d\n",
+                            layer_id,
+                            (unsigned long long) key.model_id,
+                            (unsigned long long) key.name_hash,
+                            (int) layout);
+        }
+    };
+
+    // Pin all weights in the set
+    try_pin(weights.attn_norm);
+    try_pin(weights.q_proj);
+    try_pin(weights.k_proj);
+    try_pin(weights.v_proj);
+    try_pin(weights.o_proj);
+    try_pin(weights.ffn_norm);
+    try_pin(weights.gate_proj);
+    try_pin(weights.up_proj);
+    try_pin(weights.down_proj);
+    // Optional fused weights
+    try_pin(weights.attn_qkv_proj);
+    try_pin(weights.ffn_gate_up_proj);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin_layer_weights layer=%d pinned=%d layout=%d\n",
+                    layer_id, pinned, (int) layout);
+    return pinned;
+}
+
+void unified_cache::unpin_layer_weights(int layer_id, const layer_weight_set & weights, ggml_layout_mode layout) {
+    // Helper lambda to try unpinning a single key
+    auto try_unpin = [&](const ggml_sycl_cache_id & key) {
+        if (!key.valid) {
+            return;
+        }
+        unpin(key, layout);
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] bulk unpin layer=%d model=%llu name_hash=0x%llx layout=%d\n",
+                        layer_id,
+                        (unsigned long long) key.model_id,
+                        (unsigned long long) key.name_hash,
+                        (int) layout);
+    };
+
+    // Unpin all weights in the set
+    try_unpin(weights.attn_norm);
+    try_unpin(weights.q_proj);
+    try_unpin(weights.k_proj);
+    try_unpin(weights.v_proj);
+    try_unpin(weights.o_proj);
+    try_unpin(weights.ffn_norm);
+    try_unpin(weights.gate_proj);
+    try_unpin(weights.up_proj);
+    try_unpin(weights.down_proj);
+    // Optional fused weights
+    try_unpin(weights.attn_qkv_proj);
+    try_unpin(weights.ffn_gate_up_proj);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin_layer_weights layer=%d layout=%d\n",
+                    layer_id, (int) layout);
+}
+
+int unified_cache::pin_model_weights(int n_layers, const std::vector<layer_weight_set> & layers, ggml_layout_mode layout) {
+    if (n_layers <= 0 || layers.empty()) {
+        return 0;
+    }
+
+    int total_pinned = 0;
+    const int actual_layers = std::min(n_layers, (int) layers.size());
+
+    for (int layer_id = 0; layer_id < actual_layers; layer_id++) {
+        total_pinned += pin_layer_weights(layer_id, layers[layer_id], layout);
+    }
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin_model_weights n_layers=%d total_pinned=%d layout=%d\n",
+                    actual_layers, total_pinned, (int) layout);
+    return total_pinned;
+}
+
 size_t unified_cache::evict(size_t bytes_needed) {
     std::unique_lock<std::shared_mutex> lock(rw_mutex_);
     process_deferred_frees();
@@ -4818,6 +4909,37 @@ size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buff
     unified_cache * cache = get_unified_cache_for_device(device_id);
     if (!cache) return 0;
     return cache->get_persistent_scratch_size(buffer_name);
+}
+
+// === Bulk Weight Pinning C API Wrappers ===
+
+int unified_cache_pin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !weights) return 0;
+    return cache->pin_layer_weights(layer_id, *weights, static_cast<ggml_layout_mode>(layout));
+}
+
+void unified_cache_unpin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !weights) return;
+    cache->unpin_layer_weights(layer_id, *weights, static_cast<ggml_layout_mode>(layout));
+}
+
+int unified_cache_pin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !layers || n_layers <= 0) return 0;
+    // Convert C array to vector
+    std::vector<layer_weight_set> layers_vec(layers, layers + n_layers);
+    return cache->pin_model_weights(n_layers, layers_vec, static_cast<ggml_layout_mode>(layout));
+}
+
+void unified_cache_unpin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache || !layers || n_layers <= 0) return;
+    // Unpin each layer
+    for (int i = 0; i < n_layers; i++) {
+        cache->unpin_layer_weights(i, layers[i], static_cast<ggml_layout_mode>(layout));
+    }
 }
 
 void shutdown_unified_cache() {
