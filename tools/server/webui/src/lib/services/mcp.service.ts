@@ -39,8 +39,18 @@ import type {
 	MCPResourceContent,
 	MCPReadResourceResult
 } from '$lib/types';
-import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
-import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import {
+	MCPConnectionPhase,
+	MCPLogLevel,
+	MCPTransportType,
+	MCPContentType,
+	MCPRefType
+} from '$lib/enums';
+import {
+	DEFAULT_MCP_CONFIG,
+	DEFAULT_CLIENT_VERSION,
+	DEFAULT_IMAGE_MIME_TYPE
+} from '$lib/constants/mcp';
 import { throwIfAborted, isAbortError } from '$lib/utils';
 import { buildProxiedUrl } from '$lib/utils/cors-proxy';
 
@@ -102,7 +112,7 @@ export class MCPService {
 			requestInit.credentials = config.credentials;
 		}
 
-		if (config.transport === 'websocket') {
+		if (config.transport === MCPTransportType.WEBSOCKET) {
 			if (useProxy) {
 				throw new Error(
 					'WebSocket transport is not supported when using CORS proxy. Use HTTP transport instead.'
@@ -215,7 +225,7 @@ export class MCPService {
 		const client = new Client(
 			{
 				name: effectiveClientInfo.name,
-				version: effectiveClientInfo.version ?? '1.0.0'
+				version: effectiveClientInfo.version ?? DEFAULT_CLIENT_VERSION
 			},
 			{
 				capabilities: effectiveCapabilities,
@@ -406,15 +416,15 @@ export class MCPService {
 	}
 
 	private static formatSingleContent(content: ToolResultContentItem): string {
-		if (content.type === 'text' && content.text) {
+		if (content.type === MCPContentType.TEXT && content.text) {
 			return content.text;
 		}
 
-		if (content.type === 'image' && content.data) {
-			return `data:${content.mimeType ?? 'image/png'};base64,${content.data}`;
+		if (content.type === MCPContentType.IMAGE && content.data) {
+			return `data:${content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE};base64,${content.data}`;
 		}
 
-		if (content.type === 'resource' && content.resource) {
+		if (content.type === MCPContentType.RESOURCE && content.resource) {
 			const resource = content.resource;
 
 			if (resource.text) return resource.text;
@@ -449,7 +459,7 @@ export class MCPService {
 	 */
 	static async complete(
 		connection: MCPConnection,
-		ref: { type: 'ref/prompt'; name: string } | { type: 'ref/resource'; uri: string },
+		ref: { type: MCPRefType.PROMPT; name: string } | { type: MCPRefType.RESOURCE; uri: string },
 		argument: { name: string; value: string }
 	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
 		try {

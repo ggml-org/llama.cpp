@@ -40,3 +40,20 @@ export enum HealthCheckStatus {
 	SUCCESS = 'success',
 	ERROR = 'error'
 }
+
+/**
+ * Content types for MCP tool results
+ */
+export enum MCPContentType {
+	TEXT = 'text',
+	IMAGE = 'image',
+	RESOURCE = 'resource'
+}
+
+/**
+ * Reference types for MCP completions
+ */
+export enum MCPRefType {
+	PROMPT = 'ref/prompt',
+	RESOURCE = 'ref/resource'
+}

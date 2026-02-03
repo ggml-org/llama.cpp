@@ -28,7 +28,14 @@ export {
 	SpecialFileType
 } from './files';
 
-export { MCPConnectionPhase, MCPLogLevel, MCPTransportType, HealthCheckStatus } from './mcp';
+export {
+	MCPConnectionPhase,
+	MCPLogLevel,
+	MCPTransportType,
+	HealthCheckStatus,
+	MCPContentType,
+	MCPRefType
+} from './mcp';
 
 export { ModelModality } from './model';
 
