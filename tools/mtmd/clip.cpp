@@ -2845,6 +2845,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_PADDLEOCR:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
                 clip_image_u8 resized;
@@ -2998,7 +2999,6 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
             } break;
 
         case PROJECTOR_TYPE_PIXTRAL:
-        case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
