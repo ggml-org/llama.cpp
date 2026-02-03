@@ -99,11 +99,13 @@ void common_ngram_mod::dec_score_by_index(size_t i) {
 void common_ngram_mod::prune_low_score() {
     used = 0;
     for (size_t i = 0; i < entries.size(); ++i) {
-        if (scores[i] < common_ngram_mod::SCORE_THR) {
-            entries[i] = EMPTY;
-            scores[i] = 0;
-        } else {
-            ++used;
+        if (entries[i] != EMPTY) {
+            if (scores[i] < common_ngram_mod::SCORE_THR) {
+                entries[i] = EMPTY;
+                scores[i] = 0;
+            } else {
+                ++used;
+            }
         }
     }
 }
