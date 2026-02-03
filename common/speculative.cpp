@@ -951,12 +951,8 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     }
 
     for (auto & impl : spec->impls) {
-        const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
-
+        common_time_meas tm(impl->t_begin_us, !impl->gen_perf);
         impl->begin(prompt);
-
-        const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
-        impl->t_begin_us += t_now_us - t_start_us; // accumulate duration for this refresh
     }
 }
 
@@ -971,14 +967,9 @@ llama_tokens common_speculative_draft(
 
     for (auto & impl : spec->impls) {
         {
-            const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
-
+            common_time_meas tm(impl->t_draft_us, !impl->gen_perf);
             impl->draft(params, prompt_tgt, id_last, result);
-
-            const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
-
             impl->drafts_call_count++;
-            impl->t_draft_us += t_now_us - t_start_us; // accumulate duration for this implementation
         }
 
         if (!result.empty()) {
@@ -1006,15 +997,15 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
     GGML_ASSERT(impl);
 
-    const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
-    if (n_accepted > 0) {
-        impl->drafts_accepted_count++;
-        impl->drafts_accepted_tokens += n_accepted;
-    }
+    {
+        common_time_meas tm(impl->t_accept_us, !impl->gen_perf);
+        if (n_accepted > 0) {
+            impl->drafts_accepted_count++;
+            impl->drafts_accepted_tokens += n_accepted;
+        }
 
-    impl->accept(n_accepted);
-    const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
-    impl->t_accept_us += t_now_us - t_start_us; // accumulate duration for this acculumulation
+        impl->accept(n_accepted);
+    }
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {
