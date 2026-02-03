@@ -112,6 +112,9 @@ export {
 	isImageMimeType
 } from './mcp';
 
+// Data URL utilities
+export { createBase64DataUrl } from './data-url';
+
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
 

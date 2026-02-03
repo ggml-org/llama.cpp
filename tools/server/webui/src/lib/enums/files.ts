@@ -163,7 +163,8 @@ export enum UriPattern {
 
 // MIME type enums
 export enum MimeTypeApplication {
-	PDF = 'application/pdf'
+	PDF = 'application/pdf',
+	OCTET_STREAM = 'application/octet-stream'
 }
 
 export enum MimeTypeAudio {

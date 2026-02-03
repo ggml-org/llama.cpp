@@ -3,7 +3,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { isImageMimeType } from '$lib/utils';
+	import { isImageMimeType, createBase64DataUrl } from '$lib/utils';
+	import { MimeTypeApplication } from '$lib/enums';
 	import { ActionIconCopyToClipboard } from '$lib/components/app';
 	import type { MCPResourceInfo, MCPResourceContent } from '$lib/types';
 
@@ -135,9 +136,12 @@
 				{/if}
 
 				{#each blobContent as blob (blob.uri)}
-					{#if isImageMimeType(blob.mimeType)}
+					{#if isImageMimeType(blob.mimeType ?? MimeTypeApplication.OCTET_STREAM)}
 						<img
-							src={`data:${blob.mimeType};base64,${blob.blob}`}
+							src={createBase64DataUrl(
+								blob.mimeType ?? MimeTypeApplication.OCTET_STREAM,
+								blob.blob
+							)}
 							alt="Resource content"
 							class="max-w-full rounded"
 						/>
