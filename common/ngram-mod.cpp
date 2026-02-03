@@ -45,7 +45,7 @@ common_ngram_mod::entry_t common_ngram_mod::get(const entry_t * tokens) const {
 
 void common_ngram_mod::reset() {
     std::fill(entries.begin(), entries.end(), EMPTY);
-    std::fill(scores.begin(),   scores.end(),   0);
+    std::fill(scores.begin(), scores.end(), SCORE_INIT);
     used = 0;
     collisions = 0;
 }
