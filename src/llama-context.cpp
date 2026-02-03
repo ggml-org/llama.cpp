@@ -3480,7 +3480,8 @@ void llama_memory_breakdown_print(const struct llama_context * ctx) {
         ggml_backend_dev_memory(dev, &free, &total);
 
         const size_t self = mb.model + mb.context + mb.compute;
-        const size_t unaccounted = total - self - free;
+        // Prevent underflow when self + free > total (e.g., when KV cache is offloaded to host)
+        const size_t unaccounted = (self + free <= total) ? (total - self - free) : 0;
 
         table_data.push_back({
             template_gpu,

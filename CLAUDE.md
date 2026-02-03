@@ -112,13 +112,19 @@ C^T = A * B^T  ⟺  C = B * A^T
 
 ## Development Workflow
 
+### Model Locations
+Models are stored in `/Storage/GenAI/models/`:
+- `mistral-7b-v0.1.Q4_0.gguf` - Standard benchmark model (~4GB)
+- `mistral-7b-v0.1.Q4_K_M.gguf` - Higher quality quantization
+- `gpt-oss-120b-mxfp4-*.gguf` - Large MoE model (3-part split)
+
 ### Verification Commands
 ```bash
 # Non-interactive completion (deterministic output for testing)
-./build/bin/llama-completion -m model.gguf -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
+./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 
 # Benchmark
-./build/bin/llama-bench -m model.gguf -p 512 -n 128
+./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 512 -n 128
 
 # Test backend operations (after modifying ggml operators)
 ./build/bin/test-backend-ops
