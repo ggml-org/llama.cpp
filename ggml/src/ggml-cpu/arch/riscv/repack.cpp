@@ -43,7 +43,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined __riscv_v
+#if defined(__riscv_v) && __riscv_v >= 1000000
     if (__riscv_vlenb() >= QK4_0) {
         const size_t vl = QK4_0;
 
@@ -135,7 +135,7 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if defined __riscv_v
+#if defined(__riscv_v) && __riscv_v >= 1000000
     if (__riscv_vlenb() >= QK4_0) {
         const size_t vl = QK4_0;
 
