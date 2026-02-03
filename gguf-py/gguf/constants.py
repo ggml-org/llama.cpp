@@ -179,20 +179,22 @@ class Keys:
         TEMPERATURE_SCALE            = "{arch}.attention.temperature_scale"
 
     class Rope:
-        DIMENSION_COUNT          = "{arch}.rope.dimension_count"
-        DIMENSION_SECTIONS       = "{arch}.rope.dimension_sections"
-        FREQ_BASE                = "{arch}.rope.freq_base"
-        FREQ_BASE_SWA            = "{arch}.rope.freq_base_swa"
-        SCALING_TYPE             = "{arch}.rope.scaling.type"
-        SCALING_FACTOR           = "{arch}.rope.scaling.factor"
-        SCALING_ATTN_FACTOR      = "{arch}.rope.scaling.attn_factor"
-        SCALING_ORIG_CTX_LEN     = "{arch}.rope.scaling.original_context_length"
-        SCALING_FINETUNED        = "{arch}.rope.scaling.finetuned"
-        SCALING_YARN_LOG_MUL     = "{arch}.rope.scaling.yarn_log_multiplier"
-        SCALING_YARN_EXT_FACTOR  = "{arch}.rope.scaling.yarn_ext_factor"
-        SCALING_YARN_ATTN_FACTOR = "{arch}.rope.scaling.yarn_attn_factor"
-        SCALING_YARN_BETA_FAST   = "{arch}.rope.scaling.yarn_beta_fast"
-        SCALING_YARN_BETA_SLOW   = "{arch}.rope.scaling.yarn_beta_slow"
+        DIMENSION_COUNT           = "{arch}.rope.dimension_count"
+        DIMENSION_COUNT_PER_LAYER = "{arch}.rope.dimension_count_per_layer"
+        DIMENSION_SECTIONS        = "{arch}.rope.dimension_sections"
+        FREQ_BASE                 = "{arch}.rope.freq_base"
+        FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
+        SCALING_TYPE              = "{arch}.rope.scaling.type"
+        SCALING_FACTOR            = "{arch}.rope.scaling.factor"
+        SCALING_ATTN_FACTOR       = "{arch}.rope.scaling.attn_factor"
+        SCALING_APPLY_MASK        = "{arch}.rope.scaling.apply_mask"
+        SCALING_ORIG_CTX_LEN      = "{arch}.rope.scaling.original_context_length"
+        SCALING_FINETUNED         = "{arch}.rope.scaling.finetuned"
+        SCALING_YARN_LOG_MUL      = "{arch}.rope.scaling.yarn_log_multiplier"
+        SCALING_YARN_EXT_FACTOR   = "{arch}.rope.scaling.yarn_ext_factor"
+        SCALING_YARN_ATTN_FACTOR  = "{arch}.rope.scaling.yarn_attn_factor"
+        SCALING_YARN_BETA_FAST    = "{arch}.rope.scaling.yarn_beta_fast"
+        SCALING_YARN_BETA_SLOW    = "{arch}.rope.scaling.yarn_beta_slow"
 
     class Split:
         LLM_KV_SPLIT_NO            = "split.no"
@@ -462,6 +464,7 @@ class MODEL_ARCH(IntEnum):
     PANGU_EMBED      = auto()
     MISTRAL3         = auto()
     MIMO2            = auto()
+    STEP35           = auto()
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
@@ -892,6 +895,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
     MODEL_ARCH.MISTRAL3:         "mistral3",
     MODEL_ARCH.MIMO2:            "mimo2",
+    MODEL_ARCH.STEP35:           "step35",
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
@@ -3364,6 +3368,32 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.STEP35: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
     MODEL_ARCH.LLAMA_EMBED: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -3753,12 +3783,13 @@ KEY_ATTENTION_LAYERNORM_EPS     = Keys.Attention.LAYERNORM_EPS
 KEY_ATTENTION_LAYERNORM_RMS_EPS = Keys.Attention.LAYERNORM_RMS_EPS
 
 # RoPE
-KEY_ROPE_DIMENSION_COUNT      = Keys.Rope.DIMENSION_COUNT
-KEY_ROPE_FREQ_BASE            = Keys.Rope.FREQ_BASE
-KEY_ROPE_SCALING_TYPE         = Keys.Rope.SCALING_TYPE
-KEY_ROPE_SCALING_FACTOR       = Keys.Rope.SCALING_FACTOR
-KEY_ROPE_SCALING_ORIG_CTX_LEN = Keys.Rope.SCALING_ORIG_CTX_LEN
-KEY_ROPE_SCALING_FINETUNED    = Keys.Rope.SCALING_FINETUNED
+KEY_ROPE_DIMENSION_COUNT           = Keys.Rope.DIMENSION_COUNT
+KEY_ROPE_DIMENSION_COUNT_PER_LAYER = Keys.Rope.DIMENSION_COUNT_PER_LAYER
+KEY_ROPE_FREQ_BASE                 = Keys.Rope.FREQ_BASE
+KEY_ROPE_SCALING_TYPE              = Keys.Rope.SCALING_TYPE
+KEY_ROPE_SCALING_FACTOR            = Keys.Rope.SCALING_FACTOR
+KEY_ROPE_SCALING_ORIG_CTX_LEN      = Keys.Rope.SCALING_ORIG_CTX_LEN
+KEY_ROPE_SCALING_FINETUNED         = Keys.Rope.SCALING_FINETUNED
 
 # SSM
 KEY_SSM_CONV_KERNEL    = Keys.SSM.CONV_KERNEL

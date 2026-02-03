@@ -925,6 +925,9 @@ class GGUFWriter:
 
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
+    
+    def add_rope_dimension_count_per_layer(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.Rope.DIMENSION_COUNT_PER_LAYER.format(arch=self.arch), values)
 
     def add_rope_dimension_sections(self, dims: Sequence[int]) -> None:
         self.add_array(Keys.Rope.DIMENSION_SECTIONS.format(arch=self.arch), dims)
@@ -961,6 +964,16 @@ class GGUFWriter:
 
     def add_rope_scaling_yarn_beta_slow(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_YARN_BETA_SLOW.format(arch=self.arch), value)
+
+    def add_rope_scaling_apply_mask(self, yarn_only_types: Sequence[str] | None) -> None:
+        apply_mask = 0x3  # default: apply on all layers (backwards compatible)
+        if isinstance(yarn_only_types, list):
+            apply_mask = 0
+            if "full_attention" in yarn_only_types:
+                apply_mask |= 0x1
+            if "sliding_attention" in yarn_only_types:
+                apply_mask |= 0x2
+        self.add_uint32(Keys.Rope.SCALING_APPLY_MASK.format(arch=self.arch), int(apply_mask))
 
     def add_ssm_conv_kernel(self, value: int) -> None:
         self.add_uint32(Keys.SSM.CONV_KERNEL.format(arch=self.arch), value)

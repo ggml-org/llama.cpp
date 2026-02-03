@@ -831,7 +831,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions", "max_length", "max_sequence_length", "model_max_length"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "max_position_embedding", "n_ctx", "n_positions", "max_length", "max_sequence_length", "model_max_length"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -7911,6 +7911,180 @@ class MimoV2Model(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+
+@ModelBase.register("Step3p5ForCausalLM")
+class Step35Model(TextModel):
+    """
+    Step3.5 interleaved sliding-window attention + MoE with sigmoid routing and expert selection bias.
+    """
+
+    model_arch = gguf.MODEL_ARCH.STEP35
+
+    def set_gguf_parameters(self):
+        rope_theta_per_layer = None
+        rope_theta = self.hparams.get("rope_theta", None)
+        if isinstance(rope_theta, list):
+            rope_theta_per_layer = rope_theta
+            if len(rope_theta) == 0:
+                raise ValueError("rope_theta list must not be empty")
+            rope_theta0 = float(rope_theta[0])
+            self.hparams["rope_theta"] = rope_theta0
+            if isinstance(getattr(self, "rope_parameters", None), dict) and isinstance(self.rope_parameters.get("rope_theta", None), list):
+                self.rope_parameters["rope_theta"] = rope_theta0
+
+        super().set_gguf_parameters()
+
+        def _truncate_to_block_count(name: str, values: list, *, allow_none: bool = False) -> list:
+            if not isinstance(values, list):
+                raise ValueError(f"{name} must be a list, got {type(values)}")
+            if len(values) < self.block_count:
+                raise ValueError(f"{name} must have length >= {self.block_count}, got {len(values)}")
+            if len(values) != self.block_count:
+                logger.warning(
+                    "%s length mismatch: expected %d, got %d; truncating to %d",
+                    name, self.block_count, len(values), self.block_count,
+                )
+                values = values[: self.block_count]
+            if not allow_none and any(v is None for v in values):
+                raise ValueError(f"{name} must not contain None")
+            return values
+
+        layer_types = self.hparams.get("layer_types", [])
+        attn_other = self.hparams.get("attention_other_setting", {}) or {}
+
+        n_head_base = self.hparams["num_attention_heads"]
+        n_kv_base   = self.hparams["num_attention_groups"]
+
+        n_head_swa = attn_other.get("num_attention_heads", n_head_base)
+        n_kv_swa   = attn_other.get("num_attention_groups", n_kv_base)
+
+        if layer_types:
+            layer_types = _truncate_to_block_count("layer_types", layer_types, allow_none=False)
+            head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
+            kv_arr   = [n_kv_swa   if lt == "sliding_attention" else n_kv_base   for lt in layer_types]
+            swa_pat  = [1 if lt == "sliding_attention" else 0 for lt in layer_types]
+        else:
+            raise ValueError(f"layer_types is not set: {layer_types}")
+
+        self.gguf_writer.add_head_count(head_arr)
+        self.gguf_writer.add_head_count_kv(kv_arr)
+
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern(swa_pat)
+
+        self.gguf_writer.add_value_length(self.hparams["head_dim"])
+
+        # Whether rope_scaling/rope_parameters are applied
+        # based on attention type, encoded as a small bitmask:
+        # bit0 -> apply on full_attention (dense layers)
+        # bit1 -> apply on sliding_attention (SWA layers)
+        yarn_only_types = self.hparams.get("yarn_only_types", None)
+        self.gguf_writer.add_rope_scaling_apply_mask(yarn_only_types)
+
+        # MoE params
+        self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["moe_top_k"])
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["share_expert_dim"])
+
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        self.gguf_writer.add_expert_weights_scale(self.hparams.get("moe_router_scaling_factor", 1.0))
+        self.gguf_writer.add_expert_weights_norm(bool(self.hparams.get("norm_expert_weight", False)))
+
+        # leading dense blocks
+        leading_dense = 0
+        moe_layers_enum = self.hparams.get("moe_layers_enum")
+        if isinstance(moe_layers_enum, str) and moe_layers_enum.strip():
+            moe_layers = sorted(int(i) for i in moe_layers_enum.strip().split(","))
+            if moe_layers:
+                leading_dense = max(0, moe_layers[0])
+        self.gguf_writer.add_leading_dense_block_count(leading_dense)
+        self.gguf_writer.add_moe_every_n_layers(int(self.hparams.get("moe_every_n_layer", 1)))
+
+        # RoPE: Step35 uses per-layer partial rotary factors; llama.cpp currently only supports a single rope dim.
+        # Check that partial_rotary_factors exists, is the right length, and all factors > 0
+        partial_rotary_factors = self.hparams.get("partial_rotary_factors", None)
+        if partial_rotary_factors is None:
+            raise ValueError("partial_rotary_factors must be present in hparams")
+        partial_rotary_factors = _truncate_to_block_count("partial_rotary_factors", partial_rotary_factors, allow_none=False)
+        rope_dim_per_layer = [int(self.hparams["head_dim"] * factor) for factor in partial_rotary_factors]
+        self.gguf_writer.add_rope_dimension_count_per_layer(rope_dim_per_layer)
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-5))
+
+        # Step35: per-layer rope_theta support
+        if rope_theta_per_layer is not None:
+            rope_theta_per_layer = _truncate_to_block_count("rope_theta", rope_theta_per_layer, allow_none=False)
+            freq_base_per_layer = [float(v) for v in rope_theta_per_layer]
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.rope.freq_base_per_layer", freq_base_per_layer)
+
+        # Optional per-layer SwiGLU clamps (HF: swiglu_limits / swiglu_limits_shared).
+        for key in ("swiglu_limits", "swiglu_limits_shared"):
+            limits = self.hparams.get(key, None)
+            if limits is None:
+                continue
+            limits = _truncate_to_block_count(key, limits, allow_none=True)
+            limits_f = [0.0 if v is None else float(v) for v in limits]
+            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.{key}", limits_f)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # remove mtp layers
+        if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
+            il = int(m.group(1))
+            n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
+            if il >= n_main:
+                return []
+        # Map router bias (expert selection bias) to a GGUF bias tensor
+        if name.endswith(".moe.router_bias"):
+            return [(self.map_tensor_name(name + ".bias"), data_torch)]
+            
+        if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
+            w = data_torch.squeeze()
+            return [(self.map_tensor_name(name), w.contiguous())]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # Step35 can optionally use Llama-3 style RoPE scaling (HF: rope_scaling.rope_type == "llama3").
+        # llama.cpp represents this via a single extra tensor: "rope_freqs.weight" (aka MODEL_TENSOR.ROPE_FREQS).
+        rope_params = self.rope_parameters.get("full_attention", self.rope_parameters)
+        rope_type = (rope_params.get("rope_type") or rope_params.get("type") or "")
+        if rope_type.lower() != "llama3":
+            return ()
+
+        # Step35 configs can carry per-layer rope_theta as a list; for llama3 rope factors we use the base value.
+        rope_theta = self.hparams.get("rope_theta", 10000.0)
+        if isinstance(rope_theta, list):
+            if len(rope_theta) == 0:
+                raise ValueError("rope_theta list must not be empty")
+            rope_theta = rope_theta[0]
+        base = float(rope_theta)
+        dim = self.hparams.get("head_dim")
+        if dim is None:
+            dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        dim = int(dim)
+
+        freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+        factor = float(rope_params.get("factor", 8.0))
+        low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
+        high_freq_factor = float(rope_params.get("high_freq_factor", 4.0))
+        old_context_len = int(rope_params.get("original_max_position_embeddings", self.hparams.get("original_max_position_embeddings", 8192)))
+
+        low_freq_wavelen = old_context_len / low_freq_factor
+        high_freq_wavelen = old_context_len / high_freq_factor
+
+        rope_factors: list[float] = []
+        for freq in freqs:
+            wavelen = 2 * math.pi / float(freq)
+            if wavelen < high_freq_wavelen:
+                rope_factors.append(1.0)
+            elif wavelen > low_freq_wavelen:
+                rope_factors.append(factor)
+            else:
+                smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+                rope_factors.append(1.0 / ((1.0 - smooth) / factor + smooth))
+
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
 @ModelBase.register("PanguEmbeddedForCausalLM")
 class PanguEmbeddedModel(TextModel):
