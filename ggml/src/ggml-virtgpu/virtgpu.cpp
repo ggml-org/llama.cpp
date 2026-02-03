@@ -79,13 +79,13 @@ static int virtgpu_handshake(virtgpu * gpu) {
         return 1;
     }
 
-    GGML_LOG_INFO(GGML_VIRTGPU  "%s: Guest is running with %u.%u\n", __func__, guest_major, guest_minor);
-    GGML_LOG_INFO(GGML_VIRTGPU  "%s: Host is running with %u.%u\n", __func__, host_major, host_minor);
+    GGML_LOG_INFO(GGML_VIRTGPU "%s: Guest is running with %u.%u\n", __func__, guest_major, guest_minor);
+    GGML_LOG_INFO(GGML_VIRTGPU "%s: Host is running with %u.%u\n", __func__, host_major, host_minor);
 
     if (guest_major != host_major) {
-        GGML_LOG_ERROR(GGML_VIRTGPU  "Host major (%d) and guest major (%d) version differ\n", host_major, guest_major);
+        GGML_LOG_ERROR(GGML_VIRTGPU "Host major (%d) and guest major (%d) version differ\n", host_major, guest_major);
     } else if (guest_minor != host_minor) {
-        GGML_LOG_WARN(GGML_VIRTGPU  "Host minor (%d) and guest minor (%d) version differ\n", host_minor, guest_minor);
+        GGML_LOG_WARN(GGML_VIRTGPU "Host minor (%d) and guest minor (%d) version differ\n", host_minor, guest_minor);
     }
 
     return 0;

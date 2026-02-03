@@ -80,7 +80,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
 
     if (!backend_library_handle) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK
-                       "%s:cannot open the GGML library: %s\n", __func__, dlerror());
+                       "%s: cannot open the GGML library: %s\n", __func__, dlerror());
 
         return APIR_LOAD_LIBRARY_CANNOT_OPEN;
     }
