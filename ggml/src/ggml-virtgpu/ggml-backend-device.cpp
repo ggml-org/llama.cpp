@@ -123,7 +123,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_device_buffer_from_ptr(ggml_b
 
     ggml_backend_remoting_buffer_context * context = (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
     if (!context) {
-        GGML_ABORT("Couldn't allocate the buffer context ...");
+        GGML_ABORT(GGML_VIRTGPU "%s: Couldn't allocate the buffer context ...", __func__);
     }
 
     context->gpu          = gpu;

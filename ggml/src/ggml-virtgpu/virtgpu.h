@@ -17,6 +17,8 @@
 
 #include <cstring>
 
+#include "ggml-remoting.h"
+
 #define VIRGL_RENDERER_UNSTABLE_APIS 1
 #include "apir_hw.h"
 #include <drm/virtgpu_drm.h>

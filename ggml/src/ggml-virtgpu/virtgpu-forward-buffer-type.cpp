@@ -14,7 +14,7 @@ char * apir_buffer_type_get_name(virtgpu * gpu, apir_buffer_type_host_handle_t h
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
     char *       string      = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        GGML_LOG_ERROR("%s: Could not allocate the device name buffer\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: Could not allocate the device name buffer\n", __func__);
         apir_decoder_set_fatal(decoder);
     }
     apir_decode_char_array(decoder, string, string_size);

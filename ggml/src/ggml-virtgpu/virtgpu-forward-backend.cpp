@@ -23,12 +23,12 @@ ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
     if (cgraph_size <= gpu->data_shmem.mmap_size) {
         // Lock mutex before using shared data_shmem buffer
         if (mtx_lock(&gpu->data_shmem_mutex) != thrd_success) {
-            GGML_ABORT("Failed to lock data_shmem mutex");
+            GGML_ABORT(GGML_VIRTGPU "%s: Failed to lock data_shmem mutex", __func__);
         }
         using_shared_shmem = true;
         shmem = &gpu->data_shmem;
     } else if (virtgpu_shmem_create(gpu, cgraph_size, shmem)) {
-        GGML_ABORT("Couldn't allocate the guest-host shared buffer");
+        GGML_ABORT(GGML_VIRTGPU "%s: Couldn't allocate the guest-host shared buffer", __func__);
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, shmem->res_id);

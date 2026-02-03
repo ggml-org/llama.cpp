@@ -28,7 +28,7 @@ char * apir_device_get_name(virtgpu * gpu) {
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
     char            * string = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        GGML_LOG_ERROR("%s: Could not allocate the device name buffer\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: Could not allocate the device name buffer\n", __func__);
         return NULL;
     }
     apir_decode_char_array(decoder, string, string_size);
@@ -50,7 +50,7 @@ char * apir_device_get_description(virtgpu * gpu) {
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
     char *       string      = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        GGML_LOG_ERROR("%s: Could not allocate the device description buffer\n", __func__);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: Could not allocate the device description buffer\n", __func__);
 
         return NULL;
     }
@@ -173,7 +173,7 @@ apir_buffer_context_t apir_device_buffer_from_ptr(virtgpu * gpu, size_t size, si
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR);
 
     if (virtgpu_shmem_create(gpu, size, &buffer_context.shmem)) {
-        GGML_ABORT("Couldn't allocate the guest-host shared buffer");
+        GGML_ABORT(GGML_VIRTGPU "Couldn't allocate the guest-host shared buffer");
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem.res_id);

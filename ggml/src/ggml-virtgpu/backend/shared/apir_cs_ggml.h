@@ -164,13 +164,13 @@ static inline void apir_encode_ggml_tensor_inline(apir_encoder * enc, const ggml
     size_t tensor_size = sizeof(*tensor);
 
     if (tensor->extra) {
-        GGML_ABORT("Cannot pass tensors with extra");
+        GGML_ABORT("%s: Cannot pass tensors with extra", __func__);
     }
 
     if (tensor->src[0] && tensor->buffer) {
         static int first = 1;
         if (first) {
-            GGML_LOG_WARN("Cannot pass tensors with src and buffer\n");
+            GGML_LOG_WARN("%s: Cannot pass tensors with src and buffer\n", __func__);
             first = 0;
         }
     }
