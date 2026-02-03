@@ -1,6 +1,6 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
-import { AttachmentType, MessageRole, ReasoningFormat } from '$lib/enums';
+import { AttachmentType, ContentPartType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -24,7 +24,7 @@ export class ChatService {
 		}
 
 		return content.map((part: ApiChatMessageContentPart) => {
-			if (part.type !== 'text' || !part.text) return part;
+			if (part.type !== ContentPartType.TEXT || !part.text) return part;
 			return {
 				...part,
 				text: part.text
@@ -125,7 +125,7 @@ export class ChatService {
 			normalizedMessages.forEach((msg) => {
 				if (Array.isArray(msg.content)) {
 					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
-						if (part.type === 'image_url') {
+						if (part.type === ContentPartType.IMAGE_URL) {
 							console.info(
 								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
 							);
@@ -134,7 +134,7 @@ export class ChatService {
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
-					if (msg.content.length === 1 && msg.content[0].type === 'text') {
+					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
 						msg.content = msg.content[0].text;
 					}
 				}
@@ -692,7 +692,7 @@ export class ChatService {
 
 		for (const textFile of textFiles) {
 			contentParts.push({
-				type: 'text',
+				type: ContentPartType.TEXT,
 				text: formatAttachmentText('File', textFile.name, textFile.content)
 			});
 		}
@@ -705,7 +705,7 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				type: 'text',
+				type: ContentPartType.TEXT,
 				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
 			});
 		}
@@ -740,7 +740,7 @@ export class ChatService {
 				}
 			} else {
 				contentParts.push({
-					type: 'text',
+					type: ContentPartType.TEXT,
 					text: formatAttachmentText('PDF File', pdfFile.name, pdfFile.content)
 				});
 			}
@@ -753,7 +753,7 @@ export class ChatService {
 
 		for (const mcpPrompt of mcpPrompts) {
 			contentParts.push({
-				type: 'text',
+				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
 					'MCP Prompt',
 					mcpPrompt.name,

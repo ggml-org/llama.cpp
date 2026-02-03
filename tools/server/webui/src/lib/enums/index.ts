@@ -2,7 +2,13 @@ export { AttachmentType } from './attachment';
 
 export { AgenticSectionType } from './agentic';
 
-export { ChatMessageStatsView, MessageRole, MessageType, ReasoningFormat } from './chat';
+export {
+	ChatMessageStatsView,
+	ContentPartType,
+	MessageRole,
+	MessageType,
+	ReasoningFormat
+} from './chat';
 
 export {
 	FileTypeCategory,

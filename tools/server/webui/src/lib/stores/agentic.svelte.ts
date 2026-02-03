@@ -23,7 +23,7 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, AGENTIC_TAGS } from '$lib/constants/agentic';
-import { AttachmentType, MessageRole } from '$lib/enums';
+import { AttachmentType, ContentPartType, MessageRole } from '$lib/enums';
 import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
@@ -527,12 +527,14 @@ class AgenticStore {
 
 				this.emitToolCallResult(cleanedResult, maxToolPreviewLines, onChunk);
 
-				const contentParts: ApiChatMessageContentPart[] = [{ type: 'text', text: cleanedResult }];
+				const contentParts: ApiChatMessageContentPart[] = [
+					{ type: ContentPartType.TEXT, text: cleanedResult }
+				];
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(options.model ?? '')) {
 							contentParts.push({
-								type: 'image_url',
+								type: ContentPartType.IMAGE_URL,
 								image_url: { url: (attachment as DatabaseMessageExtraImageFile).base64Url }
 							});
 						} else {
