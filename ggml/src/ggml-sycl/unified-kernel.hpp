@@ -31,6 +31,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <memory>
+#include <vector>
 #include <sycl/sycl.hpp>
 
 // Check for joint_matrix support
@@ -178,6 +180,132 @@ inline void split_barrier_sync(int scope = ScopeWorkgroup,
     split_barrier_arrive(scope, memory_semantics);
     split_barrier_wait(scope, memory_semantics);
 }
+
+// =============================================================================
+// Forward Declarations
+// =============================================================================
+
+class UnifiedCache;
+
+// =============================================================================
+// Operation Types for Persistent Kernel
+// =============================================================================
+
+// Operation types for persistent kernel
+enum class OperationType {
+    RMS_NORM,
+    MATMUL_Q_PROJ,
+    MATMUL_K_PROJ,
+    MATMUL_V_PROJ,
+    MATMUL_OUT_PROJ,
+    MATMUL_GATE,
+    MATMUL_UP,
+    MATMUL_DOWN,
+    ROPE,
+    ATTENTION,
+    SILU_MUL,
+    SOFTMAX
+};
+
+// Matmul type classification
+enum class MatmulType {
+    Q_PROJ,
+    K_PROJ,
+    V_PROJ,
+    OUT_PROJ,
+    GATE,
+    UP,
+    DOWN,
+    GENERIC
+};
+
+// Prefetch priority for cache streaming
+enum class PrefetchPriority {
+    LOW,
+    NORMAL,
+    HIGH
+};
+
+// =============================================================================
+// Operation Descriptors
+// =============================================================================
+
+// Descriptor for RMS normalization
+struct RmsNormDescriptor {
+    const void * input;
+    const void * weights;
+    void *       output;
+    int          hidden_dim;
+    float        eps;
+};
+
+struct AttentionDescriptor {
+    const void * q;
+    const void * k_cache;
+    const void * v_cache;
+    void *       output;
+    int          n_heads;
+    int          n_kv_heads;
+    int          head_dim;
+    int          seq_len;
+    float        scale;
+};
+
+struct RopeDescriptor {
+    void *        q;
+    void *        k;
+    const float * cos_cache;
+    const float * sin_cache;
+    int           n_heads;
+    int           head_dim;
+    int           position;
+};
+
+struct OperationDescriptor {
+    OperationType type;
+    int           layer;
+    const void *  weights;
+    const void *  input;
+    void *        output;
+    void *        aux;
+    int           M, N, K;
+    int           hidden_dim;
+    int           intermediate_dim;
+    float         eps;
+    float         scale;
+    int           quant_type;
+};
+
+// =============================================================================
+// Persistent Plan and Stats
+// =============================================================================
+
+struct PersistentStats {
+    int    n_operations;
+    int    n_layers;
+    int    total_tiles;
+    double kernel_time_ms;
+    double memory_bandwidth_gbps;
+};
+
+struct PersistentPlan {
+    int n_layers;
+    int batch_size;
+    int hidden_dim;
+    int intermediate_dim;
+    int n_heads;
+    int n_kv_heads;
+    int head_dim;
+    int quant_type;
+
+    std::vector<OperationDescriptor> operations;
+
+    void * intermediate_buffers[4];
+    int *  tile_counter;
+    void * weight_table;
+
+    bool is_valid() const { return n_layers > 0 && !operations.empty(); }
+};
 
 namespace ggml_sycl_unified {
 
@@ -951,6 +1079,37 @@ static_assert(sizeof(block_q4_0_unified) == 18,
               "block_q4_0_unified must be exactly 18 bytes for correct prefetch behavior");
 
 // =============================================================================
+// MXFP4 Block Structure
+// =============================================================================
+// MXFP4: 32 weights per block, 4 bits per weight with E8M0 shared exponent
+// Block layout: [e: E8M0 exponent] [qs: 16 bytes (32 nibbles)]
+// Total size: 17 bytes per block
+//
+// E8M0 exponent format: 8-bit unsigned integer representing 2^(e-127)
+// E2M1 mantissa values in qs (4 bits each): encoded in kvalues_mxfp4 lookup table
+// Values are doubled in lookup table, multiply by 0.5 during dequantization
+
+constexpr int UNIFIED_QK_MXFP4 = 32;  // Weights per MXFP4 block
+constexpr int QUANT_TYPE_MXFP4 = 39;  // GGML_TYPE_MXFP4
+
+struct block_mxfp4_unified {
+    uint8_t e;                          // E8M0 shared exponent
+    uint8_t qs[UNIFIED_QK_MXFP4 / 2];   // Quantized values: 16 bytes = 32 nibbles (E2M1)
+};
+
+static_assert(sizeof(block_mxfp4_unified) == sizeof(uint8_t) + UNIFIED_QK_MXFP4 / 2, "wrong mxfp4 block size");
+static_assert(sizeof(block_mxfp4_unified) == 17,
+              "block_mxfp4_unified must be exactly 17 bytes for correct prefetch behavior");
+
+// E2M1 quantization lookup table (values are doubled, multiply by 0.5 during dequant)
+// Positive: 0, 1, 2, 3, 4, 6, 8, 12 (indices 0-7)
+// Negative: 0, -1, -2, -3, -4, -6, -8, -12 (indices 8-15)
+constexpr int8_t kvalues_mxfp4_unified[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12,     // Positive values (doubled)
+    0, -1, -2, -3, -4, -6, -8, -12  // Negative values (doubled)
+};
+
+// =============================================================================
 // UnifiedKernelArgs: Kernel launch parameters
 // =============================================================================
 // Contains all information needed to launch the unified matmul kernel.
@@ -1410,9 +1569,60 @@ SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block,
 }
 
 /**
+ * Convert E8M0 exponent to float scale factor.
+ * E8M0 is an 8-bit unsigned exponent format: value = 2^(e - 127)
+ * For MXFP4, we also multiply by 0.5 since kvalues are doubled.
+ *
+ * @param e E8M0 exponent byte
+ * @return Float scale factor (already halved for MXFP4)
+ */
+SYCL_EXTERNAL inline float e8m0_to_float_half(uint8_t e) {
+    uint32_t bits;
+    if (e == 0) {
+        // Denormal case: return 2^(-127) * 0.5 = 2^(-128)
+        bits = 0x00400000;  // Small positive float
+    } else {
+        // Normal case: scale by 0.5 by subtracting 1 from exponent
+        // 2^(e-127) * 0.5 = 2^(e-128)
+        bits = (uint32_t)(e - 1) << 23;
+    }
+    float result;
+    std::memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
+/**
+ * Dequantize an MXFP4 block to half precision.
+ *
+ * MXFP4 format:
+ * - E8M0 shared exponent (8-bit unsigned): scale = 2^(e - 127)
+ * - E2M1 mantissa values (4-bit each): lookup in kvalues_mxfp4_unified
+ * - Lookup table values are doubled, so we multiply scale by 0.5
+ *
+ * @param block  Pointer to MXFP4 block
+ * @param output Output array of UNIFIED_QK_MXFP4 half values
+ */
+SYCL_EXTERNAL inline void dequant_mxfp4_to_half(const block_mxfp4_unified * block, sycl::half * output) {
+    // Get scale factor (already halved via e8m0_to_float_half)
+    const float scale = e8m0_to_float_half(block->e);
+
+#pragma unroll
+    for (int i = 0; i < 16; i++) {
+        const uint8_t qs = block->qs[i];
+        const int8_t  lo = kvalues_mxfp4_unified[qs & 0x0F];
+        const int8_t  hi = kvalues_mxfp4_unified[qs >> 4];
+
+        output[i]      = static_cast<sycl::half>(static_cast<float>(lo) * scale);
+        output[i + 16] = static_cast<sycl::half>(static_cast<float>(hi) * scale);
+    }
+}
+
+/**
  * Load weights from AOS (Array of Structures) layout.
  *
- * AOS layout: Contiguous blocks, each 18 bytes [d: fp16][qs: 16 bytes]
+ * AOS layout: Contiguous blocks
+ * - Q4_0: 18 bytes [d: fp16][qs: 16 bytes]
+ * - MXFP4: 17 bytes [e: E8M0][qs: 16 bytes]
  * Indexed as: blocks[row * blocks_per_row + col]
  *
  * GGML Convention: weights[N, K] - indexed by output column n, then k
@@ -1420,13 +1630,14 @@ SYCL_EXTERNAL inline void dequant_q4_0_to_half(const block_q4_0_unified * block,
  *
  * @tparam TILE_M       M dimension tile size (output rows, not used for weight loading)
  * @tparam TILE_N       N dimension tile size (output columns = weight rows to load)
- * @tparam TILE_K       K dimension tile size (should be multiple of UNIFIED_QK4_0)
+ * @tparam TILE_K       K dimension tile size (should be multiple of 32)
  * @param slm           SLM accessor for dequantized weights [TILE_N * TILE_K]
- * @param weights       Global memory pointer to Q4_0 blocks
+ * @param weights       Global memory pointer to quantized blocks
  * @param n_start       Starting N (output column) index
  * @param k_start       Starting K index
  * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
+ * @param quant_type    Quantization type (QUANT_TYPE_Q4_0 or QUANT_TYPE_MXFP4)
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -1436,42 +1647,52 @@ inline void load_weights_aos(sycl::local_accessor<sycl::half, 1> & slm,
                              int64_t                               k_start,
                              int64_t                               N,
                              int64_t                               K,
+                             int                                   quant_type,
                              const sycl::nd_item<3> &              item) {
-    const block_q4_0_unified * blocks         = static_cast<const block_q4_0_unified *>(weights);
-    const int                  blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
+    // Both Q4_0 and MXFP4 have 32 weights per block
+    constexpr int QK        = 32;
+    const int blocks_per_row = static_cast<int>(K / QK);
 
     const int local_id   = item.get_local_linear_id();
     const int local_size = item.get_local_range().size();
 
     // Total elements to load: TILE_N rows x TILE_K weights
     // Each thread handles a subset of blocks
-    const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
+    const int tile_k_blocks = TILE_K / QK;
     const int total_blocks  = TILE_N * tile_k_blocks;
 
     for (int idx = local_id; idx < total_blocks; idx += local_size) {
         const int     n_off          = idx / tile_k_blocks;
         const int     k_block        = idx % tile_k_blocks;
         const int64_t n_global       = n_start + n_off;
-        const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
+        const int64_t k_block_global = k_start / QK + k_block;
 
         // Bounds check
         if (n_global >= N || k_block_global >= blocks_per_row) {
             // Zero-fill for out-of-bounds
-            for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
+            for (int i = 0; i < QK; i++) {
+                slm[n_off * TILE_K + k_block * QK + i] = sycl::half(0.0f);
             }
             continue;
         }
 
-        // Load and dequantize block
-        // GGML: weights[n_global, k] - row n_global
-        const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
-        sycl::half                 temp[UNIFIED_QK4_0];
-        dequant_q4_0_to_half(block, temp);
+        // Load and dequantize block based on quant type
+        sycl::half temp[QK];
+
+        if (quant_type == QUANT_TYPE_MXFP4) {
+            const block_mxfp4_unified * blocks = static_cast<const block_mxfp4_unified *>(weights);
+            const block_mxfp4_unified * block  = &blocks[n_global * blocks_per_row + k_block_global];
+            dequant_mxfp4_to_half(block, temp);
+        } else {
+            // Default: Q4_0
+            const block_q4_0_unified * blocks = static_cast<const block_q4_0_unified *>(weights);
+            const block_q4_0_unified * block  = &blocks[n_global * blocks_per_row + k_block_global];
+            dequant_q4_0_to_half(block, temp);
+        }
 
         // Store to SLM: [n_off * TILE_K + k]
-        for (int i = 0; i < UNIFIED_QK4_0; i++) {
-            slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
+        for (int i = 0; i < QK; i++) {
+            slm[n_off * TILE_K + k_block * QK + i] = temp[i];
         }
     }
 }
@@ -1738,7 +1959,8 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
  * Layout dispatcher for weight loading (3D nd_item version).
  *
  * Dispatches to the appropriate weight loading function based on LayoutMode.
- * All functions dequantize Q4_0 weights to sycl::half in SLM.
+ * Supports Q4_0 and MXFP4 quantization types for AOS layout.
+ * SOA/COALESCED layouts currently only support Q4_0.
  *
  * GGML Convention: weights[N, K] - indexed by output column n, then k
  * We load TILE_N rows of weights (one row per output column n)
@@ -1754,6 +1976,7 @@ inline void load_weights_xmx_coalesced(sycl::local_accessor<sycl::half, 1> & slm
  * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows (for SOA/COALESCED scale offset)
+ * @param quant_type    Quantization type (QUANT_TYPE_Q4_0 or QUANT_TYPE_MXFP4)
  * @param item          ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -1765,21 +1988,25 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                                 int64_t                               N,
                                 int64_t                               K,
                                 int64_t                               nrows_full,
+                                int                                   quant_type,
                                 const sycl::nd_item<3> &              item) {
     switch (layout) {
         case LayoutMode::AOS:
-            load_weights_aos<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, item);
+            load_weights_aos<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, quant_type, item);
             break;
 
         case LayoutMode::SOA:
+            // SOA layout currently only supports Q4_0
             load_weights_soa<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
 
         case LayoutMode::COALESCED:
+            // COALESCED layout currently only supports Q4_0
             load_weights_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
 
         case LayoutMode::XMX_COALESCED:
+            // XMX_COALESCED layout currently only supports Q4_0
             load_weights_xmx_coalesced<TILE_M, TILE_N, TILE_K>(slm, weights, n_start, k_start, N, K, nrows_full, item);
             break;
     }
@@ -1790,6 +2017,7 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
  *
  * Uses flat linear indexing to distribute work across work-items.
  * This overload is used by the existing kernel implementation.
+ * Supports Q4_0 and MXFP4 quantization types for AOS layout.
  *
  * GGML Convention: weights[N, K] - indexed by output column n, then k
  * We load TILE_N rows of weights (one row per output column n)
@@ -1805,6 +2033,7 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
  * @param N             Total N dimension (weight rows)
  * @param K             Total K dimension
  * @param nrows_full    Full number of rows (for SOA/COALESCED scale offset)
+ * @param quant_type    Quantization type (QUANT_TYPE_Q4_0 or QUANT_TYPE_MXFP4)
  * @param item2d        2D ND-item for work distribution
  */
 template <int TILE_M, int TILE_N, int TILE_K>
@@ -1816,45 +2045,56 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                                 int64_t                               N,
                                 int64_t                               K,
                                 int64_t                               nrows_full,
+                                int                                   quant_type,
                                 const sycl::nd_item<2> &              item2d) {
     // Use flat linear indexing within the work-group
     const int local_id   = static_cast<int>(item2d.get_local_linear_id());
     const int local_size = static_cast<int>(item2d.get_local_range().size());
 
-    const block_q4_0_unified * blocks         = static_cast<const block_q4_0_unified *>(weights);
-    const int                  blocks_per_row = static_cast<int>(K / UNIFIED_QK4_0);
+    // Both Q4_0 and MXFP4 have 32 weights per block
+    constexpr int QK             = 32;
+    const int     blocks_per_row = static_cast<int>(K / QK);
 
     // Handle based on layout
     if (layout == LayoutMode::AOS) {
-        // AOS: Direct block access
-        const int tile_k_blocks = TILE_K / UNIFIED_QK4_0;
+        // AOS: Direct block access - supports both Q4_0 and MXFP4
+        const int tile_k_blocks = TILE_K / QK;
         const int total_blocks  = TILE_N * tile_k_blocks;
 
         for (int idx = local_id; idx < total_blocks; idx += local_size) {
             const int     n_off          = idx / tile_k_blocks;
             const int     k_block        = idx % tile_k_blocks;
             const int64_t n_global       = n_start + n_off;
-            const int64_t k_block_global = k_start / UNIFIED_QK4_0 + k_block;
+            const int64_t k_block_global = k_start / QK + k_block;
 
             if (n_global >= N || k_block_global >= blocks_per_row) {
-                for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                    slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = sycl::half(0.0f);
+                for (int i = 0; i < QK; i++) {
+                    slm[n_off * TILE_K + k_block * QK + i] = sycl::half(0.0f);
                 }
                 continue;
             }
 
-            // GGML: weights[n_global, k] - row n_global
-            const block_q4_0_unified * block = &blocks[n_global * blocks_per_row + k_block_global];
-            sycl::half                 temp[UNIFIED_QK4_0];
-            dequant_q4_0_to_half(block, temp);
+            // Load and dequantize block based on quant type
+            sycl::half temp[QK];
+
+            if (quant_type == QUANT_TYPE_MXFP4) {
+                const block_mxfp4_unified * blocks = static_cast<const block_mxfp4_unified *>(weights);
+                const block_mxfp4_unified * block  = &blocks[n_global * blocks_per_row + k_block_global];
+                dequant_mxfp4_to_half(block, temp);
+            } else {
+                // Default: Q4_0
+                const block_q4_0_unified * blocks = static_cast<const block_q4_0_unified *>(weights);
+                const block_q4_0_unified * block  = &blocks[n_global * blocks_per_row + k_block_global];
+                dequant_q4_0_to_half(block, temp);
+            }
 
             // Store to SLM: [n_off * TILE_K + k]
-            for (int i = 0; i < UNIFIED_QK4_0; i++) {
-                slm[n_off * TILE_K + k_block * UNIFIED_QK4_0 + i] = temp[i];
+            for (int i = 0; i < QK; i++) {
+                slm[n_off * TILE_K + k_block * QK + i] = temp[i];
             }
         }
     } else {
-        // SOA/COALESCED/XMX_COALESCED: Per-element loading
+        // SOA/COALESCED/XMX_COALESCED: Per-element loading (Q4_0 only for now)
         const uint8_t *    qs_base      = static_cast<const uint8_t *>(weights);
         const int          row_qs_bytes = static_cast<int>(K / 2);
         const sycl::half * d_base       = reinterpret_cast<const sycl::half *>(qs_base + nrows_full * row_qs_bytes);
@@ -1872,8 +2112,8 @@ inline void load_weights_to_slm(sycl::local_accessor<sycl::half, 1> & slm,
                 continue;
             }
 
-            const int block_idx    = static_cast<int>(k_global / UNIFIED_QK4_0);
-            const int pos_in_block = static_cast<int>(k_global % UNIFIED_QK4_0);
+            const int block_idx    = static_cast<int>(k_global / QK);
+            const int pos_in_block = static_cast<int>(k_global % QK);
 
             if (layout == LayoutMode::SOA) {
                 // SOA: qs bytes contiguous, then scales
@@ -2140,5 +2380,66 @@ inline bool can_use_xmx(int64_t /* M */, int64_t /* N */, int64_t /* K */) {
 #endif  // GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
 
 }  // namespace ggml_sycl_unified
+
+// =============================================================================
+// UnifiedKernel Class
+// =============================================================================
+// High-level kernel orchestration class that wraps individual operation APIs
+// and provides persistent execution support for fused multi-layer inference.
+
+namespace ggml_sycl {
+
+class UnifiedKernel {
+public:
+    explicit UnifiedKernel(sycl::queue & queue);
+    ~UnifiedKernel();
+
+    UnifiedKernel(const UnifiedKernel &)            = delete;
+    UnifiedKernel & operator=(const UnifiedKernel &) = delete;
+
+    void configure(const ggml_sycl_unified::XMXConfig & xmx_config);
+
+    // Single Operation API
+    void matmul(const ggml_sycl_unified::UnifiedKernelArgs & args);
+    void rms_norm(const RmsNormDescriptor & desc);
+    void rope(const RopeDescriptor & desc);
+    void silu_mul(const void * gate, const void * up, void * output, int dim);
+    void softmax(const void * input, void * output, int n, int stride);
+
+    // Persistent Execution API
+    void begin_persistent(int n_layers, int batch_size, int hidden_dim,
+                          int intermediate_dim, int n_heads, int n_kv_heads,
+                          int head_dim, int quant_type);
+    void add_rms_norm(int layer, const void * weights, const void * input, void * output);
+    void add_matmul(int layer, const void * weights, const void * input,
+                    void * output, MatmulType type, int M, int N, int K);
+    void add_attention(int layer, const AttentionDescriptor & desc);
+    void add_silu_mul(int layer, const void * gate, const void * up, void * output);
+    void add_rope(int layer, const RopeDescriptor & desc);
+    void execute_persistent();
+    void cancel_persistent();
+
+    bool            supports_persistent() const;
+    bool            is_building_plan() const;
+    PersistentStats get_last_stats() const;
+
+private:
+    sycl::queue &                    queue_;
+    ggml_sycl_unified::XMXConfig     xmx_config_;
+    bool                             xmx_configured_ = false;
+
+    std::unique_ptr<PersistentPlan>  current_plan_;
+    PersistentStats                  last_stats_;
+
+    void *  persistent_buffers_[4] = {nullptr, nullptr, nullptr, nullptr};
+    int *   tile_counter_          = nullptr;
+    size_t  persistent_buffer_size_ = 0;
+
+    void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);
+    void free_persistent_buffers();
+    void launch_persistent_kernel();
+};
+
+}  // namespace ggml_sycl
 
 #endif  // GGML_SYCL_UNIFIED_KERNEL_HPP
