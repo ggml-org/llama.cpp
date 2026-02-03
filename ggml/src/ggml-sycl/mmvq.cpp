@@ -7,6 +7,7 @@
 #include "quantize.hpp"
 #include "quants.hpp"
 #include "sycl-profiling.hpp"
+#include "unified-kernel.hpp"  // For split barrier support
 #include "vecdotq.hpp"
 
 // Kernel name classes for VTune/profiler visibility
@@ -546,9 +547,11 @@ static void mul_mat_vec_q6_k_variable_tile(const void * __restrict__ vx,
         shared_partials[warp_id] = warp_sum;
     }
 
-    // Memory fence + barrier for proper visibility across sub-groups on Intel Arc
-    sycl::atomic_fence(sycl::memory_order::seq_cst, sycl::memory_scope::work_group);
-    sycl::group_barrier(nd_item.get_group());
+    // Split barrier for proper visibility across sub-groups on Intel Arc
+    // Arrive is non-blocking, allowing prefetch/other work before wait
+    split_barrier_arrive(ScopeWorkgroup, SemanticsWGMem);
+    // Future optimization: prefetch next layer's weights here
+    split_barrier_wait(ScopeWorkgroup, SemanticsWGMem);
 
     // First warp reduces all partial sums
     if (warp_id == 0) {
