@@ -4,6 +4,12 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { getFaviconUrl } from '$lib/utils';
 	import type { MCPResourceAttachment, MCPResourceInfo } from '$lib/types';
+	import {
+		IMAGE_FILE_EXTENSION_REGEX,
+		CODE_FILE_EXTENSION_REGEX,
+		TEXT_FILE_EXTENSION_REGEX
+	} from '$lib/constants/mcp-resource';
+	import { MimeTypePrefix, MimeTypeIncludes, UriPattern } from '$lib/enums';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { RemoveButton } from '../../actions';
 
@@ -20,21 +26,21 @@
 		const mimeType = resource.mimeType?.toLowerCase() || '';
 		const uri = resource.uri.toLowerCase();
 
-		if (mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|svg|webp)$/.test(uri)) {
+		if (mimeType.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(uri)) {
 			return Image;
 		}
 		if (
-			mimeType.includes('json') ||
-			mimeType.includes('javascript') ||
-			mimeType.includes('typescript') ||
-			/\.(js|ts|json|yaml|yml|xml|html|css)$/.test(uri)
+			mimeType.includes(MimeTypeIncludes.JSON) ||
+			mimeType.includes(MimeTypeIncludes.JAVASCRIPT) ||
+			mimeType.includes(MimeTypeIncludes.TYPESCRIPT) ||
+			CODE_FILE_EXTENSION_REGEX.test(uri)
 		) {
 			return Code;
 		}
-		if (mimeType.includes('text') || /\.(txt|md|log)$/.test(uri)) {
+		if (mimeType.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(uri)) {
 			return FileText;
 		}
-		if (uri.includes('database') || uri.includes('db://')) {
+		if (uri.includes(UriPattern.DATABASE_KEYWORD) || uri.includes(UriPattern.DATABASE_SCHEME)) {
 			return Database;
 		}
 		return File;
