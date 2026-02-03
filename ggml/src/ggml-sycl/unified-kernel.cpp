@@ -998,6 +998,164 @@ dequant_q4_0_tile_vectorized(
 }
 
 // =============================================================================
+// Vectorized MXFP4 Dequantization using ESIMD SIMD Operations
+// =============================================================================
+// MXFP4 uses a shared E8M0 exponent with E2M1 mantissa values.
+//
+// MXFP4 block layout (17 bytes total):
+// - e: uint8_t E8M0 shared exponent (1 byte), represents 2^(e-127)
+// - qs[16]: 16 packed bytes containing 32 nibbles (16 bytes)
+//   - Low nibble:  qs[i] & 0x0F  -> lookup in kvalues_mxfp4
+//   - High nibble: qs[i] >> 4   -> lookup in kvalues_mxfp4
+//
+// The kvalues_mxfp4 lookup table maps 4-bit codes to signed integers
+// that are doubled - multiply by 0.5 during dequantization.
+// =============================================================================
+
+/**
+ * Convert E8M0 exponent to float scale factor (halved for MXFP4).
+ *
+ * E8M0 is an 8-bit unsigned exponent representing 2^(e-127).
+ * For MXFP4, we pre-apply the 0.5 factor here since kvalues are doubled.
+ *
+ * @param e E8M0 exponent byte
+ * @return Float scale factor (already halved)
+ */
+SYCL_ESIMD_FUNCTION float e8m0_to_scale_esimd(uint8_t e) {
+    uint32_t bits;
+    if (e == 0) {
+        // Denormal case: return 2^(-127) * 0.5 = 2^(-128)
+        bits = 0x00400000;  // Small positive float
+    } else {
+        // Normal case: 2^(e-127) * 0.5 = 2^(e-128)
+        bits = static_cast<uint32_t>(e - 1) << 23;
+    }
+    float result;
+    std::memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
+/**
+ * Vectorized dequantization of a full MXFP4 block (32 weights) to FP16.
+ *
+ * Loads 16 packed bytes, looks up E2M1 values, and applies E8M0 scale.
+ * This eliminates scalar loops in the hot path.
+ *
+ * @param block  Pointer to MXFP4 block (must be valid, no bounds check)
+ * @return simd<sycl::half, 32> containing dequantized weights
+ *
+ * Performance: ~17 bytes loaded, 32 weights output
+ * Target throughput: >100 GB/s for MXFP4 on Intel Arc
+ */
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, UNIFIED_QK_MXFP4>
+dequant_mxfp4_block_vectorized(const block_mxfp4_unified * block) {
+    // Get scale factor (already halved for MXFP4 kvalues)
+    const float scale = e8m0_to_scale_esimd(block->e);
+
+    // Load all 16 packed bytes at once
+    esimd::simd<uint8_t, 16> packed;
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        packed[i] = block->qs[i];
+    }
+
+    // Dequantize using kvalues lookup table
+    // kvalues_mxfp4_unified: maps 4-bit codes to doubled signed integers
+    esimd::simd<sycl::half, UNIFIED_QK_MXFP4> result;
+
+    // Low nibbles go to positions 0-15
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        const int8_t kval = kvalues_mxfp4_unified[packed[i] & 0x0F];
+        result[i] = static_cast<sycl::half>(static_cast<float>(kval) * scale);
+    }
+
+    // High nibbles go to positions 16-31
+    #pragma unroll
+    for (int i = 0; i < 16; i++) {
+        const int8_t kval = kvalues_mxfp4_unified[packed[i] >> 4];
+        result[i + 16] = static_cast<sycl::half>(static_cast<float>(kval) * scale);
+    }
+
+    return result;
+}
+
+/**
+ * Vectorized dequantization for a tile of MXFP4 weights spanning multiple blocks.
+ *
+ * This is the main entry point for tile-based MXFP4 dequantization.
+ *
+ * @tparam TILE_K  K dimension tile size (should be multiple of ESIMD_K_PER_DPAS)
+ * @param weights  Pointer to MXFP4 weight blocks
+ * @param n_global Global N index for this weight row
+ * @param k_start  Starting K index for this tile
+ * @param K        Total K dimension
+ * @param k_blocks_per_row Number of MXFP4 blocks per weight row
+ * @param k_len    Valid K elements in this tile
+ * @return simd containing dequantized weights in row-major order
+ */
+template <int TILE_K>
+SYCL_ESIMD_FUNCTION esimd::simd<sycl::half, TILE_K>
+dequant_mxfp4_tile_vectorized(
+    const block_mxfp4_unified * weights,
+    int64_t                     n_global,
+    int64_t                     k_start,
+    int64_t                     K,
+    int                         k_blocks_per_row,
+    int                         k_len) {
+
+    esimd::simd<sycl::half, TILE_K> result = sycl::half(0.0f);
+
+    // For TILE_K=16 (ESIMD_K_PER_DPAS), we may span at most 2 MXFP4 blocks
+    // since each block has 32 weights and TILE_K=16
+
+    // Calculate which block(s) we need
+    const int first_block_idx = static_cast<int>(k_start / UNIFIED_QK_MXFP4);
+    const int start_in_block = static_cast<int>(k_start % UNIFIED_QK_MXFP4);
+
+    // Get the first block
+    const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + first_block_idx);
+    const block_mxfp4_unified * blk = &weights[global_block_idx];
+
+    // Dequantize the full block
+    esimd::simd<sycl::half, UNIFIED_QK_MXFP4> full_block = dequant_mxfp4_block_vectorized(blk);
+
+    // Copy weights from the block to result
+    const int remaining_in_block = UNIFIED_QK_MXFP4 - start_in_block;
+    const int weights_from_first_block = (remaining_in_block < k_len) ? remaining_in_block : k_len;
+
+    #pragma unroll
+    for (int i = 0; i < TILE_K; i++) {
+        if (i < weights_from_first_block) {
+            result[i] = full_block[start_in_block + i];
+        }
+    }
+
+    // If we need weights from a second block (tile spans block boundary)
+    if (weights_from_first_block < k_len) {
+        const int second_block_idx = first_block_idx + 1;
+        if (second_block_idx < k_blocks_per_row) {
+            const int global_block_idx_2 = static_cast<int>(n_global * k_blocks_per_row + second_block_idx);
+            const block_mxfp4_unified * blk2 = &weights[global_block_idx_2];
+
+            esimd::simd<sycl::half, UNIFIED_QK_MXFP4> full_block_2 = dequant_mxfp4_block_vectorized(blk2);
+
+            #pragma unroll
+            for (int i = 0; i < TILE_K; i++) {
+                if (i >= weights_from_first_block && i < k_len) {
+                    result[i] = full_block_2[i - weights_from_first_block];
+                }
+            }
+        }
+    }
+
+    // Suppress unused warning
+    (void) K;
+
+    return result;
+}
+
+// =============================================================================
 // Vectorized Q8_0 Dequantization using ESIMD SIMD Operations
 // =============================================================================
 // Q8_0 is simpler than Q4_0 since each weight is a full byte (no nibble packing).
@@ -1153,6 +1311,87 @@ SYCL_ESIMD_FUNCTION void prefetch_weights_block(
     // Prefetch 4 uint32_t values (16 bytes, covers the entire 18-byte block within aligned boundary)
     esimd::prefetch<uint32_t, 4>(
         aligned_ptr, 0, esimd::simd_mask<1>(1), props);
+}
+
+/**
+ * Prefetch MXFP4 weights for a future K-tile.
+ *
+ * @param weights          Pointer to MXFP4 weight blocks
+ * @param n_global         Global N index for this weight row
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param K                Total K dimension
+ * @param k_blocks_per_row Number of blocks per weight row
+ * @param N                Total N dimension (for bounds checking)
+ */
+template <int K_TILE_SIZE>
+SYCL_ESIMD_FUNCTION void prefetch_weights_block_mxfp4(
+    const block_mxfp4_unified * weights,
+    int64_t                     n_global,
+    int64_t                     k_tile_start,
+    int64_t                     K,
+    int                         k_blocks_per_row,
+    int64_t                     N) {
+
+    // Bounds check: don't prefetch beyond array
+    if (n_global >= N || k_tile_start >= K) {
+        return;
+    }
+
+    // Calculate block address for this K-tile
+    // MXFP4 blocks have 32 weights each
+    const int k_block_idx = static_cast<int>(k_tile_start / UNIFIED_QK_MXFP4);
+    const int global_block_idx = static_cast<int>(n_global * k_blocks_per_row + k_block_idx);
+
+    // Prefetch the MXFP4 block using LSC prefetch
+    const block_mxfp4_unified * block_ptr = &weights[global_block_idx];
+
+    // Align to 16-byte boundary
+    constexpr int ALIGN_SIZE = 16;
+    const uint8_t * byte_ptr = reinterpret_cast<const uint8_t *>(block_ptr);
+    const uint64_t addr = reinterpret_cast<uint64_t>(byte_ptr);
+    const uint64_t aligned_addr = (addr / ALIGN_SIZE) * ALIGN_SIZE;
+    const uint32_t * aligned_ptr = reinterpret_cast<const uint32_t *>(aligned_addr);
+
+    constexpr auto props = esimd::properties{
+        esimd::cache_hint_L1<esimd::cache_hint::streaming>,
+        esimd::cache_hint_L2<esimd::cache_hint::uncached>
+    };
+    // Prefetch 4 uint32_t values (16 bytes, covers the entire 17-byte block within aligned boundary)
+    esimd::prefetch<uint32_t, 4>(
+        aligned_ptr, 0, esimd::simd_mask<1>(1), props);
+}
+
+/**
+ * Generic prefetch dispatcher for weights.
+ *
+ * @param weights          Pointer to weight blocks (void*)
+ * @param n_global         Global N index for this weight row
+ * @param k_tile_start     Starting K index for the tile to prefetch
+ * @param K                Total K dimension
+ * @param k_blocks_per_row Number of blocks per weight row
+ * @param N                Total N dimension (for bounds checking)
+ * @param quant_type       Quantization type
+ */
+template <int K_TILE_SIZE>
+SYCL_ESIMD_FUNCTION void prefetch_weights_block_generic(
+    const void * weights,
+    int64_t      n_global,
+    int64_t      k_tile_start,
+    int64_t      K,
+    int          k_blocks_per_row,
+    int64_t      N,
+    int          quant_type) {
+
+    if (quant_type == QUANT_TYPE_MXFP4) {
+        prefetch_weights_block_mxfp4<K_TILE_SIZE>(
+            static_cast<const block_mxfp4_unified *>(weights),
+            n_global, k_tile_start, K, k_blocks_per_row, N);
+    } else {
+        // Default: Q4_0
+        prefetch_weights_block<K_TILE_SIZE>(
+            static_cast<const block_q4_0_unified *>(weights),
+            n_global, k_tile_start, K, k_blocks_per_row, N);
+    }
 }
 
 /**
@@ -1339,7 +1578,7 @@ inline bool can_use_cooperative_esimd(int64_t M, int64_t N, int64_t K) {
  * @param k_start       Starting K index for this tile
  * @param N             Total N dimension
  * @param K             Total K dimension
- * @param k_blocks_per_row Number of Q4_0 blocks per weight row
+ * @param k_blocks_per_row Number of blocks per weight row
  * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
  */
 template <int TILE_M, int TILE_N>
@@ -1376,6 +1615,93 @@ SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni(
 
     // Store to SLM
     esimd::slm_block_store<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(slm_offset, w_vec);
+}
+
+/**
+ * Load MXFP4 weights for a K-tile to SLM with VNNI packing for ESIMD dpas.
+ *
+ * @param weights       Pointer to MXFP4 weight blocks
+ * @param slm_offset    SLM byte offset for weights buffer
+ * @param n_start       Starting N index
+ * @param k_start       Starting K index for this tile
+ * @param N             Total N dimension
+ * @param K             Total K dimension
+ * @param k_blocks_per_row Number of blocks per weight row
+ * @param k_len         Valid K elements in this tile (may be < ESIMD_K_PER_DPAS)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_mxfp4(
+    const block_mxfp4_unified * weights,
+    uint32_t                    slm_offset,
+    int64_t                     n_start,
+    int64_t                     k_start,
+    int64_t                     N,
+    int64_t                     K,
+    int                         k_blocks_per_row,
+    int                         k_len) {
+
+    // Load and dequantize MXFP4 weights with VNNI packing
+    esimd::simd<sycl::half, ESIMD_SLM_WEIGHTS_SIZE> w_vec = sycl::half(0.0f);
+
+    #pragma unroll
+    for (int n = 0; n < TILE_N; n++) {
+        const int64_t n_global = n_start + n;
+        if (n_global >= N) continue;
+
+        // Use vectorized tile dequantization for this row
+        esimd::simd<sycl::half, ESIMD_K_PER_DPAS> row_weights =
+            dequant_mxfp4_tile_vectorized<ESIMD_K_PER_DPAS>(
+                weights, n_global, k_start, K, k_blocks_per_row, k_len);
+
+        // Repack to VNNI layout: b[(k/2) * N * 2 + n * 2 + (k%2)]
+        #pragma unroll
+        for (int k = 0; k < ESIMD_K_PER_DPAS; k++) {
+            const int vnni_idx = (k / 2) * (TILE_N * 2) + n * 2 + (k % 2);
+            w_vec[vnni_idx] = (k < k_len) ? row_weights[k] : sycl::half(0.0f);
+        }
+    }
+
+    // Store to SLM
+    esimd::slm_block_store<sycl::half, ESIMD_SLM_WEIGHTS_SIZE>(slm_offset, w_vec);
+}
+
+/**
+ * Generic weight loader dispatcher for ESIMD VNNI path.
+ *
+ * Dispatches to the appropriate weight loader based on quantization type.
+ *
+ * @param weights       Pointer to weight blocks (void*, cast internally)
+ * @param slm_offset    SLM byte offset for weights buffer
+ * @param n_start       Starting N index
+ * @param k_start       Starting K index for this tile
+ * @param N             Total N dimension
+ * @param K             Total K dimension
+ * @param k_blocks_per_row Number of blocks per weight row
+ * @param k_len         Valid K elements in this tile
+ * @param quant_type    Quantization type (QUANT_TYPE_Q4_0 or QUANT_TYPE_MXFP4)
+ */
+template <int TILE_M, int TILE_N>
+SYCL_ESIMD_FUNCTION void load_weights_to_slm_vnni_generic(
+    const void * weights,
+    uint32_t     slm_offset,
+    int64_t      n_start,
+    int64_t      k_start,
+    int64_t      N,
+    int64_t      K,
+    int          k_blocks_per_row,
+    int          k_len,
+    int          quant_type) {
+
+    if (quant_type == QUANT_TYPE_MXFP4) {
+        load_weights_to_slm_vnni_mxfp4<TILE_M, TILE_N>(
+            static_cast<const block_mxfp4_unified *>(weights),
+            slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
+    } else {
+        // Default: Q4_0
+        load_weights_to_slm_vnni<TILE_M, TILE_N>(
+            static_cast<const block_q4_0_unified *>(weights),
+            slm_offset, n_start, k_start, N, K, k_blocks_per_row, k_len);
+    }
 }
 
 /**
@@ -1458,11 +1784,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
         return;
     }
 
-    // Number of Q4_0 blocks per weight row
-    const int k_blocks_per_row = static_cast<int>(args.K / UNIFIED_QK4_0);
-
-    // Cast weight pointer
-    const block_q4_0_unified * weights = static_cast<const block_q4_0_unified *>(args.weights);
+    // Number of blocks per weight row (both Q4_0 and MXFP4 have 32 elements/block)
+    constexpr int QK = 32;
+    const int k_blocks_per_row = static_cast<int>(args.K / QK);
 
     // Initialize SLM for double-buffering
     esimd::slm_init<ESIMD_SLM_TOTAL_BYTES>();
@@ -1482,9 +1806,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
         const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
         // Load weights and activations to buffer 0
-        load_weights_to_slm_vnni<TILE_M, TILE_N>(
-            weights, ESIMD_SLM_BUF0_WEIGHTS,
-            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len);
+        load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
+            args.weights, ESIMD_SLM_BUF0_WEIGHTS,
+            n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type);
         load_activations_to_slm<TILE_M, TILE_N>(
             args.activations, ESIMD_SLM_BUF0_ACTS,
             m_start, k_start, args.M, args.K, k_len);
@@ -1512,9 +1836,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
             const int64_t k_remaining = args.K;
             const int k_len = static_cast<int>(k_remaining < ESIMD_K_PER_DPAS ? k_remaining : ESIMD_K_PER_DPAS);
 
-            load_weights_to_slm_vnni<TILE_M, TILE_N>(
-                weights, ESIMD_SLM_BUF0_WEIGHTS,
-                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len);
+            load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
+                args.weights, ESIMD_SLM_BUF0_WEIGHTS,
+                n_start, k_start, args.N, args.K, k_blocks_per_row, k_len, args.quant_type);
             load_activations_to_slm<TILE_M, TILE_N>(
                 args.activations, ESIMD_SLM_BUF0_ACTS,
                 m_start, k_start, args.M, args.K, k_len);
@@ -1542,8 +1866,8 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
                 // Prefetch weights for future K-tile
                 #pragma unroll
                 for (int n = 0; n < TILE_N; n++) {
-                    prefetch_weights_block<ESIMD_K_PER_DPAS>(
-                        weights, n_start + n, prefetch_k_start, args.K, k_blocks_per_row, args.N);
+                    prefetch_weights_block_generic<ESIMD_K_PER_DPAS>(
+                        args.weights, n_start + n, prefetch_k_start, args.K, k_blocks_per_row, args.N, args.quant_type);
                 }
 
                 // Prefetch activations for future K-tile
@@ -1574,9 +1898,9 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_double_buffered_impl(
                 const int64_t next_k_remaining = args.K - next_k_start;
                 const int next_k_len = static_cast<int>(next_k_remaining < ESIMD_K_PER_DPAS ? next_k_remaining : ESIMD_K_PER_DPAS);
 
-                load_weights_to_slm_vnni<TILE_M, TILE_N>(
-                    weights, load_w_off,
-                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len);
+                load_weights_to_slm_vnni_generic<TILE_M, TILE_N>(
+                    args.weights, load_w_off,
+                    n_start, next_k_start, args.N, args.K, k_blocks_per_row, next_k_len, args.quant_type);
                 load_activations_to_slm<TILE_M, TILE_N>(
                     args.activations, load_a_off,
                     m_start, next_k_start, args.M, args.K, next_k_len);
@@ -2871,10 +3195,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         return;
     }
 
-    // Only Q4_0 supported currently
-    if (args.quant_type != QUANT_TYPE_Q4_0) {
-        fprintf(stderr, "[unified-kernel] Only Q4_0 quantization supported (got type=%d, expected=%d)\n",
-                args.quant_type, QUANT_TYPE_Q4_0);
+    // Check for supported quantization types
+    if (args.quant_type != QUANT_TYPE_Q4_0 && args.quant_type != QUANT_TYPE_MXFP4) {
+        fprintf(stderr, "[unified-kernel] Unsupported quantization type=%d (supported: Q4_0=%d, MXFP4=%d)\n",
+                args.quant_type, QUANT_TYPE_Q4_0, QUANT_TYPE_MXFP4);
         return;
     }
 
@@ -3564,3 +3888,278 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 }
 
 }  // namespace ggml_sycl_unified
+
+// =============================================================================
+// UnifiedKernel Class Implementation
+// =============================================================================
+
+namespace ggml_sycl {
+
+// -----------------------------------------------------------------------------
+// Constructor, Destructor, Configuration
+// -----------------------------------------------------------------------------
+
+UnifiedKernel::UnifiedKernel(sycl::queue & queue)
+    : queue_(queue) {
+    xmx_config_ = {};
+    xmx_config_.supported = false;
+    last_stats_ = {};
+}
+
+UnifiedKernel::~UnifiedKernel() {
+    free_persistent_buffers();
+}
+
+void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
+    xmx_config_ = xmx_config;
+    xmx_configured_ = true;
+}
+
+bool UnifiedKernel::supports_persistent() const {
+    if (!xmx_configured_ || !xmx_config_.supported) {
+        return false;
+    }
+    if (xmx_config_.slm_size < 32 * 1024) {
+        return false;
+    }
+    return true;
+}
+
+bool UnifiedKernel::is_building_plan() const {
+    return current_plan_ != nullptr;
+}
+
+PersistentStats UnifiedKernel::get_last_stats() const {
+    return last_stats_;
+}
+
+// -----------------------------------------------------------------------------
+// Buffer Management
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate_dim) {
+    size_t hidden_size = hidden_dim * sizeof(sycl::half);
+    size_t ffn_size = intermediate_dim * sizeof(sycl::half);
+    size_t required_size = std::max(hidden_size * 4, ffn_size * 2);
+
+    if (persistent_buffer_size_ >= required_size) {
+        return;
+    }
+
+    free_persistent_buffers();
+
+    for (int i = 0; i < 4; i++) {
+        persistent_buffers_[i] = sycl::malloc_device(required_size, queue_);
+    }
+
+    tile_counter_ = sycl::malloc_device<int>(1, queue_);
+    queue_.memset(tile_counter_, 0, sizeof(int)).wait();
+
+    persistent_buffer_size_ = required_size;
+}
+
+void UnifiedKernel::free_persistent_buffers() {
+    for (int i = 0; i < 4; i++) {
+        if (persistent_buffers_[i]) {
+            sycl::free(persistent_buffers_[i], queue_);
+            persistent_buffers_[i] = nullptr;
+        }
+    }
+    if (tile_counter_) {
+        sycl::free(tile_counter_, queue_);
+        tile_counter_ = nullptr;
+    }
+    persistent_buffer_size_ = 0;
+}
+
+// -----------------------------------------------------------------------------
+// Persistent Plan Building Methods
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::begin_persistent(int n_layers, int batch_size, int hidden_dim,
+                                      int intermediate_dim, int n_heads, int n_kv_heads,
+                                      int head_dim, int quant_type) {
+    cancel_persistent();
+
+    current_plan_ = std::make_unique<PersistentPlan>();
+    current_plan_->n_layers = n_layers;
+    current_plan_->batch_size = batch_size;
+    current_plan_->hidden_dim = hidden_dim;
+    current_plan_->intermediate_dim = intermediate_dim;
+    current_plan_->n_heads = n_heads;
+    current_plan_->n_kv_heads = n_kv_heads;
+    current_plan_->head_dim = head_dim;
+    current_plan_->quant_type = quant_type;
+    current_plan_->operations.reserve(n_layers * 10);
+
+    allocate_persistent_buffers(hidden_dim, intermediate_dim);
+}
+
+void UnifiedKernel::add_rms_norm(int layer, const void * weights,
+                                  const void * input, void * output) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_rms_norm called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type = OperationType::RMS_NORM;
+    op.layer = layer;
+    op.weights = weights;
+    op.input = input;
+    op.output = output;
+    op.hidden_dim = current_plan_->hidden_dim;
+    op.eps = 1e-5f;
+
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_matmul(int layer, const void * weights, const void * input,
+                                void * output, MatmulType type, int M, int N, int K) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_matmul called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+
+    switch (type) {
+        case MatmulType::Q_PROJ:    op.type = OperationType::MATMUL_Q_PROJ; break;
+        case MatmulType::K_PROJ:    op.type = OperationType::MATMUL_K_PROJ; break;
+        case MatmulType::V_PROJ:    op.type = OperationType::MATMUL_V_PROJ; break;
+        case MatmulType::OUT_PROJ:  op.type = OperationType::MATMUL_OUT_PROJ; break;
+        case MatmulType::GATE:      op.type = OperationType::MATMUL_GATE; break;
+        case MatmulType::UP:        op.type = OperationType::MATMUL_UP; break;
+        case MatmulType::DOWN:      op.type = OperationType::MATMUL_DOWN; break;
+        default:                    op.type = OperationType::MATMUL_Q_PROJ; break;
+    }
+
+    op.layer = layer;
+    op.weights = weights;
+    op.input = input;
+    op.output = output;
+    op.M = M;
+    op.N = N;
+    op.K = K;
+    op.quant_type = current_plan_->quant_type;
+
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_attention called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type = OperationType::ATTENTION;
+    op.layer = layer;
+    op.input = desc.q;
+    op.weights = desc.k_cache;
+    op.aux = const_cast<void *>(static_cast<const void *>(desc.v_cache));
+    op.output = desc.output;
+    op.M = desc.seq_len;
+    op.N = desc.n_heads;
+    op.K = desc.head_dim;
+    op.scale = desc.scale;
+
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, void * output) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_silu_mul called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type = OperationType::SILU_MUL;
+    op.layer = layer;
+    op.input = gate;
+    op.aux = const_cast<void *>(up);
+    op.output = output;
+    op.intermediate_dim = current_plan_->intermediate_dim;
+
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_rope called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type = OperationType::ROPE;
+    op.layer = layer;
+    op.input = desc.q;
+    op.aux = desc.k;
+    op.weights = desc.cos_cache;
+    op.output = const_cast<float *>(desc.sin_cache);
+    op.N = desc.n_heads;
+    op.K = desc.head_dim;
+    op.M = desc.position;
+
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::cancel_persistent() {
+    current_plan_.reset();
+}
+
+// -----------------------------------------------------------------------------
+// Persistent Execution
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::execute_persistent() {
+    if (!current_plan_ || !current_plan_->is_valid()) {
+        GGML_LOG_ERROR("UnifiedKernel: execute_persistent called with invalid plan\n");
+        return;
+    }
+
+    GGML_LOG_WARN("UnifiedKernel: persistent execution not yet implemented, "
+                  "falling back to individual ops\n");
+
+    last_stats_.n_operations = static_cast<int>(current_plan_->operations.size());
+    last_stats_.n_layers = current_plan_->n_layers;
+    last_stats_.total_tiles = 0;
+    last_stats_.kernel_time_ms = 0.0;
+    last_stats_.memory_bandwidth_gbps = 0.0;
+
+    current_plan_.reset();
+}
+
+void UnifiedKernel::launch_persistent_kernel() {
+    // Will be implemented in Phase 4
+}
+
+// -----------------------------------------------------------------------------
+// Single Operation Wrappers
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::matmul(const ggml_sycl_unified::UnifiedKernelArgs & args) {
+    ggml_sycl_unified::launch_unified_matmul(queue_, args);
+}
+
+void UnifiedKernel::rms_norm(const RmsNormDescriptor & desc) {
+    // Stub - will be implemented in Task 3.1
+    (void)desc;
+}
+
+void UnifiedKernel::rope(const RopeDescriptor & desc) {
+    // Stub - will be implemented later
+    (void)desc;
+}
+
+void UnifiedKernel::silu_mul(const void * gate, const void * up, void * output, int dim) {
+    // Stub - will be implemented in Task 3.2
+    (void)gate; (void)up; (void)output; (void)dim;
+}
+
+void UnifiedKernel::softmax(const void * input, void * output, int n, int stride) {
+    // Stub - will be implemented later
+    (void)input; (void)output; (void)n; (void)stride;
+}
+
+}  // namespace ggml_sycl
