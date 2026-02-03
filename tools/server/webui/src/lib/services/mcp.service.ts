@@ -10,7 +10,7 @@
  * NO business logic, NO state management, NO orchestration.
  * This is the protocol layer - pure MCP SDK operations.
  *
- * @see MCPClient in clients/mcp/ for business logic facade
+ * @see mcpStore in stores/mcp.svelte.ts for business logic facade
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client';
@@ -51,7 +51,7 @@ import {
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE
 } from '$lib/constants/mcp';
-import { throwIfAborted, isAbortError } from '$lib/utils';
+import { throwIfAborted, isAbortError, createBase64DataUrl } from '$lib/utils';
 import { buildProxiedUrl } from '$lib/utils/cors-proxy';
 
 interface ToolResultContentItem {
@@ -421,7 +421,7 @@ export class MCPService {
 		}
 
 		if (content.type === MCPContentType.IMAGE && content.data) {
-			return `data:${content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE};base64,${content.data}`;
+			return createBase64DataUrl(content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE, content.data);
 		}
 
 		if (content.type === MCPContentType.RESOURCE && content.resource) {
@@ -434,7 +434,7 @@ export class MCPService {
 		}
 
 		if (content.data && content.mimeType) {
-			return `data:${content.mimeType};base64,${content.data}`;
+			return createBase64DataUrl(content.mimeType, content.data);
 		}
 
 		return JSON.stringify(content);
