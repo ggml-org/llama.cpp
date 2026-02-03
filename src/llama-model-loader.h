@@ -58,8 +58,9 @@ struct llama_model_loader {
         }
     };
 
-    static const int TENSOR_NOT_REQUIRED = 1;
-    static const int TENSOR_DUPLICATED   = 2;
+    static const int TENSOR_NOT_REQUIRED = 1 << 0;
+    static const int TENSOR_DUPLICATED   = 1 << 1;
+    static const int TENSOR_SKIP         = 1 << 2;
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -69,7 +70,9 @@ struct llama_model_loader {
     size_t   n_bytes    = 0;
 
     bool use_mmap = false;
+    bool use_direct_io = false;
     bool check_tensors;
+    bool no_alloc;
 
     llama_files files;
     llama_ftype ftype;
@@ -95,7 +98,9 @@ struct llama_model_loader {
         const std::string & fname,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         bool use_mmap,
+        bool use_direct_io,
         bool check_tensors,
+        bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
@@ -127,6 +132,8 @@ struct llama_model_loader {
 
     template<typename T>
     bool get_key_or_arr(enum llm_kv kid, T & result, uint32_t n, bool required = true);
+
+    bool get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required = true);
 
     std::string get_arch_name() const;
 

@@ -1,7 +1,7 @@
 #version 450
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 
-#include "mul_mat_vec_base.comp"
+#include "mul_mat_vec_base.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -15,7 +15,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
     const uint y_idx = i * QUANT_K + y_offset;
 
     [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-        const uint ib0 = a_offset / QUANT_K + (first_row+n)*num_blocks_per_row;
+        const uint ib0 = a_offset + (first_row+n)*num_blocks_per_row;
         csel ^= 1;
 
         if (!all_threads) { // when we don't have enough blocks to use all threads
@@ -41,9 +41,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
         const vec4 qs_u32_4 = vec4(unpack8((qs_u32 >> 4) & 0x03030303));
         const vec4 qs_u32_6 = vec4(unpack8((qs_u32 >> 6) & 0x03030303));
 
-        vec2 d = vec2(data_a[ib0 + i].d);
-        const FLOAT_TYPE dall = FLOAT_TYPE(d.x);
-        const FLOAT_TYPE dmin = FLOAT_TYPE(d.y);
+        const FLOAT_TYPE_VEC2 dm = vec2(data_a[ib0 + i].dm);
 
         [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
             vec2 b0 =   vec2(data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 +  0]);
@@ -75,7 +73,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
                        fma(FLOAT_TYPE(b96[l]),  sccache2[csel][ix][6 + 8*v_im],
                        fma(FLOAT_TYPE(b112[l]), sccache2[csel][ix][7 + 8*v_im], sum2))))))));
             }
-            temp[j][n] = fma(dall, sum1, fma(-dmin, sum2, temp[j][n]));
+            temp[j][n] = fma(dm.x, sum1, fma(-dm.y, sum2, temp[j][n]));
         }
     }
 }

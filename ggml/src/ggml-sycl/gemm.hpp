@@ -32,39 +32,28 @@ public:
         else static_assert(0);
     }
 
-    // matrix A has m rows, k columns
-    // matrix B has k rows, n columns
-    // nra - number of elements to skip when moving into next row in A
-    // nrb - number of elements to skip when moving into next row in B
-    // nca - number of elements to skip when moving into next column in A
-    // ncb - number of elements to skip when moving into next column in B
-    // stride_a - number of elements to skip when moving to next A matrix
-    // stride_b - number of elements to skip when moving to next B matrix
-    // batches_a - number of A matrices
-    // batches_b - number of B matrices
     static void gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
-        const void * a, dt at, dnnl_dim_t nra, dnnl_dim_t nca, dnnl_dim_t stride_a,
-        const void * b, dt bt, dnnl_dim_t nrb, dnnl_dim_t ncb, dnnl_dim_t stride_b,
+        const void * a, dt at, dnnl_dim_t stra0, dnnl_dim_t stra1, dnnl_dim_t stra2,
+        const void * b, dt bt, dnnl_dim_t strb0, dnnl_dim_t strb1, dnnl_dim_t strb2,
         void * c, dt ct, const queue_ptr & q, dnnl_dim_t batches_a, dnnl_dim_t batches_b) {
 
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 
-        // { # strides, # rows, # columns }
-        dnnl::memory::dims a_dims = { batches_a, m, k };
-        dnnl::memory::dims b_dims = { batches_b, k, n };
-        dnnl::memory::dims c_dims = { std::max(batches_a, batches_b), m, n };
-
-        // { # elements to skip to next stride, # elements to skip to next row, # elements to skip to next column }
-        dnnl::memory::dims a_strides = { stride_a, nra, nca };
-        dnnl::memory::dims b_strides = { stride_b, nrb, ncb };
-
+        dnnl::memory::dims a_dims = {batches_a, m, k };
+        dnnl::memory::dims a_strides = {stra2, stra1, stra0};
         const auto a_in_md = dnnl::memory::desc(a_dims, at, a_strides);
-        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_strides);
-        const auto c_md    = dnnl::memory::desc(c_dims, ct, tag::abc);
 
+        dnnl::memory::dims b_dims = {batches_b, k, n };
+        dnnl::memory::dims b_strides = {strb2, strb0, strb1};
+        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_strides);
+
+        dnnl::memory::dims c_dims = { std::max(batches_a, batches_b), m, n};
+        dnnl::memory::dims c_strides = {m*n, 1,  m };
+        const auto c_md    = dnnl::memory::desc(c_dims, ct, c_strides);
         dnnl::primitive_attr primitive_attr;
         primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+
 #ifdef GGML_SYCL_F16
         primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::f16);
 #endif
@@ -76,24 +65,23 @@ public:
 
         auto scratchpad_md = matmul_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+
         auto matmul_prim = dnnl::matmul(matmul_pd);
 
         std::unordered_map<int, dnnl::memory> matmul_args;
         matmul_args.insert({ DNNL_ARG_SRC, a_mem });
         matmul_args.insert({ DNNL_ARG_WEIGHTS, b_mem });
+
         matmul_args.insert({ DNNL_ARG_DST, c_mem });
         matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
 
         matmul_prim.execute(stream, matmul_args);
     }
 
-    // matrices A and B are column major, both having k rows
-    // matrix A has m column, matrix B has n columns
-    // output: column major matrix C = A transposed * B
     static void row_gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
         const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q) {
 
-        gemm(ctx, m, n, k, a, at, k, 1, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1);
+        gemm(ctx, m, n, k, a, at, 1, k, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1);
     }
 };
 

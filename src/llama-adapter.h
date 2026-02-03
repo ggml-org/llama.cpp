@@ -67,10 +67,20 @@ struct llama_adapter_lora {
 
     float alpha;
 
+    // gguf metadata
+    std::unordered_map<std::string, std::string> gguf_kv;
+
+    // activated lora (aLoRA)
+    std::vector<llama_token> alora_invocation_tokens;
+
     llama_adapter_lora() = default;
     ~llama_adapter_lora() = default;
 
     llama_adapter_lora_weight * get_weight(ggml_tensor * w);
+
+    uint32_t get_n_nodes() const {
+        return ab_map.size() * 6u; // a, b, scale, add, 2 x mul_mat
+    }
 };
 
 using llama_adapter_loras = std::unordered_map<llama_adapter_lora *, float>;

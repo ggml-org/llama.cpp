@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "download.h"
 
 #include <string>
 #include <vector>
@@ -16,25 +17,50 @@ int main(void) {
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {
             auto ctx_arg = common_params_parser_init(params, (enum llama_example)ex);
+            common_params_add_preset_options(ctx_arg.options);
             std::unordered_set<std::string> seen_args;
             std::unordered_set<std::string> seen_env_vars;
             for (const auto & opt : ctx_arg.options) {
                 // check for args duplications
-                for (const auto & arg : opt.args) {
+                for (const auto & arg : opt.get_args()) {
                     if (seen_args.find(arg) == seen_args.end()) {
                         seen_args.insert(arg);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
                         exit(1);
                     }
                 }
                 // check for env var duplications
-                if (opt.env) {
-                    if (seen_env_vars.find(opt.env) == seen_env_vars.end()) {
-                        seen_env_vars.insert(opt.env);
+                for (const auto & env : opt.get_env()) {
+                    if (seen_env_vars.find(env) == seen_env_vars.end()) {
+                        seen_env_vars.insert(env);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", opt.env);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", env.c_str());
                         exit(1);
+                    }
+                }
+
+                // ensure shorter argument precedes longer argument
+                if (opt.args.size() > 1) {
+                    const std::string first(opt.args.front());
+                    const std::string last(opt.args.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
+                    }
+                }
+
+                // same check for negated arguments
+                if (opt.args_neg.size() > 1) {
+                    const std::string first(opt.args_neg.front());
+                    const std::string last(opt.args_neg.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
                     }
                 }
             }
@@ -72,6 +98,10 @@ int main(void) {
     argv = {"binary_name", "--draft", "123"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
 
+    // negated arg
+    argv = {"binary_name", "--no-mmap"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
 
     printf("test-arg-parser: test valid usage\n\n");
 
@@ -98,6 +128,15 @@ int main(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.n_max == 123);
 
+    // multi-value args (CSV)
+    argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.lora_adapters.size() == 4);
+    assert(params.lora_adapters[0].path == "file1.gguf");
+    assert(params.lora_adapters[1].path == "file2,2.gguf");
+    assert(params.lora_adapters[2].path == "file3\"3\".gguf");
+    assert(params.lora_adapters[3].path == "file4\".gguf");
+
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
     printf("test-arg-parser: skip on windows build\n");
@@ -115,6 +154,14 @@ int main(void) {
     assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
+    printf("test-arg-parser: test negated environment variables\n\n");
+
+    setenv("LLAMA_ARG_MMAP", "0", true);
+    setenv("LLAMA_ARG_NO_PERF", "1", true); // legacy format
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.use_mmap == false);
+    assert(params.no_perf == true);
 
     printf("test-arg-parser: test environment variables being overwritten\n\n");
 
@@ -126,52 +173,35 @@ int main(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
-    if (common_has_curl()) {
-        printf("test-arg-parser: test curl-related functions\n\n");
-        const char * GOOD_URL = "https://ggml.ai/";
-        const char * BAD_URL  = "https://www.google.com/404";
-        const char * BIG_FILE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin";
+    printf("test-arg-parser: test download functions\n\n");
+    const char * GOOD_URL = "http://ggml.ai/";
+    const char * BAD_URL  = "http://ggml.ai/404";
 
-        {
-            printf("test-arg-parser: test good URL\n\n");
-            auto res = common_remote_get_content(GOOD_URL, {});
-            assert(res.first == 200);
-            assert(res.second.size() > 0);
-            std::string str(res.second.data(), res.second.size());
-            assert(str.find("llama.cpp") != std::string::npos);
-        }
+    {
+        printf("test-arg-parser: test good URL\n\n");
+        auto res = common_remote_get_content(GOOD_URL, {});
+        assert(res.first == 200);
+        assert(res.second.size() > 0);
+        std::string str(res.second.data(), res.second.size());
+        assert(str.find("llama.cpp") != std::string::npos);
+    }
 
-        {
-            printf("test-arg-parser: test bad URL\n\n");
-            auto res = common_remote_get_content(BAD_URL, {});
-            assert(res.first == 404);
-        }
+    {
+        printf("test-arg-parser: test bad URL\n\n");
+        auto res = common_remote_get_content(BAD_URL, {});
+        assert(res.first == 404);
+    }
 
-        {
-            printf("test-arg-parser: test max size error\n");
-            common_remote_params params;
-            params.max_size = 1;
-            try {
-                common_remote_get_content(GOOD_URL, params);
-                assert(false && "it should throw an error");
-            } catch (std::exception & e) {
-                printf("  expected error: %s\n\n", e.what());
-            }
+    {
+        printf("test-arg-parser: test max size error\n");
+        common_remote_params params;
+        params.max_size = 1;
+        try {
+            common_remote_get_content(GOOD_URL, params);
+            assert(false && "it should throw an error");
+        } catch (std::exception & e) {
+            printf("  expected error: %s\n\n", e.what());
         }
-
-        {
-            printf("test-arg-parser: test timeout error\n");
-            common_remote_params params;
-            params.timeout = 1;
-            try {
-                common_remote_get_content(BIG_FILE, params);
-                assert(false && "it should throw an error");
-            } catch (std::exception & e) {
-                printf("  expected error: %s\n\n", e.what());
-            }
-        }
-    } else {
-        printf("test-arg-parser: no curl, skipping curl-related functions\n");
     }
 
     printf("test-arg-parser: all tests OK\n\n");

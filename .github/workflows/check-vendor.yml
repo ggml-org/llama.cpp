@@ -1,0 +1,52 @@
+name: Check vendor
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      'vendor/**',
+      'scripts/sync_vendor.py'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      'vendor/**',
+      'scripts/sync_vendor.py'
+    ]
+
+jobs:
+  check-vendor:
+    runs-on: ubuntu-slim
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Run vendor sync
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_vendor.py
+
+      - name: Check for changes
+        run: |
+          set -euo pipefail
+          # detect modified or untracked files
+          changed=$(git status --porcelain --untracked-files=all || true)
+          if [ -n "$changed" ]; then
+            echo "Vendor sync modified files:"
+            echo "$changed" | awk '{ print $2 }' | sed '/^$/d'
+            echo "Failing because vendor files mismatch. Please update scripts/sync_vendor.py"
+            exit 1
+          else
+            echo "Vendor files are up-to-date."
+          fi

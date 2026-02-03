@@ -568,10 +568,10 @@ int main(int argc, char ** argv) {
     llama_context * ctx_ttc = NULL;
     llama_context * ctx_cts = NULL;
 
-    common_init_result llama_init_ttc = common_init_from_params(params);
+    auto llama_init_ttc = common_init_from_params(params);
 
-    model_ttc = llama_init_ttc.model.get();
-    ctx_ttc   = llama_init_ttc.context.get();
+    model_ttc = llama_init_ttc->model();
+    ctx_ttc   = llama_init_ttc->context();
 
     if (model_ttc == nullptr || ctx_ttc == nullptr) {
         return ENOENT;
@@ -581,13 +581,12 @@ int main(int argc, char ** argv) {
 
     params.model = params.vocoder.model;
     params.embedding = true;
-    params.ctx_shift = false; // silence warning
     params.n_ubatch = params.n_batch;
 
-    common_init_result llama_init_cts = common_init_from_params(params);
+    auto llama_init_cts = common_init_from_params(params);
 
-    model_cts = llama_init_cts.model.get();
-    ctx_cts   = llama_init_cts.context.get();
+    model_cts = llama_init_cts->model();
+    ctx_cts   = llama_init_cts->context();
 
     if (model_cts == nullptr || ctx_cts == nullptr) {
         return ENOENT;
@@ -896,7 +895,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
                 codes.push_back(new_token_id);
 
-                const auto * cands = common_sampler_get_candidates(smpl[i]);
+                const auto * cands = common_sampler_get_candidates(smpl[i], false);
 
                 // is it an end of generation? -> mark the stream as finished
                 if (llama_vocab_is_eog(vocab, new_token_id) || n_decode == n_predict) {

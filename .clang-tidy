@@ -17,6 +17,7 @@ Checks: >
     clang-analyzer-*,
     -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
     performance-*,
+    -performance-enum-size,
     portability-*,
     -portability-simd-intrinsics,
     misc-*,

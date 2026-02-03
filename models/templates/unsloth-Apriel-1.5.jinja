@@ -1,0 +1,126 @@
+{# Unsloth template fixes #}
+{%- set available_tools_string = '' -%}
+{%- set thought_instructions = '' -%}
+{%- set add_tool_id = true -%}
+{%- set tool_output_format = "default" -%}
+{%- if tools is not none and tools|length > 0 -%}
+    {%- set available_tools_string -%}
+You are provided with function signatures within <available_tools></available_tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about the arguments. You should infer the argument values from previous user responses and the system message. Here are the available tools:
+<available_tools>
+{% for tool in tools %}
+{{ tool|string }}
+{% endfor %}
+</available_tools>
+{%- endset -%}
+{%- endif -%}
+{%- if tool_output_format is none or tool_output_format == "default" -%}
+{%- set tool_output_instructions -%}
+Return all function calls as a list of json objects within <tool_call></tool_call> XML tags. Each json object should contain a function name and arguments as follows:
+<tool_calls>[{"name": <function-name-1>, "arguments": <args-dict-1>}, {"name": <function-name-2>, "arguments": <args-dict-2>},...]</tool_calls>
+{%- endset -%}
+{%- elif tool_output_format == "yaml" -%}
+{%- set tool_output_instructions -%}
+Return all function calls as a list of yaml objects within <tool_call></tool_call> XML tags. Each yaml object should contain a function name and arguments as follows:
+<tool_calls>
+- name: <function-name-1>
+  arguments: <args-dict-1>
+- name: <function-name-2>
+  arguments: <args-dict-2>
+...
+</tool_calls>
+{%- endset -%}
+{%- endif -%}
+{%- if add_thoughts -%}
+{%- set thought_instructions -%}
+Prior to generating the function calls, you should generate the reasoning for why you're calling the function. Please generate these reasoning thoughts between <thinking> and </thinking> XML tags.
+{%- endset -%}
+{%- endif -%}
+{{- bos_token -}}
+{%- set reasoning_prompt='You are a thoughtful and systematic AI assistant built by ServiceNow Language Models (SLAM) lab. Before providing an answer, analyze the problem carefully and present your reasoning step by step. After explaining your thought process, provide the final solution in the following format: [BEGIN FINAL RESPONSE] ... [END FINAL RESPONSE].' -%}
+{%- if messages[0]['role'] != 'system' and tools is not none and tools|length > 0 -%}
+    {{- '<|system|>\n' + reasoning_prompt + available_tools_string + "\n" + tool_output_instructions + '\n<|end|>\n' -}}
+{%- endif -%}
+{%- if messages|selectattr('role', 'equalto', 'system')|list|length == 0 -%}
+{{- '<|system|>\n' + reasoning_prompt + '\n<|end|>\n' -}}
+{%- endif -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'user' -%}
+        {{- '<|user|>\n' }}
+        {%- if message['content'] is not string %}
+            {%- for chunk in message['content'] %}
+                {%- if chunk['type'] == 'text' %}
+                    {{- chunk['text'] }}
+                {%- elif chunk['type'] == 'image' or chunk['type'] == 'image_url'%}
+                    {{- '[IMG]' }}
+                {%- else %}
+                    {{- raise_exception('Unrecognized content type!') }}
+                {%- endif %}
+            {%- endfor %}
+        {%- else %}
+            {{- message['content'] }}
+        {%- endif %}
+        {{- '\n<|end|>\n' }}
+    {%- elif message['role'] == 'content' -%}
+        {%- if message['content'] is not string %}
+            {{- '<|content|>\n' + message['content'][0]['text'] + '\n<|end|>\n' -}}
+        {%- else %}
+            {{- '<|content|>\n' + message['content'] + '\n<|end|>\n' -}}
+        {%- endif -%}
+    {%- elif message['role'] == 'system' -%}
+        {%- if message['content'] is not none and message['content']|length > 0 %}
+            {%- if message['content'] is string %}
+                {%- set system_message = message['content'] %}
+            {%- else %}
+                {%- set system_message = message['content'][0]['text'] %}
+            {%- endif %}
+        {%- else %}
+            {%- set system_message = '' %}
+        {%- endif %}
+        {%- if tools is not none and tools|length > 0 -%}
+            {{- '<|system|>\n' + reasoning_prompt + system_message + '\n' + available_tools_string + '\n<|end|>\n' -}}
+        {%- else -%}
+            {{- '<|system|>\n' + reasoning_prompt + system_message + '\n<|end|>\n' -}}
+        {%- endif -%}
+    {%- elif message['role'] == 'assistant' -%}
+        {%- if loop.last -%}
+            {%- set add_tool_id = false -%}
+        {%- endif -%}
+        {{- '<|assistant|>\n' -}}
+        {%- if message['content'] is not none and message['content']|length > 0 -%}
+            {%- if message['content'] is not string and message['content'][0]['text'] is not none %}
+                {{- message['content'][0]['text'] }}
+            {%- else %}
+                {{- message['content'] -}}
+            {%- endif -%}
+        {%- elif message['chosen'] is not none and message['chosen']|length > 0 -%}
+            {{- message['chosen'][0] -}}
+        {%- endif -%}
+        {%- if add_thoughts and 'thought' in message and message['thought'] is not none -%}
+            {{- '<thinking>' + message['thought'] + '</thinking>' -}}
+        {%- endif -%}
+        {%- if message['tool_calls'] is not none and message['tool_calls']|length > 0 -%}
+            {{- '\n<tool_calls>[' -}}
+            {%- for tool_call in message["tool_calls"] -%}
+                {{- '{"name": "' + tool_call['function']['name'] + '", "arguments": ' + tool_call['function']['arguments']|string -}}
+                {%- if add_tool_id == true -%}
+                    {{- ', "id": "' + tool_call['id'] + '"' -}}
+                {%- endif -%}
+                {{- '}' -}}
+                {%- if not loop.last -%}{{- ', ' -}}{%- endif -%}
+            {%- endfor -%}
+            {{- ']</tool_calls>' -}}
+        {%- endif -%}
+        {{- '\n<|end|>\n' + eos_token -}}
+    {%- elif message['role'] == 'tool' -%}
+        {%- if message['content'] is string %}
+            {%- set tool_message = message['content'] %}
+        {%- else %}
+            {%- set tool_message = message['content'][0]['text'] %}
+        {%- endif -%}
+        {{- '<|tool_result|>\n' + tool_message|string + '\n<|end|>\n' -}}
+    {%- endif -%}
+    {%- if loop.last and add_generation_prompt and message['role'] != 'assistant' -%}
+        {{- '<|assistant|>\n' -}}
+    {%- endif -%}
+{%- endfor -%}
+{# Copyright 2025-present Unsloth. Apache 2.0 License. #}

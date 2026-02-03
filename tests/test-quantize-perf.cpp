@@ -260,14 +260,7 @@ int main(int argc, char * argv[]) {
 
     int64_t iterations = params.iterations;
 
-
-    // Initialize GGML, ensures float conversion tables are initialized
-    struct ggml_init_params ggml_params = {
-        /* .mem_size   = */ 1*1024,
-        /* .mem_buffer = */ NULL,
-        /* .no_alloc   = */ true,
-    };
-    struct ggml_context * ctx = ggml_init(ggml_params);
+    ggml_cpu_init();
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
@@ -358,8 +351,6 @@ int main(int argc, char * argv[]) {
             }
         }
     }
-
-    ggml_free(ctx);
 
     return 0;
 }

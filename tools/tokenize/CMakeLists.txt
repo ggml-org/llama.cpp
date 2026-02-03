@@ -1,5 +1,7 @@
 set(TARGET llama-tokenize)
 add_executable(${TARGET} tokenize.cpp)
-install(TARGETS ${TARGET} RUNTIME)
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
 target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

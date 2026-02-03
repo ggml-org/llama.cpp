@@ -1,10 +1,4 @@
 # https://github.com/actions/labeler
-Kompute:
-    - changed-files:
-        - any-glob-to-any-file:
-            - ggml/include/ggml-kompute.h
-            - ggml/src/ggml-kompute/**
-            - README-kompute.md
 Apple Metal:
     - changed-files:
         - any-glob-to-any-file:
@@ -28,6 +22,11 @@ Vulkan:
         - any-glob-to-any-file:
             - ggml/include/ggml-vulkan.h
             - ggml/src/ggml-vulkan/**
+IBM zDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zdnn.h
+            - ggml/src/ggml-zdnn/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:
@@ -77,6 +76,10 @@ ggml:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/**
+model:
+    - changed-files:
+        - any-glob-to-any-file:
+            - src/models/**
 nix:
     - changed-files:
         - any-glob-to-any-file:
@@ -86,10 +89,18 @@ nix:
 embedding:
     - changed-files:
         - any-glob-to-any-file: examples/embedding/
-
+jinja parser:
+    - changed-files:
+        - any-glob-to-any-file:
+            - common/jinja/**
 Ascend NPU:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/include/ggml-cann.h
             - ggml/src/ggml-cann/**
             - docs/backend/CANN.md
+OpenCL:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-opencl.h
+            - ggml/src/ggml-opencl/**

@@ -113,15 +113,16 @@ int main(int argc, char ** argv) {
         while (true) {
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
-            int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0);
+            int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
             if (n_ctx_used + batch.n_tokens > n_ctx) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");
                 exit(0);
             }
 
-            if (llama_decode(ctx, batch)) {
-                GGML_ABORT("failed to decode\n");
+            int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                GGML_ABORT("failed to decode, ret = %d\n", ret);
             }
 
             // sample the next token

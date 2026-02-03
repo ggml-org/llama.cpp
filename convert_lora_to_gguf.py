@@ -12,7 +12,7 @@ import json
 from math import prod
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Sequence, SupportsIndex, cast
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 import torch
 
@@ -25,6 +25,8 @@ import gguf
 
 # reuse model definitions from convert_hf_to_gguf.py
 from convert_hf_to_gguf import LazyTorchTensor, ModelBase
+
+from gguf.constants import GGUFValueType
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -240,7 +242,7 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "auto"], default="f16",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "auto"], default="f32",
         help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
     )
     parser.add_argument(
@@ -275,10 +277,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_hparams_from_hf(hf_model_id: str) -> dict[str, Any]:
+def load_hparams_from_hf(hf_model_id: str) -> tuple[dict[str, Any], Path | None]:
+    from huggingface_hub import try_to_load_from_cache
+
     # normally, adapter does not come with base model config, we need to load it from AutoConfig
     config = AutoConfig.from_pretrained(hf_model_id)
-    return config.to_dict()
+    cache_dir = try_to_load_from_cache(hf_model_id, "config.json")
+    cache_dir = Path(cache_dir).parent if isinstance(cache_dir, str) else None
+
+    return config.to_dict(), cache_dir
 
 
 if __name__ == '__main__':
@@ -323,13 +330,13 @@ if __name__ == '__main__':
     # load base model
     if base_model_id is not None:
         logger.info(f"Loading base model from Hugging Face: {base_model_id}")
-        hparams = load_hparams_from_hf(base_model_id)
+        hparams, dir_base_model = load_hparams_from_hf(base_model_id)
     elif dir_base_model is None:
         if "base_model_name_or_path" in lparams:
             model_id = lparams["base_model_name_or_path"]
             logger.info(f"Loading base model from Hugging Face: {model_id}")
             try:
-                hparams = load_hparams_from_hf(model_id)
+                hparams, dir_base_model = load_hparams_from_hf(model_id)
             except OSError as e:
                 logger.error(f"Failed to load base model config: {e}")
                 logger.error("Please try downloading the base model and add its path to --base")
@@ -340,7 +347,7 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         logger.info(f"Loading base model: {dir_base_model.name}")
-        hparams = ModelBase.load_hparams(dir_base_model)
+        hparams = ModelBase.load_hparams(dir_base_model, False)
 
     with torch.inference_mode():
         try:
@@ -369,7 +376,31 @@ if __name__ == '__main__':
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
+                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                alora_invocation_tokens = lparams.get("alora_invocation_tokens")
+                invocation_string = lparams.get("invocation_string")
+                if invocation_string and not alora_invocation_tokens:
+                    logger.debug("Tokenizing invocation_string -> alora_invocation_tokens")
+                    base_model_path_or_id = hparams.get("_name_or_path")
+                    try:
+                        tokenizer = AutoTokenizer.from_pretrained(base_model_path_or_id)
+                    except ValueError:
+                        logger.error("Unable to load tokenizer from %s", base_model_path_or_id)
+                        raise
+                    # NOTE: There's an off-by-one with the older aLoRAs where
+                    # the invocation string includes the "<|start_of_turn|>"
+                    # token, but the adapters themselves were trained to
+                    # activate _after_ that first token, so we drop it here.
+                    alora_invocation_tokens = tokenizer(invocation_string)["input_ids"][1:]
+                if alora_invocation_tokens:
+                    logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS, alora_invocation_tokens)
+                    self.gguf_writer.add_key_value(
+                        gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS,
+                        alora_invocation_tokens,
+                        GGUFValueType.ARRAY,
+                        GGUFValueType.UINT32,
+                    )
 
             def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
                 # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
@@ -454,6 +485,7 @@ if __name__ == '__main__':
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
             hparams=hparams,
+            remote_hf_model_id=base_model_id,
         )
 
         logger.info("Exporting model...")
