@@ -35,7 +35,7 @@ layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
 // Store the output when doing grouped query attention.
 // Rows index by Q's dimension 2, and the first N rows are valid.
-D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TYPE elem, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
+D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
 {
     uint32_t offset = (iq2 + r) * HSV + c;
     data_o[o_offset + offset] = D_TYPE(elem);
@@ -510,7 +510,7 @@ void main() {
                     if (d >= HSV/4) break;
                     const uint d_local = d0 / threads_per_rowgroup;
                     [[unroll]] for (uint32_t comp = 0; comp < 4; ++comp) {
-                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Of[r][d_local][comp]), o_offset, iq2, N);
+                        perElemOpGqaStore(tile_row(r), 4 * d + comp, Of[r][d_local][comp], o_offset, iq2, N);
                     }
                 }
             }
@@ -574,7 +574,7 @@ void main() {
                     if (d >= HSV / 4) break;
                     const uint d_local = d0 / threads_per_rowgroup;
                     [[unroll]] for (uint32_t comp = 0; comp < 4; ++comp) {
-                        perElemOpGqaStore(tile_row(r), 4 * d + comp, float(Of[r][d_local][comp]), o_offset, iq2, N);
+                        perElemOpGqaStore(tile_row(r), 4 * d + comp, Of[r][d_local][comp], o_offset, iq2, N);
                     }
                 }
             }
