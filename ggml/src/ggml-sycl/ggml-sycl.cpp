@@ -24498,6 +24498,45 @@ static void unpin_model_weights(ggml_backend_sycl_context & ctx) {
 }
 
 /**
+ * Check if the compute graph represents a decode phase (M=1 for all matmuls).
+ */
+static bool is_decode_phase_graph(ggml_cgraph * cgraph) {
+    if (!cgraph || cgraph->n_nodes == 0) {
+        return false;
+    }
+    bool found_mul_mat = false;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op == GGML_OP_MUL_MAT) {
+            found_mul_mat = true;
+            // src[1] is the activation tensor, ne[1] is the M dimension (batch size)
+            if (node->src[1] && node->src[1]->ne[1] != 1) {
+                return false;  // Not decode phase if any matmul has M > 1
+            }
+        }
+    }
+    return found_mul_mat;  // Must have at least one MUL_MAT
+}
+
+/**
+ * Check if the graph has a supported transformer architecture for persistent execution.
+ * Requires both RMS_NORM and MUL_MAT operations to be present.
+ */
+static bool has_supported_architecture(ggml_cgraph * cgraph) {
+    bool has_rms_norm = false;
+    bool has_mul_mat  = false;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op == GGML_OP_RMS_NORM) has_rms_norm = true;
+        if (node->op == GGML_OP_MUL_MAT)  has_mul_mat  = true;
+        if (has_rms_norm && has_mul_mat) return true;  // Early exit
+    }
+
+    return has_rms_norm && has_mul_mat;
+}
+
+/**
  * Check if persistent TG kernel should be used for this graph.
  *
  * Evaluates graph characteristics and environment settings to determine
@@ -24508,7 +24547,7 @@ static void unpin_model_weights(ggml_backend_sycl_context & ctx) {
  * @return true if persistent TG kernel should be used
  */
 static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
-    // Check environment variable gate first
+    // 1. Environment variable gate
     if (!ggml_sycl::env_persistent_tg_enabled()) {
         return false;
     }
@@ -24517,35 +24556,27 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
         return false;
     }
 
-    // Detect decode phase (batch size == 1) by checking MUL_MAT activations
-    bool is_decode_phase = false;
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT) {
-            const ggml_tensor * src1 = cgraph->nodes[i]->src[1];
-            if (src1 && src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1) {
-                is_decode_phase = true;
-            }
-            break;  // Only need first MUL_MAT
-        }
-    }
-
-    if (!is_decode_phase) {
+    // 2. Decode phase detection (all matmuls must have M=1)
+    if (!is_decode_phase_graph(cgraph)) {
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Not decode phase, skipping persistent kernel\n");
         return false;
     }
 
-    // Get XMX config for the device
+    // 3. Architecture check (needs RMS_NORM + MUL_MAT)
+    if (!has_supported_architecture(cgraph)) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Unsupported architecture, skipping persistent kernel\n");
+        return false;
+    }
+
+    // 4. XMX hardware check
     ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(ctx.device);
+    if (!xmx_config.supported) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] No XMX support, skipping persistent kernel\n");
+        return false;
+    }
 
-    // TODO: Extract model dimensions from graph for proper eligibility check
-    // For now, log that we detected decode phase but can't fully validate
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] Decode phase detected, checking eligibility (stub)\n");
-
-    // Stub: Always return false until full implementation
-    // When implemented, this will call:
-    // ggml_sycl::can_use_persistent_tg(n_layers, hidden_dim, quant_type, xmx_config)
-    (void)xmx_config;
-    return false;
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Graph is persistent-compatible (decode phase, supported arch, XMX)\n");
+    return true;
 }
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
