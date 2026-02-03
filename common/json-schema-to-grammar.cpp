@@ -27,10 +27,10 @@ static std::string build_repetition(const std::string & item_rule, int min_items
     if (separator_rule.empty()) {
         if (min_items == 1 && !has_max) {
             return item_rule + "+";
-        } 
+        }
         if (min_items == 0 && !has_max) {
             return item_rule + "*";
-        } 
+        }
         return item_rule + "{" + std::to_string(min_items) + "," + (has_max ? std::to_string(max_items) : "") + "}";
     }
 
@@ -828,11 +828,11 @@ public:
 
         if (schema.contains("$ref")) {
             return _add_rule(rule_name, _resolve_ref(schema["$ref"]));
-        } 
+        }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
             std::vector<json> alt_schemas = schema.contains("oneOf") ? schema["oneOf"].get<std::vector<json>>() : schema["anyOf"].get<std::vector<json>>();
             return _add_rule(rule_name, _generate_union_rule(name, alt_schemas));
-        } 
+        }
         if (schema_type.is_array()) {
             std::vector<json> schema_types;
             for (const auto & t : schema_type) {
@@ -841,17 +841,17 @@ public:
                 schema_types.push_back(schema_copy);
             }
             return _add_rule(rule_name, _generate_union_rule(name, schema_types));
-        } 
+        }
         if (schema.contains("const")) {
             return _add_rule(rule_name, _generate_constant_rule(schema["const"]) + " space");
-        } 
+        }
         if (schema.contains("enum")) {
             std::vector<std::string> enum_values;
             for (const auto & v : schema["enum"]) {
                 enum_values.push_back(_generate_constant_rule(v));
             }
             return _add_rule(rule_name, "(" + string_join(enum_values, " | ") + ") space");
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
                     (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {
@@ -873,7 +873,7 @@ public:
                 _build_object_rule(
                     properties, required, name,
                     schema.contains("additionalProperties") ? schema["additionalProperties"] : json()));
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "object" || schema_type == "string") && schema.contains("allOf")) {
             std::unordered_set<std::string> required;
             std::vector<std::pair<std::string, json>> properties;
@@ -922,7 +922,7 @@ public:
                 }
             }
             return _add_rule(rule_name, _build_object_rule(properties, required, hybrid_name, json()));
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "array") && (schema.contains("items") || schema.contains("prefixItems"))) {
             json items = schema.contains("items") ? schema["items"] : schema["prefixItems"];
             if (items.is_array()) {
@@ -942,23 +942,23 @@ public:
             int max_items = max_items_json.is_number_integer() ? max_items_json.get<int>() : std::numeric_limits<int>::max();
 
             return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " \"]\" space");
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "string") && schema.contains("pattern")) {
             return _visit_pattern(schema["pattern"], rule_name);
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "string") && std::regex_match(schema_format, std::regex("^uuid[1-5]?$"))) {
             return _add_primitive(rule_name == "root" ? "root" : schema_format, PRIMITIVE_RULES.at("uuid"));
-        } 
+        }
         if ((schema_type.is_null() || schema_type == "string") && STRING_FORMAT_RULES.find(schema_format + "-string") != STRING_FORMAT_RULES.end()) {
             auto prim_name = schema_format + "-string";
             return _add_rule(rule_name, _add_primitive(prim_name, STRING_FORMAT_RULES.at(prim_name)));
-        } 
+        }
         if (schema_type == "string" && (schema.contains("minLength") || schema.contains("maxLength"))) {
             std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
             int min_len = schema.contains("minLength") ? schema["minLength"].get<int>() : 0;
             int max_len = schema.contains("maxLength") ? schema["maxLength"].get<int>() : std::numeric_limits<int>::max();
             return _add_rule(rule_name, "\"\\\"\" " + build_repetition(char_rule, min_len, max_len) + " \"\\\"\" space");
-        } 
+        }
         if (schema_type == "integer" && (schema.contains("minimum") || schema.contains("exclusiveMinimum") || schema.contains("maximum") || schema.contains("exclusiveMaximum"))) {
             int64_t min_value = std::numeric_limits<int64_t>::min();
             int64_t max_value = std::numeric_limits<int64_t>::max();
@@ -977,10 +977,10 @@ public:
             build_min_max_int(min_value, max_value, out);
             out << ") space";
             return _add_rule(rule_name, out.str());
-        } 
+        }
         if (schema.empty() || schema_type == "object") {
             return _add_rule(rule_name, _add_primitive("object", PRIMITIVE_RULES.at("object")));
-        } 
+        }
         if (!schema_type.is_string() || PRIMITIVE_RULES.find(schema_type.get<std::string>()) == PRIMITIVE_RULES.end()) {
             _errors.push_back("Unrecognized schema: " + schema.dump());
             return "";

@@ -822,7 +822,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         } catch (std::exception & e) {
             throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
         }
-        
+
         msg_prev = msg_current;
     }
 

@@ -26,7 +26,7 @@ common_chat_params universal_peg_generator::generate_parser(const common_chat_te
     return generate_parser(tmpl, inputs, analysis);
 }
 
-common_chat_params universal_peg_generator::generate_parser(const common_chat_template &    tmpl, 
+common_chat_params universal_peg_generator::generate_parser(const common_chat_template &    tmpl,
                                                             const struct templates_params & inputs,
                                                             const diff_analysis_result &    analysis) {
     // Check for thinking forced open
@@ -120,9 +120,8 @@ common_peg_arena universal_peg_generator::build_parser(const diff_analysis_resul
 
             if (extracting_reasoning) {
                 return reasoning + m.content_start + p.content(p.until(m.content_end)) + m.content_end + p.end();
-            } 
-            return p.content(p.until(m.content_start)) + m.content_start +
-                    p.content(p.until(m.content_end)) + m.content_end + p.end();
+            }
+            return p.content(p.until(m.content_start)) + m.content_start + p.content(p.until(m.content_end)) + m.content_end + p.end();
         }
         return reasoning + p.content(p.rest()) + p.end();
     });

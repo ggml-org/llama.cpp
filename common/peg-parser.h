@@ -318,16 +318,16 @@ class common_peg_parser_builder {
 
     common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, *this); }
     common_peg_parser add(const common_peg_parser_variant & p) { return wrap(arena_.add_parser(p)); }
-    
-        bool allow_python_dict_format_ = false;
+
+    bool allow_python_dict_format_ = false;
 
   public:
     common_peg_parser_builder();
-    
-        // Enable/disable Python dict format support (single-quoted strings).
-        // When enabled, JSON parsers will also accept Python dict-style single-quoted strings.
-        void set_allow_python_dict_format(bool allow) { allow_python_dict_format_ = allow; }
-        bool get_allow_python_dict_format() const { return allow_python_dict_format_; }
+
+    // Enable/disable Python dict format support (single-quoted strings).
+    // When enabled, JSON parsers will also accept Python dict-style single-quoted strings.
+    void set_allow_python_dict_format(bool allow) { allow_python_dict_format_ = allow; }
+    bool get_allow_python_dict_format() const { return allow_python_dict_format_; }
 
     // Match nothing, always succeed.
     //   S -> ε

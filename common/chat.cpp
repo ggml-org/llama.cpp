@@ -1109,39 +1109,22 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
             tool_choice |= p.rule("tool-" + name, tool_parser);
         });
 
-        // The model can output:
-        // 1. Just content: >>>all\n{content}
-        // 2. Just tool call(s): >>>function_name\n{json_args}
-        // 3. Both: >>>all\n{content}>>>function_name\n{json_args}
-        
-        // Option 1: Content only (no following tool call)
         auto content_only = content_until_end;
-        
-        // Option 2: Content followed by tool call(s)
         auto content_and_tools = content_until_tool + p.one_or_more(tool_choice);
-        
-        // Option 3: Just tool call(s) (no content)
-        auto tools_only = p.one_or_more(tool_choice);
+                auto tools_only = p.one_or_more(tool_choice);
 
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-            // Must have at least one tool call
             if (inputs.parallel_tool_calls) {
-                // Multiple tool calls allowed
                 return p.choice({ content_and_tools, tools_only }) + p.end();
             } else {
-                // Single tool call only
                 return p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
             }
         } else {
-            // Tool calls are optional (auto mode)
             if (inputs.parallel_tool_calls) {
-                // Multiple tool calls allowed
                 return p.choice({ content_and_tools, content_only, tools_only }) + p.end();
-            } else {
-                // Single tool call at most
-                auto content_and_tool = content_until_tool + tool_choice;
-                return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
             }
+            auto content_and_tool = content_until_tool + tool_choice;
+            return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
         }
     });
 
@@ -1244,7 +1227,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     if (tmpl.original_caps().supports_tool_calls) {
         // some templates will require the content field in tool call messages
-        // to still be non-null, this puts an empty string everywhere where the 
+        // to still be non-null, this puts an empty string everywhere where the
         // content field is null
         workaround::requires_non_null_content(params.messages);
     }

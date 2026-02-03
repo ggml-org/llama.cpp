@@ -66,7 +66,7 @@ int main(int argc, char ** argv) {
         if (args[i] == "--help" || args[i] == "-h") {
             std::cout << HELP << "\n";
             return 0;
-        } 
+        }
         if (args[i] == "--json" && i + 1 < args.size()) {
             json_path = args[i + 1];
             i++;

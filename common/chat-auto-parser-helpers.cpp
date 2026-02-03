@@ -38,17 +38,17 @@ std::string trim_trailing_whitespace(const std::string & str) {
     if (str.empty()) {
         return "";
     }
-    
+
     size_t end = str.length() - 1;
     while (end > 0 && std::isspace(static_cast<unsigned char>(str[end]))) {
         end--;
     }
-    
+
     // If first char is also whitespace, return empty string
     if (end == 0 && std::isspace(static_cast<unsigned char>(str[0]))) {
         return "";
     }
-    
+
     return str.substr(0, end + 1);
 }
 

@@ -192,7 +192,6 @@ std::optional<compare_variants_result> differential_analyzer::compare_variants(
     if (params_modifier) {
         params_modifier(params_B);
     }
-    
 
     // Apply template to both variants
     std::string output_A = apply_template(tmpl, params_A);

@@ -441,7 +441,7 @@ int main(int argc, char ** argv) {
             LOG_ERR("args_field: '%s'\n", analysis.args_field.c_str());
             LOG_ERR("id_field: '%s'\n", analysis.id_field.c_str());
             LOG_ERR("gen_id_field: '%s'\n", analysis.gen_id_field.c_str());
-            LOG_ERR("parameter_order: '%s'\n", std::accumulate(analysis.parameter_order.begin(), analysis.parameter_order.end(), 
+            LOG_ERR("parameter_order: '%s'\n", std::accumulate(analysis.parameter_order.begin(), analysis.parameter_order.end(),
                 std::string(""), [] (const std::string & a, const std::string & b) { return a.empty() ? b : a + ", " + b; }
                 ).c_str());
 

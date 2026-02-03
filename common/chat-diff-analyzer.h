@@ -97,7 +97,7 @@ enum class reasoning_mode {
     TAG_BASED,    // Standard tag-based: <think>...</think>
     DELIMITER,    // Delimiter-based: [BEGIN FINAL RESPONSE] (reasoning ends at delimiter)
     FORCED_OPEN,  // Template ends with open reasoning tag (empty start, non-empty end)
-    FORCED_CLOSED,// Template ends with open reasoning tag on enabled thinking but 
+    FORCED_CLOSED,// Template ends with open reasoning tag on enabled thinking but
                   // with both opened and closed tag for disabled thinking
     TOOLS_ONLY    // Only reason on tool calls, not on normal content
 };
@@ -281,7 +281,7 @@ class differential_analyzer {
                                                      const std::string &    fun_name_needle,
                                                      const std::string &    arg_name_needle,
                                                      diff_analysis_result & result);
-    
+
     static void analyze_tool_call_format_non_json(const std::string &    clean_haystack,
                                                   const std::string &    fun_name_needle,
                                                   diff_analysis_result & result);
@@ -324,7 +324,7 @@ class differential_analyzer {
 };
 
 enum segment_type {
-    TEXT, 
+    TEXT,
     MARKER
 };
 

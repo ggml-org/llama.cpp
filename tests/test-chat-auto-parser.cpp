@@ -117,7 +117,7 @@ static void test_marker_separation(testing & t) {
         t.assert_equal("second is '[marker]'", "[marker]", single_square_marker[1].value);
         t.assert_equal("last is 'post_marker'", "post_marker", single_square_marker[2].value);
     });
-        
+
     t.test("single_diagonal_marker", [&] (testing & t) {
         t.assert_equal("first is text", segment_type::TEXT, single_diag_marker[0].type);
         t.assert_equal("second is marker", segment_type::MARKER, single_diag_marker[1].type);
@@ -1219,7 +1219,7 @@ static common_chat_template load_template(testing & t, const std::string & templ
     common_chat_template tmpl(template_source, "", "");
     t.assert_true("Nemotron template loaded successfully", template_source.length() > 0);
     return tmpl;
-}   
+}
 
 // ============================================================================
 // Nemotron Template Analysis Tests
