@@ -85,7 +85,8 @@ void ggml_openvino_device_config::init() {
         // Release the context (queue keeps a reference)
         clReleaseContext(cl_ctx);
     } else if (device_name == "NPU") {
-        remote_context = ov_singleton_core().get_default_context(device_name);
+        // remote tensor is not used for NPU yet
+        // remote_context = ov_singleton_core().get_default_context(device_name);
     }
 
     initialized = true;

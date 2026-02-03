@@ -213,6 +213,34 @@ public:
     static std::string compute_op_type(const ggml_tensor * node);
     void add_extra_inputs();
 
+    inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
+    }
+
+    inline static bool is_inp_pos(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_ROPE && tensor == op->src[1];
+    }
+
+    inline static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
+    }
+
+    inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]);
+    }
+
+    inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_SET_ROWS && op->src[2] == tensor;
+    }
+
+    inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
+    }
+
+    inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE;
+    }
+
 private:
     void set_input_output(ggml_tensor * node, bool naive = false);
     int compute_op_case(const ggml_tensor * node) const;
