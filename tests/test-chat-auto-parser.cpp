@@ -588,7 +588,9 @@ static void test_compare_variants_basic(testing & t) {
 
     auto result = differential_analyzer::compare_variants(tmpl, params, modifier);
 
-    t.assert_true("result should have value", result.has_value());
+    if (!t.assert_true("result should have value", result.has_value())) {
+        return;
+    }
     // The template might not output anything if messages is empty or format is different
     // Check that we get a valid result
     t.assert_true("prefix or left should have content", !result->diff.prefix.empty() || !result->diff.left.empty());
@@ -609,7 +611,9 @@ static void test_compare_variants_messages_modifier(testing & t) {
 
     std::optional<compare_variants_result> result = differential_analyzer::compare_variants(tmpl, params, modifier);
 
-    t.assert_true("result should have value", result.has_value());
+    if (!t.assert_true("result should have value", result.has_value())) {
+        return;
+    }
     t.assert_equal("left should be 'A'", "A", result->diff.left);
     t.assert_equal("right should be 'B'", "B", result->diff.right);
 }
@@ -630,7 +634,9 @@ static void test_compare_variants_tools_modifier(testing & t) {
 
     auto result = differential_analyzer::compare_variants(tmpl, params, modifier);
 
-    t.assert_true("result should have value", result.has_value());
+    if (!t.assert_true("result should have value", result.has_value())) {
+        return;
+    }
     t.assert_equal("left should be 'foo'", "foo", result->diff.left);
     t.assert_equal("right should be 'bar'", "bar", result->diff.right);
 }
@@ -652,7 +658,9 @@ static void test_compare_variants_both_modifiers(testing & t) {
 
     auto result = differential_analyzer::compare_variants(tmpl, params, modifier);
 
-    t.assert_true("result should have value", result.has_value());
+    if (!t.assert_true("result should have value", result.has_value())) {
+        return;
+    }
     t.assert_equal("left should be 'user:A'", "user:A", result->diff.left);
     t.assert_equal("right should be 'newuser:B'", "newuser:B", result->diff.right);
 }
@@ -688,7 +696,9 @@ static void test_compare_variants_identity(testing & t) {
     // No modifier - should use identity
     auto result = differential_analyzer::compare_variants(tmpl, params, nullptr);
 
-    t.assert_true("result should have value", result.has_value());
+    if (!t.assert_true("result should have value", result.has_value())) {
+        return;
+    }
     t.assert_equal("prefix should be 'Hello'", "Hello", result->diff.prefix);
     t.assert_equal("left should be empty", "", result->diff.left);
     t.assert_equal("right should be empty", "", result->diff.right);
@@ -800,7 +810,9 @@ static void test_seed_oss_tool_presence(testing & t) {
             p.messages = params_with_tools.messages;
         });
 
-    t.assert_true("T1 result should have value", result.has_value());
+    if (!t.assert_true("T1 result should have value", result.has_value())) {
+        return;
+    }
 
     const auto & diff = result->diff;
     t.assert_true("T1 prefix should contain system", diff.prefix.find("system") != std::string::npos);
@@ -860,7 +872,9 @@ static void test_seed_oss_call_count(testing & t) {
             p.messages = json::array({user_msg, assistant_two_calls});
         });
 
-    t.assert_true("T2 result should have value", result.has_value());
+    if (!t.assert_true("T2 result should have value", result.has_value())) {
+        return;
+    }
 
     const auto & diff = result->diff;
 
@@ -950,7 +964,9 @@ static void test_seed_oss_function_names(testing & t) {
             p.messages = json::array({user_msg, assistant_func_beta});
         });
 
-    t.assert_true("T3 result should have value", result.has_value());
+    if (!t.assert_true("T3 result should have value", result.has_value())) {
+        return;
+    }
 
     const auto & diff = result->diff;
 
@@ -1052,7 +1068,9 @@ static void test_seed_oss_argument_count(testing & t) {
             p.messages = json::array({user_msg, assistant_one_arg});
         });
 
-    t.assert_true("T4 zero vs one result should have value", result_zero_one.has_value());
+    if (!t.assert_true("T4 zero vs one result should have value", result_zero_one.has_value())) {
+        return;
+    }
     t.assert_true("T4 zero vs one left should be empty or minimal", result_zero_one->diff.left.empty() || result_zero_one->diff.left == "");
     t.assert_true("T4 zero vs one right should contain arg1", result_zero_one->diff.right.find("arg1") != std::string::npos);
 
@@ -1068,7 +1086,9 @@ static void test_seed_oss_argument_count(testing & t) {
             p.messages = json::array({user_msg, assistant_two_args});
         });
 
-    t.assert_true("T4 one vs two result should have value", result_one_two.has_value());
+    if (!t.assert_true("T4 one vs two result should have value", result_one_two.has_value())) {
+        return;
+    }
 
     const auto & diff4 = result_one_two->diff;
     t.assert_true("T4 one vs two left should contain arg1 (or prefix)",
@@ -1124,7 +1144,9 @@ static void test_seed_oss_args_presence(testing & t) {
             p.messages = json::array({user_msg, assistant_other_arg});
         });
 
-    t.assert_true("T5 same vs other result should have value", result_same_other.has_value());
+    if (!t.assert_true("T5 same vs other result should have value", result_same_other.has_value())) {
+        return;
+    }
     const auto & diff5a = result_same_other->diff;
     t.assert_true("T5 same vs other left should contain param1 (or prefix/suffix)",
         diff5a.left.find("param1") != std::string::npos || diff5a.prefix.find("param1") != std::string::npos || diff5a.suffix.find("param1") != std::string::npos);
@@ -1141,7 +1163,9 @@ static void test_seed_oss_args_presence(testing & t) {
             p.messages = json::array({user_msg, assistant_both_args});
         });
 
-    t.assert_true("T5 same vs both result should have value", result_same_both.has_value());
+    if (!t.assert_true("T5 same vs both result should have value", result_same_both.has_value())) {
+        return;
+    }
     const auto & diff5b = result_same_both->diff;
     t.assert_true("T5 same vs both left should contain param1 (or prefix/suffix)",
         diff5b.left.find("param1") != std::string::npos || diff5b.prefix.find("param1") != std::string::npos || diff5b.suffix.find("param1") != std::string::npos);
@@ -1188,7 +1212,9 @@ static void test_seed_oss_tool_with_reasoning(testing & t) {
             p.messages = json::array({user_msg, assistant_tool_with_reasoning});
         });
 
-    t.assert_true("T6 result should have value", result.has_value());
+    if (!t.assert_true("T6 result should have value", result.has_value())) {
+        return;
+    }
 
     const auto & diff = result->diff;
 
@@ -1445,7 +1471,9 @@ static void test_standard_json_tools_openai(testing & t) {
     common_peg_parse_context ctx(input, false);
     auto result = parser.parse(ctx);
 
-    t.assert_true("parse success", result.success());
+    if (!t.assert_true("parse success", result.success())) {
+        return;
+    }
 
     common_chat_msg msg;
     auto mapper = common_chat_peg_unified_mapper(msg);
@@ -1489,7 +1517,9 @@ static void test_standard_json_tools_cohere(testing & t) {
     common_peg_parse_context ctx(input, false);
     auto result = parser.parse(ctx);
 
-    t.assert_true("parse success", result.success());
+    if (!t.assert_true("parse success", result.success())) {
+        return;
+    }
 
     common_chat_msg msg;
     auto mapper = common_chat_peg_unified_mapper(msg);
@@ -1533,7 +1563,9 @@ static void test_standard_json_tools_function_key(testing & t) {
     common_peg_parse_context ctx(input, false);
     auto result = parser.parse(ctx);
 
-    t.assert_true("parse success", result.success());
+    if (!t.assert_true("parse success", result.success())) {
+        return;
+    }
 
     common_chat_msg msg;
     auto mapper = common_chat_peg_unified_mapper(msg);
@@ -1806,7 +1838,9 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
     common_peg_parse_context ctx(input, false);
     auto result = parser.parse(ctx);
 
-    t.assert_true("parse success", result.success());
+    if (!t.assert_true("parse success", result.success())) {
+        return;
+    }
 
     common_chat_msg msg;
     auto mapper = common_chat_peg_unified_mapper(msg);
