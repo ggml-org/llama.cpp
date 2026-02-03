@@ -667,6 +667,30 @@ class unified_cache {
     size_t onednn_weights_scratch_size() const { return onednn_weights_scratch_size_; }
     size_t onednn_activations_scratch_size() const { return onednn_activations_scratch_size_; }
 
+    // === Persistent Scratch Buffers ===
+    // Named scratch buffers for persistent kernels (TG optimization).
+    // Unlike oneDNN scratch which is shared, these are dedicated per named buffer.
+    // Used for: intermediate activations, work counters, temporary storage.
+
+    // Reserve a persistent scratch buffer by name.
+    // If buffer already exists with sufficient size, returns true without reallocating.
+    // If buffer exists but is too small, it is freed and reallocated.
+    // pin: if true, buffer is protected from eviction (default true)
+    bool reserve_persistent_scratch(const std::string & buffer_name, size_t size_bytes, bool pin = true);
+
+    // Get pointer to a persistent scratch buffer.
+    // Returns nullptr if buffer doesn't exist.
+    void * get_persistent_scratch(const std::string & buffer_name);
+
+    // Release (free) a persistent scratch buffer.
+    void release_persistent_scratch(const std::string & buffer_name);
+
+    // Check if a persistent scratch buffer exists
+    bool has_persistent_scratch(const std::string & buffer_name) const;
+
+    // Get size of a persistent scratch buffer (0 if not found)
+    size_t get_persistent_scratch_size(const std::string & buffer_name) const;
+
   private:
     // Evict lowest-scoring entry to make room for new_size bytes
     // Returns true if eviction succeeded, false if all entries are pinned
@@ -741,6 +765,16 @@ class unified_cache {
     size_t     onednn_weights_scratch_size_     = 0;
     size_t     onednn_activations_scratch_size_ = 0;
     std::mutex onednn_scratch_mutex_;
+
+    // Persistent scratch buffers for TG optimization (persistent kernels).
+    // Keyed by name for flexibility (e.g., "activations", "work_counter", "temp").
+    struct persistent_scratch_entry {
+        void * device_ptr = nullptr;
+        size_t size       = 0;
+        bool   pinned     = true;
+    };
+    std::unordered_map<std::string, persistent_scratch_entry> persistent_scratches_;
+    mutable std::mutex                                        persistent_scratch_mutex_;
 
     // Deferred frees to avoid releasing buffers while in flight.
     std::vector<deferred_free_entry> deferred_frees_;
@@ -845,6 +879,13 @@ void unified_cache_release_onednn_scratch(int device_id);
 
 // Check if scratch buffers are reserved
 bool unified_cache_has_onednn_scratch(int device_id);
+
+// Persistent scratch buffer public API
+bool unified_cache_reserve_persistent_scratch(int device_id, const char* buffer_name, size_t size_bytes, bool pin);
+void * unified_cache_get_persistent_scratch(int device_id, const char* buffer_name);
+void unified_cache_release_persistent_scratch(int device_id, const char* buffer_name);
+bool unified_cache_has_persistent_scratch(int device_id, const char* buffer_name);
+size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buffer_name);
 
 // === MoE Cache Helpers ===
 // Unpin all experts

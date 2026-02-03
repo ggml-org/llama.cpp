@@ -387,6 +387,17 @@ unified_cache::~unified_cache() {
         }
         onednn_activations_scratch_ = nullptr;
     }
+
+    // Free persistent scratch buffers
+    for (auto & pair : persistent_scratches_) {
+        if (pair.second.device_ptr) {
+            try {
+                sycl::free(pair.second.device_ptr, queue_);
+            } catch (...) {
+            }
+        }
+    }
+    persistent_scratches_.clear();
 }
 
 // Fast 64-bit hash of entire data buffer (xxHash-style)
@@ -4657,6 +4668,156 @@ bool unified_cache_has_onednn_scratch(int device_id) {
         return false;
     }
     return cache->has_onednn_scratch();
+}
+
+// === Persistent Scratch Buffer Implementation ===
+
+bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, size_t size_bytes, bool pin) {
+    std::lock_guard<std::mutex> lock(persistent_scratch_mutex_);
+
+    // Check if we already have this buffer with sufficient size
+    auto it = persistent_scratches_.find(buffer_name);
+    if (it != persistent_scratches_.end()) {
+        auto & entry = it->second;
+        if (entry.size >= size_bytes) {
+            // Already have sufficient size, just update pin state if needed
+            entry.pinned = pin;
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Persistent scratch '%s' already reserved (%.1f MB >= %.1f MB)\n",
+                          buffer_name.c_str(),
+                          entry.size / (1024.0f * 1024.0f),
+                          size_bytes / (1024.0f * 1024.0f));
+            return true;
+        }
+        // Existing buffer too small, need to free and reallocate
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Persistent scratch '%s' resize: %.1f MB -> %.1f MB\n",
+                      buffer_name.c_str(),
+                      entry.size / (1024.0f * 1024.0f),
+                      size_bytes / (1024.0f * 1024.0f));
+        if (entry.device_ptr) {
+            try {
+                sycl::free(entry.device_ptr, queue_);
+            } catch (...) {}
+            used_.fetch_sub(entry.size);
+        }
+        persistent_scratches_.erase(it);
+    }
+
+    // Check if we have budget
+    if (size_bytes > available()) {
+        // Try to evict to make room
+        size_t freed = evict(size_bytes - available());
+        if (freed < size_bytes - available()) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] Cannot reserve persistent scratch '%s': need %.1f MB, available %.1f MB\n",
+                          buffer_name.c_str(),
+                          size_bytes / (1024.0f * 1024.0f),
+                          available() / (1024.0f * 1024.0f));
+            return false;
+        }
+    }
+
+    // Allocate device memory
+    void * ptr = nullptr;
+    try {
+        ptr = sycl::malloc_device(size_bytes, queue_);
+        if (!ptr) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to allocate persistent scratch '%s' (%.1f MB)\n",
+                          buffer_name.c_str(),
+                          size_bytes / (1024.0f * 1024.0f));
+            return false;
+        }
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] Persistent scratch '%s' allocation failed: %s\n",
+                      buffer_name.c_str(), e.what());
+        return false;
+    }
+
+    // Track in budget and store entry
+    used_.fetch_add(size_bytes);
+    persistent_scratches_[buffer_name] = { ptr, size_bytes, pin };
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved persistent scratch '%s': %.1f MB (pinned=%d)\n",
+                  buffer_name.c_str(),
+                  size_bytes / (1024.0f * 1024.0f),
+                  pin ? 1 : 0);
+    return true;
+}
+
+void * unified_cache::get_persistent_scratch(const std::string & buffer_name) {
+    std::lock_guard<std::mutex> lock(persistent_scratch_mutex_);
+
+    auto it = persistent_scratches_.find(buffer_name);
+    if (it == persistent_scratches_.end()) {
+        return nullptr;
+    }
+    return it->second.device_ptr;
+}
+
+void unified_cache::release_persistent_scratch(const std::string & buffer_name) {
+    std::lock_guard<std::mutex> lock(persistent_scratch_mutex_);
+
+    auto it = persistent_scratches_.find(buffer_name);
+    if (it == persistent_scratches_.end()) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Persistent scratch '%s' not found for release\n",
+                      buffer_name.c_str());
+        return;
+    }
+
+    auto & entry = it->second;
+    if (entry.device_ptr) {
+        try {
+            sycl::free(entry.device_ptr, queue_);
+        } catch (...) {}
+        used_.fetch_sub(entry.size);
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Released persistent scratch '%s' (%.1f MB)\n",
+                      buffer_name.c_str(),
+                      entry.size / (1024.0f * 1024.0f));
+    }
+    persistent_scratches_.erase(it);
+}
+
+bool unified_cache::has_persistent_scratch(const std::string & buffer_name) const {
+    std::lock_guard<std::mutex> lock(persistent_scratch_mutex_);
+    return persistent_scratches_.find(buffer_name) != persistent_scratches_.end();
+}
+
+size_t unified_cache::get_persistent_scratch_size(const std::string & buffer_name) const {
+    std::lock_guard<std::mutex> lock(persistent_scratch_mutex_);
+    auto it = persistent_scratches_.find(buffer_name);
+    if (it == persistent_scratches_.end()) {
+        return 0;
+    }
+    return it->second.size;
+}
+
+// === Persistent Scratch Buffer C API Wrappers ===
+
+bool unified_cache_reserve_persistent_scratch(int device_id, const char* buffer_name, size_t size_bytes, bool pin) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) return false;
+    return cache->reserve_persistent_scratch(buffer_name, size_bytes, pin);
+}
+
+void * unified_cache_get_persistent_scratch(int device_id, const char* buffer_name) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) return nullptr;
+    return cache->get_persistent_scratch(buffer_name);
+}
+
+void unified_cache_release_persistent_scratch(int device_id, const char* buffer_name) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (cache) cache->release_persistent_scratch(buffer_name);
+}
+
+bool unified_cache_has_persistent_scratch(int device_id, const char* buffer_name) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) return false;
+    return cache->has_persistent_scratch(buffer_name);
+}
+
+size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buffer_name) {
+    unified_cache * cache = get_unified_cache_for_device(device_id);
+    if (!cache) return 0;
+    return cache->get_persistent_scratch_size(buffer_name);
 }
 
 void shutdown_unified_cache() {
