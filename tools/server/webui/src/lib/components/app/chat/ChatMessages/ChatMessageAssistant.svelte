@@ -17,7 +17,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
-	import { MessageRole } from '$lib/enums';
+	import { MessageRole, KeyboardKey } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -75,10 +75,10 @@
 	let shouldBranchAfterEdit = $state(false);
 
 	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
 			editCtx.save();
-		} else if (event.key === 'Escape') {
+		} else if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			editCtx.cancel();
 		}

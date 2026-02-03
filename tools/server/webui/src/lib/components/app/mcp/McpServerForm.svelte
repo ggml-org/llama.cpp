@@ -4,6 +4,8 @@
 	import { KeyValuePairs } from '$lib/components/app';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
+	import { UrlPrefix } from '$lib/enums';
+	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants/mcp-form';
 
 	interface Props {
 		url: string;
@@ -28,7 +30,8 @@
 	}: Props = $props();
 
 	let isWebSocket = $derived(
-		url.toLowerCase().startsWith('ws://') || url.toLowerCase().startsWith('wss://')
+		url.toLowerCase().startsWith(UrlPrefix.WEBSOCKET) ||
+			url.toLowerCase().startsWith(UrlPrefix.WEBSOCKET_SECURE)
 	);
 
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
@@ -48,7 +51,7 @@
 		<Input
 			id="server-url-{id}"
 			type="url"
-			placeholder="https://mcp.example.com/sse"
+			placeholder={MCP_SERVER_URL_PLACEHOLDER}
 			value={url}
 			oninput={(e) => onUrlChange(e.currentTarget.value)}
 			class={urlError ? 'border-destructive' : ''}

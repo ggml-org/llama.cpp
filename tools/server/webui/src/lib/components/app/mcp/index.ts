@@ -204,6 +204,9 @@ export { default as McpServerCardEditForm } from './McpServerCard/McpServerCardE
 /** Delete confirmation dialog with server name display. */
 export { default as McpServerCardDeleteDialog } from './McpServerCard/McpServerCardDeleteDialog.svelte';
 
+/** Skeleton loading state for server card during health checks. */
+export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte';
+
 /**
  * **McpServerInfo** - Server instructions display
  *

@@ -8,7 +8,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
-	import { MessageRole } from '$lib/enums';
+	import { KeyboardKey, MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -48,11 +48,11 @@
 	const editCtx = getMessageEditContext();
 
 	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey && !isIMEComposing(event)) {
+		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			event.preventDefault();
 
 			editCtx.save();
-		} else if (event.key === 'Escape') {
+		} else if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 
 			editCtx.cancel();

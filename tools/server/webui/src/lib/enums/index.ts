@@ -47,3 +47,5 @@ export { ServerRole, ServerModelStatus } from './server';
 export { ParameterSource, SyncableParameterType } from './settings';
 
 export { ColorMode, McpPromptVariant, UrlPrefix } from './ui';
+
+export { KeyboardKey } from './keyboard';

@@ -6,8 +6,9 @@
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
-	import { AgenticSectionType, AttachmentType } from '$lib/enums';
+	import { AgenticSectionType, AttachmentType, FileTypeText } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
+	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic-ui';
 	import { parseAgenticContent, type AgenticSection } from '$lib/utils/agentic';
 	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
 
@@ -78,7 +79,7 @@
 	): ToolResultLine[] {
 		const lines = toolResult.split('\n');
 		return lines.map((line) => {
-			const match = line.match(/\[Attachment saved: ([^\]]+)\]/);
+			const match = line.match(ATTACHMENT_SAVED_REGEX);
 			if (!match || !extras) return { text: line };
 
 			const attachmentName = match[1];
@@ -124,7 +125,7 @@
 					{#if section.toolArgs}
 						<SyntaxHighlightedCode
 							code={formatJsonPretty(section.toolArgs)}
-							language="json"
+							language={FileTypeText.JSON}
 							maxHeight="20rem"
 							class="text-xs"
 						/>
@@ -162,7 +163,7 @@
 
 						<SyntaxHighlightedCode
 							code={formatJsonPretty(section.toolArgs)}
-							language="json"
+							language={FileTypeText.JSON}
 							maxHeight="20rem"
 							class="text-xs"
 						/>

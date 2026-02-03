@@ -19,6 +19,13 @@
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
+		IMAGE_NOT_ERROR_BOUND_SELECTOR,
+		DATA_ERROR_BOUND_ATTR,
+		DATA_ERROR_HANDLED_ATTR,
+		BOOL_TRUE_STRING
+	} from '$lib/constants/markdown';
+	import { UrlPrefix } from '$lib/enums';
+	import {
 		highlightCode,
 		detectIncompleteCodeBlock,
 		type IncompleteCodeBlock
@@ -470,10 +477,10 @@
 	function setupImageErrorHandlers() {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>('img:not([data-error-bound])');
+		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
-			img.dataset.errorBound = 'true';
+			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
 			img.addEventListener('error', handleImageError);
 		}
 	}
@@ -487,8 +494,12 @@
 		if (!img || !img.src) return;
 
 		// Don't handle data URLs or already-handled images
-		if (img.src.startsWith('data:') || img.dataset.errorHandled === 'true') return;
-		img.dataset.errorHandled = 'true';
+		if (
+			img.src.startsWith(UrlPrefix.DATA) ||
+			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
+		)
+			return;
+		img.dataset[DATA_ERROR_HANDLED_ATTR] = BOOL_TRUE_STRING;
 
 		const src = img.src;
 		// Create fallback element

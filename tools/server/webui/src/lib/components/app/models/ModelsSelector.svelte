@@ -12,7 +12,7 @@
 		routerModels,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { ServerModelStatus } from '$lib/enums';
+	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
