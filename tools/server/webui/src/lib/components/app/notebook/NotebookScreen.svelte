@@ -66,7 +66,10 @@
 		if (notebookModel == null) {
 			notebookModel = activeModelId;
 		}
-		await notebookStore.generate(notebookModel);
+
+		if (notebookModel) {
+			await notebookStore.generate(notebookModel);
+		}
 	}
 
 	function handleUndo() {
@@ -127,7 +130,7 @@
 	let canGenerate = $derived(inputContent.length > 0 && hasModelSelected && isSelectedModelInCache);
 	let isDisabled = $derived(!canGenerate);
 
-	let notebookModel = $state(null);
+	let notebookModel = $state<string | null>(null);
 
 	const { handleModelChange } = useModelChangeValidation({
 		getRequiredModalities: () => ({ vision: false, audio: false }), // Notebook doesn't require modalities
