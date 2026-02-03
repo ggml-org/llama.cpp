@@ -1,6 +1,7 @@
 #include "chat.h"
 
 #include "chat-auto-parser.h"
+#include "chat-diff-analyzer.h"
 #include "chat-peg-parser.h"
 #include "common.h"
 #include "ggml.h"
@@ -234,7 +235,13 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     const auto rendered_no_thinking   = common_chat_templates_apply(chat_templates, dummy_inputs);
     dummy_inputs.enable_thinking      = true;
     const auto rendered_with_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
-    return rendered_no_thinking.prompt != rendered_with_thinking.prompt;
+    bool detect = rendered_no_thinking.prompt != rendered_with_thinking.prompt;
+    const auto & tmpl = chat_templates->template_tool_use
+        ? *chat_templates->template_tool_use
+        : *chat_templates->template_default;
+    diff_analysis_result result = differential_analyzer::analyze(tmpl);
+    detect |= result.reasoning != reasoning_mode::NONE;
+    return detect;
 }
 
 std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messages) {
