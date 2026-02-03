@@ -145,3 +145,56 @@ jobs:
           cd tools/server/tests
           $env:SLOW_TESTS = "1"
           pytest -v -x
+
+  server-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    name: server-metal (${{ matrix.wf_name }})
+    strategy:
+      matrix:
+        build_type: [Release]
+        wf_name: ["GPUx1"]
+        include:
+          - build_type: Release
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "GPUx1, backend-sampling"
+          - build_type: Release
+            extra_args: "GGML_METAL_DEVICES=2"
+            wf_name:    "GPUx2"
+          - build_type: Release
+            extra_args: "GGML_METAL_DEVICES=2 LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "GPUx2, backend-sampling"
+      fail-fast: false
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config ${{ matrix.build_type }} -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Tests dependencies
+        id: test_dependencies
+        run: |
+          pip install -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
+        run: |
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
