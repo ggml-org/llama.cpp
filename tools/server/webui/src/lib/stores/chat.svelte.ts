@@ -432,7 +432,7 @@ class ChatStore {
 		return await DatabaseService.createMessageBranch(
 			{
 				convId: activeConv.id,
-				type: 'text',
+				type: MessageType.TEXT,
 				role: MessageRole.ASSISTANT,
 				content: '',
 				timestamp: Date.now(),
@@ -1234,7 +1234,7 @@ class ChatStore {
 			const assistantMessage = await DatabaseService.createMessageBranch(
 				{
 					convId: activeConv.id,
-					type: 'text',
+					type: MessageType.TEXT,
 					timestamp: Date.now(),
 					role: MessageRole.ASSISTANT,
 					content: '',

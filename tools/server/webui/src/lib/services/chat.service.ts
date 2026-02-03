@@ -1,5 +1,9 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
+import {
+	ATTACHMENT_LABEL_PDF_FILE,
+	ATTACHMENT_LABEL_MCP_PROMPT
+} from '$lib/constants/attachment-labels';
 import { AttachmentType, ContentPartType, MessageRole, ReasoningFormat } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
@@ -741,7 +745,7 @@ export class ChatService {
 			} else {
 				contentParts.push({
 					type: ContentPartType.TEXT,
-					text: formatAttachmentText('PDF File', pdfFile.name, pdfFile.content)
+					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
 				});
 			}
 		}
@@ -755,7 +759,7 @@ export class ChatService {
 			contentParts.push({
 				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
-					'MCP Prompt',
+					ATTACHMENT_LABEL_MCP_PROMPT,
 					mcpPrompt.name,
 					mcpPrompt.content,
 					mcpPrompt.serverName
