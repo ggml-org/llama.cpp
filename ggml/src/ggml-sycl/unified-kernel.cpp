@@ -36,6 +36,7 @@ bool g_ggml_sycl_debug_forced_off = false;
 // Stub device info structure (minimal for testing)
 struct ggml_sycl_device_info_stub {
     int nsm = 20;
+    const char * device_name = "Intel(R) Arc(TM) B580 Graphics";
     struct {
         bool supported = true;
         bool supports_int8 = true;
@@ -62,6 +63,10 @@ const ggml_sycl_info_stub & ggml_sycl_info() {
 
 // Stub GGML_SYCL_DEBUG macro (no-op in standalone mode)
 #define GGML_SYCL_DEBUG(...) do {} while(0)
+
+// Stub GGML_LOG macros (normally from ggml-impl.h)
+#define GGML_LOG_ERROR(...) fprintf(stderr, __VA_ARGS__)
+#define GGML_LOG_WARN(...)  fprintf(stderr, __VA_ARGS__)
 
 #else  // !UNIFIED_KERNEL_TEST_STANDALONE
 
@@ -4143,8 +4148,61 @@ void UnifiedKernel::matmul(const ggml_sycl_unified::UnifiedKernelArgs & args) {
 }
 
 void UnifiedKernel::rms_norm(const RmsNormDescriptor & desc) {
-    // Stub - will be implemented in Task 3.1
-    (void)desc;
+    const int hidden_dim = desc.hidden_dim;
+    const float eps = desc.eps;
+    const float * input = static_cast<const float *>(desc.input);
+    const float * weights = static_cast<const float *>(desc.weights);
+    float * output = static_cast<float *>(desc.output);
+
+    const int block_size = 256;
+    const int sg_size = 16;  // Intel XMX subgroup size
+    const int n_warps = block_size / sg_size;
+
+    queue_.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> slm_reduce(n_warps, cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<1>(block_size, block_size),
+            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                const int tid = item.get_local_id(0);
+                auto sg = item.get_sub_group();
+                const int warp_id = sg.get_group_linear_id();
+                const int lane_id = sg.get_local_linear_id();
+
+                // Phase 1: Compute sum of squares
+                float sum_sq = 0.0f;
+                for (int i = tid; i < hidden_dim; i += block_size) {
+                    float val = input[i];
+                    sum_sq += val * val;
+                }
+
+                // Phase 2: Subgroup reduction
+                sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+
+                // Phase 3: Cross-subgroup reduction via SLM
+                if (lane_id == 0) {
+                    slm_reduce[warp_id] = sum_sq;
+                }
+                sycl::group_barrier(item.get_group());
+
+                if (warp_id == 0) {
+                    sum_sq = (lane_id < n_warps) ? slm_reduce[lane_id] : 0.0f;
+                    sum_sq = sycl::reduce_over_group(sg, sum_sq, sycl::plus<float>());
+                    if (lane_id == 0) {
+                        slm_reduce[0] = sum_sq;
+                    }
+                }
+                sycl::group_barrier(item.get_group());
+
+                // Phase 4: Normalize
+                const float rms = sycl::sqrt(slm_reduce[0] / hidden_dim + eps);
+                const float scale = 1.0f / rms;
+
+                for (int i = tid; i < hidden_dim; i += block_size) {
+                    output[i] = input[i] * scale * weights[i];
+                }
+            });
+    });
 }
 
 void UnifiedKernel::rope(const RopeDescriptor & desc) {
@@ -4153,8 +4211,27 @@ void UnifiedKernel::rope(const RopeDescriptor & desc) {
 }
 
 void UnifiedKernel::silu_mul(const void * gate, const void * up, void * output, int dim) {
-    // Stub - will be implemented in Task 3.2
-    (void)gate; (void)up; (void)output; (void)dim;
+    const float * gate_f = static_cast<const float *>(gate);
+    const float * up_f = static_cast<const float *>(up);
+    float * output_f = static_cast<float *>(output);
+
+    const int block_size = 256;
+    const int n_blocks = (dim + block_size - 1) / block_size;
+
+    queue_.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<1>(n_blocks * block_size, block_size),
+            [=](sycl::nd_item<1> item) {
+                const int gid = item.get_global_id(0);
+
+                if (gid < dim) {
+                    const float g = gate_f[gid];
+                    const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
+                    const float silu_g = g * sigmoid_g;
+                    output_f[gid] = silu_g * up_f[gid];
+                }
+            });
+    });
 }
 
 void UnifiedKernel::softmax(const void * input, void * output, int n, int stride) {

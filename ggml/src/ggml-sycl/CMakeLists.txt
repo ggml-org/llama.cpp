@@ -780,4 +780,35 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;cache;fast-path;tdd"
         TIMEOUT 120
     )
+
+    # Test 18: UnifiedKernel Operation Tests (TDD)
+    # Tests RMS norm and SiLU mul operations for persistent kernel
+    add_executable(test-unified-kernel-ops
+        tests/test-unified-kernel-ops.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-unified-kernel-ops PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-unified-kernel-ops PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-unified-kernel-ops PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
+    target_compile_definitions(test-unified-kernel-ops PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-unified-kernel-ops PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME unified-kernel-ops COMMAND test-unified-kernel-ops)
+    set_tests_properties(unified-kernel-ops PROPERTIES
+        LABELS "sycl;unified;ops;tdd"
+        TIMEOUT 180
+    )
 endif()
