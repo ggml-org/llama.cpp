@@ -134,13 +134,17 @@ export class NotebookStore {
 		this.isGenerating = false;
 	}
 
-	updateTokenCount() {
+	updateTokenCount(model?: string) {
 		if (this.tokenizeTimeout) {
 			clearTimeout(this.tokenizeTimeout);
 		}
 
 		this.tokenizeTimeout = setTimeout(async () => {
-			const tokens = await ChatService.tokenize(this.content);
+			if (this.content.length === 0) {
+				this.totalTokens = 0;
+				return;
+			}
+			const tokens = await ChatService.tokenize(this.content, model);
 			this.totalTokens = tokens.length;
 		}, 500);
 	}

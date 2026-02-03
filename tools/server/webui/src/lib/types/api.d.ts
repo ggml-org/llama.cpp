@@ -302,6 +302,7 @@ export interface ApiCompletionStreamChunk {
 		predicted_ms?: number;
 		cache_n?: number;
 	};
+	prompt_progress?: ChatMessagePromptProgress;
 }
 
 export interface ApiCompletionResponse {

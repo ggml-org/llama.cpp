@@ -11,8 +11,8 @@
 		KeyboardShortcutInfo,
 		ModelsSelector
 	} from '$lib/components/app';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+
+	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
@@ -46,7 +46,9 @@
 	// Sync local input with store content
 	$effect(() => {
 		inputContent = notebookStore.content;
-		notebookStore.updateTokenCount();
+		if (activeModelId || !isRouter) {
+			notebookStore.updateTokenCount(activeModelId);
+		}
 	});
 
 	function handleInput(e: Event) {
@@ -68,12 +70,8 @@
 			scrollToBottom();
 		}
 
-		if (notebookModel == null) {
-			notebookModel = activeModelId;
-		}
-
-		if (notebookModel) {
-			await notebookStore.generate(notebookModel);
+		if (activeModelId) {
+			await notebookStore.generate(activeModelId);
 		}
 	}
 
@@ -134,15 +132,6 @@
 
 	let canGenerate = $derived(inputContent.length > 0 && hasModelSelected && isSelectedModelInCache);
 	let isDisabled = $derived(!canGenerate);
-
-	let notebookModel = $state<string | null>(null);
-
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => ({ vision: false, audio: false }), // Notebook doesn't require modalities
-		onSuccess: async (modelName) => {
-			notebookModel = modelName;
-		}
-	});
 
 	function handleScroll() {
 		if (disableAutoScroll || !scrollContainer) return;
@@ -293,7 +282,7 @@
 					</Tooltip.Content>
 				</Tooltip.Root>
 
-				{#snippet generateButton(props = {})}
+				{#snippet generateButton()}
 					<Button
 						disabled={isDisabled}
 						onclick={notebookStore.isGenerating ? handleStop : handleGenerate}
@@ -328,8 +317,6 @@
 				</Tooltip.Root>
 
 				<ModelsSelector
-					currentModel={notebookModel}
-					onModelChange={handleModelChange}
 					forceForegroundText={true}
 					useGlobalSelection={true}
 					disabled={notebookStore.isGenerating}
