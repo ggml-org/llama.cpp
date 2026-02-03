@@ -654,8 +654,8 @@ common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
     }
     // Mode 3: Flat keys (enhanced with ID fields and parameter ordering)
     else {
-        auto name_key_parser = literal("\"" + name_key + "\"");
-        auto args_key_parser = literal("\"" + args_key + "\"");
+        auto name_key_parser = literal("\"" + effective_name_key + "\"");
+        auto args_key_parser = literal("\"" + effective_args_key + "\"");
 
         for (const auto & tool_def : tools) {
             if (!tool_def.contains("function")) {
