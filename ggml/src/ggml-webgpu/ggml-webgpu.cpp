@@ -191,6 +191,11 @@ struct webgpu_buf_pool {
         }
         free.clear();
     }
+
+    ~webgpu_buf_pool() {
+        this->cleanup();
+    }
+
 };
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -258,7 +263,7 @@ struct webgpu_gpu_profile_buf_pool {
 struct webgpu_pipeline {
     wgpu::ComputePipeline pipeline;
     std::string           name;
-    void *                context = nullptr;
+    std::shared_ptr<void>                context = nullptr;
 };
 
 struct webgpu_command {
@@ -792,6 +797,9 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 #if !defined(GGML_WEBGPU_CPU_PROFILE) && !defined(GGML_WEBGPU_GPU_PROFILE)
     GGML_UNUSED(ctx);
 #endif
+
+    delete ctx;
+    delete backend;
 }
 
 static size_t ggml_webgpu_tensor_offset(const ggml_tensor * tensor) {
@@ -875,8 +883,7 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
         ctx->pad_pipelines.emplace(pipeline_key, pipeline);
     }
 
-    ggml_webgpu_generic_shader_decisions decisions =
-        *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
 
     const uint32_t ne = (uint32_t) ggml_nelements(dst);
 
@@ -920,7 +927,7 @@ static webgpu_command ggml_webgpu_pad(webgpu_context & ctx, ggml_tensor * src, g
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
     };
 
-    uint32_t wg_x = CEIL_DIV(ne, decisions.wg_size);
+    uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
@@ -954,8 +961,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
         ctx->set_rows_pipelines.emplace(key, pipeline);
     }
 
-    ggml_webgpu_generic_shader_decisions decisions =
-        *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
 
     std::optional<webgpu_pool_bufs> error_bufs = std::nullopt;
     if (key.i64_idx) {
@@ -1007,7 +1013,7 @@ static std::optional<webgpu_command> ggml_webgpu_set_rows(webgpu_context & ctx,
     } else {
         threads = src->ne[0] * src->ne[1] * src->ne[2] * src->ne[3];
     }
-    uint32_t wg_x = CEIL_DIV(threads, decisions.wg_size);
+    uint32_t wg_x = CEIL_DIV(threads, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x, 1,
                                      error_bufs);
 }
@@ -1276,10 +1282,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         ctx->flash_attn_pipelines.emplace(key, pipeline);
     }
 
-    ggml_webgpu_flash_attn_shader_decisions decisions =
-        *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
+    auto * decisions = static_cast<ggml_webgpu_flash_attn_shader_decisions*>(pipeline.context.get()); 
 
-    uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions.q_tile);
+    uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions->q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
@@ -1310,8 +1315,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
         ctx->unary_pipelines.emplace(pipeline_key, pipeline);
     }
 
-    ggml_webgpu_generic_shader_decisions decisions =
-        *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions*>(pipeline.context.get());
 
     uint32_t ne = (uint32_t) ggml_nelements(dst);
 
@@ -1371,7 +1375,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    uint32_t wg_x = CEIL_DIV(ne, decisions.wg_size);
+    uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
@@ -1766,8 +1770,7 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
         argsort_pipeline.context = processed.decisions;
         ctx->argsort_pipelines.emplace(order, argsort_pipeline);
     }
-    ggml_webgpu_argsort_shader_decisions argsort_decisions =
-        *static_cast<ggml_webgpu_argsort_shader_decisions *>(argsort_pipeline.context);
+    auto * argsort_decisions = static_cast<ggml_webgpu_argsort_shader_decisions*>(argsort_pipeline.context.get());
 
     webgpu_pipeline argsort_merge_pipeline;
     it = ctx->argsort_merge_pipelines.find(order);
@@ -1784,13 +1787,13 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
 
     const uint32_t src_ne0 = (uint32_t) src->ne[0];
     const uint32_t nrows   = (uint32_t) ggml_nrows(src);
-    const uint32_t npr     = CEIL_DIV(src_ne0, argsort_decisions.wg_size);
+    const uint32_t npr     = CEIL_DIV(src_ne0, argsort_decisions->wg_size);
     const uint32_t block_size =
-        is_top_k ? std::min(argsort_decisions.wg_size, (uint32_t) dst->ne[0]) : argsort_decisions.wg_size;
+        is_top_k ? std::min(argsort_decisions->wg_size, (uint32_t) dst->ne[0]) : argsort_decisions->wg_size;
     uint32_t out_ne0 = src_ne0;
     if (is_top_k) {
         if (npr > 1) {
-            const uint32_t last_tile = src_ne0 - (npr - 1) * argsort_decisions.wg_size;
+            const uint32_t last_tile = src_ne0 - (npr - 1) * argsort_decisions->wg_size;
             out_ne0                  = (npr - 1) * block_size + std::min(last_tile, block_size);
         } else {
             out_ne0 = block_size;
@@ -2159,6 +2162,7 @@ static ggml_backend_i ggml_backend_webgpu_i = {
 static void ggml_backend_webgpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_webgpu_buffer_context * ctx = static_cast<ggml_backend_webgpu_buffer_context *>(buffer->context);
     ctx->buffer.Destroy();
+    delete ctx;
 }
 
 // Returns the "fake" base pointer.
@@ -3381,10 +3385,7 @@ static size_t ggml_backend_webgpu_reg_get_device_count(ggml_backend_reg_t reg) {
     return ctx->device_count;
 }
 
-// TODO: Does this need to be thread safe? Is it only called once?
-// TODO: move most logic to device_init function so backend can be freed/initialized properly
 // Only one device is supported for now
-
 static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t reg, size_t index) {
     GGML_ASSERT(index == 0);
     WEBGPU_LOG_DEBUG("ggml_backend_reg_get_device()");
