@@ -94,6 +94,15 @@ else()
     target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 endif()
 
+# Enable SPIR-V split barrier extension for cooperative ESIMD kernels on Arc GPUs
+# Split barriers allow non-blocking arrival + deferred wait, improving performance
+# over monolithic esimd::barrier() by overlapping compute with synchronization.
+# Required for: __spirv_ControlBarrierArriveINTEL / __spirv_ControlBarrierWaitINTEL
+# Note: Must specify both targets since we use -fsycl-targets=intel_gpu_bmg_g21,spir64
+target_link_options(ggml-sycl PRIVATE
+    "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+    "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier")
+
 # Link against oneDNN (primary math backend for Intel targets)
 set(GGML_SYCL_DNNL 0)
 set(GGML_SYCL_MKL_FALLBACK_ENABLED 0)

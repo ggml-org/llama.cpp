@@ -154,9 +154,33 @@ static int get_max_esimd_workgroup(GPUFamily family) {
 // Check if GPU family supports named barriers (nbarrier intrinsics)
 // Named barriers are advanced ESIMD features for fine-grained synchronization.
 // Only available on PVC (Xe-HPC), NOT on Arc (XeLPG/XeHPG).
+// NOTE: This is now informational only - kernels use SPIR-V split barriers for Arc compatibility.
 static bool supports_named_barriers(GPUFamily family) {
     // Only Data Center Max (PVC) supports named barriers
     return family == GPUFamily::DATA_CENTER_MAX;
+}
+
+// Check if GPU family supports ESIMD xmx::dpas intrinsics with ExecutionSize=16
+//
+// According to Intel Graphics Compiler documentation (documentation/visa/instructions/DPAS.md):
+//   - Pre-PVC (XeHP/XeHPG/Arc Alchemist): ExecutionSize = 8 only
+//   - PVC and later (Xe-HPC, Xe2/Battlemage): ExecutionSize = 16
+//
+// Our ESIMD kernels use ESIMD_EXEC_SIZE=16, so they require PVC or Xe2 class hardware.
+//
+// NOTE: XeLPG (Meteor Lake iGPU) does NOT have XMX hardware at all - that's a different
+// architecture from Arc discrete GPUs. The "XeLPG" error message is misleading.
+static bool gpu_family_supports_esimd_dpas(GPUFamily family) {
+    switch (family) {
+        case GPUFamily::DATA_CENTER_MAX:   // PVC (Xe-HPC) - ExecutionSize=16 supported
+        case GPUFamily::ARC_BATTLEMAGE:    // Xe2 (B580, B570) - ExecutionSize=16 supported
+            return true;
+        case GPUFamily::ARC_ALCHEMIST:     // XeHPG (A770, A750) - ExecutionSize=8 only
+        case GPUFamily::DATA_CENTER_FLEX:  // XeHPG-based - ExecutionSize=8 only
+        case GPUFamily::UNKNOWN:
+        default:
+            return false;
+    }
 }
 
 // =============================================================================
@@ -207,8 +231,12 @@ XMXConfig XMXConfig::from_device(int device_id) {
     cfg.max_esimd_workgroup = get_max_esimd_workgroup(family);
 
     // Named barriers (nbarrier) are only available on PVC, not on Arc
-    // The large-tile ESIMD kernel requires named barriers for inter-sub-group sync
+    // This is now informational - kernels use SPIR-V split barriers which work on Arc
     cfg.supports_named_barrier = supports_named_barriers(family);
+
+    // ESIMD dpas intrinsics with ExecutionSize=16 work on PVC and Xe2 (Battlemage)
+    // Arc Alchemist (XeHPG) only supports ExecutionSize=8, requiring different kernel config
+    cfg.supports_esimd_dpas = gpu_family_supports_esimd_dpas(family);
 
     // Edge case: M/N/K = 0 should use fallback defaults
     // XMX dimensions: Use queried values if valid, otherwise defaults
@@ -232,11 +260,11 @@ XMXConfig XMXConfig::from_device(int device_id) {
     cfg.tiles_per_workitem = 1;
 
     GGML_SYCL_DEBUG("[XMXConfig] device=%d: M=%zu N=%zu K_INT8=%zu K_FP16=%zu SLM=%zu nsm=%d "
-                    "supported=%d int8=%d fp16=%d double_buf=%d max_esimd_wg=%d nbarrier=%d\n",
+                    "supported=%d int8=%d fp16=%d double_buf=%d max_esimd_wg=%d nbarrier=%d esimd_dpas=%d\n",
                     device_id, cfg.xmx_m, cfg.xmx_n, cfg.xmx_k_int8, cfg.xmx_k_fp16,
                     cfg.slm_size, cfg.nsm, cfg.supported, cfg.supports_int8,
                     cfg.supports_fp16, cfg.use_double_buffer, cfg.max_esimd_workgroup,
-                    cfg.supports_named_barrier);
+                    cfg.supports_named_barrier, cfg.supports_esimd_dpas);
 
     return cfg;
 }
@@ -625,14 +653,16 @@ class esimd_fp16_double_buffered_kernel;
 template <int TILE_M, int TILE_N>
 class esimd_int8_kernel;
 
-#if GGML_SYCL_NAMED_BARRIER_KERNELS
-// Cooperative ESIMD kernel: multi-work-item with named barriers
-// NOTE: Named barriers are only available on PVC (Xe-HPC), not on Arc (XeLPG/XeHPG).
+#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+// Cooperative ESIMD kernel: multi-work-item with work-group barrier
+// Uses split barriers (SPV_INTEL_split_barrier) for efficient synchronization on Arc.
 template <int WG_SIZE>
 class esimd_fp16_cooperative_kernel;
+#endif
 
-// Large-tile ESIMD kernel: 128 work-items for 32x64 output tiles
-// NOTE: This kernel uses named barriers which are only available on PVC (Xe-HPC).
+#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+// Large-tile ESIMD kernel: 64 work-items for 32x32 output tiles
+// Uses split barriers (SPV_INTEL_split_barrier) for efficient synchronization on Arc.
 template <int WG_SIZE>
 class esimd_fp16_large_tile_kernel;
 #endif
@@ -1968,15 +1998,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
     }
 }
 
-#if GGML_SYCL_NAMED_BARRIER_KERNELS
+#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 // =============================================================================
-// Cooperative ESIMD FP16 Kernel Implementation (Named Barriers Required)
+// Cooperative ESIMD FP16 Kernel Implementation
 // =============================================================================
-// NOTE: This kernel uses named barriers which are only available on PVC (Xe-HPC).
-// Disabled by default to avoid JIT compilation errors on Arc (XeLPG/XeHPG).
-// Enable with -DGGML_SYCL_NAMED_BARRIER_KERNELS=1 for PVC builds.
-//
-// Uses multiple work-items with named barriers for work-group level loading.
+// Uses multiple work-items with split barriers for work-group level loading.
 // Each sub-group (16 work-items) owns one 8x16 output tile.
 // All work-items cooperate on loading data to SLM using strided pattern.
 //
@@ -1984,7 +2010,7 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_int8_kernel_impl(
 // 1. Work-group size: 32 (2 sub-groups) vs 1
 // 2. Cooperative loading: All work-items load together, then barrier
 // 3. Each sub-group computes its own output tile after loading
-// 4. Uses esimd::named_barrier for work-group synchronization
+// 4. Uses SPIR-V split barriers for work-group synchronization (Arc-compatible)
 
 /**
  * Cooperative ESIMD FP16 matmul kernel using xmx::dpas with work-group level loading.
@@ -2057,10 +2083,6 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
 
     // Initialize accumulator for this sub-group's output tile: [8 x 16] float
     esimd::simd<float, ESIMD_ACC_SIZE> acc = 0.0f;
-
-    // Initialize named barrier 0 for work-group synchronization
-    // All WG_SIZE work-items participate
-    esimd::named_barrier_init<1>();  // 1 barrier with ID 0
 
     // Number of K tiles
     const int64_t k_tiles = (args.K + ESIMD_K_PER_DPAS - 1) / ESIMD_K_PER_DPAS;
@@ -2161,14 +2183,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
             esimd::slm_block_store<sycl::half, ELEMS_PER_ROW>(slm_off, a_row);
         }
 
-        // Fence and barrier to ensure all loading is complete
-        // named_barrier_signal(barrier_id, producer_consumer_mode, num_producers, num_consumers)
-        // Note: Mode=0 acts as simple barrier on Arc/Xe2 (all work-items sync without role tracking).
-        // PVC docs say 0x1=producer, 0x2=consumer, 0x3=both, but mode=3 hangs on Arc.
-        // Keep mode=0 for Arc compatibility - all WG_SIZE work-items participate as peers.
+        // Split barrier: signal that loading is complete, then wait for all loaders
+        // Using split barriers (SPV_INTEL_split_barrier) for better performance on Arc
         esimd::fence<esimd::fence_mask::local_barrier>();
-        esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
-        esimd::named_barrier_wait(0);
+        split_barrier_arrive(ScopeWorkgroup, SemanticsWGMem);
+        split_barrier_wait(ScopeWorkgroup, SemanticsWGMem);
 
         // ================================================================
         // Phase 2: Compute with Block Loads
@@ -2232,12 +2251,11 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
                             float, float, sycl::half, sycl::half>(acc, b_vec, a_vec);
         }
 
-        // Barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
-        // Mode=0 for Arc/Xe2 compatibility (see note above)
+        // Split barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
         if (kt + 1 < k_tiles) {
             esimd::fence<esimd::fence_mask::local_barrier>();
-            esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
-            esimd::named_barrier_wait(0);
+            split_barrier_arrive(ScopeWorkgroup, SemanticsWGMem);
+            split_barrier_wait(ScopeWorkgroup, SemanticsWGMem);
         }
     }
 
@@ -2260,34 +2278,36 @@ SYCL_ESIMD_FUNCTION void esimd_matmul_fp16_cooperative_impl(
         }
     }
 }
+#endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 
+#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 /**
- * Large-tile ESIMD kernel implementation for 32×64 output tiles.
+ * Large-tile ESIMD kernel implementation for 32×32 output tiles.
  *
- * This kernel processes larger output tiles (32×64) using 128 work-items
- * (8 sub-groups of 16). Designed for prompt processing where larger batches
+ * This kernel processes larger output tiles (32×32) using 64 work-items
+ * (4 sub-groups of 16). Designed for prompt processing where larger batches
  * benefit from increased parallelism and better SLM utilization.
  *
  * Architecture:
- * - 128 work-items = 8 sub-groups of 16 lanes each
- * - 4×2 sub-group grid: 4 columns (covering 64 N) × 2 rows (covering 32 M)
+ * - 64 work-items = 4 sub-groups of 16 lanes each
+ * - 2×2 sub-group grid: 2 columns (covering 32 N) × 2 rows (covering 32 M)
  * - Each sub-group computes 2 stacked 8×16 dpas tiles = 16×16 output
  * - K-dimension tiled at 32 for efficient dpas chaining
  *
  * SLM Layout:
- * - Weights: [64 rows × 32 cols] = 2048 half = 4096 bytes
+ * - Weights: [32 rows × 32 cols] = 1024 half = 2048 bytes
  * - Activations: [32 rows × 32 cols] = 1024 half = 2048 bytes
- * - Total: 6144 bytes (well under 64KB limit)
+ * - Total: 4096 bytes (well under 64KB limit)
  *
- * Cooperative Loading (128 work-items):
- * - Work-items 0-63: Load weight rows (one row of 32 half each)
- * - Work-items 64-127: Load activation rows (doubled up since 64 > 32)
+ * Cooperative Loading (64 work-items):
+ * - Work-items 0-31: Load weight rows (one row of 32 half each)
+ * - Work-items 32-63: Load activation rows (one row of 32 half each)
  *
- * @tparam WG_SIZE  Work-group size (must be 128)
+ * @tparam WG_SIZE  Work-group size (must be 64)
  * @param item      ND-item for work distribution
  * @param args      Kernel arguments
- * @param local_id  Linear work-item ID within work-group [0..127]
- * @param sg_id     Sub-group ID within work-group [0..7]
+ * @param local_id  Linear work-item ID within work-group [0..63]
+ * @param sg_id     Sub-group ID within work-group [0..3]
  * @param lane      Lane ID within sub-group [0..15]
  */
 template <int WG_SIZE>
@@ -2342,9 +2362,6 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
     // Use 2 separate accumulators for the 2 dpas tiles
     esimd::simd<float, ESIMD_ACC_SIZE> acc_lo = 0.0f;  // Rows [0..7]
     esimd::simd<float, ESIMD_ACC_SIZE> acc_hi = 0.0f;  // Rows [8..15]
-
-    // Initialize named barrier 0 for work-group synchronization
-    esimd::named_barrier_init<1>();  // 1 barrier with ID 0
 
     // Number of K tiles (LARGE_TILE_K = 32, process 2 dpas K-tiles of 16 each)
     const int64_t k_tiles = (args.K + LARGE_TILE_K - 1) / LARGE_TILE_K;
@@ -2424,10 +2441,11 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
         }
         // All 64 work-items participate in loading (32 weights + 32 activations)
 
-        // Fence and barrier to ensure all loading is complete
+        // Split barrier: signal that loading is complete, then wait for all loaders
+        // Using split barriers (SPV_INTEL_split_barrier) for better performance on Arc
         esimd::fence<esimd::fence_mask::local_barrier>();
-        esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
-        esimd::named_barrier_wait(0);
+        split_barrier_arrive(ScopeWorkgroup, SemanticsWGMem);
+        split_barrier_wait(ScopeWorkgroup, SemanticsWGMem);
 
         // ================================================================
         // Phase 2: Compute with Block Loads
@@ -2573,11 +2591,11 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
             }
         }
 
-        // Barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
+        // Split barrier before next K-tile (ensure all sub-groups done before overwriting SLM)
         if (kt + 1 < k_tiles) {
             esimd::fence<esimd::fence_mask::local_barrier>();
-            esimd::named_barrier_signal</*Fence=*/false>(0, 0, WG_SIZE, WG_SIZE);
-            esimd::named_barrier_wait(0);
+            split_barrier_arrive(ScopeWorkgroup, SemanticsWGMem);
+            split_barrier_wait(ScopeWorkgroup, SemanticsWGMem);
         }
     }
 
@@ -2616,7 +2634,7 @@ SYCL_ESIMD_FUNCTION void large_tile_esimd_kernel_impl(
         }
     }
 }
-#endif  // GGML_SYCL_NAMED_BARRIER_KERNELS
+#endif  // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 
 /**
  * Check if INT8 ESIMD dpas path can be used for given dimensions.
@@ -2937,7 +2955,9 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
 #if GGML_SYCL_XMX_JOINT_MATRIX_AVAILABLE
     // XMX joint_matrix path should only run if ESIMD_LARGE_TILE was not selected
     // (ESIMD_LARGE_TILE uses its own ESIMD-based large-tile implementation)
-    if (use_xmx_path && selected_path != KernelPath::ESIMD_LARGE_TILE) {
+    // Set GGML_SYCL_SKIP_JM=1 to skip joint_matrix and use cooperative ESIMD instead
+    static const bool skip_joint_matrix = (std::getenv("GGML_SYCL_SKIP_JM") != nullptr);
+    if (use_xmx_path && selected_path != KernelPath::ESIMD_LARGE_TILE && !skip_joint_matrix) {
         // XMX path uses fixed tile sizes aligned to XMX dimensions
         constexpr int XMX_TM = 8;   // Must be multiple of XMX_TILE_M=8
         constexpr int XMX_TN = 16;  // Must be multiple of XMX_TILE_N=16
@@ -2997,11 +3017,34 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
     // Small batches should use scalar DMMV/MMVQ kernels instead.
 
 #if GGML_SYCL_ESIMD_AVAILABLE
-    // Only proceed with ESIMD paths if batch-size gating selected ESIMD_DPAS or ESIMD_LARGE_TILE
-    const bool esimd_enabled_by_gating = (selected_path == KernelPath::ESIMD_DPAS);
-    const bool large_tile_selected     = (selected_path == KernelPath::ESIMD_LARGE_TILE);
+    // ==========================================================================
+    // ESIMD Path: Hardware Capability Check
+    // ==========================================================================
+    // Our ESIMD kernels use ExecutionSize=16 for xmx::dpas, which requires:
+    //   - PVC (Xe-HPC/Data Center Max) - ExecutionSize=16 supported
+    //   - Xe2 (Arc Battlemage B580/B570) - ExecutionSize=16 supported
+    //
+    // Arc Alchemist (XeHPG) only supports ExecutionSize=8, so our kernels won't work.
+    // Use joint_matrix API instead for XeHPG - it handles the difference automatically.
+    //
+    // NOTE: We use a runtime check here. The ESIMD kernels are still compiled,
+    // but they won't be submitted to the queue on unsupported hardware.
+    const bool esimd_hw_supported = cfg.supports_esimd_dpas;
+    if (!esimd_hw_supported) {
+        if (ggml_sycl_unified_debug_enabled()) {
+            fprintf(stderr, "[unified-kernel] ESIMD dpas not supported on this GPU, using joint_matrix/scalar path\n");
+            fflush(stderr);
+        }
+        // Fall through to DMMV/scalar paths below
+    }
 
-#if GGML_SYCL_NAMED_BARRIER_KERNELS
+    // Only proceed with ESIMD paths if:
+    // 1. Hardware supports ESIMD dpas (PVC only)
+    // 2. Batch-size gating selected ESIMD_DPAS or ESIMD_LARGE_TILE
+    const bool esimd_enabled_by_gating = esimd_hw_supported && (selected_path == KernelPath::ESIMD_DPAS);
+    const bool large_tile_selected     = esimd_hw_supported && (selected_path == KernelPath::ESIMD_LARGE_TILE);
+
+#if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
     // Large-tile ESIMD path - adaptive based on hardware capabilities
     // Uses cooperative loading with multiple sub-groups for better memory bandwidth
     // Tile configuration selected based on max ESIMD work-group size:
@@ -3051,10 +3094,10 @@ void launch_unified_matmul(sycl::queue & q, const UnifiedKernelArgs & args_in) {
         // Note: WG_SIZE=128 and WG_SIZE=256 instantiations can be added here
         // when validated on hardware that supports larger work-groups
     }
-cooperative_path:
+cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 #else
     (void)large_tile_selected;  // Suppress unused variable warning when kernels disabled
-#endif
+#endif  // GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 
     // Try INT8 path first (requires both ESIMD and INT8 flags AND batch-size gating)
     if (esimd_enabled_by_gating && can_use_esimd_int8_dpas(args.M, args.N, args.K)) {
@@ -3096,10 +3139,10 @@ cooperative_path:
         return;
     }
 
-#if GGML_SYCL_NAMED_BARRIER_KERNELS
-    // Cooperative ESIMD FP16 path (multi-work-item with named barriers)
-    // NOTE: Named barriers are only available on PVC (Xe-HPC), not on Arc.
-    // Enabled by default while optimizing; set GGML_SYCL_XMX_COOPERATIVE=0 to disable
+#if GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+    // Cooperative ESIMD FP16 path (multi-work-item with work-group barrier)
+    // Uses SPIR-V split barriers for synchronization (Arc-compatible).
+    // Enabled by default; set GGML_SYCL_XMX_COOPERATIVE=0 to disable
     // Work-group size configurable via GGML_SYCL_ESIMD_WG_SIZE (valid: 32, 64)
     if (esimd_enabled_by_gating && can_use_cooperative_esimd(args.M, args.N, args.K)) {
         // Get configured work-group size (default: 32)
@@ -3140,7 +3183,7 @@ cooperative_path:
         });
         return;
     }
-#endif  // GGML_SYCL_NAMED_BARRIER_KERNELS
+#endif  // GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
 
     // FP16 path (ESIMD enabled but INT8 not enabled)
     if (esimd_enabled_by_gating && can_use_esimd_dpas(args.M, args.N, args.K)) {

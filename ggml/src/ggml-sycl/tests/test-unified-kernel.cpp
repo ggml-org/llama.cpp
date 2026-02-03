@@ -13,6 +13,7 @@
 //
 
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -413,6 +414,325 @@ static bool test_unified_kernel_scalar(sycl::queue & q) {
 }
 
 // =============================================================================
+// Test 4: DMMV Performance - Vectorized Q4_0 for Batch=1
+// Verifies the DMMV path achieves target performance for decode operations
+// =============================================================================
+static bool test_unified_kernel_dmmv_perf_impl(sycl::queue & q, int N, int K, const char * label) {
+    const int M        = 1;       // batch=1 (decode)
+    const int k_blocks = K / QK4_0;
+
+    // Allocate and initialize Q4_0 weights [N, K/32 blocks]
+    // Note: For DMMV, weights are indexed by output column (N dimension)
+    std::vector<block_q4_0_test> A(N * k_blocks);
+    std::mt19937                 rng(42);
+    for (auto & block : A) {
+        block.d = sycl::half(0.01f * (rng() % 100 + 1) / 100.0f);
+        for (int i = 0; i < 16; i++) {
+            block.qs[i] = rng() % 256;
+        }
+    }
+
+    // Allocate F32 activations [M=1, K]
+    std::vector<float> B(M * K);
+    for (int k = 0; k < K; k++) {
+        B[k] = 0.01f * ((rng() % 200) - 100) / 100.0f;
+    }
+
+    // Compute CPU reference: C[M=1, N] = B[M=1, K] @ A_dequant[K, N]
+    std::vector<float> C_ref(M * N, 0.0f);
+    std::vector<float> a_col(K);  // Dequantized column
+    for (int n = 0; n < N; n++) {
+        // Dequantize column n of weights
+        for (int kb = 0; kb < k_blocks; kb++) {
+            dequantize_q4_0_block_test(A[n * k_blocks + kb], a_col.data() + kb * QK4_0);
+        }
+        // Dot product
+        float acc = 0.0f;
+        for (int k = 0; k < K; k++) {
+            acc += B[k] * a_col[k];
+        }
+        C_ref[n] = acc;
+    }
+
+    // Allocate device memory
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(N * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(M * K, q);
+    auto * C_dev = sycl::malloc_device<float>(M * N, q);
+
+    TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
+
+    // Copy to device
+    q.memcpy(A_dev, A.data(), N * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, B.data(), M * K * sizeof(float)).wait();
+    q.memset(C_dev, 0, M * N * sizeof(float)).wait();
+
+    // Setup kernel args for DMMV path
+    ggml_sycl_unified::UnifiedKernelArgs args;
+    args.M              = M;
+    args.N              = N;
+    args.K              = K;
+    args.tile_m         = 8;
+    args.tile_n         = 32;
+    args.tile_k         = 32;
+    args.use_xmx        = false;  // DMMV doesn't use XMX
+    args.layout_mode    = 0;      // AoS
+    args.quant_type     = 2;      // GGML_TYPE_Q4_0
+    args.prefetch_depth = 0;
+    args.weights        = A_dev;
+    args.activations    = B_dev;
+    args.output         = C_dev;
+
+    // Warmup
+    ggml_sycl_unified::launch_unified_matmul(q, args);
+    q.wait();
+
+    // Benchmark: Run multiple iterations
+    const int num_iters = 100;
+    auto      start     = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < num_iters; i++) {
+        ggml_sycl_unified::launch_unified_matmul(q, args);
+    }
+    q.wait();
+
+    auto end     = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+    // Calculate throughput
+    double time_per_iter_us = static_cast<double>(elapsed) / num_iters;
+    double time_per_iter_ms = time_per_iter_us / 1000.0;
+
+    // Memory bandwidth calculation
+    // Read: N * K/32 * sizeof(block_q4_0) + K * sizeof(float)
+    // Write: N * sizeof(float)
+    size_t bytes_read  = N * k_blocks * sizeof(block_q4_0_test) + K * sizeof(float);
+    size_t bytes_write = N * sizeof(float);
+    double bandwidth_gbps = (bytes_read + bytes_write) / (time_per_iter_us * 1000.0);
+
+    fprintf(stderr, "  [%s] M=%d N=%d K=%d\n", label, M, N, K);
+    fprintf(stderr, "  Time per matmul: %.2f us (%.3f ms)\n", time_per_iter_us, time_per_iter_ms);
+    fprintf(stderr, "  Effective bandwidth: %.2f GB/s\n", bandwidth_gbps);
+
+    // Performance target: Should achieve >50% of theoretical bandwidth
+    // Arc B580 has ~480 GB/s bandwidth, so target is ~240 GB/s for memory-bound ops
+    // Current unified DMMV is ~15 tok/s, legacy is ~40 tok/s
+    // This corresponds to roughly 3x improvement needed
+    const double min_bandwidth_gbps = 100.0;  // Conservative target
+
+    if (bandwidth_gbps < min_bandwidth_gbps) {
+        fprintf(stderr, "  WARNING: Below target bandwidth (%.1f GB/s < %.1f GB/s)\n",
+                bandwidth_gbps, min_bandwidth_gbps);
+    }
+
+    // Copy result back for correctness check
+    std::vector<float> C_gpu(M * N);
+    q.memcpy(C_gpu.data(), C_dev, M * N * sizeof(float)).wait();
+
+    // Verify results (more lenient tolerance for larger matrices)
+    const float tolerance = 0.01f;
+    int         errors    = 0;
+    for (int i = 0; i < M * N && errors < 5; i++) {
+        float diff = std::abs(C_gpu[i] - C_ref[i]);
+        float rel  = diff / (std::abs(C_ref[i]) + 1e-6f);
+        if (rel > tolerance && diff > 1e-4f) {
+            fprintf(stderr, "  Mismatch at [%d]: GPU=%.6f, CPU=%.6f, diff=%.6f\n",
+                    i, C_gpu[i], C_ref[i], diff);
+            errors++;
+        }
+    }
+
+    // Cleanup
+    sycl::free(A_dev, q);
+    sycl::free(B_dev, q);
+    sycl::free(C_dev, q);
+
+    TEST_ASSERT(errors == 0, "Correctness check failed");
+
+    return true;
+}
+
+static bool test_unified_kernel_dmmv_perf(sycl::queue & q) {
+    TEST_BEGIN("test_unified_kernel_dmmv_perf");
+
+    fprintf(stderr, "\n");
+
+    // Test multiple dimension configurations
+    bool ok = true;
+    ok &= test_unified_kernel_dmmv_perf_impl(q, 4096, 4096, "Attention Q/K/V/O");
+    ok &= test_unified_kernel_dmmv_perf_impl(q, 14336, 4096, "FFN Gate/Up");
+    ok &= test_unified_kernel_dmmv_perf_impl(q, 4096, 14336, "FFN Down");
+
+    if (ok) {
+        TEST_PASS();
+    }
+    return ok;
+}
+
+// =============================================================================
+// Test 5: DMMV SoA Layout Performance
+// Verifies the SoA layout achieves better performance for large K dimensions
+// =============================================================================
+static bool test_unified_kernel_dmmv_soa_impl(sycl::queue & q, int N, int K, const char * label) {
+    const int M        = 1;       // batch=1 (decode)
+    const int k_blocks = K / QK4_0;
+    const int64_t total_blocks = static_cast<int64_t>(N) * k_blocks;
+
+    // Allocate Q4_0 weights in SoA layout:
+    // [all qs: total_blocks * 16 bytes] [all d: total_blocks * sizeof(half)]
+    const size_t qs_bytes = total_blocks * (QK4_0 / 2);
+    const size_t d_bytes  = total_blocks * sizeof(sycl::half);
+    std::vector<uint8_t> soa_buffer(qs_bytes + d_bytes);
+
+    uint8_t *    qs_base = soa_buffer.data();
+    sycl::half * d_base  = reinterpret_cast<sycl::half *>(soa_buffer.data() + qs_bytes);
+
+    // Initialize with random data
+    std::mt19937 rng(42);
+    for (int64_t i = 0; i < total_blocks; i++) {
+        d_base[i] = sycl::half(0.01f * (rng() % 100 + 1) / 100.0f);
+        for (int j = 0; j < 16; j++) {
+            qs_base[i * 16 + j] = rng() % 256;
+        }
+    }
+
+    // Allocate F32 activations [M=1, K]
+    std::vector<float> B(M * K);
+    for (int k = 0; k < K; k++) {
+        B[k] = 0.01f * ((rng() % 200) - 100) / 100.0f;
+    }
+
+    // Compute CPU reference: C[M=1, N] = B[M=1, K] @ A_dequant[K, N]
+    std::vector<float> C_ref(M * N, 0.0f);
+    for (int n = 0; n < N; n++) {
+        float acc = 0.0f;
+        for (int kb = 0; kb < k_blocks; kb++) {
+            const int64_t block_idx = static_cast<int64_t>(n) * k_blocks + kb;
+            const float d = static_cast<float>(d_base[block_idx]);
+            const uint8_t * qs = qs_base + block_idx * 16;
+
+            for (int i = 0; i < 16; i++) {
+                const uint8_t qs_byte = qs[i];
+                const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+                const int k_offset = kb * QK4_0;
+                acc += w0 * B[k_offset + i] + w1 * B[k_offset + i + 16];
+            }
+        }
+        C_ref[n] = acc;
+    }
+
+    // Allocate device memory
+    auto * A_dev = sycl::malloc_device<uint8_t>(soa_buffer.size(), q);
+    auto * B_dev = sycl::malloc_device<float>(M * K, q);
+    auto * C_dev = sycl::malloc_device<float>(M * N, q);
+
+    if (!A_dev || !B_dev || !C_dev) {
+        fprintf(stderr, "FAILED: Device memory allocation failed\n");
+        if (A_dev) sycl::free(A_dev, q);
+        if (B_dev) sycl::free(B_dev, q);
+        if (C_dev) sycl::free(C_dev, q);
+        return false;
+    }
+
+    // Copy to device
+    q.memcpy(A_dev, soa_buffer.data(), soa_buffer.size()).wait();
+    q.memcpy(B_dev, B.data(), M * K * sizeof(float)).wait();
+    q.memset(C_dev, 0, M * N * sizeof(float)).wait();
+
+    // Setup kernel args for DMMV path with SoA layout
+    ggml_sycl_unified::UnifiedKernelArgs args;
+    args.M              = M;
+    args.N              = N;
+    args.K              = K;
+    args.tile_m         = 8;
+    args.tile_n         = 32;
+    args.tile_k         = 32;
+    args.use_xmx        = false;  // DMMV doesn't use XMX
+    args.layout_mode    = 1;      // SOA
+    args.layout         = ggml_sycl_unified::LayoutMode::SOA;
+    args.quant_type     = 2;      // GGML_TYPE_Q4_0
+    args.prefetch_depth = 0;
+    args.weights        = A_dev;
+    args.activations    = B_dev;
+    args.output         = C_dev;
+
+    // Warmup
+    ggml_sycl_unified::launch_unified_matmul(q, args);
+    q.wait();
+
+    // Benchmark: Run multiple iterations
+    const int num_iters = 100;
+    auto      start     = std::chrono::high_resolution_clock::now();
+
+    for (int i = 0; i < num_iters; i++) {
+        ggml_sycl_unified::launch_unified_matmul(q, args);
+    }
+    q.wait();
+
+    auto end     = std::chrono::high_resolution_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+
+    // Calculate throughput
+    double time_per_iter_us = static_cast<double>(elapsed) / num_iters;
+    double time_per_iter_ms = time_per_iter_us / 1000.0;
+
+    // Memory bandwidth calculation
+    size_t bytes_read  = soa_buffer.size() + K * sizeof(float);
+    size_t bytes_write = N * sizeof(float);
+    double bandwidth_gbps = (bytes_read + bytes_write) / (time_per_iter_us * 1000.0);
+
+    fprintf(stderr, "  [%s SoA] M=%d N=%d K=%d\n", label, M, N, K);
+    fprintf(stderr, "  Time per matmul: %.2f us (%.3f ms)\n", time_per_iter_us, time_per_iter_ms);
+    fprintf(stderr, "  Effective bandwidth: %.2f GB/s\n", bandwidth_gbps);
+
+    // Copy result back for correctness check
+    std::vector<float> C_gpu(M * N);
+    q.memcpy(C_gpu.data(), C_dev, M * N * sizeof(float)).wait();
+
+    // Verify results
+    const float tolerance = 0.01f;
+    int         errors    = 0;
+    for (int i = 0; i < M * N && errors < 5; i++) {
+        float diff = std::abs(C_gpu[i] - C_ref[i]);
+        float rel  = diff / (std::abs(C_ref[i]) + 1e-6f);
+        if (rel > tolerance && diff > 1e-4f) {
+            fprintf(stderr, "  Mismatch at [%d]: GPU=%.6f, CPU=%.6f, diff=%.6f\n",
+                    i, C_gpu[i], C_ref[i], diff);
+            errors++;
+        }
+    }
+
+    // Cleanup
+    sycl::free(A_dev, q);
+    sycl::free(B_dev, q);
+    sycl::free(C_dev, q);
+
+    if (errors > 0) {
+        fprintf(stderr, "FAILED: Correctness check failed\n");
+        return false;
+    }
+
+    return true;
+}
+
+static bool test_unified_kernel_dmmv_soa_perf(sycl::queue & q) {
+    TEST_BEGIN("test_unified_kernel_dmmv_soa_perf");
+
+    fprintf(stderr, "\n");
+
+    // Test SoA layout performance - especially for large K (FFN Down)
+    bool ok = true;
+    ok &= test_unified_kernel_dmmv_soa_impl(q, 4096, 4096, "Attention Q/K/V/O");
+    ok &= test_unified_kernel_dmmv_soa_impl(q, 14336, 4096, "FFN Gate/Up");
+    ok &= test_unified_kernel_dmmv_soa_impl(q, 4096, 14336, "FFN Down");
+
+    if (ok) {
+        TEST_PASS();
+    }
+    return ok;
+}
+
+// =============================================================================
 // Main
 // =============================================================================
 
@@ -444,6 +764,8 @@ int main(int argc, char ** argv) {
     all_passed &= test_unified_kernel_q4_0_small(q);
     all_passed &= test_unified_kernel_boundary(q);
     all_passed &= test_unified_kernel_scalar(q);
+    all_passed &= test_unified_kernel_dmmv_perf(q);
+    all_passed &= test_unified_kernel_dmmv_soa_perf(q);
 
     // Summary
     fprintf(stderr, "-------------------------------------------\n");

@@ -1949,7 +1949,10 @@ if(GGML_SYCL)
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
     target_compile_definitions(test-unified-dispatch-integration PRIVATE GGML_SYCL_WARP_SIZE=32)
     target_compile_options(test-unified-dispatch-integration PRIVATE "-fsycl" "-Wno-narrowing")
-    target_link_options(test-unified-dispatch-integration PRIVATE "-fsycl")
+    # Split barrier extension required for cooperative ESIMD kernels
+    target_link_options(test-unified-dispatch-integration PRIVATE "-fsycl"
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier")
     install(TARGETS test-unified-dispatch-integration RUNTIME)
     add_test(NAME test-unified-dispatch-integration COMMAND $<TARGET_FILE:test-unified-dispatch-integration>)
     set_property(TEST test-unified-dispatch-integration PROPERTY LABELS "sycl;integration")

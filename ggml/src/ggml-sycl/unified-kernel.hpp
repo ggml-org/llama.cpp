@@ -70,24 +70,114 @@ namespace xmx   = sycl::ext::intel::esimd::xmx;
 #    define GGML_SYCL_ESIMD_AVAILABLE 0
 #endif
 
-// Named barrier kernel support (cooperative ESIMD and large-tile kernels)
-// These kernels use named barriers (nbarrier) which are only available on PVC/Xe-HPC.
-// Disabled by default since they cause JIT compilation errors on Arc (XeLPG/XeHPG).
-// Enable with -DGGML_SYCL_NAMED_BARRIER_KERNELS=1 for PVC builds.
-#ifndef GGML_SYCL_NAMED_BARRIER_KERNELS
-#    define GGML_SYCL_NAMED_BARRIER_KERNELS 0
+// Cooperative ESIMD kernel support
+// These kernels use split barriers for work-group synchronization.
+// Split barriers (SPV_INTEL_split_barrier) allow non-blocking arrival + deferred wait,
+// which can overlap computation with synchronization for better performance.
+#ifndef GGML_SYCL_COOPERATIVE_KERNEL_ENABLED
+#    define GGML_SYCL_COOPERATIVE_KERNEL_ENABLED 1
 #endif
 
-// Large-tile ESIMD kernel support (subset of named barrier kernels)
-// Requires GGML_SYCL_NAMED_BARRIER_KERNELS=1 to be enabled.
-#if GGML_SYCL_NAMED_BARRIER_KERNELS
-#    ifndef GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
-#        define GGML_SYCL_LARGE_TILE_KERNEL_ENABLED 1
-#    endif
-#else
-#    undef GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
+// Large-tile ESIMD kernel support (32x32 output tiles with 64 work-items)
+// Uses split barriers for work-group synchronization.
+// DISABLED BY DEFAULT: The dpas2 intrinsic configuration used by this kernel
+// is not supported on XeLPG (Arc B580). Enable only on PVC/future GPUs.
+#ifndef GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
 #    define GGML_SYCL_LARGE_TILE_KERNEL_ENABLED 0
 #endif
+
+// =============================================================================
+// SPIR-V Split Barrier Support (from Intel SYCL*TLA)
+// =============================================================================
+// Split barriers allow non-blocking arrival + deferred wait, enabling overlap
+// of computation with synchronization. This is more efficient than monolithic
+// esimd::barrier() which blocks immediately.
+//
+// Usage pattern:
+//   split_barrier_arrive(ScopeWorkgroup);  // Non-blocking: signal "I'm done"
+//   // ... do other work while waiting for others ...
+//   split_barrier_wait(ScopeWorkgroup);    // Block until all have arrived
+//
+// Scope options:
+//   ScopeWorkgroup (2) - Synchronize all work-items in the work-group
+//   ScopeSubgroup (3)  - Synchronize work-items in the sub-group
+//
+// Requires: -Xspirv-translator "--spirv-ext=+SPV_INTEL_split_barrier"
+
+#ifdef __SYCL_DEVICE_ONLY__
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_ControlBarrierArriveINTEL(
+    int execution_scope, int memory_scope, int memory_semantics);
+SYCL_EXTERNAL __attribute__((convergent)) void __spirv_ControlBarrierWaitINTEL(
+    int execution_scope, int memory_scope, int memory_semantics);
+#endif
+
+// SPIR-V scope constants (from SPV_INTEL_split_barrier extension)
+enum class SPIRVScope : int {
+    CrossDevice = 0,
+    Device      = 1,
+    Workgroup   = 2,
+    Subgroup    = 3,
+    Invocation  = 4,
+};
+
+// SPIR-V memory semantics (for memory ordering)
+enum class SPIRVMemorySemantics : int {
+    None            = 0,
+    Acquire         = 0x2,
+    Release         = 0x4,
+    AcquireRelease  = 0x8,
+    SubgroupMemory  = 0x80,
+    WorkgroupMemory = 0x100,
+    CrossWorkgroup  = 0x200,
+};
+
+// Convenience aliases
+constexpr int ScopeWorkgroup = static_cast<int>(SPIRVScope::Workgroup);
+constexpr int ScopeSubgroup  = static_cast<int>(SPIRVScope::Subgroup);
+constexpr int SemanticsNone  = static_cast<int>(SPIRVMemorySemantics::None);
+constexpr int SemanticsWGMem = static_cast<int>(SPIRVMemorySemantics::WorkgroupMemory);
+
+// Split barrier helper functions for cleaner kernel code
+// These wrap the SPIR-V intrinsics with meaningful names
+
+/**
+ * Signal arrival at a split barrier (non-blocking).
+ * Call this when work-item has finished its contribution.
+ * Does NOT wait for other work-items.
+ */
+inline void split_barrier_arrive(int scope = ScopeWorkgroup,
+                                  int memory_semantics = SemanticsWGMem) {
+#ifdef __SYCL_DEVICE_ONLY__
+    __spirv_ControlBarrierArriveINTEL(scope, scope, memory_semantics);
+#else
+    (void)scope;
+    (void)memory_semantics;
+#endif
+}
+
+/**
+ * Wait at a split barrier for all arrivals.
+ * Blocks until all work-items in the scope have called split_barrier_arrive().
+ */
+inline void split_barrier_wait(int scope = ScopeWorkgroup,
+                                int memory_semantics = SemanticsWGMem) {
+#ifdef __SYCL_DEVICE_ONLY__
+    __spirv_ControlBarrierWaitINTEL(scope, scope, memory_semantics);
+#else
+    (void)scope;
+    (void)memory_semantics;
+#endif
+}
+
+/**
+ * Combined arrive-and-wait (equivalent to esimd::barrier() but using split barrier API).
+ * Use when you need immediate synchronization without overlapping work.
+ */
+inline void split_barrier_sync(int scope = ScopeWorkgroup,
+                                int memory_semantics = SemanticsWGMem) {
+    split_barrier_arrive(scope, memory_semantics);
+    split_barrier_wait(scope, memory_semantics);
+}
 
 namespace ggml_sycl_unified {
 
@@ -640,7 +730,8 @@ struct XMXConfig {
     bool supported              = false;  // Hardware has XMX support
     bool supports_int8          = false;  // INT8 dpas available
     bool supports_fp16          = false;  // FP16 dpas available
-    bool supports_named_barrier = false;  // Named barriers for ESIMD (PVC only, not Arc)
+    bool supports_named_barrier = false;  // Named barriers (PVC only)
+    bool supports_esimd_dpas    = false;  // ESIMD xmx::dpas with ExecSize=16 (PVC, Xe2/Battlemage)
 
     // =========================================================================
     // Derived Configuration
@@ -761,15 +852,13 @@ inline KernelPath select_kernel_path(int               batch_size,
         return KernelPath::MMVQ;
     }
 
-    // Large-tile path for very large batches (32x64 output tiles)
-    // Uses 128 work-items per work-group with cooperative loading
+    // Large-tile path for very large batches (32x32 output tiles with 64 work-items)
+    // Uses cooperative loading with esimd::barrier() for work-group synchronization.
     // Requires:
-    // - GGML_SYCL_LARGE_TILE_KERNEL_ENABLED=1 at compile time (disabled by default)
+    // - GGML_SYCL_LARGE_TILE_KERNEL_ENABLED=1 at compile time (enabled by default)
     // - GGML_SYCL_UNIFIED_LARGE_TILE=1 environment variable
-    // - Named barrier support (PVC only - not available on Arc)
 #if GGML_SYCL_LARGE_TILE_KERNEL_ENABLED
-    if (cfg.supports_named_barrier &&
-        batch_size >= get_large_tile_min_batch() && can_use_large_tile_esimd(M, N, K)) {
+    if (batch_size >= get_large_tile_min_batch() && can_use_large_tile_esimd(M, N, K)) {
         return KernelPath::ESIMD_LARGE_TILE;
     }
 #endif
