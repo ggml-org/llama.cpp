@@ -83,6 +83,7 @@
 #include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/layer-prefetch.hpp"
+#include "ggml-sycl/l2-prefetch.hpp"
 
 // Forward declarations for layout helpers used before definition.
 static const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode);
@@ -141,6 +142,8 @@ std::atomic<bool>        g_ggml_sycl_debug_forced_off{ false };
 // Force VRAM placement override (GGML_SYCL_FORCE_VRAM=1)
 // When set, ignores g_model_exceeds_vram and always prefers VRAM placement
 static std::atomic<int>  g_ggml_sycl_force_vram{ -1 };  // -1 = not initialized, 0 = disabled, 1 = enabled
+// Forward declaration - defined later in tensor inventory section
+extern std::atomic<bool> g_model_exceeds_vram;
 
 int ggml_sycl_graph_inflight_count() {
     return g_sycl_graph_inflight.load(std::memory_order_acquire);
@@ -1487,28 +1490,34 @@ static void ggml_sycl_release_xmx_aos_staging(ggml_tensor_extra_gpu * extra, int
 }
 
 bool ggml_backend_sycl_weights_evictable(void) {
-    static std::atomic<int> g_cached{ -1 };  // -1 = uninitialized, 0 = false, 1 = true
-    int                     cached = g_cached.load(std::memory_order_acquire);
-    if (cached != -1) {
-        return cached != 0;
-    }
-
-    // Default OFF: weights_evictable places model in HOST memory, causing slow performance.
-    // Only enable when model exceeds VRAM and needs streaming from host.
-    // Users can explicitly enable with GGML_SYCL_WEIGHTS_EVICTABLE=1 for large models.
-    int resolved = 0;
-    if (ggml_sycl::unified_cache_enabled()) {
-        const char * env = std::getenv("GGML_SYCL_WEIGHTS_EVICTABLE");
-        if (env != nullptr) {
-            resolved = std::atoi(env) != 0 ? 1 : 0;
+    // Check env var first (explicit user preference)
+    static std::atomic<int> g_env_cached{ -1 };  // -1 = uninitialized, 0 = false, 1 = true, 2 = auto
+    int                     env_cached = g_env_cached.load(std::memory_order_acquire);
+    if (env_cached == -1) {
+        int resolved = 2;  // default = auto (follow g_model_exceeds_vram)
+        if (ggml_sycl::unified_cache_enabled()) {
+            const char * env = std::getenv("GGML_SYCL_WEIGHTS_EVICTABLE");
+            if (env != nullptr) {
+                resolved = std::atoi(env) != 0 ? 1 : 0;
+            }
         } else {
-            // Default OFF - models that fit in VRAM should use VRAM, not host memory
-            resolved = 0;
+            resolved = 0;  // No unified cache means no eviction support
         }
+        g_env_cached.store(resolved, std::memory_order_release);
+        env_cached = resolved;
     }
 
-    g_cached.store(resolved, std::memory_order_release);
-    return resolved != 0;
+    // Explicit enable/disable via env var
+    if (env_cached == 1) {
+        return true;
+    }
+    if (env_cached == 0) {
+        return false;
+    }
+
+    // Auto mode: enable when model exceeds VRAM (requires streaming from host)
+    // This allows large models to work automatically without manual env var configuration.
+    return g_model_exceeds_vram.load(std::memory_order_acquire);
 }
 
 void ggml_backend_sycl_set_unified_cache_budget_pct(int pct) {
@@ -3061,6 +3070,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
                 ctx->stream->memset((char *) tensor->data + original_size, 0, padded_size - original_size).wait()));
         }
     }
+
     return GGML_STATUS_SUCCESS;
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -8942,6 +8952,11 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_host(qptr, device));
 }
 
+// Custom deleter for L2PrefetchManager - complete type is available here
+void ggml_sycl::L2PrefetchManagerDeleter::operator()(ggml_sycl::L2PrefetchManager * ptr) const {
+    delete ptr;
+}
+
 ggml_backend_sycl_context::~ggml_backend_sycl_context() {
     // Release cached MoE ids buffers (device + pinned host staging).
     for (auto & pair : moe_ids_cache) {
@@ -8963,6 +8978,7 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
     }
     moe_ids_cache.clear();
 }
+
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
     // TBD: NO VMM support
     // if (ggml_sycl_info().devices[device].vmm) {
@@ -16598,9 +16614,17 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
             target = GGML_LAYOUT_AOS;
         }
         if (!extra) {
-            GGML_LOG_ERROR("[LAYOUT] MoE layout registration missing extra for %s\n",
-                           tensor->name ? tensor->name : "?");
-            GGML_ASSERT(extra);
+            // MoE tensor doesn't have GPU extra metadata yet - this happens for
+            // host-resident weights when model exceeds VRAM. Register the base_key
+            // layout choice so the unified cache can handle on-demand loading.
+            // Per-expert keys will be created lazily when the tensor gets an extra.
+            if (base_key.valid) {
+                ggml_sycl_register_layout_choice(base_key, ctx.device, target, tensor->type, ggml_get_name(tensor));
+                if (g_ggml_sycl_debug) {
+                    GGML_SYCL_DEBUG("[LAYOUT] MoE tensor %s registered with base_key only (host-resident, no extra)\n",
+                                    tensor->name ? tensor->name : "?");
+                }
+            }
             continue;
         }
 
@@ -18156,7 +18180,7 @@ std::optional<ggml_sycl_mul_mat_kernel> ggml_sycl_select_preferred_kernel(
                                                  !ggml_is_transposed(src1) &&
                                                  !ggml_is_permuted(src1);
                     if (!ggml_sycl_unified_dispatch_enabled() ||
-                        !ggml_sycl::is_unified_kernel_enabled() ||
+                        !ggml_sycl::is_unified_kernel_enabled_for_device(device) ||
                         !ggml_sycl::should_use_unified(src0->type) ||
                         !src1_contiguous) {
                         override_ok = false;
@@ -18473,7 +18497,7 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor * src0,
 
     const bool unified_enabled = allow_unified &&
                                  ggml_sycl_unified_dispatch_enabled() &&
-                                 ggml_sycl::is_unified_kernel_enabled() &&
+                                 ggml_sycl::is_unified_kernel_enabled_for_device(ctx_.device) &&
                                  ggml_sycl::should_use_unified(src0->type);
     if (unified_enabled) {
         const bool src1_contiguous = ggml_is_contiguous(src1) &&
@@ -18662,6 +18686,20 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             // For now, just log the opportunity. Full prefetch requires cache_id lookup.
             GGML_SYCL_DEBUG("[PREFETCH] Layer transition at %s -> prefetch layer %d\n",
                             src0->name, next_layer_id);
+        }
+    }
+
+    // L2 cache prefetch for TG (batch=1) workloads with VRAM-resident models
+    // Prefetch next tensor's data into L2 cache while current tensor is computing.
+    // This is complementary to the host->VRAM prefetch above - this handles the
+    // case where weights are already in VRAM but we want to warm up L2.
+    // Enable with: GGML_SYCL_L2_PREFETCH=1
+    if (src0->name && src1->ne[1] == 1 && !g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        auto * l2_mgr = ctx.l2_prefetch_manager.get();
+        if (l2_mgr) {
+            // Lazy registration: register tensor on first access if not already registered
+            l2_mgr->register_tensor(src0->name, src0->data, ggml_nbytes(src0));
+            l2_mgr->on_tensor_compute_start(src0->name, src0->data);
         }
     }
 
@@ -19476,7 +19514,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             has_override    = true;
         }
         const bool layout_finalized = ggml_sycl_layout_choices_finalized_for_device(ctx.device);
-        bool       enforce_layout_choice = layout_finalized && !has_override && ggml_sycl_tensor_is_weight(src0);
+        // Only enforce layout choices for quantized types that support reordering.
+        // Float types (F32, F16, BF16) don't have reordered layouts and should
+        // always use their default kernel paths regardless of layout finalization.
+        const bool type_has_reorder_support =
+            (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_K ||
+             src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_0 ||
+             src0->type == GGML_TYPE_MXFP4);
+        bool       enforce_layout_choice = layout_finalized && !has_override &&
+                                     ggml_sycl_tensor_is_weight(src0) && type_has_reorder_support;
         layout_mode chosen_layout = GGML_LAYOUT_AOS;
         if (enforce_layout_choice) {
             if (!ggml_sycl_get_layout_choice_for_tensor(src0, ctx.device, &chosen_layout)) {
@@ -22347,6 +22393,7 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     ggml_sycl_free_dev2dev_transfer_buffer();
     ggml_sycl_layout_ptr_stats_dump();
     g_sycl_backend_refcount.fetch_sub(1, std::memory_order_acq_rel);
+    // L2 prefetch manager is owned by context via unique_ptr, cleaned up automatically
     // NOTE: We intentionally do NOT release host weight extras when refcount reaches 0.
     // Reason: Extras are associated with tensors, not backends. Tensors may outlive
     // backends (e.g., temporary backends created during model loading). Releasing
@@ -24661,6 +24708,24 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 graph_unpin_weights(sycl_ctx);
             }
         }
+
+        // Graph state logging for TG optimization debugging
+        if (sycl_ctx->graphs_disabled) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH-STATE] disabled globally\n");
+        } else if (!sycl_ctx->exec_graph) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH-STATE] no executable graph cached, will record\n");
+        } else if (sycl_ctx->exec_graph_n_nodes != cgraph->n_nodes) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH-STATE] node count mismatch (cached=%d, current=%d)\n",
+                            sycl_ctx->exec_graph_n_nodes, cgraph->n_nodes);
+        } else if (sycl_ctx->exec_graph_is_decode != is_decode_phase) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH-STATE] phase mismatch (cached=%s, current=%s)\n",
+                            sycl_ctx->exec_graph_is_decode ? "decode" : "prompt",
+                            is_decode_phase ? "decode" : "prompt");
+        } else {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH-STATE] replaying cached graph (%d nodes, %s phase)\n",
+                            cgraph->n_nodes, is_decode_phase ? "decode" : "prompt");
+        }
+
         // If we already have an executable graph with matching structure, just execute it.
         // Kernel arguments are captured by value, so pointers must remain stable across replays.
         // We don't need to re-record because the kernel arguments (buffer pointers)
@@ -25531,6 +25596,7 @@ ggml_backend_reg_t ggml_backend_sycl_reg() {
     }
     return &reg;
 }
+
 ggml_backend_t ggml_backend_sycl_init(int device) {
 
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_init\n");
@@ -25546,6 +25612,19 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
         GGML_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
         return nullptr;
     };
+
+    // Initialize L2 prefetch manager for TG optimization (owned by context)
+    // Note: Can't use make_unique with custom deleter, use explicit construction
+    if (ggml_sycl::is_l2_prefetch_enabled() && ctx->stream()) {
+        try {
+            ctx->l2_prefetch_manager.reset(new ggml_sycl::L2PrefetchManager(ctx->stream()));
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[L2-PREFETCH] Failed to create manager (SYCL): %s\n", e.what());
+        } catch (const std::exception & e) {
+            GGML_LOG_ERROR("[L2-PREFETCH] Failed to create manager (std): %s\n", e.what());
+        }
+    }
+
     ggml_backend_t sycl_backend =
 
         new ggml_backend{ /* .guid    = */ ggml_backend_sycl_guid(),
@@ -25553,6 +25632,7 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
                           /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), device),
                           /* .context = */ ctx };
     g_sycl_backend_refcount.fetch_add(1, std::memory_order_acq_rel);
+
     return sycl_backend;
 }
 
