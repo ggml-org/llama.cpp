@@ -111,10 +111,15 @@ option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
 
 # 3rd party libs
-option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
-option(LLAMA_HTTPLIB    "llama: if libcurl is disabled, use httplib to download model from an URL" ON)
-option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" OFF)
+option(LLAMA_HTTPLIB    "llama: httplib for downloading functionality" ON)
+option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+
+# deprecated
+option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
+if (LLAMA_CURL)
+    message(WARNING "LLAMA_CURL option is deprecated and will be ignored")
+endif()
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
@@ -211,11 +216,6 @@ add_subdirectory(src)
 #
 # utils, programs, examples and tests
 #
-
-if (NOT LLAMA_BUILD_COMMON)
-    message(STATUS "LLAMA_BUILD_COMMON is OFF, disabling LLAMA_CURL")
-    set(LLAMA_CURL OFF)
-endif()
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)

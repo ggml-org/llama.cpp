@@ -142,7 +142,7 @@ elseif (LLAMA_OPENSSL)
             target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
         endif()
     else()
-        message(STATUS "OpenSSL not found, SSL support disabled")
+        message(WARNING "OpenSSL not found, HTTPS support disabled")
     endif()
 endif()
 

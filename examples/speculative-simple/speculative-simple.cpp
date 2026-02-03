@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.path.empty()) {
+    if (params.speculative.mparams_dft.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -34,10 +34,8 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     llama_model * model_tgt = NULL;
-    //llama_model * model_dft = NULL;
 
     llama_context * ctx_tgt = NULL;
-    llama_context * ctx_dft = NULL;
 
     // load the target model
     auto llama_init_tgt = common_init_from_params(params);
@@ -48,26 +46,38 @@ int main(int argc, char ** argv) {
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
     // load the draft model
-    params.devices      = params.speculative.devices;
-    params.model        = params.speculative.model;
-    params.n_ctx        = params.speculative.n_ctx;
-    params.n_batch      = params.speculative.n_ctx > 0 ? params.speculative.n_ctx : params.n_batch;
-    params.n_gpu_layers = params.speculative.n_gpu_layers;
+    llama_model_ptr model_dft;
 
-    if (params.speculative.cpuparams.n_threads > 0) {
-        params.cpuparams.n_threads = params.speculative.cpuparams.n_threads;
-    }
+    // TODO: simplify this logic
+    {
+        const auto & params_spec = params.speculative;
 
-    params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
-    params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
+        auto params_dft = params;
 
-    auto llama_init_dft = common_init_from_params(params);
+        params_dft.n_parallel   = 1;
+        params_dft.n_ctx        = params_spec.n_ctx;
+        params_dft.n_batch      = llama_n_ctx_seq(ctx_tgt);
+        params_dft.devices      = params_spec.devices;
+        params_dft.model        = params_spec.mparams_dft;
+        params_dft.n_gpu_layers = params_spec.n_gpu_layers;
 
-    //model_dft = llama_init_dft->model();
-    ctx_dft   = llama_init_dft->context();
+        if (params_spec.cpuparams.n_threads > 0) {
+            params_dft.cpuparams.n_threads       = params.speculative.cpuparams.n_threads;
+            params_dft.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
+        }
 
-    if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
-        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
+        params_dft.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
+
+        auto mparams_dft = common_model_params_to_llama(params_dft);
+
+        model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
+        if (model_dft == nullptr) {
+            LOG_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
+            return 1;
+        }
+
+        params.speculative.model_dft = model_dft.get();
+        params.speculative.cparams_dft = common_context_params_to_llama(params_dft);
     }
 
     // Tokenize the prompt
@@ -91,12 +101,6 @@ int main(int argc, char ** argv) {
     for (auto id : inp) {
         LOG("%s", common_token_to_piece(ctx_tgt, id).c_str());
     }
-
-    // how many tokens to draft each time
-    int n_draft     = params.speculative.n_max;
-    int n_draft_min = params.speculative.n_min;
-
-    float p_min = params.speculative.p_min;
 
     int n_predict = 0;
     int n_drafted = 0;
@@ -127,15 +131,11 @@ int main(int argc, char ** argv) {
     int n_past = inp.size() - 1;
 
     // init the speculator
-    struct common_speculative_params params_spec;
-    params_spec.n_draft = n_draft;
-    params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
-    params_spec.p_min   = p_min;
+    const auto & params_spec = params.speculative;
 
-    struct common_speculative * spec = common_speculative_init(ctx_tgt, ctx_dft);
-    for (auto &pair : params.speculative.replacements) {
-        common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
-    }
+    struct common_speculative * spec = common_speculative_init(params.speculative, ctx_tgt);
+
+    common_speculative_begin(spec, prompt_tgt);
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
@@ -151,7 +151,7 @@ int main(int argc, char ** argv) {
         // offloaded to a remote device. it doesn't even have to be based on an LLM. instead, it can provide tokens
         // from a cache or lookup tables.
         //
-        llama_tokens draft = common_speculative_gen_draft(spec, params_spec, prompt_tgt, id_last);
+        llama_tokens draft = common_speculative_draft(spec, params_spec, prompt_tgt, id_last);
 
         //LOG_DBG("draft: %s\n", string_from(ctx_dft, draft).c_str());
 
@@ -162,7 +162,7 @@ int main(int argc, char ** argv) {
         // evaluate the target model on [id_last, draft0, draft1, ..., draftN-1]
         {
             // do not waste time on small drafts
-            if (draft.size() < (size_t) n_draft_min) {
+            if (draft.size() < (size_t) params_spec.n_min) {
                 draft.clear();
             }
 
@@ -240,7 +240,7 @@ int main(int argc, char ** argv) {
     LOG_INF("decoded %4d tokens in %8.3f seconds, speed: %8.3f t/s\n", n_predict, (t_dec_end - t_dec_start) / 1e6f, n_predict  / ((t_dec_end - t_dec_start) / 1e6f));
 
     LOG_INF("\n");
-    LOG_INF("n_draft   = %d\n", n_draft);
+    LOG_INF("n_draft   = %d\n", params_spec.n_max);
     LOG_INF("n_predict = %d\n", n_predict);
     LOG_INF("n_drafted = %d\n", n_drafted);
     LOG_INF("n_accept  = %d\n", n_accept);
@@ -248,8 +248,6 @@ int main(int argc, char ** argv) {
 
     LOG_INF("\n");
     LOG_INF("draft:\n\n");
-
-    llama_perf_context_print(ctx_dft);
 
     LOG_INF("\n");
     LOG_INF("target:\n\n");
