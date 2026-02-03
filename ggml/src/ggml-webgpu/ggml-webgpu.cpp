@@ -393,14 +393,6 @@ struct webgpu_context_struct {
 
     size_t memset_bytes_per_thread;
 
-    // ~webgpu_context_struct() {
-    //     // Since global context is shared across backend instances and buffer instances,
-    //     // we decrement the refcount of the shared_ptr so when it hits 0, the destructor is called.
-    //     global_ctx.reset();
-    //     // Wait for inflight callbacks that may modify buffer pools
-
-    // }
-
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -780,7 +772,6 @@ static const char * ggml_backend_webgpu_name(ggml_backend_t backend) {
     return ctx->name.c_str();
 }
 
-// TODO: implement proper cleanup
 static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *) backend->context;
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_free(" << ctx->name << ")");
@@ -828,10 +819,9 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     GGML_UNUSED(ctx);
 #endif
 
-// TODO(nikhil.jain) delete all webgpu::buffers and pipelines!
-    // ctx->webgpu_ctx->global_ctx->get_tensor_staging_buf.Destroy();
     // Since global context is shared across backend instances and buffer instances,
-    // we decrement the refcount of the shared_ptr so when it hits 0, the destructor is called.
+    // we decrement the refcount of the shared_ptr so when it hits 0, 
+    // the global context's destructor is called. 
     ctx->webgpu_ctx->global_ctx.reset();
     delete ctx;
     delete backend;

@@ -20,7 +20,6 @@
 struct ggml_webgpu_processed_shader {
     std::string wgsl;
     std::string variant;
-    // void * decisions;
     std::shared_ptr<void>      decisions;
 };
 
