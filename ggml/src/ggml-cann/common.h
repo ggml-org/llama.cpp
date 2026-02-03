@@ -46,6 +46,7 @@
 
 #define MATRIX_ROW_PADDING    512
 #define GGML_CANN_MAX_STREAMS 8
+#define GGML_CANN_NUM_COMPUTE_STREAMS 4  // Number of streams for parallel compute
 
 /**
  * @brief Handles CANN-related errors by printing an error message and
@@ -564,6 +565,12 @@ struct ggml_backend_cann_context {
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = { nullptr }; /**< Array of streams for the device. */
 
+    // Multi-stream parallel execution support
+    bool multi_stream_enabled = false;  /**< Whether multi-stream execution is enabled. */
+    int current_stream_idx = 0;         /**< Current stream index for round-robin scheduling. */
+    aclrtEvent stream_events[GGML_CANN_NUM_COMPUTE_STREAMS] = { nullptr }; /**< Events for stream synchronization. */
+    std::vector<const ggml_tensor *> unsynced_nodes; /**< Nodes that have been executed but not synced. */
+
     /**
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
@@ -590,6 +597,12 @@ struct ggml_backend_cann_context {
         for (int i = 0; i < GGML_CANN_MAX_STREAMS; ++i) {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
+            }
+        }
+        // Clean up multi-stream events
+        for (int i = 0; i < GGML_CANN_NUM_COMPUTE_STREAMS; ++i) {
+            if (stream_events[i] != nullptr) {
+                ACL_CHECK(aclrtDestroyEvent(stream_events[i]));
             }
         }
     }
