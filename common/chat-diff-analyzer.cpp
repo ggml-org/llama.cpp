@@ -192,6 +192,7 @@ std::optional<compare_variants_result> differential_analyzer::compare_variants(
     if (params_modifier) {
         params_modifier(params_B);
     }
+    
 
     // Apply template to both variants
     std::string output_A = apply_template(tmpl, params_A);
@@ -683,7 +684,8 @@ void differential_analyzer::analyze_tool_call_format_json_native(const std::stri
     // we might not have the typical OpenAI tool calling structure
     int  json_start     = clean_haystack.find_first_of('{');
     int  json_end       = clean_haystack.find_last_of('}');
-    json call_struct    = json::parse(clean_haystack.substr(json_start, json_end - json_start + 1));
+    std::string cut     = clean_haystack.substr(json_start, json_end - json_start + 1);
+    json call_struct    = json::parse(cut);
     auto register_field = [&](const std::string &                                             prefix,
                               const nlohmann::detail::iteration_proxy_value<json::iterator> & subel) {
         if (subel.value().is_string() && std::string(subel.value()).find("call0000") != std::string::npos) {

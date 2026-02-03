@@ -502,12 +502,21 @@ struct value_object_t : public value_t {
     virtual bool is_immutable() const override { return false; }
     virtual const std::vector<std::pair<value, value>> & as_ordered_object() const override { return val_obj; }
     virtual string as_string() const override {
+        // Use JSON format for object string representation to ensure compatibility
+        // when concatenated in templates (e.g., '{"name": ' + arguments + '}')
         std::ostringstream ss;
         ss << "{";
         for (size_t i = 0; i < val_obj.size(); i++) {
             if (i > 0) ss << ", ";
             auto & [key, val] = val_obj.at(i);
-            ss << value_to_string_repr(key) << ": " << value_to_string_repr(val);
+            // Use double quotes for keys (JSON format)
+            ss << "\"" << key->as_string().str() << "\": ";
+            if (is_val<value_string>(val)) {
+                // Strings need to be quoted in JSON
+                ss << "\"" << val->as_string().str() << "\"";
+            } else {
+                ss << val->as_string().str();
+            }
         }
         ss << "}";
         return ss.str();

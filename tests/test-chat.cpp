@@ -973,7 +973,6 @@ static void test_msgs_oaicompat_json_conversion() {
                   common_chat_msgs_to_json_oaicompat({ message_user_parts }).dump(2));
 
     // Note: content is "" instead of null due to workaround for templates that render null as "None"
-    // Arguments are serialized as string for OAI compatibility
     assert_equals(std::string("[\n"
                               "  {\n"
                               "    \"role\": \"assistant\",\n"
@@ -983,7 +982,9 @@ static void test_msgs_oaicompat_json_conversion() {
                               "        \"type\": \"function\",\n"
                               "        \"function\": {\n"
                               "          \"name\": \"python\",\n"
-                              "          \"arguments\": \"{\\\"code\\\":\\\"print('hey')\\\"}\"\n"
+                              "          \"arguments\": {\n"
+                              "            \"code\": \"print('hey')\"\n"
+                              "          }\n"
                               "        }\n"
                               "      }\n"
                               "    ]\n"

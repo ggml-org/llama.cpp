@@ -116,7 +116,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                 {"type", "function"},
                 {"function", {
                     {"name", tool_call.name},
-                    {"arguments", tool_call.arguments},
+                    {"arguments", json::parse(tool_call.arguments)},
                 }},
             };
             if (!tool_call.id.empty()) {
