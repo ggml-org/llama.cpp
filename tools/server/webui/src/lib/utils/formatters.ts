@@ -101,19 +101,19 @@ export function formatTime(date: Date): string {
 export function formatPerformanceTime(ms: number): string {
 	if (ms < 0) return '0s';
 
-	const totalSeconds = ms / 1000;
+	const totalSeconds = ms / MS_PER_SECOND;
 
-	if (totalSeconds < 1) {
+	if (totalSeconds < SHORT_DURATION_THRESHOLD) {
 		return `${totalSeconds.toFixed(1)}s`;
 	}
 
-	if (totalSeconds < 10) {
+	if (totalSeconds < MEDIUM_DURATION_THRESHOLD) {
 		return `${totalSeconds.toFixed(1)}s`;
 	}
 
-	const hours = Math.floor(totalSeconds / 3600);
-	const minutes = Math.floor((totalSeconds % 3600) / 60);
-	const seconds = Math.floor(totalSeconds % 60);
+	const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
+	const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+	const seconds = Math.floor(totalSeconds % SECONDS_PER_MINUTE);
 
 	const parts: string[] = [];
 

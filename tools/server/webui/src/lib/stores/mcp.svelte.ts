@@ -24,7 +24,7 @@ import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { parseMcpServerSettings, detectMcpTransportFromUrl } from '$lib/utils';
-import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
+import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus, MCPRefType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 import type {
 	MCPToolCall,
@@ -732,7 +732,7 @@ class MCPStore {
 		if (!connection.serverCapabilities?.completions) return null;
 		return MCPService.complete(
 			connection,
-			{ type: 'ref/prompt', name: promptName },
+			{ type: MCPRefType.PROMPT, name: promptName },
 			{ name: argumentName, value: argumentValue }
 		);
 	}
