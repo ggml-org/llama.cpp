@@ -20,6 +20,11 @@
 		isStreaming?: boolean;
 	}
 
+	type ToolResultLine = {
+		text: string;
+		image?: DatabaseMessageExtraImageFile;
+	};
+
 	let { content, message, isStreaming = false }: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
@@ -66,11 +71,6 @@
 
 		expandedStates[index] = !currentState;
 	}
-
-	type ToolResultLine = {
-		text: string;
-		image?: DatabaseMessageExtraImageFile;
-	};
 
 	function parseToolResultWithImages(
 		toolResult: string,

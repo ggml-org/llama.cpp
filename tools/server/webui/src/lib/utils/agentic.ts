@@ -1,5 +1,10 @@
 import { AgenticSectionType } from '$lib/enums';
-import { AGENTIC_TAGS, AGENTIC_REGEX, REASONING_TAGS } from '$lib/constants/agentic';
+import {
+	AGENTIC_TAGS,
+	AGENTIC_REGEX,
+	REASONING_TAGS,
+	TRIM_NEWLINES_REGEX
+} from '$lib/constants/agentic';
 
 /**
  * Represents a parsed section of agentic content
@@ -52,12 +57,12 @@ export function parseAgenticContent(rawContent: string): AgenticSection[] {
 	const sections: AgenticSection[] = [];
 
 	for (const segment of segments) {
-		if (segment.type === 'text') {
+		if (segment.type === AgenticSectionType.TEXT) {
 			sections.push(...parseToolCallContent(segment.content));
 			continue;
 		}
 
-		if (segment.type === 'reasoning') {
+		if (segment.type === AgenticSectionType.REASONING) {
 			if (segment.content.trim()) {
 				sections.push({ type: AgenticSectionType.REASONING, content: segment.content });
 			}
@@ -105,7 +110,7 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 
 		const toolName = match[1];
 		const toolArgs = match[2];
-		const toolResult = match[3].replace(/^\n+|\n+$/g, '');
+		const toolResult = match[3].replace(TRIM_NEWLINES_REGEX, '');
 
 		sections.push({
 			type: AgenticSectionType.TOOL_CALL,
@@ -135,7 +140,7 @@ function parseToolCallContent(rawContent: string): AgenticSection[] {
 
 		const toolName = pendingMatch[1];
 		const toolArgs = pendingMatch[2];
-		const streamingResult = (pendingMatch[3] || '').replace(/^\n+|\n+$/g, '');
+		const streamingResult = (pendingMatch[3] || '').replace(TRIM_NEWLINES_REGEX, '');
 
 		sections.push({
 			type: AgenticSectionType.TOOL_CALL_PENDING,
