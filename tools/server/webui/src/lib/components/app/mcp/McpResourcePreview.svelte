@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { FileText, Loader2, AlertCircle, Download, Copy, Check } from '@lucide/svelte';
+	import { FileText, Loader2, AlertCircle, Download } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { isImageMimeType } from '$lib/utils';
+	import { ActionIconCopyToClipboard } from '$lib/components/app';
 	import type { MCPResourceInfo, MCPResourceContent } from '$lib/types';
 
 	interface Props {
@@ -15,7 +17,6 @@
 	let content = $state<MCPResourceContent[] | null>(null);
 	let isLoading = $state(false);
 	let error = $state<string | null>(null);
-	let copied = $state(false);
 
 	$effect(() => {
 		if (resource) {
@@ -59,21 +60,6 @@
 		);
 	}
 
-	function isImageMimeType(mimeType?: string): boolean {
-		return mimeType?.startsWith('image/') ?? false;
-	}
-
-	async function handleCopy() {
-		const text = getTextContent();
-		if (text) {
-			await navigator.clipboard.writeText(text);
-			copied = true;
-			setTimeout(() => {
-				copied = false;
-			}, 2000);
-		}
-	}
-
 	function handleDownload() {
 		const text = getTextContent();
 		if (!text || !resource) return;
@@ -109,21 +95,12 @@
 				{/if}
 			</div>
 
-			<div class="flex gap-1">
-				<Button
-					variant="ghost"
-					size="sm"
-					class="h-7 w-7 p-0"
-					onclick={handleCopy}
-					disabled={isLoading || !getTextContent()}
-					title="Copy content"
-				>
-					{#if copied}
-						<Check class="h-3.5 w-3.5 text-green-500" />
-					{:else}
-						<Copy class="h-3.5 w-3.5" />
-					{/if}
-				</Button>
+			<div class="flex items-center gap-1">
+				<ActionIconCopyToClipboard
+					text={getTextContent()}
+					canCopy={!isLoading && !!getTextContent()}
+					ariaLabel="Copy content"
+				/>
 
 				<Button
 					variant="ghost"

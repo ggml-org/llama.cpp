@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import type { DatabaseMessageExtraMcpPrompt, MCPServerSettingsEntry } from '$lib/types';
-	import { getFaviconUrl } from '$lib/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import { McpPromptVariant } from '$lib/enums';
@@ -33,17 +32,6 @@
 	let argumentEntries = $derived(Object.entries(prompt.arguments ?? {}));
 	let hasArguments = $derived(prompt.arguments && Object.keys(prompt.arguments).length > 0);
 	let hasContent = $derived(prompt.content && prompt.content.trim().length > 0);
-
-	let serverSettingsMap = $derived.by(() => {
-		const servers = mcpStore.getServers();
-		const map = new SvelteMap<string, MCPServerSettingsEntry>();
-
-		for (const server of servers) {
-			map.set(server.id, server);
-		}
-
-		return map;
-	});
 
 	let contentParts = $derived.by((): ContentPart[] => {
 		if (!prompt.content || !hasArguments) {
@@ -96,17 +84,8 @@
 		isAttachment ? 'max-height: 10rem;' : 'max-height: var(--max-message-height);'
 	);
 
-	function getServerFavicon(): string | null {
-		const server = serverSettingsMap.get(prompt.serverName);
-		return server ? getFaviconUrl(server.url) : null;
-	}
-
-	function getServerDisplayName(): string {
-		const server = serverSettingsMap.get(prompt.serverName);
-		if (!server) return prompt.serverName;
-
-		return mcpStore.getServerLabel(server);
-	}
+	const serverFavicon = $derived(mcpStore.getServerFavicon(prompt.serverName));
+	const serverDisplayName = $derived(mcpStore.getServerDisplayName(prompt.serverName));
 </script>
 
 <div class="flex flex-col gap-2 {className}">
@@ -114,9 +93,9 @@
 		<div class="inline-flex flex-wrap items-center gap-1.25 text-xs text-muted-foreground">
 			<Tooltip.Root>
 				<Tooltip.Trigger>
-					{#if getServerFavicon()}
+					{#if serverFavicon}
 						<img
-							src={getServerFavicon()}
+							src={serverFavicon}
 							alt=""
 							class="h-3.5 w-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
@@ -127,7 +106,7 @@
 				</Tooltip.Trigger>
 
 				<Tooltip.Content>
-					<span>{getServerDisplayName()}</span>
+					<span>{serverDisplayName}</span>
 				</Tooltip.Content>
 			</Tooltip.Root>
 
@@ -136,18 +115,25 @@
 
 		{#if showArgBadges}
 			<div class="flex flex-wrap justify-end gap-1">
-				{#each argumentEntries as [key] (key)}
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<span
-						class="rounded-sm bg-purple-200/60 px-1.5 py-0.5 text-[10px] leading-none text-purple-700 transition-opacity dark:bg-purple-800/40 dark:text-purple-300 {hoveredArgKey &&
-						hoveredArgKey !== key
-							? 'opacity-30'
-							: ''}"
-						onmouseenter={() => (hoveredArgKey = key)}
-						onmouseleave={() => (hoveredArgKey = null)}
-					>
-						{key}
-					</span>
+				{#each argumentEntries as [key, value] (key)}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<span
+								class="rounded-sm bg-purple-200/60 px-1.5 py-0.5 text-[10px] leading-none text-purple-700 transition-opacity dark:bg-purple-800/40 dark:text-purple-300 {hoveredArgKey &&
+								hoveredArgKey !== key
+									? 'opacity-30'
+									: ''}"
+								onmouseenter={() => (hoveredArgKey = key)}
+								onmouseleave={() => (hoveredArgKey = null)}
+							>
+								{key}
+							</span>
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<span class="max-w-xs break-all">{value}</span>
+						</Tooltip.Content>
+					</Tooltip.Root>
 				{/each}
 			</div>
 		{/if}

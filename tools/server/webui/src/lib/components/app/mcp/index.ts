@@ -246,18 +246,3 @@ export { default as McpResourceBrowser } from './McpResourceBrowser.svelte';
  * - Loading and error states
  */
 export { default as McpResourcePreview } from './McpResourcePreview.svelte';
-
-/**
- * **McpResourcePicker** - MCP resource selection dialog
- *
- * Full dialog for browsing and attaching MCP resources.
- * Combines browser and preview panels.
- *
- * **Features:**
- * - Split panel layout (browser + preview)
- * - Resource selection with preview
- * - Quick attach from browser
- * - Attach selected resource action
- * - Auto-fetch resources on open
- */
-export { default as McpResourcePicker } from './McpResourcePicker.svelte';

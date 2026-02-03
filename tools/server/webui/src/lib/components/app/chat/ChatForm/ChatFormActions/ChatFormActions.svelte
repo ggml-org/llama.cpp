@@ -5,10 +5,10 @@
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		DialogMcpServersSettings,
 		McpServersSelector,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { DialogMcpServersSettings } from '$lib/components/app/dialogs';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';

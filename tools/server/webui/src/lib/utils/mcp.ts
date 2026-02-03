@@ -1,5 +1,5 @@
 import type { MCPServerSettingsEntry } from '$lib/types';
-import { MCPTransportType, MCPLogLevel, UrlPrefix } from '$lib/enums';
+import { MCPTransportType, MCPLogLevel, UrlPrefix, MimeTypePrefix } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -96,4 +96,14 @@ export function getMcpLogLevelClass(level: MCPLogLevel): string {
 		default:
 			return 'text-muted-foreground';
 	}
+}
+
+/**
+ * Check if a MIME type represents an image.
+ *
+ * @param mimeType - The MIME type to check
+ * @returns True if the MIME type starts with 'image/'
+ */
+export function isImageMimeType(mimeType?: string): boolean {
+	return mimeType?.startsWith(MimeTypePrefix.IMAGE) ?? false;
 }
