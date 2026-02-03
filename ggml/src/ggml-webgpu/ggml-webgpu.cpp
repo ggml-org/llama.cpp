@@ -193,7 +193,6 @@ struct webgpu_buf_pool {
     }
 
     ~webgpu_buf_pool() {
-        std::cout << "EMPTYING POOL";
         this->cleanup();
     }
 
@@ -337,9 +336,6 @@ struct webgpu_global_context_struct {
         debug_host_buf.Destroy();
         debug_dev_buf.Destroy();
 #endif
-
-        // Fence any g
-        std::cout << "Killing global context.";
 
     }
 
@@ -819,10 +815,6 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     GGML_UNUSED(ctx);
 #endif
 
-    // Since global context is shared across backend instances and buffer instances,
-    // we decrement the refcount of the shared_ptr so when it hits 0, 
-    // the global context's destructor is called. 
-    ctx->webgpu_ctx->global_ctx.reset();
     delete ctx;
     delete backend;
 }
