@@ -2229,10 +2229,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
     static bool opt_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
 
     // Check if multi-stream execution is enabled
-    static bool multi_stream_enabled = [] {
-        const char * env = getenv("GGML_CANN_MULTI_STREAM");
-        return env != nullptr && (strcmp(env, "1") == 0 || strcmp(env, "true") == 0);
-    }();
+    static bool multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
 
     if (!use_cann_graph || cann_graph_capture_required) {
         if (multi_stream_enabled) {
@@ -2336,15 +2333,15 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
                     // Single dependency - execute on the same stream to avoid sync overhead
                     exec_stream = *dependent_streams.begin();
                 } else {
-                    // Multiple dependencies - sync all to stream 0 and execute there
-                    sync_all_to_stream(0);
-                    exec_stream = 0;
-                    current_stream = 1;
+                    // Multiple dependencies - pick the first dependent stream and wait for others
+                    exec_stream = *dependent_streams.begin();
                 }
 
-                // If we depend on a different stream, wait for it
-                if (dependent_streams.size() == 1 && *dependent_streams.begin() != exec_stream) {
-                    wait_for_stream(*dependent_streams.begin(), exec_stream);
+                // Wait for all dependent streams (except the exec_stream itself)
+                for (int dep_stream : dependent_streams) {
+                    if (dep_stream != exec_stream) {
+                        wait_for_stream(dep_stream, exec_stream);
+                    }
                 }
 
                 // Execute the node on the chosen stream
@@ -2442,10 +2439,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
     bool use_cann_graph = true;
 
     // Check if multi-stream execution is enabled (must check before using use_cann_graph)
-    static bool multi_stream_enabled = [] {
-        const char * env = getenv("GGML_CANN_MULTI_STREAM");
-        return env != nullptr && (strcmp(env, "1") == 0 || strcmp(env, "true") == 0);
-    }();
+    static bool multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
 
     // Multi-stream mode is incompatible with ACL graph capture/execution
     if (multi_stream_enabled) {
