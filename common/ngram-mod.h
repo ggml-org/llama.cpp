@@ -18,7 +18,7 @@ struct common_ngram_mod {
     static constexpr int8_t SCORE_INIT = 0;
     static constexpr int8_t SCORE_MIN  = -5;
     static constexpr int8_t SCORE_MAX  = 20;
-    static constexpr int8_t SCORE_THR  = 0; // keep equal or lower than SCORE_INIT
+    static constexpr int8_t SCORE_THR  = 0;
     static constexpr int8_t SCORE_INS  = 3;
 
     common_ngram_mod(uint16_t n, size_t size);
