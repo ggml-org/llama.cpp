@@ -153,3 +153,7 @@ poetry.toml
 *.code-workspace
 
 /generate_model/
+
+# Local tooling (not versioned)
+/.claude/
+/test.tracetemplate

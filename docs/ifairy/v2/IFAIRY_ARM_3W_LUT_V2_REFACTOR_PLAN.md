@@ -62,7 +62,7 @@ Status: Draft (2026-01-24)
 - **便于接入 lut_c**：V2 必须引入清晰的“backend/driver”接口，把“权重 transform + preprocess + kernel”作为一个可替换单元。
 
 ### 3.2 非目标（明确不做）
-- 不改动 `IFAIRY_ARM_3W_LUT_DESIGN.md` / `IFAIRY_ARM_3W_LUT_API_PLAN.md` 等旧文档内容（仅参考）。
+- 不改动 `../legacy/IFAIRY_ARM_3W_LUT_DESIGN.md` / `../legacy/IFAIRY_ARM_3W_LUT_API_PLAN.md` 等旧文档内容（仅参考）。
 - 不在本阶段引入新第三方依赖。
 - 不在本阶段做跨平台（非 ARM）LUT 支持。
 
@@ -169,4 +169,3 @@ V2 建议保留（或新增）最小 env 集合：
   - 支持 `n==1` decode fastpath（关键性能点）
 
 接入方案详见：`IFAIRY_ARM_3W_LUT_V2_LUT_C_INTEGRATION_PLAN.md`。
-

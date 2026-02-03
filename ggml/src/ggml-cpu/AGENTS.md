@@ -4,7 +4,7 @@ This directory is hot-path CPU code. Prefer minimal diffs, keep routing conditio
 
 ## Non-negotiable semantic invariant
 
-Must match the ggml baseline exactly: compute `w * conj(x)` (NOT `w * x`). See `IFAIRY_ARM_3W_LUT_DESIGN.md`.
+Must match the ggml baseline exactly: compute `w * conj(x)` (NOT `w * x`). See `docs/ifairy/legacy/IFAIRY_ARM_3W_LUT_DESIGN.md`.
 
 ## Current routing constraints (as implemented)
 
@@ -27,7 +27,7 @@ Primary integration points:
 
 V2 keeps a single production LUT path and removes layout/kernel/tiling knobs to reduce surface area. Do not add new knobs unless strictly necessary.
 
-If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` and keep a safe default.
+If adding a new knob, document it in `docs/ifairy/v2/IFAIRY_ARM_3W_LUT_V2_STATUS.md` and keep a safe default.
 
 ## Formatting & Static Analysis (required)
 
@@ -52,7 +52,7 @@ Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/la
 ## Performance claims
 
 - Use `eval tok/s` only, and always include the full command + env.
-- Record results in `IFAIRY_ARM_3W_LUT_V2_STATUS.md` (or link to raw logs/TSV paths).
+- Record results in `docs/ifairy/v2/IFAIRY_ARM_3W_LUT_V2_STATUS.md` (or link to raw logs/TSV paths).
 
 ## Current V2 core path (lut16)
 

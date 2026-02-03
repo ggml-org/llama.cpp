@@ -3,7 +3,7 @@
 Offline enumeration for iFairy complex 2-bit 3-weight LUT (TL1).
 
 This script corresponds to section "10.1 步骤一：规格验证与离线枚举"
-in IFAIRY_ARM_3W_LUT_DESIGN.md.
+in docs/ifairy/legacy/IFAIRY_ARM_3W_LUT_DESIGN.md.
 
 It:
   - Enumerates all 3×2-bit combinations (c0, c1, c2), ci ∈ {0,1,2,3}.

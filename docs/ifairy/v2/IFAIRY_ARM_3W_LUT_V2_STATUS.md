@@ -2,7 +2,7 @@
 
 Status: Draft (2026-01-25)
 
-本文件用于替代旧的 `IFAIRY_ARM_3W_LUT_STATUS.md` 的后续增量记录（旧文件不再修改）。
+本文件用于替代旧的 `../legacy/IFAIRY_ARM_3W_LUT_STATUS.md` 的后续增量记录（旧文件不再修改）。
 
 相关方案文档：
 - `IFAIRY_ARM_3W_LUT_V2_REFACTOR_PLAN.md`

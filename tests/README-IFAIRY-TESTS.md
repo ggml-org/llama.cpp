@@ -2,6 +2,11 @@
 
 本文档描述了 iFairy 模型的测试框架和使用方法。
 
+## 相关文档
+
+- iFairy 文档索引：`../docs/ifairy/README.md`
+- iFairy 3W LUT（V2）状态与复现：`../docs/ifairy/v2/IFAIRY_ARM_3W_LUT_V2_STATUS.md`
+
 ## 测试架构
 
 测试框架包含三个主要部分：
