@@ -287,7 +287,7 @@ void differential_analyzer::compare_reasoning_presence(const common_chat_templat
     const std::string reasoning_content = "Let me think about this.";
 
     if (!diff.right.empty() && diff.right.find(reasoning_content) != std::string::npos) {
-        auto seg = segmentize_markers(diff.right);
+        auto seg = prune_whitespace_segments(segmentize_markers(diff.right));
         if (seg.size() >= 3 && trim_whitespace(seg[1].value) == reasoning_content) {
             // easy one: opening marker - reasoning - closing marker (possibly with trailing whitespace)
             result.reasoning               = reasoning_mode::TAG_BASED;
@@ -312,10 +312,10 @@ void differential_analyzer::compare_reasoning_presence(const common_chat_templat
             // right: reasoning_content
             // suffix: <closing marker>content
             // prefix: ...<opening marker>
-            auto suf_seg = segmentize_markers(diff.suffix);
+            auto suf_seg = prune_whitespace_segments(segmentize_markers(diff.suffix));
             if (trim_whitespace(diff.left).empty() && suf_seg.size() >= 2 && suf_seg[0].type == segment_type::MARKER &&
                 trim_whitespace(suf_seg[1].value).substr(0, 11) == "I can help.") {
-                auto pre_seg = segmentize_markers(diff.prefix);
+                auto pre_seg = prune_whitespace_segments(segmentize_markers(diff.prefix));
                 if (pre_seg[pre_seg.size() - 1].type == segment_type::MARKER ||
                     (pre_seg.size() > 1 && trim_whitespace(pre_seg[pre_seg.size() - 1].value).empty() &&
                      pre_seg[pre_seg.size() - 2].type == segment_type::MARKER)) {
@@ -577,7 +577,7 @@ void differential_analyzer::compare_content_values(const common_chat_template & 
             LOG_DBG("C1: No content markers\n");
             result.content      = content_mode::PLAIN;
             found_plain_content = true;
-        } else if (result.reasoning == reasoning_mode::FORCED_CLOSED &&
+        } else if (result.reasoning != reasoning_mode::NONE && !result.markers.reasoning_end.empty() &&
                    diff_reasoning.left.find(result.markers.reasoning_end) != std::string::npos) {
             std::string post_closed_reasoning = diff_reasoning.left.substr(
                 diff_reasoning.left.find(result.markers.reasoning_end) + result.markers.reasoning_end.length());

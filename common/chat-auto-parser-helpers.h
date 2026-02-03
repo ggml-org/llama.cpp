@@ -20,3 +20,6 @@ std::string after_common_suffix(const std::string & full, const std::string & le
 
 // Segmentize text into markers and non-marker fragments
 std::vector<segment> segmentize_markers(const std::string & text);
+
+// Prune whitespace-only segments from a vector of segments
+std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segments);

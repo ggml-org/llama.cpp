@@ -374,3 +374,13 @@ std::vector<segment> segmentize_markers(const std::string & text) {
     return retval;
 }
 
+std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segments) {
+    std::vector<segment> result;
+    for (const auto & seg : segments) {
+        if (!trim_whitespace(seg.value).empty()) {
+            result.push_back(seg);
+        }
+    }
+    return result;
+}
+
