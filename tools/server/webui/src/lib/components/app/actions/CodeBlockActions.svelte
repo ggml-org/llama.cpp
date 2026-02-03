@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Copy, Eye } from '@lucide/svelte';
 	import { copyCodeToClipboard } from '$lib/utils';
+	import { FileTypeText } from '$lib/enums';
 
 	interface Props {
 		code: string;
@@ -11,7 +12,7 @@
 
 	let { code, language, disabled = false, onPreview }: Props = $props();
 
-	const showPreview = $derived(language?.toLowerCase() === 'html');
+	const showPreview = $derived(language?.toLowerCase() === FileTypeText.HTML);
 
 	function handleCopy() {
 		if (disabled) return;

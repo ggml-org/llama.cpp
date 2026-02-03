@@ -10,7 +10,11 @@
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { INITIAL_FILE_SIZE, PROMPT_CONTENT_SEPARATOR } from '$lib/constants/chat-form';
+	import {
+		CLIPBOARD_CONTENT_QUOTE_PREFIX,
+		INITIAL_FILE_SIZE,
+		PROMPT_CONTENT_SEPARATOR
+	} from '$lib/constants/chat-form';
 	import { ContentPartType, KeyboardKey, MimeTypeText, SpecialFileType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
@@ -264,7 +268,7 @@
 
 		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
 
-		if (text.startsWith('"')) {
+		if (text.startsWith(CLIPBOARD_CONTENT_QUOTE_PREFIX)) {
 			const parsed = parseClipboardContent(text);
 
 			if (parsed.textAttachments.length > 0 || parsed.mcpPromptAttachments.length > 0) {

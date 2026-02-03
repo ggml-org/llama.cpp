@@ -143,6 +143,24 @@ export enum FileExtensionText {
 	CS = '.cs'
 }
 
+// MIME type prefixes and includes for content detection
+export enum MimeTypePrefix {
+	IMAGE = 'image/',
+	TEXT = 'text'
+}
+
+export enum MimeTypeIncludes {
+	JSON = 'json',
+	JAVASCRIPT = 'javascript',
+	TYPESCRIPT = 'typescript'
+}
+
+// URI patterns for content detection
+export enum UriPattern {
+	DATABASE_KEYWORD = 'database',
+	DATABASE_SCHEME = 'db://'
+}
+
 // MIME type enums
 export enum MimeTypeApplication {
 	PDF = 'application/pdf'
