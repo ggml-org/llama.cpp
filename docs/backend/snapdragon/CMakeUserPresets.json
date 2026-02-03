@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "configurePresets": [
     {
         "name": "arm64-android-snapdragon",
@@ -16,7 +16,9 @@
             "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
             "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
             "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -DNDEBUG -g",
-            "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+            "CMAKE_PREFIX_PATH":  "$env{OPENCL_SDK_ROOT}",
+            "HEXAGON_SDK_ROOT":   "$env{HEXAGON_SDK_ROOT}",
+            "HEXAGON_TOOLS_ROOT": "$env{HEXAGON_TOOLS_ROOT}",
             "PREBUILT_LIB_DIR": "android_aarch64",
             "GGML_OPENMP":      "OFF",
             "GGML_LLAMAFILE":   "OFF",
@@ -31,7 +33,15 @@
         "name": "arm64-windows-snapdragon",
         "inherits": [ "base", "arm64-windows-llvm" ],
         "cacheVariables": {
-            "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
+            "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
+            "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
+            "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -DNDEBUG -g",
+            "CMAKE_PREFIX_PATH":  "$env{OPENCL_SDK_ROOT}",
+            "HEXAGON_SDK_ROOT":   "$env{HEXAGON_SDK_ROOT}",
+            "HEXAGON_TOOLS_ROOT": "$env{HEXAGON_TOOLS_ROOT}",
             "PREBUILT_LIB_DIR": "windows_aarch64",
             "GGML_OPENMP":      "OFF",
             "GGML_LLAMAFILE":   "OFF",
