@@ -93,10 +93,13 @@ template <int WORKGROUP_SIZE> class PersistentDMMVKernel {
   public:
     // Constructor
     // @param args_      Kernel arguments (weights, KV cache, dimensions)
+    // @param config_    Kernel configuration (tile sizes, sync options)
     // @param slm_       Local memory accessor for shared storage
     // @param item_      SYCL nd_item for thread identification
-    PersistentDMMVKernel(const PersistentTGArgs args_, sycl::local_accessor<float, 1> slm_, sycl::nd_item<1> item_) :
+    PersistentDMMVKernel(const PersistentTGArgs args_, const PersistentTGConfig config_,
+                         sycl::local_accessor<float, 1> slm_, sycl::nd_item<1> item_) :
         args(args_),
+        config(config_),
         slm(slm_),
         item(item_) {}
 
@@ -137,12 +140,21 @@ template <int WORKGROUP_SIZE> class PersistentDMMVKernel {
             dispatch_operation(wi);
 
             // Barrier to ensure all threads complete before next iteration
-            sycl::group_barrier(item.get_group());
+            // Split barriers allow non-blocking arrival + deferred wait for better
+            // latency hiding when computation can overlap with synchronization.
+            if (config.use_split_barriers) {
+                split_barrier_arrive();
+                // Future optimization: do useful work here while waiting
+                split_barrier_wait();
+            } else {
+                sycl::group_barrier(item.get_group());
+            }
         }
     }
 
   private:
     const PersistentTGArgs         args;
+    const PersistentTGConfig       config;
     sycl::local_accessor<float, 1> slm;
     sycl::nd_item<1>               item;
 
@@ -288,17 +300,17 @@ sycl::event launch_persistent_tg_kernel(sycl::queue &              q,
             // Instantiate kernel based on workgroup size
             // Using fixed sizes for common configurations
             if (config_copy.workgroup_size == 256) {
-                PersistentDMMVKernel<256> kernel(args_copy, slm, item);
+                PersistentDMMVKernel<256> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             } else if (config_copy.workgroup_size == 512) {
-                PersistentDMMVKernel<512> kernel(args_copy, slm, item);
+                PersistentDMMVKernel<512> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             } else if (config_copy.workgroup_size == 128) {
-                PersistentDMMVKernel<128> kernel(args_copy, slm, item);
+                PersistentDMMVKernel<128> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             } else {
                 // Fallback to 256 for unsupported sizes
-                PersistentDMMVKernel<256> kernel(args_copy, slm, item);
+                PersistentDMMVKernel<256> kernel(args_copy, config_copy, slm, item);
                 kernel.run();
             }
         });
