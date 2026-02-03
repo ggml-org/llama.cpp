@@ -534,6 +534,36 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rwkv(ggml_metal_
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_metal_library_t lib, const ggml_tensor * op) {
+    char base[256];
+    char name[256];
+
+    const int nsg = 8;
+    const int n   = op->src[1]->ne[1];
+    const int k   = op->src[1]->ne[0];
+
+    snprintf(base, 256, "kernel_solve_tri_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s_nsg=%d_n=%d_k=%d", base, nsg, n, k);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+        ggml_metal_cv_set_int16(cv, nsg, FC_SOLVE_TRI + 0);
+        ggml_metal_cv_set_int16(cv, n,   FC_SOLVE_TRI + 1);
+        ggml_metal_cv_set_int16(cv, k,   FC_SOLVE_TRI + 2);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
+    }
+
+    res.nsg  = nsg;
+    res.smem = GGML_PAD(GGML_PAD(n, 32)*nsg*sizeof(float), 16);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_metal_library_t lib, ggml_type tsrc0, ggml_type tsrc1, int nsg, int nxpsg, int r1ptg) {
     char base[256];
     char name[256];
