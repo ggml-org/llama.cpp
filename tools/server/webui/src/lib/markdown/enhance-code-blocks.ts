@@ -13,6 +13,16 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent } from 'hast';
 import { visit } from 'unist-util-visit';
+import {
+	CODE_BLOCK_SCROLL_CONTAINER_CLASS,
+	CODE_BLOCK_WRAPPER_CLASS,
+	CODE_BLOCK_HEADER_CLASS,
+	CODE_BLOCK_ACTIONS_CLASS,
+	CODE_LANGUAGE_CLASS,
+	COPY_CODE_BTN_CLASS,
+	PREVIEW_CODE_BTN_CLASS,
+	RELATIVE_CLASS
+} from '$lib/constants/code-blocks';
 
 declare global {
 	interface Window {
@@ -42,7 +52,7 @@ function createCopyButton(codeId: string): Element {
 		type: 'element',
 		tagName: 'button',
 		properties: {
-			className: ['copy-code-btn'],
+			className: [COPY_CODE_BTN_CLASS],
 			'data-code-id': codeId,
 			title: 'Copy code',
 			type: 'button'
@@ -56,7 +66,7 @@ function createPreviewButton(codeId: string): Element {
 		type: 'element',
 		tagName: 'button',
 		properties: {
-			className: ['preview-code-btn'],
+			className: [PREVIEW_CODE_BTN_CLASS],
 			'data-code-id': codeId,
 			title: 'Preview code',
 			type: 'button'
@@ -75,18 +85,18 @@ function createHeader(language: string, codeId: string): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: ['code-block-header'] },
+		properties: { className: [CODE_BLOCK_HEADER_CLASS] },
 		children: [
 			{
 				type: 'element',
 				tagName: 'span',
-				properties: { className: ['code-language'] },
+				properties: { className: [CODE_LANGUAGE_CLASS] },
 				children: [{ type: 'text', value: language }]
 			},
 			{
 				type: 'element',
 				tagName: 'div',
-				properties: { className: ['code-block-actions'] },
+				properties: { className: [CODE_BLOCK_ACTIONS_CLASS] },
 				children: actions
 			}
 		]
@@ -97,7 +107,7 @@ function createScrollContainer(preElement: Element): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: ['code-block-scroll-container'] },
+		properties: { className: [CODE_BLOCK_SCROLL_CONTAINER_CLASS] },
 		children: [preElement]
 	};
 }
@@ -106,7 +116,7 @@ function createWrapper(header: Element, preElement: Element): Element {
 	return {
 		type: 'element',
 		tagName: 'div',
-		properties: { className: ['code-block-wrapper', 'relative'] },
+		properties: { className: [CODE_BLOCK_WRAPPER_CLASS, RELATIVE_CLASS] },
 		children: [header, createScrollContainer(preElement)]
 	};
 }
