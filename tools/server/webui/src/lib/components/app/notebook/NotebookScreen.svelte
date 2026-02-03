@@ -322,7 +322,9 @@
 						{#if generateTooltip}
 							<p>{generateTooltip}</p>
 						{:else}
-							<KeyboardShortcutInfo keys={['shift', 'enter']} class="opacity-100 w-full justify-center" />
+							<div class="flex items-center justify-center py-1">
+								<KeyboardShortcutInfo keys={['shift', 'enter']} class="opacity-100" />
+							</div>
 						{/if}
 					</Tooltip.Content>
 				</Tooltip.Root>
