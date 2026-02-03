@@ -357,9 +357,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         }
 
         if (GGML_CUDA_CC_IS_RDNA4(cc)){
-            // if (n_experts >= 64) {
-            //     return true;
-            // }
             switch (type) {
                 case GGML_TYPE_IQ2_S:
                 case GGML_TYPE_Q6_K:
