@@ -35,3 +35,11 @@ export { default as HorizontalScrollCarousel } from './HorizontalScrollCarousel.
  * Useful for long names or paths in constrained spaces.
  */
 export { default as TruncatedText } from './TruncatedText.svelte';
+
+/**
+ * **KeyboardShortcutInfo** - Keyboard shortcut hint display
+ *
+ * Displays keyboard shortcut hints (e.g., "⌘ + Enter").
+ * Supports special keys like shift, cmd, and custom text.
+ */
+export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';

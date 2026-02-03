@@ -11,7 +11,7 @@
 	} from '$lib/constants/mcp-resource';
 	import { MimeTypePrefix, MimeTypeIncludes, UriPattern } from '$lib/enums';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { RemoveButton } from '../../actions';
+	import { ActionIconRemove } from '$lib/components/app';
 
 	interface Props {
 		attachment: MCPResourceAttachment;
@@ -93,7 +93,7 @@
 			</span>
 
 			{#if onRemove}
-				<RemoveButton class="bg-transparent " id={attachment.id} {onRemove} />
+				<ActionIconRemove class="bg-transparent " id={attachment.id} {onRemove} />
 			{/if}
 		</button>
 	</Tooltip.Trigger>

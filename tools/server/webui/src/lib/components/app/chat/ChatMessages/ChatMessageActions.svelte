@@ -79,11 +79,11 @@
 			{/if}
 
 			{#if role === MessageRole.ASSISTANT && onRegenerate}
-				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
+				<ActionIcon icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
-				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 
 			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />

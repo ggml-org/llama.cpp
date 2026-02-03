@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Eye } from '@lucide/svelte';
-	import { ActionIconCopyToClipboard } from '$lib/components/app';
+	import { Copy, Eye } from '@lucide/svelte';
+	import { copyCodeToClipboard } from '$lib/utils';
 	import { FileTypeText } from '$lib/enums';
 
 	interface Props {
@@ -14,6 +14,11 @@
 
 	const showPreview = $derived(language?.toLowerCase() === FileTypeText.HTML);
 
+	function handleCopy() {
+		if (disabled) return;
+		copyCodeToClipboard(code);
+	}
+
 	function handlePreview() {
 		if (disabled) return;
 		onPreview?.(code, language);
@@ -21,14 +26,18 @@
 </script>
 
 <div class="code-block-actions">
-	<div class="copy-code-btn" class:opacity-50={disabled} class:!cursor-not-allowed={disabled}>
-		<ActionIconCopyToClipboard
-			text={code}
-			canCopy={!disabled}
-			ariaLabel={disabled ? 'Code incomplete' : 'Copy code'}
-		/>
-	</div>
-
+	<button
+		class="copy-code-btn"
+		class:opacity-50={disabled}
+		class:!cursor-not-allowed={disabled}
+		title={disabled ? 'Code incomplete' : 'Copy code'}
+		aria-label="Copy code"
+		aria-disabled={disabled}
+		type="button"
+		onclick={handleCopy}
+	>
+		<Copy size={16} />
+	</button>
 	{#if showPreview}
 		<button
 			class="preview-code-btn"

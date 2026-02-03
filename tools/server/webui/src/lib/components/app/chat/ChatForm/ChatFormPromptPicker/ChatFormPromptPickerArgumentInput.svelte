@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { MCPPromptInfo } from '$lib/types';
 	import { fly } from 'svelte/transition';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 
 	type PromptArgument = NonNullable<MCPPromptInfo['arguments']>[number];
 
@@ -34,10 +36,7 @@
 </script>
 
 <div class="relative grid gap-1">
-	<label
-		for="arg-{argument.name}"
-		class="mb-1 flex items-center gap-2 text-sm text-muted-foreground"
-	>
+	<Label for="arg-{argument.name}" class="mb-1 text-muted-foreground">
 		<span>
 			{argument.name}
 
@@ -49,9 +48,9 @@
 		{#if isLoadingSuggestions}
 			<span class="text-xs text-muted-foreground/50">...</span>
 		{/if}
-	</label>
+	</Label>
 
-	<input
+	<Input
 		id="arg-{argument.name}"
 		type="text"
 		{value}
@@ -62,7 +61,6 @@
 		placeholder={argument.description || argument.name}
 		required={argument.required}
 		autocomplete="off"
-		class="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm focus:border-primary focus:outline-none"
 	/>
 
 	{#if isAutocompleteActive && suggestions.length > 0}

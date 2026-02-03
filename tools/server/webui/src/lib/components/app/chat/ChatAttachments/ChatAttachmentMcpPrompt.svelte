@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatMessageMcpPromptContent, RemoveButton } from '$lib/components/app';
+	import { ChatMessageMcpPromptContent, ActionIconRemove } from '$lib/components/app';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { McpPromptVariant } from '$lib/enums';
 
@@ -34,7 +34,7 @@
 		<div
 			class="absolute top-8 right-2 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<RemoveButton id={prompt.name} onRemove={() => onRemove?.()} />
+			<ActionIconRemove id={prompt.name} onRemove={() => onRemove?.()} />
 		</div>
 	{/if}
 </div>
