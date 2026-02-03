@@ -24,12 +24,33 @@
 #include "tuning-engine-impl.hpp"
 #include "cold-start.hpp"
 #include "op-context.hpp"
+#include "persistent-tg-kernel.hpp"
 
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
 namespace ggml_sycl {
+
+// =============================================================================
+// Kernel Type Enum for Dispatch Selection
+// =============================================================================
+
+/**
+ * Kernel types for matmul dispatch selection.
+ *
+ * The dispatch system selects the optimal kernel based on:
+ * - Batch size (M dimension)
+ * - Weight quantization type
+ * - Hardware capabilities (XMX, ESIMD dpas)
+ * - Memory layout
+ */
+enum class KernelType {
+    LEGACY,        // Legacy per-operation kernels (DMMV, MMQ, etc.)
+    UNIFIED,       // Unified kernel with tuning engine
+    ONEDNN,        // oneDNN FP16/BF16 path for large batches
+    PERSISTENT_TG  // Persistent token generation kernel (whole-graph)
+};
 
 // =============================================================================
 // Quant Type Support Check
@@ -46,6 +67,7 @@ namespace ggml_sycl {
 inline bool should_use_unified(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_MXFP4:
             // TODO: Add Q8_0, Q6_K, Q4_K support to unified kernel
             return true;
         default:
@@ -74,6 +96,49 @@ inline bool is_unified_kernel_enabled() {
 }
 
 /**
+ * Check if unified kernel should be used on this device.
+ *
+ * The unified kernel requires ESIMD dpas support for optimal performance.
+ * Without ESIMD dpas, the unified kernel falls back to a slow scalar path
+ * that's much slower than the legacy mul_mat kernels.
+ *
+ * COMPILER LIMITATION (oneAPI 2025.3.2):
+ * Even if we don't dispatch to ESIMD kernels at runtime, they get JIT compiled
+ * when any kernel in the unified-kernel.cpp translation unit is submitted.
+ * This causes compilation failures on platforms where dpas intrinsics aren't
+ * supported (like Arc Battlemage, which is treated as XeLPG by the compiler).
+ *
+ * Until the compiler adds Xe2/Battlemage ESIMD dpas support, we disable the
+ * unified kernel entirely on hardware that doesn't support ESIMD dpas.
+ *
+ * @param device_id Device to check (default: 0)
+ * @return true if unified kernel should be used on this device
+ */
+inline bool is_unified_kernel_enabled_for_device(int device_id = 0) {
+    // First check the environment variable gate
+    if (!is_unified_kernel_enabled()) {
+        return false;
+    }
+
+    // Check if the device supports ESIMD dpas
+    // Without ESIMD dpas, the unified kernel falls back to slow paths AND
+    // causes JIT compilation failures when ESIMD kernels are compiled
+    ggml_sycl_unified::XMXConfig cfg = ggml_sycl_unified::XMXConfig::from_device(device_id);
+    if (!cfg.supports_esimd_dpas) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            fprintf(stderr, "[unified-dispatch] Unified kernel disabled: device %d does not support ESIMD dpas\n", device_id);
+            fprintf(stderr, "[unified-dispatch] Using legacy mul_mat kernels for better performance\n");
+            fflush(stderr);
+        }
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Get debug level from environment variable.
  *
  * @return Debug level (0 = off, 1+ = enabled)
@@ -85,6 +150,58 @@ inline int get_debug_level() {
         level = (env != nullptr) ? std::atoi(env) : 0;
     }
     return level;
+}
+
+/**
+ * Check if persistent TG kernel is enabled via environment variable.
+ *
+ * Set GGML_SYCL_PERSISTENT_TG=1 to enable persistent token generation kernel.
+ * Default: disabled (requires explicit opt-in).
+ *
+ * @return true if persistent TG kernel is enabled
+ */
+inline bool env_persistent_tg_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG");
+        enabled = (env != nullptr && std::strcmp(env, "1") == 0) ? 1 : 0;  // Default: disabled
+    }
+    return enabled != 0;
+}
+
+/**
+ * Select the optimal kernel type for a given matmul operation.
+ *
+ * Decision factors:
+ * - is_decode_phase: true if this is token generation (not prompt processing)
+ * - batch_size: M dimension (number of output rows)
+ * - n_layers: number of transformer layers
+ * - hidden_dim: model hidden dimension
+ * - quant_type: weight quantization type (GGML_TYPE_*)
+ * - xmx_config: hardware XMX configuration
+ *
+ * @return Selected KernelType for dispatch
+ */
+inline KernelType select_kernel_type(bool                                       is_decode_phase,
+                                     int64_t                                    batch_size,
+                                     int                                        n_layers,
+                                     int                                        hidden_dim,
+                                     int                                        quant_type,
+                                     const ggml_sycl_unified::XMXConfig & xmx_config) {
+    // Check for persistent TG kernel eligibility:
+    // - Decode phase (token generation, not prompt processing)
+    // - Batch size == 1 (single token generation)
+    // - Hardware and model support (via can_use_persistent_tg)
+    // - Environment variable enabled
+    if (is_decode_phase && batch_size == 1 &&
+        can_use_persistent_tg(n_layers, hidden_dim, quant_type, xmx_config) &&
+        env_persistent_tg_enabled()) {
+        return KernelType::PERSISTENT_TG;
+    }
+
+    // Fall back to legacy kernel selection
+    // (Unified kernel selection happens elsewhere in the existing dispatch)
+    return KernelType::LEGACY;
 }
 
 // =============================================================================

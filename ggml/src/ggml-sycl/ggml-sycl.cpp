@@ -84,6 +84,7 @@
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/layer-prefetch.hpp"
 #include "ggml-sycl/l2-prefetch.hpp"
+#include "ggml-sycl/persistent-tg-kernel.hpp"
 
 // Forward declarations for layout helpers used before definition.
 static const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode);
@@ -24381,6 +24382,172 @@ static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
     return h;
 }
 
+// =============================================================================
+// Persistent TG Kernel Dispatch Helpers (Stub Implementations)
+// =============================================================================
+//
+// These helpers support the persistent token generation kernel dispatch.
+// The persistent kernel executes a complete forward pass in a single kernel,
+// reducing dispatch overhead for TG workloads (M=1).
+//
+
+/**
+ * Build persistent TG kernel arguments from a compute graph.
+ *
+ * Extracts model dimensions, layer weights, and KV cache pointers from the
+ * compute graph nodes. Returns a populated PersistentTGArgs structure.
+ *
+ * @param ctx   SYCL backend context
+ * @param cgraph Compute graph to analyze
+ * @return Populated arguments (stub returns empty args for now)
+ */
+static ggml_sycl::PersistentTGArgs build_persistent_tg_args(
+    ggml_backend_sycl_context & ctx,
+    ggml_cgraph *               cgraph) {
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] build_persistent_tg_args: ctx.device=%d n_nodes=%d (stub)\n",
+                    ctx.device, cgraph ? cgraph->n_nodes : -1);
+
+    // TODO: Implement full argument extraction from cgraph:
+    // 1. Parse graph to identify transformer layer nodes
+    // 2. Extract weight pointers from MUL_MAT ops
+    // 3. Locate KV cache tensors
+    // 4. Build layer weight array
+    ggml_sycl::PersistentTGArgs args = {};
+    args.n_layers = 0;  // Will be populated when implemented
+    args.hidden_dim = 0;
+    args.n_heads = 0;
+    args.head_dim = 0;
+    args.intermediate_dim = 0;
+    args.vocab_size = 0;
+    args.quant_type = 0;
+    args.layout_mode = 0;
+    args.layer_weights = nullptr;
+    args.kv_caches = nullptr;
+    args.input_embedding = nullptr;
+    args.output_logits = nullptr;
+    args.intermediate_buffer = nullptr;
+    args.work_counter = nullptr;
+    args.total_tiles = 0;
+
+    return args;
+}
+
+/**
+ * Get persistent TG kernel configuration for the current device.
+ *
+ * Returns optimal tile sizes and work distribution based on hardware.
+ *
+ * @param ctx SYCL backend context
+ * @return Kernel configuration (stub returns default config)
+ */
+static ggml_sycl::PersistentTGConfig get_persistent_tg_config(
+    ggml_backend_sycl_context & ctx) {
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] get_persistent_tg_config: device=%d (stub)\n", ctx.device);
+
+    // TODO: Query device capabilities and return optimal config:
+    // - Tile sizes based on register pressure
+    // - Workgroup count based on EU count
+    // - Barrier mode based on split barrier support
+    ggml_sycl::PersistentTGConfig config = {};
+    config.tile_m = 1;
+    config.tile_n = 128;
+    config.tile_k = 32;
+    config.n_workgroups = 64;
+    config.workgroup_size = 256;
+    config.use_split_barriers = false;
+
+    return config;
+}
+
+/**
+ * Pin model weights for persistent kernel execution.
+ *
+ * Ensures all layer weights are resident in device memory and pinned
+ * for the duration of the persistent kernel execution.
+ *
+ * @param ctx  SYCL backend context
+ * @param args Persistent TG arguments containing weight pointers
+ */
+static void pin_model_weights_for_persistent(
+    ggml_backend_sycl_context &        ctx,
+    const ggml_sycl::PersistentTGArgs & args) {
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] pin_model_weights_for_persistent: device=%d n_layers=%d (stub)\n",
+                    ctx.device, args.n_layers);
+
+    // TODO: Implement weight pinning via unified_cache:
+    // 1. Call unified_cache_pin_layers() with layer range
+    // 2. Verify all weights are resident in device memory
+    // 3. Update args pointers if weights were migrated
+    (void)args;  // Suppress unused warning
+}
+
+/**
+ * Unpin model weights after persistent kernel execution.
+ *
+ * Releases pins acquired by pin_model_weights_for_persistent, allowing
+ * normal cache eviction to resume.
+ *
+ * @param ctx SYCL backend context
+ */
+static void unpin_model_weights(ggml_backend_sycl_context & ctx) {
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] unpin_model_weights: device=%d (stub)\n", ctx.device);
+
+    // TODO: Implement weight unpinning:
+    // 1. Call unified_cache_unpin_layers() to release pins
+    // 2. Allow normal LRU eviction to resume
+}
+
+/**
+ * Check if persistent TG kernel should be used for this graph.
+ *
+ * Evaluates graph characteristics and environment settings to determine
+ * if the persistent kernel path is appropriate.
+ *
+ * @param ctx    SYCL backend context
+ * @param cgraph Compute graph to evaluate
+ * @return true if persistent TG kernel should be used
+ */
+static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+    // Check environment variable gate first
+    if (!ggml_sycl::env_persistent_tg_enabled()) {
+        return false;
+    }
+
+    if (!cgraph || cgraph->n_nodes == 0) {
+        return false;
+    }
+
+    // Detect decode phase (batch size == 1) by checking MUL_MAT activations
+    bool is_decode_phase = false;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT) {
+            const ggml_tensor * src1 = cgraph->nodes[i]->src[1];
+            if (src1 && src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1) {
+                is_decode_phase = true;
+            }
+            break;  // Only need first MUL_MAT
+        }
+    }
+
+    if (!is_decode_phase) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Not decode phase, skipping persistent kernel\n");
+        return false;
+    }
+
+    // Get XMX config for the device
+    ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(ctx.device);
+
+    // TODO: Extract model dimensions from graph for proper eligibility check
+    // For now, log that we detected decode phase but can't fully validate
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Decode phase detected, checking eligibility (stub)\n");
+
+    // Stub: Always return false until full implementation
+    // When implemented, this will call:
+    // ggml_sycl::can_use_persistent_tg(n_layers, hidden_dim, quant_type, xmx_config)
+    (void)xmx_config;
+    return false;
+}
+
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     struct graph_inflight_guard {
         std::atomic<int> & counter;
@@ -24452,6 +24619,45 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             GGML_LOG_ERROR("[SYCL] post-finalize sync failed: %s\n", e.what());
         }
     }
+
+    // =========================================================================
+    // Persistent TG Kernel Dispatch Check
+    // =========================================================================
+    // Check if persistent TG kernel should be used for this graph.
+    // The persistent kernel executes an entire forward pass in a single launch,
+    // reducing kernel dispatch overhead for token generation (M=1) workloads.
+    //
+    // Requirements:
+    // - GGML_SYCL_PERSISTENT_TG=1 environment variable
+    // - Decode phase (batch size == 1)
+    // - Supported model architecture and quantization
+    // - XMX hardware support
+    //
+    if (should_use_persistent_tg(*sycl_ctx, cgraph)) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Using persistent TG kernel dispatch\n");
+
+        ggml_sycl::PersistentTGArgs   args   = build_persistent_tg_args(*sycl_ctx, cgraph);
+        ggml_sycl::PersistentTGConfig config = get_persistent_tg_config(*sycl_ctx);
+
+        // Pin weights for the duration of the persistent kernel
+        pin_model_weights_for_persistent(*sycl_ctx, args);
+
+        try {
+            sycl::event e = ggml_sycl::launch_persistent_tg_kernel(*sycl_ctx->stream(), args, config);
+            e.wait();
+        } catch (const sycl::exception & exc) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] Kernel execution failed: %s\n", exc.what());
+            unpin_model_weights(*sycl_ctx);
+            // Fall through to normal dispatch on failure
+            goto normal_dispatch;
+        }
+
+        unpin_model_weights(*sycl_ctx);
+        record_completion(true);
+        return GGML_STATUS_SUCCESS;
+    }
+normal_dispatch:
+
 #ifdef GGML_SYCL_GRAPH
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
