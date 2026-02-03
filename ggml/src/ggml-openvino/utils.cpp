@@ -508,8 +508,8 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(param_name);
     const auto * op = ggml_decoder->get_tensor_used_op(ggml_tensor);
 
-    if (param_name == "inp_pos" || param_name == "inp_tokens" ||
-        (op->op == GGML_OP_SET_ROWS && op->src[1] == ggml_tensor)) {
+    if (GgmlOvDecoder::is_inp_tok(ggml_tensor, op) || GgmlOvDecoder::is_inp_pos(ggml_tensor, op) ||
+        GgmlOvDecoder::is_kv_idx(ggml_tensor, op)) {
         assert(ggml_tensor->ne[0] == 1);
         ov::Shape input_shape = {1, 1, 1, 1};
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
@@ -523,7 +523,7 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
         return input_tensor;
     }
 
-    if (param_name == "inp_out_ids") {
+    if (GgmlOvDecoder::is_output_idx(ggml_tensor, op)) {
         ov::Shape input_shape = {1, 1, 1, 1};
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         int32_t inp_out_id = *((int32_t *) ggml_tensor->data);
@@ -533,7 +533,7 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
         return input_tensor;
     }
 
-    if (param_name.find("self_kq_mask") == 0) {
+    if (GgmlOvDecoder::is_inp_mask(ggml_tensor, op)) {
         size_t context_size = ggml_decoder->get_ctx_size();
         std::vector<float> padded_data = pad_input<float>(ggml_tensor, 1, context_size, -INFINITY);
         ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, 1, context_size});
@@ -557,8 +557,8 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
     const size_t chunk_valid_size = std::min(chunk_size, input_len - chunk_index * chunk_size);
     const size_t chunk_pad_size = chunk_size - chunk_valid_size;
 
-    if (param_name == "inp_pos" || param_name == "inp_tokens" ||
-        (op->op == GGML_OP_SET_ROWS && op->src[1] == ggml_tensor)) {
+    if (GgmlOvDecoder::is_inp_tok(ggml_tensor, op) || GgmlOvDecoder::is_inp_pos(ggml_tensor, op) ||
+        GgmlOvDecoder::is_kv_idx(ggml_tensor, op)) {
         ov::Shape input_shape = {1, 1, 1, chunk_size};
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
         // copy the chunk_index-th chunk from ggml_tensor
@@ -585,7 +585,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
         return input_tensor;
     }
 
-    if (param_name == "inp_out_ids") {
+    if (GgmlOvDecoder::is_output_idx(ggml_tensor, op)) {
         size_t output_len = ggml_decoder->get_compute_params().output_len;
         ov::Shape input_shape = {1, 1, 1, output_len};
         ov::Tensor input_tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
@@ -600,7 +600,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
         return input_tensor;
     }
 
-    if (param_name.find("self_kq_mask") == 0) {
+    if (GgmlOvDecoder::is_inp_mask(ggml_tensor, op)) {
         size_t cols = ggml_tensor->ne[0];
         size_t rows = ggml_tensor->ne[1];
         float * ggml_data = (float *) ggml_tensor->data + chunk_index * chunk_size * cols;
@@ -748,7 +748,7 @@ const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
             if (src == nullptr) {
                 break;
             }
-            if (std::string(src->name) == "inp_pos") {
+            if (GgmlOvDecoder::is_inp_pos(src, op)) {
                 return src;
             }
         }

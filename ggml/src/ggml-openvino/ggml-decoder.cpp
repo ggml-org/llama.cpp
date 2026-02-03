@@ -161,7 +161,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 ov::PartialShape stateful_kv_shape;
                 // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
-                    assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
                     if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name);
                         it == m_model_params.kv_names.end()) {
                         m_model_params.kv_names.push_back(src_name);
@@ -242,18 +241,18 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
     case GGML_OP_PERMUTE: {
         if (node->src[0]->op != GGML_OP_VIEW) {
             op_case = 1;
-        } else if (ggml_is_contiguous(node->src[0])) {
+        } else if (node->src[0]->src[0]->op == GGML_OP_NONE) {
+            // kv cache tensor
             std::string src_name(node->view_src->name);
-            if (src_name.find("cache") == std::string::npos) {
-                op_case = 4;
+            int layer = extract_layer_from_name(src_name);
+            if (!is_swa_layer(layer)) {
+                op_case = 2;
             } else {
-                int layer = extract_layer_from_name(src_name);
-                if (!is_swa_layer(layer)) {
-                    op_case = 2;
-                } else {
-                    op_case = 3;
-                }
+                op_case = 3;
             }
+        } else if (node->src[0]->src[0]->op == GGML_OP_ROPE || node->src[0]->src[0]->src[0]->op == GGML_OP_ROPE) {
+            // rope'ed query tensor
+            op_case = 4;
         }
         break;
     }
@@ -383,16 +382,16 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
-    if ((op->op == GGML_OP_GET_ROWS && op->src[0]->op == GGML_OP_NONE) || op->op == GGML_OP_ROPE) {
+    if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
         // tokens or positions
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
         input_shape = ov::PartialShape{1, 1, 1, len};
 
-    } else if (op->op == GGML_OP_GET_ROWS) {
+    } else if (is_output_idx(input, op)) {
         // output index
         input_shape = ov::PartialShape{1, 1, 1, m_is_static ? m_compute_params.output_len : -1};
 
-    } else if (op->op == GGML_OP_CPY || op->op == GGML_OP_FLASH_ATTN_EXT) {
+    } else if (is_inp_mask(input, op)) {
         // mask
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
@@ -402,7 +401,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
 
-    } else if (op && op->op == GGML_OP_SET_ROWS && op->src[2] == input) {
+    } else if (is_kvcache(input, op)) {
         // kvcache
         input_shape = ov::PartialShape{get_shape(input)};
         if (!m_is_static) {
@@ -410,7 +409,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
             input_shape[2] = -1;
         }
 
-    } else if (op && op->op == GGML_OP_SET_ROWS && op->src[1] == input) {
+    } else if (is_kv_idx(input, op)) {
         // kv update index
         int len = m_is_static ? (m_is_prefill ? m_prefill_chunk_size : 1) : -1;
         input_shape = ov::PartialShape{1, 1, 1, len};
@@ -490,9 +489,7 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
     std::map<std::string, std::string> kv_param_res_names;
     for (const auto & name : m_model_params.kv_names) {
-        if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
-            kv_param_res_names[name] = name;
-        }
+        kv_param_res_names[name] = name;
     }
     return kv_param_res_names;
 }
