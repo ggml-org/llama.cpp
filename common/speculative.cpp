@@ -124,9 +124,9 @@ struct common_speculative_state {
     // TODO: track performance of most recent calls
     const bool gen_perf = true; // whether to generate performance stats.
 
-    // TODO: rename to t_draft_us
-    // TODO: add t_begin_us, t_accept_us
-    int64_t gen_duration_us = 0; // total time spent in this implementation in microseconds.
+    int64_t t_begin_us  = 0; // total time spent in refresh of this implementation in microseconds.
+    int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
+    int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
 
     common_speculative_state(enum common_speculative_type type) : type(type) {}
 
@@ -499,7 +499,7 @@ struct common_speculative_state_ngram_map_k : public common_speculative_state {
         : common_speculative_state(type), map(std::move(map)) {}
 
     void begin(const llama_tokens & prompt) override {
-        GGML_UNUSED(prompt);
+        common_ngram_map_begin(map, prompt);
     }
 
     void draft(
@@ -951,7 +951,12 @@ void common_speculative_begin(common_speculative * spec, const llama_tokens & pr
     }
 
     for (auto & impl : spec->impls) {
+        const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
+
         impl->begin(prompt);
+
+        const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
+        impl->t_begin_us += t_now_us - t_start_us; // accumulate duration for this refresh
     }
 }
 
@@ -973,7 +978,7 @@ llama_tokens common_speculative_draft(
             const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
 
             impl->drafts_call_count++;
-            impl->gen_duration_us += t_now_us - t_start_us; // accumulate duration for this implementation
+            impl->t_draft_us += t_now_us - t_start_us; // accumulate duration for this implementation
         }
 
         if (!result.empty()) {
@@ -1001,12 +1006,15 @@ void common_speculative_accept(common_speculative * spec, uint16_t n_accepted) {
 
     GGML_ASSERT(impl);
 
+    const int64_t t_start_us = impl->gen_perf ? ggml_time_us() : 0;
     if (n_accepted > 0) {
         impl->drafts_accepted_count++;
         impl->drafts_accepted_tokens += n_accepted;
     }
 
     impl->accept(n_accepted);
+    const int64_t t_now_us = impl->gen_perf ? ggml_time_us() : 0;
+    impl->t_accept_us += t_now_us - t_start_us; // accumulate duration for this acculumulation
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {
@@ -1018,13 +1026,14 @@ void common_speculative_print_stats(const common_speculative * spec) {
         std::string str_perf;
         if (impl->gen_perf) {
             std::ostringstream oss;
-            oss << std::fixed << std::setprecision(3) << impl->gen_duration_us / 1000.0;
-            str_perf = ", dur = " + oss.str() + " ms";
+            oss << std::fixed << std::setprecision(3) << impl->t_begin_us / 1000.0 << ", ";
+            oss << std::fixed << std::setprecision(3) << impl->t_draft_us / 1000.0 << ", ";
+            oss << std::fixed << std::setprecision(3) << impl->t_accept_us / 1000.0;
+            str_perf = ", dur(b,g,a) = " + oss.str() + " ms";
         } else {
             str_perf = "";
         }
 
-        // TODO: report time for begin() and accept()
         LOG_INF("statistics %s: #calls = %zu, #gen drafts = %zu, #acc drafts = %zu, #gen tokens = %zu, #acc tokens = %zu%s\n",
                 common_speculative_type_to_str(impl->type).c_str(),
                 impl->drafts_call_count,
