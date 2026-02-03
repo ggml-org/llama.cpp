@@ -8033,6 +8033,14 @@ class Step35Model(TextModel):
             n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
             if il >= n_main:
                 return []
+        if name.endswith(".weight"):
+            if (
+                name == "model.norm.weight"
+                or re.fullmatch(r"model\.layers\.\d+\.input_layernorm\.weight", name) is not None
+                or re.fullmatch(r"model\.layers\.\d+\.post_attention_layernorm\.weight", name) is not None
+                or re.fullmatch(r"model\.layers\.\d+\.self_attn\.(q_norm|k_norm)\.weight", name) is not None
+            ):
+                data_torch = data_torch + 1
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
             return [(self.map_tensor_name(name + ".bias"), data_torch)]
