@@ -301,6 +301,25 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                     } else {
                         buffer_needs_closing_quote = true;
                     }
+                } else if (is_arg_string_value) {
+                    // Schema declares this as string type but it parsed as non-string (e.g., number)
+                    // Force treatment as string value - add opening quote and escape content
+                    if (!current_tool->name.empty()) {
+                        if (!needs_closing_quote) {
+                            value_to_add        = "\"";
+                            needs_closing_quote = true;
+                        }
+                    } else {
+                        if (!buffer_needs_closing_quote) {
+                            value_to_add               = "\"";
+                            buffer_needs_closing_quote = true;
+                        }
+                    }
+                    std::string escaped = json(value_content).dump();
+                    if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
+                        escaped = escaped.substr(1, escaped.size() - 2);
+                    }
+                    value_to_add += escaped;
                 } else {
                     // For non-string values (number, bool, null, object, array), add raw value content
                     // Using raw content instead of dump() ensures monotonicity for streaming

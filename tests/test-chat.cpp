@@ -321,6 +321,23 @@ static common_chat_tool edit_tool{
     })",
 };
 
+static common_chat_tool magic_tool{
+    /* .name = */ "magic",
+    /* .description = */ "Magic tool that takes a hash",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string"
+            },
+            "ref": {
+                "type": "string"
+            }
+        },
+        "required": ["name", "ref"]
+    })",
+};
+
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
 
@@ -2079,6 +2096,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             expect_reasoning("I was thinking").
             expect_content("Now I'm not.")
         .run();
+
+        // Test that numeric-looking string values are coerced to strings per the schema
+        tst.test(
+               "Let me call the magic tool\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=magic>\n"
+               "<parameter=name>\nfooBar\n</parameter>\n"
+               "<parameter=ref>\n5123123\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_tool })
+            .expect_reasoning("Let me call the magic tool")
+            .expect_tool_calls({
+                { "magic", R"({"name": "fooBar", "ref": "5123123"})", {} },
+            })
+            .run();
     }
 }
 
