@@ -811,4 +811,35 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         LABELS "sycl;unified;ops;tdd"
         TIMEOUT 180
     )
+
+    # Test 19: UnifiedKernel Persistent Execution Integration Tests
+    # Tests the persistent plan-build-execute workflow
+    add_executable(test-unified-kernel-persistent
+        tests/test-unified-kernel-persistent.cpp
+        unified-kernel.cpp
+    )
+    target_include_directories(test-unified-kernel-persistent PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-unified-kernel-persistent PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-unified-kernel-persistent PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
+    target_compile_definitions(test-unified-kernel-persistent PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+        UNIFIED_KERNEL_TEST_STANDALONE=1
+    )
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-unified-kernel-persistent PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME unified-kernel-persistent COMMAND test-unified-kernel-persistent)
+    set_tests_properties(unified-kernel-persistent PROPERTIES
+        LABELS "sycl;unified;persistent;tdd"
+        TIMEOUT 300
+    )
 endif()
