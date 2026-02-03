@@ -32,3 +32,12 @@ export enum MessageType {
 	THINK = 'think',
 	SYSTEM = 'system'
 }
+
+/**
+ * Content part types for API chat message content.
+ */
+export enum ContentPartType {
+	TEXT = 'text',
+	IMAGE_URL = 'image_url',
+	INPUT_AUDIO = 'input_audio'
+}
