@@ -122,10 +122,9 @@ static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
             Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy3_qf), Q6_V_hi_W(xy3_qf)), rsum3));
     }
 
-    HVX_Vector rsum01 = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), hvx_vec_reduce_sum_f32x2(rsum0, rsum1));
-    hvx_vec_store_u(r, 8, Q6_Vsf_equals_Vqf32(rsum01));
-    HVX_Vector rsum23 = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), hvx_vec_reduce_sum_f32x2(rsum2, rsum3));
-    hvx_vec_store_u(r + 2, 8, Q6_Vsf_equals_Vqf32(rsum23));
+    HVX_Vector_x4 rsum0123 = { .v = { rsum0, rsum1, rsum2, rsum3 } };
+    HVX_Vector rsum = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), hvx_vec_reduce_sum_f32x4(rsum0123));
+    hvx_vec_store_u(r, 4 * sizeof(float), Q6_Vsf_equals_Vqf32(rsum));
 }
 
 // MAD: y (F32) += x (F16) * s (F32)
