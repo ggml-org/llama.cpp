@@ -895,12 +895,9 @@ void ggml_gemv_q5_K_8x8_q8_K_generic(int                        n,
         for (int j = 0; j < ncols_interleaved; j++) {
             s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
             int index = x * ncols_interleaved + j;
-            printf("index =%d",index);
-            printf("\n");
-            printf("sub_ps values = %f\n",sumf[j] - sum_minf[j]);
+
         }
     }
-    exit(0);
 }
 
 
