@@ -58,9 +58,7 @@ public:
     // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
 
-    bool get_can_shift()     const override;
-    bool get_can_rm_suffix() const override;
-
+    bool get_can_shift() const override;
 
     // state write/load
 

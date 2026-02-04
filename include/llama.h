@@ -760,9 +760,6 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
-    // Check if the memory supports removing the last tokens in the sequence
-    LLAMA_API bool llama_memory_can_rm_suffix(llama_memory_t mem);
-
     //
     // State / sessions
     //

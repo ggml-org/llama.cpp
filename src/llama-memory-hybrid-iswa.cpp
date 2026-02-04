@@ -126,11 +126,8 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_update(llama_context * l
 }
 
 bool llama_memory_hybrid_iswa::get_can_shift() const {
-    return mem_attn->get_can_shift() && mem_recr->get_can_shift();
-}
-
-bool llama_memory_hybrid_iswa::get_can_rm_suffix() const {
-    return mem_attn->get_can_rm_suffix() && mem_recr->get_can_rm_suffix();
+    // Shifting is trivially supported for recurrent
+    return mem_attn->get_can_shift();
 }
 
 void llama_memory_hybrid_iswa::clear(bool data) {

@@ -752,7 +752,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            if (llama_memory_can_rm_suffix(llama_get_memory(ctx))) {
+            {
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {
@@ -763,8 +763,6 @@ private:
                 } else {
                     SLT_INF(slot, "%s", "speculative decoding context not initialized\n");
                 }
-            } else {
-                SLT_WRN(slot, "%s", "speculative decoding not supported by this context (no memory_rm_suffix support)\n");
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
