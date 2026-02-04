@@ -4,8 +4,7 @@ import { ChatService } from '$lib/services/chat';
 import type {
 	ApiCompletionRequest,
 	ApiCompletionResponse,
-	ApiCompletionStreamChunk,
-	ApiErrorResponse
+	ApiCompletionStreamChunk
 } from '$lib/types/api';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import type { SettingsChatServiceOptions } from '$lib/types/settings';

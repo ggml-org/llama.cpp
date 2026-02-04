@@ -304,7 +304,7 @@
 			</div>
 
 			{#if showMessageStats}
-				<div class="flex w-full flex-col items-end justify-center gap-0.5 md:w-auto">
+				<div class="flex min-h-[42px] w-full flex-col items-end justify-center gap-0.5 md:w-auto">
 					{#if notebookStore.totalTokens > 0}
 						<Tooltip.Root>
 							<Tooltip.Trigger>

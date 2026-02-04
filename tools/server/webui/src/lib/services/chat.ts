@@ -7,10 +7,7 @@ import type {
 	ApiChatCompletionToolCall,
 	ApiChatCompletionToolCallDelta,
 	ApiChatMessageContentPart,
-	ApiChatMessageData,
-	ApiCompletionRequest,
-	ApiCompletionResponse,
-	ApiCompletionStreamChunk
+	ApiChatMessageData
 } from '$lib/types/api';
 
 /**
