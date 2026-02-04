@@ -7973,13 +7973,13 @@ class Step35Model(TextModel):
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-5))
 
-        # Optional per-layer SwiGLU clamps (HF: swiglu_limits / swiglu_limits_shared).
+        # Optional per-layer SwiGLU clamps.
         if (limits := self.hparams.get("swiglu_limits")) is not None:
             limits_f = [0.0 if v is None else float(v) for v in limits[: self.block_count]]
-            self.gguf_writer.add_swiglu_limits(limits_f)
+            self.gguf_writer.add_swiglu_clamp_exp(limits_f)
         if (limits_shared := self.hparams.get("swiglu_limits_shared")) is not None:
             limits_shared_f = [0.0 if v is None else float(v) for v in limits_shared[: self.block_count]]
-            self.gguf_writer.add_swiglu_limits_shared(limits_shared_f)
+            self.gguf_writer.add_swiglu_clamp_shexp(limits_shared_f)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # remove mtp layers

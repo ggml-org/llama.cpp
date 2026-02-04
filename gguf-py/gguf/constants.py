@@ -146,8 +146,8 @@ class Keys:
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
-        SWIGLU_LIMITS                     = "{arch}.swiglu_limits"
-        SWIGLU_LIMITS_SHARED              = "{arch}.swiglu_limits_shared"
+        SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
+        SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 

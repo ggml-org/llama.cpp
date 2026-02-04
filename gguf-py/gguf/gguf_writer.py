@@ -824,11 +824,11 @@ class GGUFWriter:
     def add_expert_gating_func(self, value: ExpertGatingFuncType) -> None:
         self.add_uint32(Keys.LLM.EXPERT_GATING_FUNC.format(arch=self.arch), value.value)
 
-    def add_swiglu_limits(self, values: Sequence[float]) -> None:
-        self.add_array(Keys.LLM.SWIGLU_LIMITS.format(arch=self.arch), values)
+    def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
 
-    def add_swiglu_limits_shared(self, values: Sequence[float]) -> None:
-        self.add_array(Keys.LLM.SWIGLU_LIMITS_SHARED.format(arch=self.arch), values)
+    def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
 
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)

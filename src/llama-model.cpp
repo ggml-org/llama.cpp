@@ -2502,8 +2502,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
                 ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
-                ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS,        hparams.swiglu_clamp_exp,   hparams.n_layer);
-                ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS_SHARED, hparams.swiglu_clamp_shexp, hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer);
+                ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer);
 
                 type = LLM_TYPE_UNKNOWN;
             } break;
