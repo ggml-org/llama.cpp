@@ -115,13 +115,13 @@ kernel void kernel_mul_mv_q4_K_f32(
         for (int i = 0; i < 8; ++i) {
             yl[i+0] = y4[i+0];
             sumy.s0 += yl[i+0];
-            
+
             yl[i+8] = y4[i+32];
             sumy.s1 += yl[i+8];
-            
+
             yh[i+0] = y4[i+128];
             sumy.s2 += yh[i+0];
-            
+
             yh[i+8] = y4[i+160];
             sumy.s3 += yh[i+8];
         }
