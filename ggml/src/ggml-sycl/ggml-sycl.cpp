@@ -8954,8 +8954,12 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_host(qptr, device));
 }
 
-// Custom deleter for L2PrefetchManager - complete type is available here
+// Custom deleters - complete types are available here
 void ggml_sycl::L2PrefetchManagerDeleter::operator()(ggml_sycl::L2PrefetchManager * ptr) const {
+    delete ptr;
+}
+
+void ggml_sycl::UnifiedKernelDeleter::operator()(ggml_sycl::UnifiedKernel * ptr) const {
     delete ptr;
 }
 
@@ -24792,14 +24796,18 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     if (should_use_persistent_tg(*sycl_ctx, cgraph)) {
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Using persistent TG kernel dispatch\n");
 
-        // Create UnifiedKernel on-demand for this context
-        // TODO: Cache this in ggml_backend_sycl_context for reuse across calls
-        sycl::queue * q = sycl_ctx->stream(sycl_ctx->device, 0);
-        ggml_sycl::UnifiedKernel kernel(*q);
+        // Lazy-initialize UnifiedKernel on first use, then reuse across calls.
+        // This avoids repeated device buffer allocation/deallocation per token.
+        if (!sycl_ctx->unified_kernel) {
+            sycl::queue * q = sycl_ctx->stream(sycl_ctx->device, 0);
+            sycl_ctx->unified_kernel.reset(new ggml_sycl::UnifiedKernel(*q));
 
-        // Configure XMX support
-        ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(sycl_ctx->device);
-        kernel.configure(xmx_config);
+            ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(sycl_ctx->device);
+            sycl_ctx->unified_kernel->configure(xmx_config);
+            GGML_SYCL_DEBUG("[PERSISTENT-TG] Created and cached UnifiedKernel for device %d\n", sycl_ctx->device);
+        }
+
+        ggml_sycl::UnifiedKernel & kernel = *sycl_ctx->unified_kernel;
 
         // Extract persistent plan from graph
         if (!extract_persistent_plan(kernel, *sycl_ctx, cgraph)) {

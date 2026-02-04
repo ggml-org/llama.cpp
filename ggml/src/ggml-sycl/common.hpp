@@ -29,6 +29,7 @@
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <queue>
@@ -39,6 +40,19 @@
 #include <vector>
 
 struct ggml_backend_sycl_context;
+
+namespace ggml_sycl {
+class L2PrefetchManager;  // Forward declaration for l2-prefetch.hpp
+class UnifiedKernel;       // Forward declaration for unified-kernel.hpp
+
+// Custom deleters - defined in ggml-sycl.cpp where types are complete
+struct L2PrefetchManagerDeleter {
+    void operator()(L2PrefetchManager * ptr) const;
+};
+struct UnifiedKernelDeleter {
+    void operator()(UnifiedKernel * ptr) const;
+};
+}
 
 struct ggml_sycl_fa_graph_snapshot {
     const void * q_ptr                  = nullptr;
@@ -2167,6 +2181,14 @@ struct ggml_backend_sycl_context {
     std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> moe_ids_cache;
     std::mutex                                                   graph_mutex;
 
+    // L2 prefetch manager for TG optimization (owned by this context)
+    // Uses custom deleter to allow incomplete type in header
+    std::unique_ptr<ggml_sycl::L2PrefetchManager, ggml_sycl::L2PrefetchManagerDeleter> l2_prefetch_manager;
+
+    // Persistent TG kernel instance (cached across graph_compute calls)
+    // Lazy-initialized on first persistent dispatch to avoid allocation when unused
+    std::unique_ptr<ggml_sycl::UnifiedKernel, ggml_sycl::UnifiedKernelDeleter> unified_kernel;
+
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
     explicit ggml_backend_sycl_context(int device) :
@@ -2176,6 +2198,14 @@ struct ggml_backend_sycl_context {
         matmul_orchestrator(*this) {}
 
     ~ggml_backend_sycl_context();
+
+    // Non-movable: UnifiedMatmulOrchestrator has reference member, context created once per backend
+    ggml_backend_sycl_context(ggml_backend_sycl_context&&) = delete;
+    ggml_backend_sycl_context& operator=(ggml_backend_sycl_context&&) = delete;
+
+    // Non-copyable (owns resources)
+    ggml_backend_sycl_context(const ggml_backend_sycl_context&) = delete;
+    ggml_backend_sycl_context& operator=(const ggml_backend_sycl_context&) = delete;
 
     queue_ptr stream(int device, int stream) {
         // In TP mode, ALWAYS use the shared-context queue so all devices can access
