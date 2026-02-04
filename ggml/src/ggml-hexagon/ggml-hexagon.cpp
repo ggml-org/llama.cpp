@@ -2111,6 +2111,21 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     return true;
 }
 
+static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // values
+    const struct ggml_tensor * dst  = op;         // indices
+
+    if (src0->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_I32) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const int32_t * op_params = &op->op_params[0];
 
@@ -2311,6 +2326,17 @@ static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * 
     size_t n_bufs = 0;
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_argsort_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_ARGSORT;
+    memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
@@ -2562,6 +2588,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_CPY:
                 ggml_hexagon_dispatch_op<init_cpy_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_ARGSORT:
+                ggml_hexagon_dispatch_op<init_argsort_req>(sess, node, flags);
                 break;
 
             default:
@@ -2966,6 +2996,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_CPY:
             supp = ggml_hexagon_supported_cpy(sess, op);
+            break;
+
+        case GGML_OP_ARGSORT:
+            supp = ggml_hexagon_supported_argsort(sess, op);
             break;
 
         default:
