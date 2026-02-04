@@ -1,5 +1,6 @@
 import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
+import { tokenize } from '$lib/services/tokenize';
 
 export class NotebookStore {
 	content = $state('');
@@ -144,7 +145,7 @@ export class NotebookStore {
 				this.totalTokens = 0;
 				return;
 			}
-			const tokens = await ChatService.tokenize(this.content, model);
+			const tokens = await tokenize(this.content, model);
 			this.totalTokens = tokens.length;
 		}, 500);
 	}
