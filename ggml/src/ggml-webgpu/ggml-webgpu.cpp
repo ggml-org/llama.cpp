@@ -186,8 +186,12 @@ struct webgpu_buf_pool {
     void cleanup() {
         std::lock_guard<std::mutex> lock(mutex);
         for (auto & bufs : free) {
-            bufs.host_buf.Destroy();
-            bufs.dev_buf.Destroy();
+            if (bufs.host_buf) {
+                bufs.host_buf.Destroy();
+            }
+            if (bufs.dev_buf) {
+                bufs.dev_buf.Destroy();
+            }
         }
         free.clear();
     }
@@ -325,10 +329,19 @@ struct webgpu_global_context_struct {
 #endif
 
     ~webgpu_global_context_struct() {
-        this->get_tensor_staging_buf.Destroy();
+        if (this->get_tensor_staging_buf) {
+            this->get_tensor_staging_buf.Destroy();
+            this->get_tensor_staging_buf = nullptr;
+        }
 #ifdef GGML_WEBGPU_DEBUG
-        debug_host_buf.Destroy();
-        debug_dev_buf.Destroy();
+        if (this->debug_host_buf) {
+            this->debug_host_buf.Destroy();
+            this->debug_host_buf = nullptr;
+        }
+        if (this->debug_dev_buf) {
+            this->debug_dev_buf.Destroy();
+            this->debug_dev_buf = nullptr;
+        }
 #endif
     }
 };
@@ -2167,8 +2180,10 @@ static ggml_backend_i ggml_backend_webgpu_i = {
 
 static void ggml_backend_webgpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_webgpu_buffer_context * ctx = static_cast<ggml_backend_webgpu_buffer_context *>(buffer->context);
-    ctx->buffer.Destroy();
-    delete ctx;
+    if (ctx != nullptr && ctx->buffer != nullptr) {
+        ctx->buffer.Destroy();
+        delete ctx;
+    }
 }
 
 // Returns the "fake" base pointer.
