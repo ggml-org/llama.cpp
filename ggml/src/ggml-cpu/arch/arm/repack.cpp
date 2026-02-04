@@ -3725,7 +3725,7 @@ void ggml_gemm_q6_K_8x4_q8_K(int                        n,
 
                 int32x4_t acc_s32[acc_size];
                 for (int i = 0; i < acc_size; i++) {
-                    acc_s32[i]  = vdupq_n_s32(0);
+                    acc_s32[i] = vdupq_n_s32(0);
                 }
 
                 int16_t q6_scales[8 * 16];
@@ -3752,8 +3752,8 @@ void ggml_gemm_q6_K_8x4_q8_K(int                        n,
                         // 4 rows * 16 elements per scale
                         // 4 reads of 16 bytes each
                         constexpr int reads_per_sb = 4;
-                        int8x16_t q8_l[reads_per_sb];
-                        int8x16_t q8_h[reads_per_sb];
+                        int8x16_t     q8_l[reads_per_sb];
+                        int8x16_t     q8_h[reads_per_sb];
                         for (int k = 0; k < reads_per_sb; k++) {
                             q8_l[k] = vld1q_s8(q8_base_l + 16 * k);
                             q8_h[k] = vld1q_s8(q8_base_h + 16 * k);
@@ -3789,11 +3789,9 @@ void ggml_gemm_q6_K_8x4_q8_K(int                        n,
                             const uint8x16_t hbit_hi_4567 = vandq_u8(q6_qh_4567[k], mask_hi);
 
                             const int8x16_t q6_0123_lo = vsubq_s8(
-                                vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_ql_0123[k], m4b), hbit_lo_0123, 4)),
-                                m32s);
+                                vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_ql_0123[k], m4b), hbit_lo_0123, 4)), m32s);
                             const int8x16_t q6_0123_hi = vsubq_s8(
-                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_ql_0123[k], 4), hbit_hi_0123)),
-                                m32s);
+                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_ql_0123[k], 4), hbit_hi_0123)), m32s);
 
                             acc_lo[0] = vdotq_laneq_s32(acc_lo[0], q6_0123_lo, q8_l[k], 0);  //  0..3  r0 c0123
                             acc_lo[1] = vdotq_laneq_s32(acc_lo[1], q6_0123_lo, q8_l[k], 1);  //  0..3  r1 c0123
@@ -3806,11 +3804,9 @@ void ggml_gemm_q6_K_8x4_q8_K(int                        n,
                             acc_hi[3] = vdotq_laneq_s32(acc_hi[3], q6_0123_hi, q8_h[k], 3);  // 64..67 r3 c0123
 
                             const int8x16_t q6_4567_lo = vsubq_s8(
-                                vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_ql_4567[k], m4b), hbit_lo_4567, 4)),
-                                m32s);
+                                vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(q6_ql_4567[k], m4b), hbit_lo_4567, 4)), m32s);
                             const int8x16_t q6_4567_hi = vsubq_s8(
-                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_ql_4567[k], 4), hbit_hi_4567)),
-                                m32s);
+                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_ql_4567[k], 4), hbit_hi_4567)), m32s);
 
                             acc_lo[4] = vdotq_laneq_s32(acc_lo[4], q6_4567_lo, q8_l[k], 0);  //  0..3  r0 c4567
                             acc_lo[5] = vdotq_laneq_s32(acc_lo[5], q6_4567_lo, q8_l[k], 1);  //  0..3  r1 c4567

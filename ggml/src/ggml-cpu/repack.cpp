@@ -258,12 +258,12 @@ template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTR
 
 template <int N, int M>
 static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
-                                                  float * GGML_RESTRICT      s,
-                                                  size_t                     bs,
-                                                  const void * GGML_RESTRICT vx,
-                                                  const void * GGML_RESTRICT vy,
-                                                  int                        nr,
-                                                  int                        nc) {
+                                                 float * GGML_RESTRICT      s,
+                                                 size_t                     bs,
+                                                 const void * GGML_RESTRICT vx,
+                                                 const void * GGML_RESTRICT vy,
+                                                 int                        nr,
+                                                 int                        nc) {
     constexpr int ncols_interleaved = N;
     constexpr int blocklen          = M;
     const int     qk                = QK_K;
@@ -334,7 +334,8 @@ static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
                         sumi_h += q_h * a_h;
                     }
 
-                    sumf[j] += (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
+                    sumf[j] +=
+                        (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
                 }
             }
         }
@@ -347,12 +348,12 @@ static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
 
 template <int N, int M>
 static void ggml_gemm_q6_K_NxM_q8_K_generic_impl(int                        n,
-                                                  float * GGML_RESTRICT      s,
-                                                  size_t                     bs,
-                                                  const void * GGML_RESTRICT vx,
-                                                  const void * GGML_RESTRICT vy,
-                                                  int                        nr,
-                                                  int                        nc) {
+                                                 float * GGML_RESTRICT      s,
+                                                 size_t                     bs,
+                                                 const void * GGML_RESTRICT vx,
+                                                 const void * GGML_RESTRICT vy,
+                                                 int                        nr,
+                                                 int                        nc) {
     constexpr int ncols_interleaved = N;
     constexpr int blocklen          = M;
     const int     qk                = QK_K;
@@ -409,17 +410,19 @@ static void ggml_gemm_q6_K_NxM_q8_K_generic_impl(int                        n,
                                 const int l_4    = b_ptr[l].ql[ql_pos] & 0xF;
                                 const int hi_4   = (b_ptr[l].ql[ql_pos] >> 4) & 0xF;
 
-                                const int qh_idx_l    = qh_half_l + ((base_l + i) % 32);
-                                const int qh_chunk_l  = qh_idx_l / blocklen;
-                                const int qh_pos_l    = qh_idx_l % blocklen;
-                                const int qh_offset_l = qh_chunk_l * (blocklen * ncols_interleaved) + j * blocklen + qh_pos_l;
-                                const int hi_2_l      = (b_ptr[l].qh[qh_offset_l] >> qh_shift_l) & 0x3;
+                                const int qh_idx_l   = qh_half_l + ((base_l + i) % 32);
+                                const int qh_chunk_l = qh_idx_l / blocklen;
+                                const int qh_pos_l   = qh_idx_l % blocklen;
+                                const int qh_offset_l =
+                                    qh_chunk_l * (blocklen * ncols_interleaved) + j * blocklen + qh_pos_l;
+                                const int hi_2_l = (b_ptr[l].qh[qh_offset_l] >> qh_shift_l) & 0x3;
 
-                                const int qh_idx_h    = qh_half_h + ((base_h + i) % 32);
-                                const int qh_chunk_h  = qh_idx_h / blocklen;
-                                const int qh_pos_h    = qh_idx_h % blocklen;
-                                const int qh_offset_h = qh_chunk_h * (blocklen * ncols_interleaved) + j * blocklen + qh_pos_h;
-                                const int hi_2_h      = (b_ptr[l].qh[qh_offset_h] >> qh_shift_h) & 0x3;
+                                const int qh_idx_h   = qh_half_h + ((base_h + i) % 32);
+                                const int qh_chunk_h = qh_idx_h / blocklen;
+                                const int qh_pos_h   = qh_idx_h % blocklen;
+                                const int qh_offset_h =
+                                    qh_chunk_h * (blocklen * ncols_interleaved) + j * blocklen + qh_pos_h;
+                                const int hi_2_h = (b_ptr[l].qh[qh_offset_h] >> qh_shift_h) & 0x3;
 
                                 const int q_l = ((hi_2_l << 4) | l_4) - 32;
                                 const int q_h = ((hi_2_h << 4) | hi_4) - 32;
@@ -431,7 +434,8 @@ static void ggml_gemm_q6_K_NxM_q8_K_generic_impl(int                        n,
                                 sumi_h += q_h * q8_h;
                             }
 
-                            sumf[m][j] += (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d[m];
+                            sumf[m][j] += (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) *
+                                          a_ptr[l].d[m];
                         }
                     }
                 }
