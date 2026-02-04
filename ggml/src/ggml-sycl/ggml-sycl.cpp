@@ -85,6 +85,7 @@
 #include "ggml-sycl/layer-prefetch.hpp"
 #include "ggml-sycl/l2-prefetch.hpp"
 #include "ggml-sycl/persistent-tg-kernel.hpp"
+#include "ggml-sycl/unified-kernel.hpp"
 
 // Forward declarations for layout helpers used before definition.
 static const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode);
@@ -24383,118 +24384,225 @@ static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
 }
 
 // =============================================================================
-// Persistent TG Kernel Dispatch Helpers (Stub Implementations)
+// Persistent Kernel Graph Extraction
 // =============================================================================
-//
-// These helpers support the persistent token generation kernel dispatch.
-// The persistent kernel executes a complete forward pass in a single kernel,
-// reducing dispatch overhead for TG workloads (M=1).
-//
 
 /**
- * Build persistent TG kernel arguments from a compute graph.
+ * Extract layer index from a tensor name.
+ * Tensor names follow the pattern "blk.N.component.weight" where N is the layer.
+ * Returns -1 if no layer index is found.
+ */
+static int extract_layer_index(const char * name) {
+    if (!name) return -1;
+    const char * blk = std::strstr(name, "blk.");
+    if (!blk) return -1;
+    return std::atoi(blk + 4);  // Parse number after "blk."
+}
+
+/**
+ * Classify a MUL_MAT weight tensor into a MatmulType.
+ * Weight tensor name determines the projection type.
+ */
+static MatmulType classify_matmul(const char * weight_name) {
+    if (!weight_name) return MatmulType::GENERIC;
+
+    if (std::strstr(weight_name, "attn_q"))      return MatmulType::Q_PROJ;
+    if (std::strstr(weight_name, "attn_k"))      return MatmulType::K_PROJ;
+    if (std::strstr(weight_name, "attn_v"))      return MatmulType::V_PROJ;
+    if (std::strstr(weight_name, "attn_output")) return MatmulType::OUT_PROJ;
+    if (std::strstr(weight_name, "ffn_gate"))    return MatmulType::GATE;
+    if (std::strstr(weight_name, "ffn_up"))      return MatmulType::UP;
+    if (std::strstr(weight_name, "ffn_down"))    return MatmulType::DOWN;
+
+    return MatmulType::GENERIC;  // Default fallback
+}
+
+/**
+ * Extract model dimensions from the compute graph.
+ * Analyzes tensor shapes to determine hidden_dim, intermediate_dim, etc.
  *
- * Extracts model dimensions, layer weights, and KV cache pointers from the
- * compute graph nodes. Returns a populated PersistentTGArgs structure.
- *
- * @param ctx   SYCL backend context
  * @param cgraph Compute graph to analyze
- * @return Populated arguments (stub returns empty args for now)
+ * @param[out] n_layers      Number of transformer layers
+ * @param[out] hidden_dim    Hidden dimension (from RMS_NORM weights)
+ * @param[out] intermediate_dim  FFN intermediate dimension
+ * @param[out] n_heads       Number of attention heads
+ * @param[out] n_kv_heads    Number of KV heads (for GQA)
+ * @param[out] head_dim      Dimension per head
+ * @param[out] quant_type    Weight quantization type
+ * @return true if dimensions were successfully extracted
  */
-static ggml_sycl::PersistentTGArgs build_persistent_tg_args(
-    ggml_backend_sycl_context & ctx,
-    ggml_cgraph *               cgraph) {
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] build_persistent_tg_args: ctx.device=%d n_nodes=%d (stub)\n",
-                    ctx.device, cgraph ? cgraph->n_nodes : -1);
+static bool extract_model_dimensions(ggml_cgraph * cgraph,
+                                     int & n_layers, int & hidden_dim, int & intermediate_dim,
+                                     int & n_heads, int & n_kv_heads, int & head_dim,
+                                     int & quant_type) {
+    n_layers         = 0;
+    hidden_dim       = 0;
+    intermediate_dim = 0;
+    n_heads          = 0;
+    n_kv_heads       = 0;
+    head_dim         = 0;
+    quant_type       = 0;
 
-    // TODO: Implement full argument extraction from cgraph:
-    // 1. Parse graph to identify transformer layer nodes
-    // 2. Extract weight pointers from MUL_MAT ops
-    // 3. Locate KV cache tensors
-    // 4. Build layer weight array
-    ggml_sycl::PersistentTGArgs args = {};
-    args.n_layers = 0;  // Will be populated when implemented
-    args.hidden_dim = 0;
-    args.n_heads = 0;
-    args.head_dim = 0;
-    args.intermediate_dim = 0;
-    args.vocab_size = 0;
-    args.quant_type = 0;
-    args.layout_mode = 0;
-    args.layer_weights = nullptr;
-    args.kv_caches = nullptr;
-    args.input_embedding = nullptr;
-    args.output_logits = nullptr;
-    args.intermediate_buffer = nullptr;
-    args.work_counter = nullptr;
-    args.total_tiles = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
 
-    return args;
+        if (node->op == GGML_OP_RMS_NORM && hidden_dim == 0) {
+            // RMS_NORM input dimension gives hidden_dim
+            hidden_dim = (int) node->src[0]->ne[0];
+        }
+
+        if (node->op == GGML_OP_MUL_MAT && node->src[0]) {
+            const char * weight_name = node->src[0]->name;
+            int layer = extract_layer_index(weight_name);
+            if (layer >= n_layers) {
+                n_layers = layer + 1;
+            }
+
+            // Extract quant type from first weight
+            if (quant_type == 0) {
+                quant_type = node->src[0]->type;
+            }
+
+            // FFN gate/up gives intermediate_dim (N dimension of weight)
+            if (std::strstr(weight_name, "ffn_gate") || std::strstr(weight_name, "ffn_up")) {
+                if (intermediate_dim == 0) {
+                    intermediate_dim = (int) node->src[0]->ne[1];
+                }
+            }
+
+            // Q projection gives n_heads * head_dim
+            if (std::strstr(weight_name, "attn_q") && n_heads == 0) {
+                int q_dim = (int) node->src[0]->ne[1];
+                // head_dim is typically 128 for Mistral/LLaMA
+                head_dim = 128;
+                n_heads  = q_dim / head_dim;
+                if (n_heads == 0) {
+                    head_dim = 64;
+                    n_heads  = q_dim / head_dim;
+                }
+            }
+
+            // K projection gives n_kv_heads * head_dim
+            if (std::strstr(weight_name, "attn_k") && n_kv_heads == 0) {
+                int k_dim = (int) node->src[0]->ne[1];
+                if (head_dim > 0) {
+                    n_kv_heads = k_dim / head_dim;
+                }
+            }
+        }
+    }
+
+    bool valid = (n_layers > 0 && hidden_dim > 0 && intermediate_dim > 0 &&
+                  n_heads > 0 && head_dim > 0);
+    if (n_kv_heads == 0) {
+        n_kv_heads = n_heads;  // Default to MHA if GQA not detected
+    }
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Extracted dims: layers=%d hidden=%d intermediate=%d "
+                    "heads=%d kv_heads=%d head_dim=%d quant=%d valid=%d\n",
+                    n_layers, hidden_dim, intermediate_dim,
+                    n_heads, n_kv_heads, head_dim, quant_type, valid ? 1 : 0);
+
+    return valid;
 }
 
 /**
- * Get persistent TG kernel configuration for the current device.
+ * Build a persistent execution plan from the compute graph using UnifiedKernel API.
  *
- * Returns optimal tile sizes and work distribution based on hardware.
+ * Walks the graph, identifies transformer operations, and adds them to the
+ * UnifiedKernel's persistent execution plan.
  *
- * @param ctx SYCL backend context
- * @return Kernel configuration (stub returns default config)
+ * @param kernel  UnifiedKernel instance to build plan on
+ * @param ctx     SYCL backend context (for device pointers)
+ * @param cgraph  Compute graph to extract operations from
+ * @return true if plan was successfully built
  */
-static ggml_sycl::PersistentTGConfig get_persistent_tg_config(
-    ggml_backend_sycl_context & ctx) {
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] get_persistent_tg_config: device=%d (stub)\n", ctx.device);
+static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
+                                    ggml_backend_sycl_context & ctx,
+                                    ggml_cgraph * cgraph) {
+    // 1. Extract model dimensions
+    int n_layers, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type;
+    if (!extract_model_dimensions(cgraph, n_layers, hidden_dim, intermediate_dim,
+                                  n_heads, n_kv_heads, head_dim, quant_type)) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] Failed to extract model dimensions from graph\n");
+        return false;
+    }
 
-    // TODO: Query device capabilities and return optimal config:
-    // - Tile sizes based on register pressure
-    // - Workgroup count based on EU count
-    // - Barrier mode based on split barrier support
-    ggml_sycl::PersistentTGConfig config = {};
-    config.tile_m = 1;
-    config.tile_n = 128;
-    config.tile_k = 32;
-    config.n_workgroups = 64;
-    config.workgroup_size = 256;
-    config.use_split_barriers = false;
+    // 2. Begin building the persistent plan
+    kernel.begin_persistent(n_layers, 1 /* batch_size */, hidden_dim,
+                            intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type);
 
-    return config;
-}
+    // 3. Walk graph and add operations
+    int ops_added = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        int layer = -1;
 
-/**
- * Pin model weights for persistent kernel execution.
- *
- * Ensures all layer weights are resident in device memory and pinned
- * for the duration of the persistent kernel execution.
- *
- * @param ctx  SYCL backend context
- * @param args Persistent TG arguments containing weight pointers
- */
-static void pin_model_weights_for_persistent(
-    ggml_backend_sycl_context &        ctx,
-    const ggml_sycl::PersistentTGArgs & args) {
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] pin_model_weights_for_persistent: device=%d n_layers=%d (stub)\n",
-                    ctx.device, args.n_layers);
+        // Try to get layer index from the node or its sources
+        if (node->name[0] != '\0') {
+            layer = extract_layer_index(node->name);
+        }
+        if (layer < 0 && node->src[0] && node->src[0]->name[0] != '\0') {
+            layer = extract_layer_index(node->src[0]->name);
+        }
+        if (layer < 0) {
+            layer = 0;  // Default to layer 0 for non-layer operations
+        }
 
-    // TODO: Implement weight pinning via unified_cache:
-    // 1. Call unified_cache_pin_layers() with layer range
-    // 2. Verify all weights are resident in device memory
-    // 3. Update args pointers if weights were migrated
-    (void)args;  // Suppress unused warning
-}
+        switch (node->op) {
+            case GGML_OP_RMS_NORM: {
+                // src[0] = input, src[1] = norm weights (if available)
+                const void * input  = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
+                const void * weights = nullptr;
+                if (node->src[1]) {
+                    weights = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                }
+                kernel.add_rms_norm(layer, weights, input, output);
+                ops_added++;
+                break;
+            }
 
-/**
- * Unpin model weights after persistent kernel execution.
- *
- * Releases pins acquired by pin_model_weights_for_persistent, allowing
- * normal cache eviction to resume.
- *
- * @param ctx SYCL backend context
- */
-static void unpin_model_weights(ggml_backend_sycl_context & ctx) {
-    GGML_SYCL_DEBUG("[PERSISTENT-TG] unpin_model_weights: device=%d (stub)\n", ctx.device);
+            case GGML_OP_MUL_MAT: {
+                // src[0] = weight matrix, src[1] = input activation, dst = output
+                const void * weight = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                const void * input  = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
 
-    // TODO: Implement weight unpinning:
-    // 1. Call unified_cache_unpin_layers() to release pins
-    // 2. Allow normal LRU eviction to resume
+                MatmulType mtype = classify_matmul(node->src[0]->name);
+
+                // Matrix dimensions: C = A * B^T where A=weight (NxK), B=input (MxK)
+                int M = (int) node->src[1]->ne[1];  // Output rows (batch size, typically 1)
+                int N = (int) node->src[0]->ne[1];  // Output cols
+                int K = (int) node->src[0]->ne[0];  // Inner dimension
+
+                kernel.add_matmul(layer, weight, input, output, mtype, M, N, K);
+                ops_added++;
+                break;
+            }
+
+            case GGML_OP_MUL: {
+                // Element-wise multiply: src[0] * src[1] -> dst
+                // In transformer context, this is often silu(gate) * up
+                const void * gate   = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                const void * up     = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
+                kernel.add_silu_mul(layer, gate, up, output);
+                ops_added++;
+                break;
+            }
+
+            default:
+                // Skip operations not yet supported in persistent kernel
+                // (ROPE, ATTENTION/FLASH_ATTN, SOFTMAX, etc.)
+                break;
+        }
+    }
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] Built persistent plan: %d ops from %d graph nodes\n",
+                    ops_added, cgraph->n_nodes);
+
+    return ops_added > 0;
 }
 
 /**
@@ -24667,23 +24775,34 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     if (should_use_persistent_tg(*sycl_ctx, cgraph)) {
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Using persistent TG kernel dispatch\n");
 
-        ggml_sycl::PersistentTGArgs   args   = build_persistent_tg_args(*sycl_ctx, cgraph);
-        ggml_sycl::PersistentTGConfig config = get_persistent_tg_config(*sycl_ctx);
+        // Create UnifiedKernel on-demand for this context
+        // TODO: Cache this in ggml_backend_sycl_context for reuse across calls
+        sycl::queue * q = sycl_ctx->stream(sycl_ctx->device, 0);
+        ggml_sycl::UnifiedKernel kernel(*q);
 
-        // Pin weights for the duration of the persistent kernel
-        pin_model_weights_for_persistent(*sycl_ctx, args);
+        // Configure XMX support
+        ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(sycl_ctx->device);
+        kernel.configure(xmx_config);
+
+        // Extract persistent plan from graph
+        if (!extract_persistent_plan(kernel, *sycl_ctx, cgraph)) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] Failed to build persistent plan, falling back to normal dispatch\n");
+            kernel.cancel_persistent();
+            goto normal_dispatch;
+        }
 
         try {
-            sycl::event e = ggml_sycl::launch_persistent_tg_kernel(*sycl_ctx->stream(), args, config);
-            e.wait();
+            kernel.execute_persistent();
+
+            PersistentStats stats = kernel.get_last_stats();
+            GGML_SYCL_DEBUG("[PERSISTENT-TG] Execution complete: %d ops, %.2f ms\n",
+                            stats.n_operations, stats.kernel_time_ms);
         } catch (const sycl::exception & exc) {
             GGML_LOG_ERROR("[PERSISTENT-TG] Kernel execution failed: %s\n", exc.what());
-            unpin_model_weights(*sycl_ctx);
             // Fall through to normal dispatch on failure
             goto normal_dispatch;
         }
 
-        unpin_model_weights(*sycl_ctx);
         record_completion(true);
         return GGML_STATUS_SUCCESS;
     }
