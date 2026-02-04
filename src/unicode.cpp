@@ -499,11 +499,9 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
 
 template<typename CharT>
 static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT> & text, const std::basic_string<CharT> & regex, const std::vector<size_t> & offsets) {
-#ifdef _MSC_VER // https://github.com/ggml-org/llama.cpp/issues/17830
-    // MSVC's std::regex has stack limitations with complex patterns
+#ifdef _MSC_VER // Bypass bug in MSVC: https://github.com/ggml-org/llama.cpp/issues/17830
     constexpr auto regex_flags = std::regex_constants::ECMAScript;
 #else
-    // Prevents catastrophic backtracking on repetitive input
     constexpr auto regex_flags = std::regex_constants::optimize | std::regex_constants::nosubs;
 #endif
     std::basic_regex<CharT> expr(regex, regex_flags);
