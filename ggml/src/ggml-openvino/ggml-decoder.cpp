@@ -79,6 +79,17 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
     add_extra_inputs();
 }
 
+void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
+    m_cgraph = cgraph;
+    m_model_inputs.clear();
+    m_model_outputs.clear();
+    m_node_info_list.clear();
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto * cur_node = cgraph->nodes[node_n];
+        set_input_output(cur_node);
+    }
+}
+
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::shared_ptr<ov::Node>> & model_weights) {
     m_cgraph = cgraph;
     m_model_weights = model_weights;
@@ -330,6 +341,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             auto * mask = node->src[3];
             std::string mask_name(mask->name);
 
+            model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);
             if (mask_name.find("swa") != std::string::npos) {
                 model_params.swa_layers.push_back(layer);
                 model_params.ctx_per_seq_swa = cache_k->ne[1];
@@ -358,7 +370,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             break;
         }
         if (node->op == GGML_OP_ROPE) {
-            model_params.rope_params = node->op_params;
+            memcpy(model_params.rope_params, node->op_params, sizeof(int32_t) * 15);
         }
     }
     auto * output_tensor = cgraph->nodes[cgraph->n_nodes - 1];
@@ -405,7 +417,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
         // kvcache
         input_shape = ov::PartialShape{get_shape(input)};
         if (!m_is_static) {
-            // do not fix ctx size to make llama-bench work
+            // do not fix ctx size to make llama-bench work across test params
             input_shape[2] = -1;
         }
 

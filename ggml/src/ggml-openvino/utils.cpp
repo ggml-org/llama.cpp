@@ -76,7 +76,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
     ComputeParams c_params;
     std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
-    const auto key = compute_graph_key(cgraph);
+    graph_key key(cgraph);
     bool cache_hit;
 
     int64_t decoder_end_time;
@@ -90,19 +90,22 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
         auto it = decoder_cache.find(key);
 
         cache_hit = it != decoder_cache.end();
+        ModelParams old_m_params;
         if (cache_hit) {
             ggml_decoder = it->second;
-            cache_hit = ggml_decoder->get_model_params().can_reuse_dynamically(m_params);
+            old_m_params = ggml_decoder->get_model_params();
+            cache_hit = old_m_params.can_reuse_dynamically(m_params);
         }
 
         if (cache_hit) {
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-            ggml_decoder = decoder_cache[key];
             ggml_decoder->set_compute_params(c_params);
             ggml_decoder->set_model_params(m_params);
+            if (old_m_params.kv_buffer_changed(m_params)) {
+                ggml_decoder->update_io(cgraph);
+            }
             ggml_decoder->add_extra_inputs();
-            infer_request = infer_request_cache[key];
-
+            infer_request = infer_request_cache.at(key);
             if (stateful) {
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
                 int32_t * pos_data = (int32_t *) inp_pos->data;
@@ -240,7 +243,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
     const auto * inp_pos = get_inp_pos_tensor(cgraph);
     const auto is_prefill = get_is_prefill(inp_pos);
-    const auto key = compute_graph_key(cgraph);
+    graph_key key(cgraph);
     bool cache_hit;
 
     int64_t decoder_end_time;
@@ -254,19 +257,23 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
         auto it = decoder_cache.find(key);
 
         cache_hit = it != decoder_cache.end();
+        ModelParams old_m_params;
         if (cache_hit) {
             ggml_decoder = it->second;
-            cache_hit = ggml_decoder->get_model_params().can_reuse_statically(m_params);
+            old_m_params = ggml_decoder->get_model_params();
+            cache_hit = old_m_params.can_reuse_statically(m_params);
         }
 
         if (cache_hit) {
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-            ggml_decoder = decoder_cache[key];
             ggml_decoder->m_is_prefill = is_prefill;
             ggml_decoder->set_model_params(m_params);
             ggml_decoder->set_compute_params(c_params);
+            if (old_m_params.kv_buffer_changed(m_params)) {
+                ggml_decoder->update_io(cgraph);
+            }
             ggml_decoder->add_extra_inputs();
-            infer_request = is_prefill ? infer_request_cache_prefill[key] : infer_request_cache[key];
+            infer_request = is_prefill ? infer_request_cache_prefill.at(key) : infer_request_cache.at(key);
 
             decoder_end_time = ggml_time_us();
             conversion_end_time = decoder_end_time;
@@ -759,19 +766,6 @@ const ggml_tensor * get_inp_pos_tensor(ggml_cgraph * cgraph) {
 
 bool get_is_prefill(const ggml_tensor * inp_pos) {
     return inp_pos->ne[0] > 1;
-}
-
-graph_key compute_graph_key(ggml_cgraph * cgraph) {
-    graph_key key;
-    key.n_nodes = cgraph->n_nodes;
-
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const auto * node = cgraph->nodes[i];
-        if (node->op == GGML_OP_SET_ROWS && strncmp(node->src[2]->name, "cache_k_l0", 10) == 0) {
-            key.cache_k_l0 = node->src[2];
-        }
-    }
-    return key;
 }
 
 #pragma GCC diagnostic pop
