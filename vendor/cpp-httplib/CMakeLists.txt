@@ -3,8 +3,9 @@ license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
-set(LLAMA_FATAL_WARNINGS OFF)
 llama_add_compile_flags()
+list(REMOVE_ITEM C_FLAGS   -Werror)
+list(REMOVE_ITEM CXX_FLAGS -Werror)
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 if (NOT MSVC)
