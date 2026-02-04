@@ -48,7 +48,7 @@ export class NotebookStore {
 				this.content,
 				{
 					...currentConfig,
-					model: model ?? currentConfig.model,
+					model,
 					stream: true,
 					timings_per_token: true,
 					onChunk: (chunk: string) => {
