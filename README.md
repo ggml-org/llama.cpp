@@ -1,3 +1,6 @@
+# IMPORTANT: this version has some bugs that seems to be affecting output correctness. Its an experimental build, use at your risk until will be fixed! 
+
+
 # llama.cpp-gfx906-2602
 
 Based on llama.cpp build 7924.
