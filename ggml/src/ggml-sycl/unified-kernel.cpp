@@ -4508,6 +4508,13 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
     tile_counter_ = sycl::malloc_device<int>(1, queue_);
     queue_.memset(tile_counter_, 0, sizeof(int)).wait();
 
+    if (!barrier_counter_) {
+        barrier_counter_ = sycl::malloc_device<int>(1, queue_);
+    }
+    if (!barrier_sense_) {
+        barrier_sense_ = sycl::malloc_device<int>(1, queue_);
+    }
+
     persistent_buffer_size_ = required_size;
 }
 
@@ -4522,6 +4529,8 @@ void UnifiedKernel::free_persistent_buffers() {
         sycl::free(tile_counter_, queue_);
         tile_counter_ = nullptr;
     }
+    if (barrier_counter_) { sycl::free(barrier_counter_, queue_); barrier_counter_ = nullptr; }
+    if (barrier_sense_)   { sycl::free(barrier_sense_, queue_);   barrier_sense_   = nullptr; }
     persistent_buffer_size_ = 0;
 }
 
@@ -4689,7 +4698,6 @@ void UnifiedKernel::launch_persistent_kernel() {
     const size_t n_ops = current_plan_->operations.size();
     std::vector<DeviceOperation> host_ops(n_ops);
 
-
     int total_tiles = 0;
     for (size_t i = 0; i < n_ops; i++) {
         const auto & src = current_plan_->operations[i];
@@ -4712,11 +4720,10 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.n_kv_heads       = src.n_kv_heads;
         memset(dst.pad, 0, sizeof(dst.pad));
 
-
         // Calculate tiles for this operation
         switch (src.type) {
             case OperationType::RMS_NORM:
-                dst.n_tiles = 1;  // Single cooperative operation
+                dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
                 break;
             case OperationType::SILU_MUL:
                 dst.n_tiles = (src.intermediate_dim + 255) / 256;
@@ -4734,7 +4741,7 @@ void UnifiedKernel::launch_persistent_kernel() {
                 dst.n_tiles = src.N;  // One tile per head
                 break;
             case OperationType::ROPE:
-                dst.n_tiles = 1;  // Single cooperative operation (all threads work together)
+                dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
                 break;
             default:
                 dst.n_tiles = 1;
@@ -4749,19 +4756,17 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Reset tile counter
     queue_.memset(tile_counter_, 0, sizeof(int)).wait();
 
-    // Allocate and initialize atomic barrier state (counter=0, sense=0)
-    int * barrier_counter = sycl::malloc_device<int>(1, queue_);
-    int * barrier_sense   = sycl::malloc_device<int>(1, queue_);
-    queue_.memset(barrier_counter, 0, sizeof(int)).wait();
-    queue_.memset(barrier_sense, 0, sizeof(int)).wait();
+    // Reset barrier state (counter=0, sense=0)
+    queue_.memset(barrier_counter_, 0, sizeof(int)).wait();
+    queue_.memset(barrier_sense_, 0, sizeof(int)).wait();
 
     // Build kernel args
     PersistentKernelArgs args = {};
     args.operations           = d_ops;
     args.n_operations         = static_cast<int>(n_ops);
     args.tile_counter         = tile_counter_;
-    args.barrier_counter      = barrier_counter;
-    args.barrier_sense        = barrier_sense;
+    args.barrier_counter      = barrier_counter_;
+    args.barrier_sense        = barrier_sense_;
     for (int i = 0; i < 4; i++) {
         args.scratch_buffers[i] = persistent_buffers_[i];
     }
@@ -4804,10 +4809,8 @@ void UnifiedKernel::launch_persistent_kernel() {
     last_stats_.total_tiles          = total_tiles;
     last_stats_.kernel_time_ms       = elapsed_ms;
 
-    // Cleanup device operation table and barrier state
+    // Cleanup device operation table
     sycl::free(d_ops, queue_);
-    sycl::free(barrier_counter, queue_);
-    sycl::free(barrier_sense, queue_);
 }
 
 // -----------------------------------------------------------------------------

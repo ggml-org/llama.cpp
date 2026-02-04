@@ -2436,6 +2436,8 @@ private:
 
     void *  persistent_buffers_[4] = {nullptr, nullptr, nullptr, nullptr};
     int *   tile_counter_          = nullptr;
+    int *   barrier_counter_       = nullptr;
+    int *   barrier_sense_         = nullptr;
     size_t  persistent_buffer_size_ = 0;
 
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);
