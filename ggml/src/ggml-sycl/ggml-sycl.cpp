@@ -24613,9 +24613,130 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 break;
             }
 
+            case GGML_OP_ROPE: {
+                // RoPE: Apply rotary position embeddings to a single tensor (Q or K).
+                // In the ggml graph, ROPE is applied separately to Q and K tensors.
+                // Each ROPE op processes one tensor: src[0] = input (Q or K), src[1] = position.
+                //
+                // The persistent kernel's compute_rope_tile() can handle k_data == nullptr,
+                // so each graph ROPE op maps to one add_rope() call with only the Q field set.
+
+                // Extract RoPE parameters from op_params (same layout as ggml_sycl_op_rope)
+                const int n_dims      = ((int32_t *) node->op_params)[1];
+                const int mode        = ((int32_t *) node->op_params)[2];
+
+                float freq_base;
+                memcpy(&freq_base, (int32_t *) node->op_params + 5, sizeof(float));
+
+                // Support normal (mode=0) and neox (mode=2) RoPE modes
+                const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
+                const bool is_normal = (mode == GGML_ROPE_TYPE_NORMAL);
+                if (!is_neox && !is_normal) {
+                    GGML_SYCL_DEBUG("[PERSISTENT-TG] Skipping unsupported ROPE mode=%d\n", mode);
+                    break;
+                }
+
+                // Get tensor dimensions
+                const int head_dim_rope = (int) node->src[0]->ne[0];
+                const int n_heads_rope  = (int) node->src[0]->ne[1];
+                const int half_dim      = n_dims / 2;  // n_dims may be <= head_dim
+
+                // Read position from device (src[1] is position tensor)
+                // For TG mode (M=1), there's only one position value
+                const int32_t * pos_device = (const int32_t *) ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                int32_t position = 0;
+                sycl::queue * q = ctx.stream();
+                q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+
+                // Pre-compute cos/sin caches on host
+                // theta_i = position * freq_base^(-2i/n_dims) for neox-style RoPE
+                std::vector<float> cos_cache(half_dim);
+                std::vector<float> sin_cache(half_dim);
+                for (int j = 0; j < half_dim; j++) {
+                    float theta = (float) position * powf(freq_base, -2.0f * (float) j / (float) n_dims);
+                    cos_cache[j] = cosf(theta);
+                    sin_cache[j] = sinf(theta);
+                }
+
+                // Upload cos/sin caches to device
+                float * d_cos = sycl::malloc_device<float>(half_dim, *q);
+                float * d_sin = sycl::malloc_device<float>(half_dim, *q);
+                q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
+                q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+
+                // Track device allocations for cleanup after execution
+                kernel.add_temp_device_alloc(d_cos);
+                kernel.add_temp_device_alloc(d_sin);
+
+                // Each graph ROPE op processes a single tensor (Q or K)
+                // src[0] is the input tensor, dst is the output tensor
+                void * input_rope  = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
+                void * output_rope = ggml_sycl_get_data_ptr(node, ctx.device);
+
+                RopeDescriptor desc = {};
+                desc.q         = input_rope;     // Source data (read from src[0])
+                desc.k         = nullptr;         // Single-tensor mode: no K
+                desc.rope_dst  = output_rope;     // Destination data (write to dst)
+                desc.cos_cache = d_cos;
+                desc.sin_cache = d_sin;
+                desc.n_heads   = n_heads_rope;
+                desc.head_dim  = head_dim_rope;
+                desc.position  = position;
+                desc.is_neox   = is_neox;
+                kernel.add_rope(layer, desc);
+                ops_added++;
+
+                GGML_SYCL_DEBUG("[PERSISTENT-TG]   ROPE: heads=%d head_dim=%d n_dims=%d pos=%d\n",
+                                n_heads_rope, head_dim_rope, n_dims, position);
+                break;
+            }
+
+            case GGML_OP_FLASH_ATTN_EXT: {
+                // Flash attention: src[0]=Q, src[1]=K, src[2]=V, dst=output
+                // Q dimensions: ne[0]=head_dim, ne[1]=n_queries, ne[2]=n_heads
+                // K dimensions: ne[0]=head_dim, ne[1]=n_kv (seq_len), ne[2]=n_kv_heads
+                const ggml_tensor * Q_fa = node->src[0];
+                const ggml_tensor * K_fa = node->src[1];
+                const ggml_tensor * V_fa = node->src[2];
+
+                const void * q_ptr = ggml_sycl_get_data_ptr(Q_fa, ctx.device);
+                const void * k_ptr = ggml_sycl_get_data_ptr(K_fa, ctx.device);
+                const void * v_ptr = ggml_sycl_get_data_ptr(V_fa, ctx.device);
+                void * out_ptr     = ggml_sycl_get_data_ptr(node, ctx.device);
+
+                // Extract dimensions
+                const int head_dim_attn    = (int) Q_fa->ne[0];
+                const int n_heads_attn     = (int) Q_fa->ne[2];  // Q heads in ne[2]
+                const int n_kv_heads_attn  = (int) K_fa->ne[2];  // KV heads in ne[2]
+                const int seq_len_attn     = (int) K_fa->ne[1];  // Sequence length from K
+
+                // Scale from op_params[0]
+                float scale_attn;
+                memcpy(&scale_attn, (const float *) node->op_params, sizeof(float));
+
+                AttentionDescriptor attn_desc = {};
+                attn_desc.q          = q_ptr;
+                attn_desc.k_cache    = k_ptr;
+                attn_desc.v_cache    = v_ptr;
+                attn_desc.output     = out_ptr;
+                attn_desc.n_heads    = n_heads_attn;
+                attn_desc.n_kv_heads = n_kv_heads_attn;
+                attn_desc.head_dim   = head_dim_attn;
+                attn_desc.seq_len    = seq_len_attn;
+                attn_desc.scale      = scale_attn;
+                kernel.add_attention(layer, attn_desc);
+                ops_added++;
+
+                GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN: heads=%d kv_heads=%d "
+                                "head_dim=%d seq_len=%d scale=%.4f\n",
+                                n_heads_attn, n_kv_heads_attn, head_dim_attn,
+                                seq_len_attn, scale_attn);
+                break;
+            }
+
             default:
                 // Skip operations not yet supported in persistent kernel
-                // (ROPE, ATTENTION/FLASH_ATTN, SOFTMAX, etc.)
+                // (SOFTMAX, etc.)
                 break;
         }
     }

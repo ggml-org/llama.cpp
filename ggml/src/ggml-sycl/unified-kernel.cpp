@@ -4402,10 +4402,28 @@ private:
     }
 
     void compute_rope_tile(const DeviceOperation & op, int tile_idx) {
-        // RoPE: Apply neox-style rotary position embeddings to Q and K.
-        // In TG mode (M=1), Q has [n_heads * head_dim] and K has [n_kv_heads * head_dim].
+        // RoPE: Apply rotary position embeddings (NORMAL or NEOX style).
         // cos/sin caches are pre-computed for the current position, size = head_dim/2 each.
         // This is a cooperative operation - all threads in the work-group participate.
+        //
+        // RoPE mode is encoded in op.scale: 1.0 = NEOX (split pairs), 0.0 = NORMAL (adjacent)
+        //   NEOX:   pairs at [i] and [i + half_dim]
+        //   NORMAL: pairs at [2*i] and [2*i + 1]
+        //
+        // Two tensor modes:
+        //
+        // 1. Dual-tensor mode (n_kv_heads > 0): Q and K are rotated in a single call.
+        //    - input  = q_data (in-place read/write)
+        //    - aux    = k_data (in-place read/write)
+        //    - weights = cos_cache
+        //    - output  = sin_cache (field overloaded)
+        //
+        // 2. Single-tensor mode (n_kv_heads == 0): Only one tensor is rotated.
+        //    Used when graph extraction maps each GGML_OP_ROPE node separately.
+        //    - input  = source data (read)
+        //    - output = destination data (write, may equal input for in-place)
+        //    - weights = cos_cache
+        //    - aux     = sin_cache (field overloaded)
 
         (void)tile_idx;  // Single tile, not used
 
@@ -4414,36 +4432,79 @@ private:
         const int head_dim   = op.K;
         const int n_kv_heads = op.n_kv_heads;
         const int half_dim   = head_dim / 2;
+        const bool is_neox   = (op.scale > 0.5f);
 
-        float *       q_data    = const_cast<float *>(static_cast<const float *>(op.input));
-        float *       k_data    = static_cast<float *>(op.aux);
         const float * cos_cache = static_cast<const float *>(op.weights);
-        const float * sin_cache = static_cast<const float *>(op.output);
 
-        // Total elements to rotate: (n_heads + n_kv_heads) heads, each with half_dim pairs
-        const int total_heads = n_heads + n_kv_heads;
-        const int total_pairs = total_heads * half_dim;
+        if (n_kv_heads > 0) {
+            // Dual-tensor mode: rotate both Q and K in-place
+            float *       q_data    = const_cast<float *>(static_cast<const float *>(op.input));
+            float *       k_data    = static_cast<float *>(op.aux);
+            const float * sin_cache_dual = static_cast<const float *>(op.output);
 
-        // Each thread processes multiple pairs stride-style
-        for (int idx = tid; idx < total_pairs; idx += BLOCK_SIZE) {
-            const int head_idx = idx / half_dim;
-            const int dim_idx  = idx % half_dim;
+            const int total_heads = n_heads + n_kv_heads;
+            const int total_pairs = total_heads * half_dim;
 
-            // Determine if this is a Q head or K head
-            float * data;
-            if (head_idx < n_heads) {
-                data = q_data + head_idx * head_dim;
-            } else {
-                data = k_data + (head_idx - n_heads) * head_dim;
+            for (int idx = tid; idx < total_pairs; idx += BLOCK_SIZE) {
+                const int head_idx = idx / half_dim;
+                const int dim_idx  = idx % half_dim;
+
+                float * data;
+                if (head_idx < n_heads) {
+                    data = q_data + head_idx * head_dim;
+                } else {
+                    data = k_data + (head_idx - n_heads) * head_dim;
+                }
+
+                const float cos_val = cos_cache[dim_idx];
+                const float sin_val = sin_cache_dual[dim_idx];
+
+                if (is_neox) {
+                    // NEOX: pairs at [dim_idx] and [dim_idx + half_dim]
+                    const float x0 = data[dim_idx];
+                    const float x1 = data[dim_idx + half_dim];
+                    data[dim_idx]            = x0 * cos_val - x1 * sin_val;
+                    data[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+                } else {
+                    // NORMAL: pairs at [2*dim_idx] and [2*dim_idx + 1]
+                    const float x0 = data[2 * dim_idx];
+                    const float x1 = data[2 * dim_idx + 1];
+                    data[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
+                    data[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
+                }
             }
+        } else {
+            // Single-tensor mode: read from input, write to output
+            const float * src_data  = static_cast<const float *>(op.input);
+            float *       dst_data  = static_cast<float *>(op.output);
+            const float * sin_cache_single = static_cast<const float *>(op.aux);
 
-            const float x0 = data[dim_idx];
-            const float x1 = data[dim_idx + half_dim];
-            const float cos_val = cos_cache[dim_idx];
-            const float sin_val = sin_cache[dim_idx];
+            const int total_pairs = n_heads * half_dim;
 
-            data[dim_idx]            = x0 * cos_val - x1 * sin_val;
-            data[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+            for (int idx = tid; idx < total_pairs; idx += BLOCK_SIZE) {
+                const int head_idx = idx / half_dim;
+                const int dim_idx  = idx % half_dim;
+
+                const float * src = src_data + head_idx * head_dim;
+                float *       dst = dst_data + head_idx * head_dim;
+
+                const float cos_val = cos_cache[dim_idx];
+                const float sin_val = sin_cache_single[dim_idx];
+
+                if (is_neox) {
+                    // NEOX: pairs at [dim_idx] and [dim_idx + half_dim]
+                    const float x0 = src[dim_idx];
+                    const float x1 = src[dim_idx + half_dim];
+                    dst[dim_idx]            = x0 * cos_val - x1 * sin_val;
+                    dst[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+                } else {
+                    // NORMAL: pairs at [2*dim_idx] and [2*dim_idx + 1]
+                    const float x0 = src[2 * dim_idx];
+                    const float x1 = src[2 * dim_idx + 1];
+                    dst[2 * dim_idx]     = x0 * cos_val - x1 * sin_val;
+                    dst[2 * dim_idx + 1] = x0 * sin_val + x1 * cos_val;
+                }
+            }
         }
     }
 };
@@ -4656,19 +4717,50 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
     OperationDescriptor op = {};
     op.type = OperationType::ROPE;
     op.layer = layer;
-    op.input = desc.q;
-    op.aux = desc.k;
     op.weights = desc.cos_cache;
-    op.output = const_cast<float *>(desc.sin_cache);
     op.N = desc.n_heads;
     op.K = desc.head_dim;
     op.M = desc.position;
-    op.n_kv_heads = current_plan_->n_kv_heads;
+    // Encode RoPE mode in scale: 1.0 = NEOX (split pairs), 0.0 = NORMAL (adjacent pairs)
+    op.scale = desc.is_neox ? 1.0f : 0.0f;
+
+    if (desc.k) {
+        // Dual-tensor mode: rotate both Q and K in-place
+        //   input  = q_data (in-place)
+        //   aux    = k_data (in-place)
+        //   output = sin_cache (overloaded)
+        op.input     = desc.q;
+        op.aux       = desc.k;
+        op.output    = const_cast<float *>(desc.sin_cache);
+        op.n_kv_heads = current_plan_->n_kv_heads;
+    } else {
+        // Single-tensor mode: read from input, write to output
+        //   input  = source data (read)
+        //   output = destination data (write)
+        //   aux    = sin_cache (overloaded)
+        op.input     = desc.q;            // Source pointer (set by caller)
+        op.output    = desc.rope_dst;     // Destination pointer
+        op.aux       = const_cast<float *>(desc.sin_cache);
+        op.n_kv_heads = 0;
+    }
 
     current_plan_->operations.push_back(op);
 }
 
+void UnifiedKernel::add_temp_device_alloc(void * ptr) {
+    if (current_plan_ && ptr) {
+        current_plan_->temp_device_allocs.push_back(ptr);
+    }
+}
+
 void UnifiedKernel::cancel_persistent() {
+    // Free any temp allocations before clearing the plan
+    if (current_plan_) {
+        for (void * ptr : current_plan_->temp_device_allocs) {
+            sycl::free(ptr, queue_);
+        }
+        current_plan_->temp_device_allocs.clear();
+    }
     current_plan_.reset();
 }
 
@@ -4684,6 +4776,12 @@ void UnifiedKernel::execute_persistent() {
 
     // Launch the persistent kernel
     launch_persistent_kernel();
+
+    // Free temporary device allocations (e.g. RoPE cos/sin caches)
+    for (void * ptr : current_plan_->temp_device_allocs) {
+        sycl::free(ptr, queue_);
+    }
+    current_plan_->temp_device_allocs.clear();
 
     // Clear the plan after execution
     current_plan_.reset();

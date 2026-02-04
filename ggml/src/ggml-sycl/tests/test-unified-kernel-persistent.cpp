@@ -958,6 +958,7 @@ static bool test_persistent_rope(sycl::queue & q) {
     desc.n_heads   = n_heads;
     desc.head_dim  = head_dim;
     desc.position  = position;
+    desc.is_neox   = true;  // Test uses NEOX-style split-pair layout
     kernel.add_rope(0, desc);
 
     kernel.execute_persistent();

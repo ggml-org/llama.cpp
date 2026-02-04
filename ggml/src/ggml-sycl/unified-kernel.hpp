@@ -254,13 +254,15 @@ struct AttentionDescriptor {
 };
 
 struct RopeDescriptor {
-    void *        q;
-    void *        k;
+    void *        q;          // Q data pointer (or source tensor for single-tensor mode)
+    void *        k;          // K data pointer (nullptr for single-tensor mode)
+    void *        rope_dst;   // Output pointer for single-tensor mode (ignored in dual mode)
     const float * cos_cache;
     const float * sin_cache;
     int           n_heads;
     int           head_dim;
     int           position;
+    bool          is_neox;    // true = NEOX layout (split pairs), false = NORMAL (adjacent pairs)
 };
 
 struct OperationDescriptor {
@@ -306,6 +308,10 @@ struct PersistentPlan {
     void * intermediate_buffers[4];
     int *  tile_counter;
     void * weight_table;
+
+    // Device memory allocations made during plan building (e.g. RoPE cos/sin caches).
+    // These are freed after execute_persistent() completes.
+    std::vector<void *> temp_device_allocs;
 
     bool is_valid() const { return n_layers > 0 && !operations.empty(); }
 };
@@ -2419,6 +2425,7 @@ public:
     void add_attention(int layer, const AttentionDescriptor & desc);
     void add_silu_mul(int layer, const void * gate, const void * up, void * output);
     void add_rope(int layer, const RopeDescriptor & desc);
+    void add_temp_device_alloc(void * ptr);
     void execute_persistent();
     void cancel_persistent();
 
