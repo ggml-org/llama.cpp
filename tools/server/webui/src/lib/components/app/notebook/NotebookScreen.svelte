@@ -16,10 +16,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
-	let { content } = $state(notebookStore);
 	let settingsOpen = $state(false);
-
-	let inputContent = $state(content);
 
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
@@ -43,18 +40,13 @@
 	let canUndo = $derived(notebookStore.previousContent !== null && !notebookStore.isGenerating);
 	let canRedo = $derived(notebookStore.undoneContent !== null && !notebookStore.isGenerating);
 
-	// Sync local input with store content
-	$effect(() => {
-		inputContent = notebookStore.content;
-		if (activeModelId || !isRouter) {
-			notebookStore.updateTokenCount(activeModelId);
-		}
-	});
-
 	function handleInput(e: Event) {
 		const target = e.target as HTMLTextAreaElement;
 		notebookStore.content = target.value;
 		notebookStore.resetUndoRedo();
+		if (activeModelId || !isRouter) {
+			notebookStore.updateTokenCount(activeModelId);
+		}
 	}
 
 	function handleErrorDialogOpenChange(open: boolean) {
@@ -105,32 +97,19 @@
 
 	let hasModelSelected = $derived(!isRouter || !!selectedModelId());
 
-	let isSelectedModelInCache = $derived.by(() => {
-		if (!isRouter) return true;
-
-		const currentModelId = selectedModelId();
-		if (!currentModelId) return false;
-
-		return modelOptions().some((option) => option.id === currentModelId);
-	});
-
 	let generateTooltip = $derived.by(() => {
 		if (!hasModelSelected) {
 			return 'Please select a model first';
 		}
 
-		if (!isSelectedModelInCache) {
-			return 'Selected model is not available, please select another';
-		}
-
-		if (inputContent.length == 0) {
+		if (notebookStore.content.length == 0) {
 			return 'Input some text first';
 		}
 
 		return '';
 	});
 
-	let canGenerate = $derived(inputContent.length > 0 && hasModelSelected && isSelectedModelInCache);
+	let canGenerate = $derived(notebookStore.content.length > 0 && hasModelSelected);
 	let isDisabled = $derived(!canGenerate);
 
 	function handleScroll() {
@@ -196,7 +175,8 @@
 	});
 
 	function handleBeforeUnload(event: BeforeUnloadEvent) {
-		if (inputContent.length > 0) {
+		// This should prevent the browser from closing the tab if there is content in the notebook
+		if (notebookStore.content.length > 0) {
 			event.preventDefault();
 			event.returnValue = '';
 		}
@@ -248,7 +228,7 @@
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
-			value={inputContent}
+			value={notebookStore.content}
 			oninput={handleInput}
 			class="h-full min-h-[100px] w-full resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
 			placeholder="Enter your text here..."
