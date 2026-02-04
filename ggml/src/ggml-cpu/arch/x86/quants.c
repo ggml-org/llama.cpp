@@ -843,6 +843,149 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
+void ggml_vec_dot_mxfp6_e3m2_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP6_E3M2 == 0);
+    static_assert(QK_MXFP6_E3M2 == QK8_0, "QK_MXFP6_E3M2 and QK8_0 must be the same");
+    assert(QK_MXFP6_E3M2 == 32);
+
+    const block_mxfp6_e3m2 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    const int nb = n / QK_MXFP6_E3M2;
+
+    #if defined __AVX2__
+        __m256 acc = _mm256_setzero_ps();
+        const int16_t* kvalues = (const int16_t*)kvalues_mxfp6_e3m2;
+
+        for (int i = 0; i < nb; ++i) {
+            const float d = GGML_CPU_FP16_TO_FP32(y[i].d) * GGML_E8M0_TO_FP32_ANY(x[i].e, 4);
+
+            const __m256i q8_v = _mm256_loadu_si256((const __m256i*)y[i].qs);
+
+            uint8_t indices_buf[32];
+            const uint8_t* q3 = x[i].qs;
+            for (int j = 0; j < 8; ++j) {
+                const uint8_t b0 = q3[0];
+                const uint8_t b1 = q3[1];
+                const uint8_t b2 = q3[2];
+                q3 += 3;
+
+                indices_buf[4*j + 0] = b0 & 0x3F;
+                indices_buf[4*j + 1] = (b0 >> 6) | ((b1 & 0x0F) << 2);
+                indices_buf[4*j + 2] = (b1 >> 4) | ((b2 & 0x03) << 4);
+                indices_buf[4*j + 3] = b2 >> 2;
+            }
+
+            int16_t x_dequant_buf_lo[16];
+            for (int j = 0; j < 16; ++j) {
+                x_dequant_buf_lo[j] = kvalues[indices_buf[j]];
+            }
+            int16_t x_dequant_buf_hi[16];
+            for (int j = 0; j < 16; ++j) {
+                x_dequant_buf_hi[j] = kvalues[indices_buf[j + 16]];
+            }
+
+            const __m256i x_s16_lo = _mm256_loadu_si256((const __m256i*)x_dequant_buf_lo); // 16x s16
+            const __m128i y_s8_lo = _mm256_castsi256_si128(q8_v);                           // 16x s8
+            const __m256i y_s16_lo = _mm256_cvtepi8_epi16(y_s8_lo);                         // 16x s16
+            const __m256i prod_lo = _mm256_madd_epi16(x_s16_lo, y_s16_lo);                  // 8x s32
+
+            const __m256i x_s16_hi = _mm256_loadu_si256((const __m256i*)x_dequant_buf_hi); // 16x s16
+            const __m128i y_s8_hi = _mm256_extracti128_si256(q8_v, 1);                      // 16x s8
+            const __m256i y_s16_hi = _mm256_cvtepi8_epi16(y_s8_hi);                         // 16x s16
+            const __m256i prod_hi = _mm256_madd_epi16(x_s16_hi, y_s16_hi);                  // 8x s32
+
+            const __m256i sumi_v = _mm256_add_epi32(prod_lo, prod_hi); // 8x s32
+
+            const __m256 sumf_v = _mm256_cvtepi32_ps(sumi_v);
+            acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), sumf_v, acc);
+        }
+
+        *s = hsum_float_8(acc);
+    #else
+        UNUSED(x);
+        UNUSED(y);
+        UNUSED(nb);
+        ggml_vec_dot_mxfp6_e3m2_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    #endif
+}
+
+void ggml_vec_dot_mxfp6_e2m3_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP6_E2M3 == 0);
+    static_assert(QK_MXFP6_E2M3 == QK8_0, "QK_MXFP6_E2M3 and QK8_0 must be the same");
+    assert(QK_MXFP6_E2M3 == 32);
+
+    const block_mxfp6_e2m3 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    const int nb = n / QK_MXFP6_E2M3;
+
+    #if defined __AVX2__
+    __m256 acc = _mm256_setzero_ps();
+    const int16_t* kvalues = (const int16_t*)kvalues_mxfp6_e2m3;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[i].d) * GGML_E8M0_TO_FP32_ANY(x[i].e, 3);
+
+        const __m256i q8_v = _mm256_loadu_si256((const __m256i*)y[i].qs);
+
+        uint8_t indices_buf[32];
+        const uint8_t* q3 = x[i].qs;
+        for (int j = 0; j < 8; ++j) {
+            const uint8_t b0 = q3[0];
+            const uint8_t b1 = q3[1];
+            const uint8_t b2 = q3[2];
+            q3 += 3;
+
+            indices_buf[4*j + 0] = b0 & 0x3F;
+            indices_buf[4*j + 1] = (b0 >> 6) | ((b1 & 0x0F) << 2);
+            indices_buf[4*j + 2] = (b1 >> 4) | ((b2 & 0x03) << 4);
+            indices_buf[4*j + 3] = b2 >> 2;
+        }
+
+        int16_t x_dequant_buf_lo[16];
+        for (int j = 0; j < 16; ++j) {
+            x_dequant_buf_lo[j] = kvalues[indices_buf[j]];
+        }
+        int16_t x_dequant_buf_hi[16];
+        for (int j = 0; j < 16; ++j) {
+            x_dequant_buf_hi[j] = kvalues[indices_buf[j + 16]];
+        }
+
+        const __m256i x_s16_lo = _mm256_loadu_si256((const __m256i*)x_dequant_buf_lo); // 16x s16
+        const __m128i y_s8_lo = _mm256_castsi256_si128(q8_v);                           // 16x s8
+        const __m256i y_s16_lo = _mm256_cvtepi8_epi16(y_s8_lo);                         // 16x s16
+        const __m256i prod_lo = _mm256_madd_epi16(x_s16_lo, y_s16_lo);                  // 8x s32
+
+        const __m256i x_s16_hi = _mm256_loadu_si256((const __m256i*)x_dequant_buf_hi); // 16x s16
+        const __m128i y_s8_hi = _mm256_extracti128_si256(q8_v, 1);                      // 16x s8
+        const __m256i y_s16_hi = _mm256_cvtepi8_epi16(y_s8_hi);                         // 16x s16
+        const __m256i prod_hi = _mm256_madd_epi16(x_s16_hi, y_s16_hi);                  // 8x s32
+
+        const __m256i sumi_v = _mm256_add_epi32(prod_lo, prod_hi); // 8x s32
+
+        const __m256 sumf_v = _mm256_cvtepi32_ps(sumi_v);
+        acc = _mm256_fmadd_ps(_mm256_broadcast_ss(&d), sumf_v, acc);
+    }
+
+    *s = hsum_float_8(acc);
+    #else
+        UNUSED(x);
+        UNUSED(y);
+        UNUSED(nb);
+        ggml_vec_dot_mxfp6_e2m3_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    #endif
+}
+
+
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
