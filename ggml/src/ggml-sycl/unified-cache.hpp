@@ -17,11 +17,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #if !defined(_WIN32) && !defined(__SYCL_DEVICE_ONLY__)
@@ -444,6 +446,28 @@ struct layer_weight_set {
     ggml_sycl_cache_id ffn_gate_up_proj;                             // Fused gate+up for some models
 };
 
+// Prefetch priority for async layer prefetch queue.
+// Defined locally to avoid circular dependency with unified-kernel.hpp.
+enum class prefetch_priority {
+    LOW,
+    NORMAL,
+    HIGH
+};
+
+// Result of await_layer - contains device pointers to all layer weights.
+// Populated by looking up each weight in the cache after prefetch completes.
+struct layer_weight_pointers {
+    void * attn_norm   = nullptr;
+    void * q_proj      = nullptr;
+    void * k_proj      = nullptr;
+    void * v_proj      = nullptr;
+    void * o_proj      = nullptr;
+    void * ffn_norm    = nullptr;
+    void * gate_proj   = nullptr;
+    void * up_proj     = nullptr;
+    void * down_proj   = nullptr;
+};
+
 // Unified GPU cache for both dense weights and MoE experts
 //
 // Design principles:
@@ -560,6 +584,31 @@ class unified_cache {
     // Pin entire model weights (all layers). Returns total count of pinned entries.
     // layers: vector of layer_weight_set for each layer (index = layer_id)
     int pin_model_weights(int n_layers, const std::vector<layer_weight_set> & layers, ggml_layout_mode layout);
+
+    // === Async Layer Prefetch for Persistent Kernels ===
+    // Queue a layer for background prefetch (pins weights so they won't be evicted).
+    // The prefetch worker thread will pin all weights for the layer and mark it ready.
+    // Priority HIGH requests are placed at the front of the queue.
+    void queue_layer_prefetch(int                      layer_id,
+                              const layer_weight_set & weights,
+                              ggml_layout_mode         layout,
+                              prefetch_priority        priority = prefetch_priority::NORMAL);
+
+    // Block until the specified layer is prefetched and ready.
+    // Returns pointers to all cached weights for the layer.
+    layer_weight_pointers await_layer(int layer_id);
+
+    // Check if a layer has been prefetched and is ready (non-blocking).
+    bool is_layer_ready(int layer_id) const;
+
+    // Release a prefetched layer (unpins weights, allows eviction).
+    void release_layer(int layer_id);
+
+    // Start the background prefetch worker thread (called lazily on first queue_layer_prefetch).
+    void start_prefetch_worker();
+
+    // Stop the background prefetch worker thread (called from destructor).
+    void stop_prefetch_worker();
 
     // === Memory Management ===
 
@@ -814,6 +863,35 @@ class unified_cache {
 
     // Entries pinned for in-flight kernels.
     std::list<inflight_unpin_entry> inflight_unpins_;
+
+    // === Async Layer Prefetch State ===
+    // Background worker thread pins layer weights ahead of kernel execution.
+
+    struct prefetch_request {
+        int              layer_id;
+        layer_weight_set weights;
+        ggml_layout_mode layout;
+        prefetch_priority priority;
+    };
+
+    // Prefetch queue and worker thread
+    std::deque<prefetch_request>     prefetch_queue_;
+    std::mutex                       prefetch_mutex_;
+    std::condition_variable          prefetch_cv_;
+    std::thread                      prefetch_worker_;
+    std::atomic<bool>                prefetch_shutdown_{ false };
+    std::atomic<bool>                prefetch_started_{ false };
+
+    // Per-layer ready tracking
+    // Guarded by layer_state_mutex_
+    std::unordered_map<int, bool>              layer_ready_;    // layer_id -> ready
+    std::unordered_map<int, layer_weight_set>  layer_weights_;  // for release_layer unpin
+    std::unordered_map<int, ggml_layout_mode>  layer_layouts_;  // layout used for pinning
+    mutable std::mutex                         layer_state_mutex_;
+    std::condition_variable                    layer_ready_cv_;
+
+    // The prefetch worker loop (runs on background thread)
+    void prefetch_worker_loop();
 
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };

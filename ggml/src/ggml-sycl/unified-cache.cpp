@@ -314,6 +314,11 @@ unified_cache::unified_cache(sycl::queue & queue,
 }
 
 unified_cache::~unified_cache() {
+    // Stop the prefetch worker thread first (before any resource cleanup).
+    // This is safe even if the SYCL runtime is shutting down since the worker
+    // only does cache lookups and pinning, not SYCL memory operations.
+    stop_prefetch_worker();
+
     // Skip cleanup if SYCL runtime is shutting down (static destruction order issue)
     // This can happen when the program exits and static destructors run in undefined order
     if (g_sycl_shutting_down.load()) {
@@ -3117,6 +3122,179 @@ int unified_cache::pin_model_weights(int n_layers, const std::vector<layer_weigh
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin_model_weights n_layers=%d total_pinned=%d layout=%d\n",
                     actual_layers, total_pinned, (int) layout);
     return total_pinned;
+}
+
+// === Async Layer Prefetch Implementation ===
+
+void unified_cache::queue_layer_prefetch(int                      layer_id,
+                                         const layer_weight_set & weights,
+                                         ggml_layout_mode         layout,
+                                         prefetch_priority        priority) {
+    // Lazily start the worker thread on first call
+    if (!prefetch_started_.load()) {
+        start_prefetch_worker();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(prefetch_mutex_);
+        prefetch_request req;
+        req.layer_id = layer_id;
+        req.weights  = weights;
+        req.layout   = layout;
+        req.priority = priority;
+
+        // HIGH priority goes to the front of the queue
+        if (priority == prefetch_priority::HIGH) {
+            prefetch_queue_.push_front(std::move(req));
+        } else {
+            prefetch_queue_.push_back(std::move(req));
+        }
+    }
+    prefetch_cv_.notify_one();
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] queue_layer_prefetch layer=%d priority=%d layout=%d\n",
+                    layer_id, (int) priority, (int) layout);
+}
+
+void unified_cache::prefetch_worker_loop() {
+    while (true) {
+        prefetch_request req;
+
+        // Wait for a request or shutdown signal
+        {
+            std::unique_lock<std::mutex> lock(prefetch_mutex_);
+            prefetch_cv_.wait(lock, [this] {
+                return !prefetch_queue_.empty() || prefetch_shutdown_.load();
+            });
+
+            if (prefetch_shutdown_.load() && prefetch_queue_.empty()) {
+                return;
+            }
+
+            req = std::move(prefetch_queue_.front());
+            prefetch_queue_.pop_front();
+        }
+
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] prefetch_worker processing layer=%d layout=%d\n",
+                        req.layer_id, (int) req.layout);
+
+        // Pin all weights for this layer.
+        // The weights should already be in cache from model loading; we just pin them
+        // to prevent eviction during persistent kernel execution.
+        int pinned = pin_layer_weights(req.layer_id, req.weights, req.layout);
+
+        // Store the weight set and layout for later release_layer
+        {
+            std::lock_guard<std::mutex> lock(layer_state_mutex_);
+            layer_weights_[req.layer_id] = req.weights;
+            layer_layouts_[req.layer_id] = req.layout;
+            layer_ready_[req.layer_id]   = true;
+        }
+        layer_ready_cv_.notify_all();
+
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] prefetch_worker layer=%d ready (pinned=%d)\n",
+                        req.layer_id, pinned);
+    }
+}
+
+layer_weight_pointers unified_cache::await_layer(int layer_id) {
+    // Wait until the layer is marked ready by the prefetch worker
+    {
+        std::unique_lock<std::mutex> lock(layer_state_mutex_);
+        layer_ready_cv_.wait(lock, [this, layer_id] {
+            auto it = layer_ready_.find(layer_id);
+            return it != layer_ready_.end() && it->second;
+        });
+    }
+
+    // Look up the layout that was used for this layer
+    ggml_layout_mode layout;
+    layer_weight_set weights;
+    {
+        std::lock_guard<std::mutex> lock(layer_state_mutex_);
+        layout  = layer_layouts_[layer_id];
+        weights = layer_weights_[layer_id];
+    }
+
+    // Build the result by looking up each weight pointer in the cache.
+    // try_get_cached_fast uses a shared_lock on rw_mutex_ (read-only, no deadlock risk).
+    layer_weight_pointers ptrs;
+    ptrs.attn_norm = try_get_cached_fast(weights.attn_norm, layout);
+    ptrs.q_proj    = try_get_cached_fast(weights.q_proj,    layout);
+    ptrs.k_proj    = try_get_cached_fast(weights.k_proj,    layout);
+    ptrs.v_proj    = try_get_cached_fast(weights.v_proj,    layout);
+    ptrs.o_proj    = try_get_cached_fast(weights.o_proj,    layout);
+    ptrs.ffn_norm  = try_get_cached_fast(weights.ffn_norm,  layout);
+    ptrs.gate_proj = try_get_cached_fast(weights.gate_proj, layout);
+    ptrs.up_proj   = try_get_cached_fast(weights.up_proj,   layout);
+    ptrs.down_proj = try_get_cached_fast(weights.down_proj, layout);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] await_layer layer=%d pointers resolved\n", layer_id);
+    return ptrs;
+}
+
+bool unified_cache::is_layer_ready(int layer_id) const {
+    std::lock_guard<std::mutex> lock(layer_state_mutex_);
+    auto it = layer_ready_.find(layer_id);
+    return it != layer_ready_.end() && it->second;
+}
+
+void unified_cache::release_layer(int layer_id) {
+    layer_weight_set weights;
+    ggml_layout_mode layout;
+
+    // Retrieve and remove the layer's tracking state
+    {
+        std::lock_guard<std::mutex> lock(layer_state_mutex_);
+        auto wit = layer_weights_.find(layer_id);
+        auto lit = layer_layouts_.find(layer_id);
+        if (wit == layer_weights_.end() || lit == layer_layouts_.end()) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] release_layer layer=%d not found\n", layer_id);
+            return;
+        }
+        weights = wit->second;
+        layout  = lit->second;
+
+        layer_ready_.erase(layer_id);
+        layer_weights_.erase(wit);
+        layer_layouts_.erase(lit);
+    }
+
+    // Unpin the layer weights (uses rw_mutex_ internally, safe since we dropped layer_state_mutex_)
+    unpin_layer_weights(layer_id, weights, layout);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] release_layer layer=%d unpinned\n", layer_id);
+}
+
+void unified_cache::start_prefetch_worker() {
+    bool expected = false;
+    if (!prefetch_started_.compare_exchange_strong(expected, true)) {
+        return;  // Already started
+    }
+
+    prefetch_shutdown_.store(false);
+    prefetch_worker_ = std::thread([this] { prefetch_worker_loop(); });
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] prefetch worker started\n");
+}
+
+void unified_cache::stop_prefetch_worker() {
+    if (!prefetch_started_.load()) {
+        return;  // Never started
+    }
+
+    // Signal shutdown and wake the worker
+    prefetch_shutdown_.store(true);
+    prefetch_cv_.notify_all();
+
+    // Join the worker thread
+    if (prefetch_worker_.joinable()) {
+        prefetch_worker_.join();
+    }
+
+    prefetch_started_.store(false);
+
+    GGML_SYCL_DEBUG("[UNIFIED-CACHE] prefetch worker stopped\n");
 }
 
 size_t unified_cache::evict(size_t bytes_needed) {
