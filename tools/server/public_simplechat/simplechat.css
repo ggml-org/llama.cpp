@@ -49,6 +49,9 @@
 button {
     min-width: 8vw;
 }
+textarea {
+    resize: vertical;
+}
 
 .sameline {
     display: flex;
