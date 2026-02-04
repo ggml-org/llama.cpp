@@ -8010,8 +8010,6 @@ class Step35Model(TextModel):
         # Step35 configs can carry per-layer rope_theta as a list; for llama3 rope factors we use the base value.
         rope_theta = self.hparams.get("rope_theta", 10000.0)
         if isinstance(rope_theta, list):
-            if len(rope_theta) == 0:
-                raise ValueError("rope_theta list must not be empty")
             rope_theta = rope_theta[0]
         base = float(rope_theta)
         if (dim := self.hparams.get("head_dim")) is None:
