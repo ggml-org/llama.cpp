@@ -463,12 +463,14 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
 
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_state_ngram_simple : public common_speculative_state {
-    common_ngram_simple_state state;
+    common_ngram_simple_config config;
+
+    uint16_t check_id = 0; // used to control the frequency of generating drafts
 
     common_speculative_state_ngram_simple(
             enum common_speculative_type type,
-            common_ngram_simple_state state)
-        : common_speculative_state(type), state(state) {}
+            common_ngram_simple_config config)
+        : common_speculative_state(type), config(config) {}
 
     void begin(const llama_tokens & prompt) override {
         GGML_UNUSED(prompt);
@@ -479,7 +481,13 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
-        result = common_ngram_simple_draft(state, prompt_tgt, id_last);
+        ++check_id;
+        if (check_id < config.check_rate) {
+            return;
+        }
+        check_id = 0;
+
+        result = common_ngram_simple_draft(config, prompt_tgt, id_last);
         GGML_UNUSED(params);
     }
 
@@ -889,14 +897,14 @@ common_speculative * common_speculative_init(
                 uint16_t mgram_size_value = ngram_map.size_value;
                 uint16_t check_rate       = ngram_map.check_rate;
 
-                auto config_simple = common_ngram_simple_config{
+                auto config_simple = common_ngram_simple_config {
                     /* .size_ngram      = */ ngram_size_key,
                     /* .size_mgram      = */ mgram_size_value,
                     /* .check_rate      = */ check_rate
                 };
                 auto state = std::make_unique<common_speculative_state_ngram_simple>(
                     /* .type            = */ config.type,
-                    /* .state           = */ common_ngram_simple_state(config_simple)
+                    /* .state           = */ config_simple
                 );
                 impls.push_back(std::move(state));
                 break;
