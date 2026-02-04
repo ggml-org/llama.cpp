@@ -4108,10 +4108,74 @@ private:
     }
 
     void compute_matmul_tile(const DeviceOperation & op, int tile_idx) {
-        // TODO: Implement dequantizing matmul tile
-        // This will integrate with existing DMMV code for Q4_0, Q4_K, Q6_K
-        (void)op;
-        (void)tile_idx;
+        // DMMV (Dequantizing Matrix-Vector Multiply) for M=1 TG workloads.
+        // Each tile covers 64 output columns. With 256 threads and 16-thread
+        // sub-groups (matching reqd_sub_group_size(16)), we have 16 sub-groups
+        // per work-group, each computing one output column per iteration.
+        // 64 columns / 16 sub-groups = 4 iterations per tile.
+
+        constexpr int TILE_N_MATMUL  = 64;   // Output columns per tile
+        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16)
+        constexpr int DMMV_QK4_0     = 32;   // Q4_0 block size
+        constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+
+        const int local_id = item_.get_local_id(0);
+        const int sg_id    = local_id / SG_SIZE;   // Which sub-group (0-15)
+        const int lane_id  = local_id % SG_SIZE;   // Thread within sub-group (0-15)
+
+        const int tile_start = tile_idx * TILE_N_MATMUL;
+
+        const float *                  activations = static_cast<const float *>(op.input);
+        float *                        out         = static_cast<float *>(op.output);
+        const int                      K           = op.K;
+        const int                      N           = op.N;
+        const int                      k_blocks    = K / DMMV_QK4_0;
+
+        // Only Q4_0 AoS layout is supported for now
+        const ggml_sycl_unified::block_q4_0_unified * weights =
+            static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
+
+        // Process 16 columns per iteration (one per sub-group), iterate 4 times
+        for (int iter = 0; iter < TILE_N_MATMUL / N_SGS; iter++) {
+            const int n = tile_start + iter * N_SGS + sg_id;
+
+            if (n >= N) continue;
+
+            // Each thread accumulates partial dot product
+            float partial_sum = 0.0f;
+
+            // Thread lane_id processes blocks: lane_id, lane_id+16, lane_id+32, ...
+            for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
+                const int global_block = n * k_blocks + block_idx;
+                const ggml_sycl_unified::block_q4_0_unified * blk = &weights[global_block];
+                const float d = static_cast<float>(blk->d);
+                const int k_offset = block_idx * DMMV_QK4_0;
+
+                // Process 32 values from this Q4_0 block (16 bytes, 2 nibbles each)
+                float block_sum = 0.0f;
+                #pragma unroll
+                for (int i = 0; i < DMMV_QK4_0 / 2; i++) {
+                    const uint8_t qs_byte = blk->qs[i];
+                    const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                    const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+                    block_sum += w0 * activations[k_offset + i] +
+                                 w1 * activations[k_offset + i + 16];
+                }
+                partial_sum += block_sum;
+            }
+
+            // Sub-group shuffle reduction (16-wide sub-groups)
+            auto sg = item_.get_sub_group();
+            #pragma unroll
+            for (int mask = SG_SIZE >> 1; mask > 0; mask >>= 1) {
+                partial_sum += sycl::shift_group_left(sg, partial_sum, mask);
+            }
+
+            // Lane 0 writes the result
+            if (lane_id == 0) {
+                out[n] = partial_sum;
+            }
+        }
     }
 
     void compute_attention_tile(const DeviceOperation & op, int tile_idx) {

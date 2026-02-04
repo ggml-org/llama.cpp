@@ -384,6 +384,116 @@ static bool test_persistent_stats(sycl::queue & q) {
 }
 
 // =============================================================================
+// Test: Persistent DMMV Matmul (Q4_0 dequantizing matrix-vector multiply)
+// =============================================================================
+static bool test_persistent_dmmv_matmul(sycl::queue & q) {
+    // N=256 output columns, K=128 inner dimension
+    // K=128 means 4 Q4_0 blocks per row (128 / 32 = 4)
+    const int N        = 256;
+    const int K        = 128;
+    const int k_blocks = K / 32;  // 4 blocks per row
+
+    // Total Q4_0 blocks: N * k_blocks = 256 * 4 = 1024
+    const int total_blocks = N * k_blocks;
+
+    // Create deterministic Q4_0 weight blocks on host
+    // block_q4_0_unified: 18 bytes = half d + uint8_t qs[16]
+    std::vector<ggml_sycl_unified::block_q4_0_unified> h_weights(total_blocks);
+
+    for (int n = 0; n < N; n++) {
+        for (int b = 0; b < k_blocks; b++) {
+            auto & blk = h_weights[n * k_blocks + b];
+            // Scale factor: deterministic, varies by row and block
+            float scale = 0.1f + 0.01f * (n % 16) + 0.005f * b;
+            blk.d = sycl::half(scale);
+            // Fill nibbles with a pattern: low nibble = (i + n) % 16, high nibble = (i + b) % 16
+            for (int i = 0; i < 16; i++) {
+                uint8_t lo = (i + n) % 16;
+                uint8_t hi = (i + b) % 16;
+                blk.qs[i] = lo | (hi << 4);
+            }
+        }
+    }
+
+    // Create float activation vector of size K
+    std::vector<float> h_activations(K);
+    for (int i = 0; i < K; i++) {
+        h_activations[i] = std::sin(i * 0.05f) * 0.5f + 0.5f;
+    }
+
+    // CPU reference: for each output column n, dot product of dequantized weight row n with activations
+    std::vector<float> h_ref(N, 0.0f);
+    for (int n = 0; n < N; n++) {
+        float dot = 0.0f;
+        for (int b = 0; b < k_blocks; b++) {
+            const auto & blk = h_weights[n * k_blocks + b];
+            float d = static_cast<float>(blk.d);
+            int k_offset = b * 32;
+            for (int i = 0; i < 16; i++) {
+                uint8_t qs_byte = blk.qs[i];
+                float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
+                float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
+                dot += w0 * h_activations[k_offset + i] +
+                       w1 * h_activations[k_offset + i + 16];
+            }
+        }
+        h_ref[n] = dot;
+    }
+
+    // Allocate device memory
+    const size_t weights_bytes = total_blocks * sizeof(ggml_sycl_unified::block_q4_0_unified);
+    void *  d_weights     = sycl::malloc_device(weights_bytes, q);
+    float * d_activations = sycl::malloc_device<float>(K, q);
+    float * d_output      = sycl::malloc_device<float>(N, q);
+
+    q.memcpy(d_weights, h_weights.data(), weights_bytes).wait();
+    q.memcpy(d_activations, h_activations.data(), K * sizeof(float)).wait();
+    q.memset(d_output, 0, N * sizeof(float)).wait();
+
+    // Configure and run persistent kernel
+    ggml_sycl::UnifiedKernel     kernel(q);
+    ggml_sycl_unified::XMXConfig config = {};
+    config.supported                    = true;
+    config.slm_size                     = 64 * 1024;
+    kernel.configure(config);
+
+    // begin_persistent(n_layers, batch_size, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type)
+    // quant_type=2 for Q4_0 (GGML_TYPE_Q4_0 = 2)
+    kernel.begin_persistent(1, 1, K, K, 32, 8, 128, 2);
+    // add_matmul(layer, weights, input, output, type, M, N, K)
+    // M=1 for DMMV (single vector), N=256 output columns, K=128 inner dim
+    kernel.add_matmul(0, d_weights, d_activations, d_output, MatmulType::Q_PROJ, 1, N, K);
+    kernel.execute_persistent();
+
+    // Read back results
+    std::vector<float> h_output(N, 0.0f);
+    q.memcpy(h_output.data(), d_output, N * sizeof(float)).wait();
+
+    float error  = max_abs_error(h_output, h_ref);
+    bool  passed = error < TEST_TOLERANCE;
+
+    auto stats = kernel.get_last_stats();
+    printf("    ops=%d, tiles=%d, time=%.2f ms\n",
+           stats.n_operations, stats.total_tiles, stats.kernel_time_ms);
+
+    // Print a few values for debugging if failed
+    if (!passed) {
+        printf("    First 8 values:\n");
+        for (int i = 0; i < 8 && i < N; i++) {
+            printf("      [%d] got=%.6f ref=%.6f diff=%.2e\n",
+                   i, h_output[i], h_ref[i], std::abs(h_output[i] - h_ref[i]));
+        }
+    }
+
+    sycl::free(d_weights, q);
+    sycl::free(d_activations, q);
+    sycl::free(d_output, q);
+
+    print_result("persistent_dmmv_matmul (N=256, K=128, Q4_0)", passed, error);
+    return passed;
+}
+
+// =============================================================================
 // Test: Plan cancellation
 // =============================================================================
 static bool test_persistent_cancel(sycl::queue & q) {
@@ -431,6 +541,9 @@ int main() {
 
         printf("\nMulti-Layer Tests:\n");
         if (test_persistent_multi_layer(q)) { passed++; } else { failed++; }
+
+        printf("\nDMMV Matmul Tests:\n");
+        if (test_persistent_dmmv_matmul(q)) { passed++; } else { failed++; }
 
         printf("\nDiagnostics Tests:\n");
         if (test_persistent_stats(q))    { passed++; } else { failed++; }
