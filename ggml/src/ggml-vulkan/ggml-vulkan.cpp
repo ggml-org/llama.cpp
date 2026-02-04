@@ -252,6 +252,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
@@ -332,6 +333,8 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
             return vk_device_architecture::INTEL_XE2;
+        } else {
+            return vk_device_architecture::INTEL_XE1;
         }
     } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
@@ -3048,8 +3051,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
             l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
-        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2) {
-            // Xe2/Xe3 with coopmat enabled - warptile performance tuning
+        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
+            // Xe1/Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         }
@@ -3338,20 +3341,24 @@ static void ggml_vk_load_shaders(vk_device& device) {
 #endif  // defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     if (device->coopmat_support) {
+        int l_required_subgroup_size = 0;
+        int m_required_subgroup_size = 0;
+        int s_required_subgroup_size = 0;
+
         // Create 6 variants, {s,m,l}x{unaligned,aligned}
 #define CREATE_MM(TYPE, PIPELINE_NAME, NAMELC, F16ACC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1, false, true, l_required_subgroup_size);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, 1, false, true, m_required_subgroup_size);   \
         if (device->mul_mat ## ID ## _s[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, 1, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _cm1_len, NAMELC ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, 1, false, true, s_required_subgroup_size);   \
         if (device->mul_mat ## ID ## _l[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l, #NAMELC #F16ACC "_aligned_l", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, l_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_l, #NAMELC #F16ACC "_aligned_l", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, l_align, false, true, l_required_subgroup_size);   \
         if (device->mul_mat ## ID ## _m[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_m, #NAMELC #F16ACC "_aligned_m", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, m_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_m, #NAMELC #F16ACC "_aligned_m", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, m_align, false, true, m_required_subgroup_size);   \
         if (device->mul_mat ## ID ## _s[TYPE]) \
-            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_s, #NAMELC #F16ACC "_aligned_s", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, s_align, false, true);   \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_s, #NAMELC #F16ACC "_aligned_s", NAMELC ## _aligned ## F16ACC ## _cm1_len, NAMELC ## _aligned ## F16ACC ## _cm1_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, s_align, false, true, s_required_subgroup_size);   \
 
         // Create 2 variants, {f16,f32} accumulator
 #define CREATE_MM2(TYPE, PIPELINE_NAME, NAMELC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
@@ -3371,6 +3378,19 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_bf16, matmul_bf16, , wg_denoms, warptile, vk_mat_mat_push_constants, 3, )
         }
 #endif
+
+        //dense GEMM warp tuning for intel Xe
+        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            l_required_subgroup_size = 16;
+            if (device->architecture == INTEL_XE2) {
+                l_warptile_mmq  = { 512, 128, 256, 32, 32, 32, 2, 8, 16, 16, 16 };
+                l_mmq_wg_denoms = { 128, 256, 1 };
+            } else if (device->architecture == INTEL_XE1) {
+                l_warptile_mmq  = { 512, 256, 128, 32, 32, 32, 2, 8, 8, 16, 16 };
+                l_mmq_wg_denoms = { 256, 128, 1 };
+                l_align         = 256;
+            }
+        }
 
         if (device->coopmat_acc_f16_support) {
             CREATE_MM2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q4_0], matmul_q4_0_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -3416,6 +3436,19 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_IQ4_XS,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_XS].f32acc,  matmul_iq4_xs_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f32acc,  matmul_iq4_nl_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
             CREATE_MM(GGML_TYPE_MXFP4,   pipeline_dequant_mul_mat_mat[GGML_TYPE_MXFP4].f32acc,   matmul_mxfp4_f32,   , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        }
+
+        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            if (device->architecture == INTEL_XE1) {
+                l_warptile_mmq  = { 512, 128, 128, 32, 32, 32, 2, 8, 8, 16, 32 };
+                l_mmq_wg_denoms = { 128, 128, 1 };
+            }
+            else if (device->architecture == INTEL_XE2) {
+                l_warptile_mmq  = { 512, 128, 128, 32, 32, 32, 2, 8, 16, 16, 32 };
+                l_mmq_wg_denoms = { 128, 128, 1 };
+            }
+            l_align                  = 128;
+            l_required_subgroup_size = 32;
         }
 
         GGML_ASSERT(device->subgroup_ballot);
@@ -5173,11 +5206,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_s[i] = true;
                 break;
             case VK_VENDOR_ID_INTEL:
-                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
+                if (!device->coopmat_support) {
                     device->mul_mat_l[i] = false;
                     device->mul_mat_id_l[i] = false;
                 } else {
-                    device->mul_mat_l[i] = true;  // if coopmat & XE2+, allow large matmul warptile config for Intel
+                    device->mul_mat_l[i] = true;  // if coopmat , allow large matmul warptile config for Intel
                     device->mul_mat_id_l[i] = true;
                 }
                 device->mul_mat_m[i] = true;
@@ -15267,9 +15300,7 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-        // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        return (arch == vk_device_architecture::INTEL_XE2) || (arch == vk_device_architecture::INTEL_XE1);
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
