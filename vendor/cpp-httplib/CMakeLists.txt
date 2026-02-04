@@ -8,7 +8,7 @@ llama_add_compile_flags()
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 if (NOT MSVC)
     # disable warnings in 3rd party code
-    target_compile_options(${TARGET} PRIVATE -w -Wno-unused-parameter)
+    target_compile_options(${TARGET} PRIVATE -w)
 endif()
 
 target_link_libraries(${TARGET} PRIVATE Threads::Threads)
@@ -29,6 +29,12 @@ target_compile_definitions(${TARGET} PRIVATE
     # disable Nagle's algorithm
     CPPHTTPLIB_TCP_NODELAY=1
 )
+
+if(LLAMA_FATAL_WARNINGS)
+    # disable fatal warnings in 3rd party code
+    string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+endif()
 
 set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
 
