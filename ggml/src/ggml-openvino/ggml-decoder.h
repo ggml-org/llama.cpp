@@ -5,6 +5,7 @@
 #include "openvino/decoder.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <map>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
@@ -20,20 +21,21 @@ struct ModelParams {
     int n_heads = -1;
     int n_heads_kv = -1;
     int head_size = -1;
-    int32_t * rope_params = nullptr;
+    int32_t rope_params[15];
     std::vector<int> swa_layers;
 
     std::vector<std::string> kv_names;
+    size_t kv_buffer_ctx_id = 0;
 
-    bool operator==(const ModelParams & other) const {
-        return n_seq == other.n_seq && n_heads == other.n_heads && n_heads_kv == other.n_heads_kv &&
-               head_size == other.head_size && rope_params == other.rope_params && swa_layers == other.swa_layers &&
-               ctx_per_seq == other.ctx_per_seq && ctx_per_seq_swa == other.ctx_per_seq_swa;
+    bool same_rope_params(const ModelParams & other) const {
+        return memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
     }
 
-    bool can_reuse_dynamically(const ModelParams & other) const { return *this == other; }
+    bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
 
-    bool can_reuse_statically(const ModelParams & other) const { return *this == other; }
+    bool can_reuse_statically(const ModelParams & other) const { return same_rope_params(other) && ctx == other.ctx; }
+
+    bool kv_buffer_changed(const ModelParams & other) const { return kv_buffer_ctx_id != other.kv_buffer_ctx_id; }
 };
 
 struct ComputeParams {
@@ -170,7 +172,7 @@ public:
 
     int get_input_len() const { return m_compute_params.input_len; }
 
-    virtual int32_t * get_rope_params() const override { return m_model_params.rope_params; }
+    virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
 
     virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
@@ -212,6 +214,8 @@ public:
     static ov::element::Type get_ov_type(const ggml_tensor * tensor);
     static std::string compute_op_type(const ggml_tensor * node);
     void add_extra_inputs();
+
+    void update_io(ggml_cgraph * cgraph);
 
     inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;

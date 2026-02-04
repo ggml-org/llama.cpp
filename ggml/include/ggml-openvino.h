@@ -24,6 +24,8 @@ GGML_BACKEND_API bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t b
 
 GGML_BACKEND_API bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft);
 
+GGML_BACKEND_API size_t ggml_backend_openvino_buffer_get_ctx_id(ggml_backend_buffer_t buffer);
+
 // device buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(int device);
 

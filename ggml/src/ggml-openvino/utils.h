@@ -5,20 +5,33 @@
 #include <algorithm>
 #include <cstddef>
 #include <openvino/runtime/core.hpp>
+#include <string>
 
 struct graph_key {
-    size_t n_nodes;
-    void * cache_k_l0;
+    int n_nodes;
+    std::string first_node_name;
+    std::string last_node_name;
+
+    graph_key(const ggml_cgraph * cgraph) : n_nodes(cgraph->n_nodes) {
+        if (n_nodes > 0) {
+            first_node_name = cgraph->nodes[0]->name;
+            last_node_name = cgraph->nodes[n_nodes - 1]->name;
+        }
+    }
 
     bool operator==(const graph_key & other) const {
-        return n_nodes == other.n_nodes && cache_k_l0 == other.cache_k_l0;
+        return n_nodes == other.n_nodes && first_node_name == other.first_node_name &&
+               last_node_name == other.last_node_name;
     }
 };
 
 struct graph_key_hash {
     size_t operator()(const graph_key & key) const {
-        size_t h = std::hash<size_t>{}(key.n_nodes);
-        h ^= std::hash<void *>{}(key.cache_k_l0) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        size_t h = std::hash<int>{}(key.n_nodes);
+        if (key.n_nodes > 0) {
+            h ^= std::hash<std::string>{}(key.first_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            h ^= std::hash<std::string>{}(key.last_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        }
         return h;
     }
 };
@@ -65,8 +78,6 @@ void set_zero_diagonal(std::vector<float> & matrix, size_t rows, size_t cols);
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
 bool get_is_prefill(const ggml_tensor * inp_pos);
-
-graph_key compute_graph_key(struct ggml_cgraph * cgraph);
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
 ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml_decoder,

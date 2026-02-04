@@ -8,6 +8,7 @@
 #include "ggml-quants.hpp"
 #include "ggml.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -53,6 +54,7 @@
 struct ggml_backend_openvino_buffer_context {
     int device;
     std::string name;
+    size_t id;
 
     // For non-weight buffers (KV cache, compute), we still use contiguous allocation
     void * data;
@@ -71,6 +73,10 @@ struct ggml_backend_openvino_buffer_context {
     ggml_backend_openvino_buffer_context(int device, size_t size, bool is_remote = false) :
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
+        id([]() {
+            static std::atomic<size_t> next_id{1};
+            return next_id.fetch_add(1);
+        }()),
         data(nullptr),
         size(size),
         is_remote(is_remote) {
@@ -107,6 +113,8 @@ struct ggml_backend_openvino_buffer_context {
 
     ~ggml_backend_openvino_buffer_context() {
         // Clean up all tensor extras
+        GGML_LOG_DEBUG("Deleting OpenVINO buffer context #%zu for device %d, size %zu MB\n", id, device,
+                       size / 1024 / 1024);
         for (auto & pair : tensor_extras) {
             delete pair.second;
         }
@@ -585,6 +593,14 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_ty
 
 bool ggml_backend_buffer_is_openvino(ggml_backend_buffer_t buffer) {
     return buffer->iface.free_buffer == ggml_backend_openvino_buffer_free_buffer;
+}
+
+size_t ggml_backend_openvino_buffer_get_ctx_id(ggml_backend_buffer_t buffer) {
+    if (!ggml_backend_buffer_is_openvino(buffer)) {
+        return 0;
+    }
+    ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
+    return ctx->id;
 }
 
 bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft) {
