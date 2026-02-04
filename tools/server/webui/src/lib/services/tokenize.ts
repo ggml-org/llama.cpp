@@ -9,31 +9,31 @@ import { getJsonHeaders } from '$lib/utils';
  * @returns {Promise<number[]>} Promise that resolves to an array of token IDs
  */
 export async function tokenize(
-    content: string,
-    model?: string,
-    signal?: AbortSignal
+	content: string,
+	model?: string,
+	signal?: AbortSignal
 ): Promise<number[]> {
-    try {
-        const body: { content: string; model?: string } = { content };
-        if (model) {
-            body.model = model;
-        }
+	try {
+		const body: { content: string; model?: string } = { content };
+		if (model) {
+			body.model = model;
+		}
 
-        const response = await fetch('./tokenize', {
-            method: 'POST',
-            headers: getJsonHeaders(),
-            body: JSON.stringify(body),
-            signal
-        });
+		const response = await fetch('./tokenize', {
+			method: 'POST',
+			headers: getJsonHeaders(),
+			body: JSON.stringify(body),
+			signal
+		});
 
-        if (!response.ok) {
-            throw new Error(`Tokenize failed: ${response.statusText}`);
-        }
+		if (!response.ok) {
+			throw new Error(`Tokenize failed: ${response.statusText}`);
+		}
 
-        const data = await response.json();
-        return data.tokens;
-    } catch (error) {
-        console.error('Tokenize error:', error);
-        return [];
-    }
+		const data = await response.json();
+		return data.tokens;
+	} catch (error) {
+		console.error('Tokenize error:', error);
+		return [];
+	}
 }

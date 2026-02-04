@@ -259,8 +259,6 @@ export class ChatService {
 		}
 	}
 
-
-
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Streaming
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -795,7 +793,4 @@ export class ChatService {
 
 		onTimingsCallback(timings, promptProgress);
 	}
-
-
-
 }
