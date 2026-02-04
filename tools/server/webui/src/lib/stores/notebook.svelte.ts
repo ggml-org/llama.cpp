@@ -1,4 +1,4 @@
-import { ChatService } from '$lib/services/chat';
+import { CompletionService } from '$lib/services/completion';
 import { config } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize';
 
@@ -45,7 +45,7 @@ export class NotebookStore {
 
 		try {
 			const currentConfig = config();
-			await ChatService.sendCompletion(
+			await CompletionService.sendCompletion(
 				this.content,
 				{
 					...currentConfig,
