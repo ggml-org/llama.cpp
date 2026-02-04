@@ -12,7 +12,9 @@
 #define GFX906_USE_DPP_REDUCTIONS 1
 #define GFX906_FATTN_TILE_SIZE_DEFAULT 128
 #define GFX906_Q8_SCALE_HOISTING 1
-#define GFX906_KVQ_MOE_CACHE_ENABLED 1
+#define GFX906_KVQ_MOE_CACHE_ENABLED 0
+//cache disabled cause it has problems with different models. 
+//still needs to be debugged
 #define GFX906_ROPE_ENABLED 1
 
 #endif // GGML_USE_HIP
