@@ -3,6 +3,8 @@ license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
+llama_add_compile_flags()
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 if (NOT MSVC)
     # disable warnings in 3rd party code
