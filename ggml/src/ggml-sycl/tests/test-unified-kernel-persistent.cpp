@@ -458,8 +458,8 @@ static bool test_persistent_dmmv_matmul(sycl::queue & q) {
     kernel.configure(config);
 
     // begin_persistent(n_layers, batch_size, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type)
-    // quant_type=2 for Q4_0 (GGML_TYPE_Q4_0 = 2)
-    kernel.begin_persistent(1, 1, K, K, 32, 8, 128, 2);
+    // quant_type=QUANT_TYPE_Q4_0 for Q4_0 dequantizing matmul
+    kernel.begin_persistent(1, 1, K, K, 32, 8, 128, ggml_sycl_unified::QUANT_TYPE_Q4_0);
     // add_matmul(layer, weights, input, output, type, M, N, K)
     // M=1 for DMMV (single vector), N=256 output columns, K=128 inner dim
     kernel.add_matmul(0, d_weights, d_activations, d_output, MatmulType::Q_PROJ, 1, N, K);

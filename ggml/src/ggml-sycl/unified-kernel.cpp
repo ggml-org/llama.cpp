@@ -4115,9 +4115,17 @@ private:
         // 64 columns / 16 sub-groups = 4 iterations per tile.
 
         constexpr int TILE_N_MATMUL  = 64;   // Output columns per tile
-        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16)
+        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16) used by the
+                                              // persistent kernel. The standalone DMMV uses SG=32,
+                                              // but the persistent kernel requires SG=16 for
+                                              // unified sub-group size across all operation types
+                                              // (RMS norm reduction needs 16-wide sub-groups).
+                                              // This means 2x more work per thread in dot products.
         constexpr int DMMV_QK4_0     = 32;   // Q4_0 block size
         constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+
+        // Guard against unsupported quantization types
+        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
         const int local_id = item_.get_local_id(0);
         const int sg_id    = local_id / SG_SIZE;   // Which sub-group (0-15)
