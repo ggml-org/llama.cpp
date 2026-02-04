@@ -293,6 +293,7 @@ jobs:
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
@@ -303,6 +304,7 @@ jobs:
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
