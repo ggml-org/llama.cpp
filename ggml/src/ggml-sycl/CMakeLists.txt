@@ -536,7 +536,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-unified-kernel PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-unified-kernel PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-unified-kernel PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-unified-kernel PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
@@ -563,7 +567,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-xmx-compute PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-xmx-compute PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-compute PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-xmx-compute PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
@@ -590,7 +598,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-xmx-default-enable PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-xmx-default-enable PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-default-enable PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-xmx-default-enable PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
@@ -617,7 +629,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-xmx-optimization PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-xmx-optimization PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-optimization PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-xmx-optimization PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
@@ -644,7 +660,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-xmx-config PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-xmx-config PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-xmx-config PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-xmx-config PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
@@ -737,7 +757,11 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
         ${CMAKE_CURRENT_SOURCE_DIR}/../../include
     )
     target_compile_options(test-esimd-prefetch PRIVATE ${XMX_TEST_SYCL_OPTIONS})
-    target_link_options(test-esimd-prefetch PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-esimd-prefetch PRIVATE
+        ${XMX_TEST_SYCL_OPTIONS}
+        "SHELL:-Xspirv-translator=intel_gpu_bmg_g21 -spirv-ext=+SPV_INTEL_split_barrier"
+        "SHELL:-Xspirv-translator=spir64 -spirv-ext=+SPV_INTEL_split_barrier"
+    )
     target_compile_definitions(test-esimd-prefetch PRIVATE
         GGML_SYCL_WARP_SIZE=32
         GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
