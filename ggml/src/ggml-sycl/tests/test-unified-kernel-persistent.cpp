@@ -497,14 +497,21 @@ static bool test_persistent_dmmv_matmul(sycl::queue & q) {
 // CPU Reference: Attention (single query, M=1)
 // =============================================================================
 
-// Standard attention: output[h][d] = sum_p softmax(score[p]) * v[h][p][d]
-// where score[p] = dot(q[h], k[h][p]) * scale
+// Standard attention with GQA support:
+// output[h][d] = sum_p softmax(score[p]) * v[kv_h][p][d]
+// where score[p] = dot(q[h], k[kv_h][p]) * scale
+// and kv_h = h / (n_heads / n_kv_heads) when n_kv_heads < n_heads (GQA)
 static void ref_attention(const float * q, const float * k_cache, const float * v_cache,
-                          float * output, int n_heads, int head_dim, int seq_len, float scale) {
+                          float * output, int n_heads, int n_kv_heads, int head_dim,
+                          int seq_len, float scale) {
     for (int h = 0; h < n_heads; h++) {
         const float * q_head = q + h * head_dim;
-        const float * k_head = k_cache + h * seq_len * head_dim;
-        const float * v_head = v_cache + h * seq_len * head_dim;
+        // GQA: compute which KV head this query head maps to
+        const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads)
+                            ? h / (n_heads / n_kv_heads)
+                            : h;
+        const float * k_head = k_cache + kv_head * seq_len * head_dim;
+        const float * v_head = v_cache + kv_head * seq_len * head_dim;
         float *       o_head = output + h * head_dim;
 
         // Compute scores and find max for numerical stability
@@ -569,9 +576,9 @@ static bool test_persistent_attention(sycl::queue & q) {
         h_v[i] = std::sin(i * 0.03f + 1.0f) * 0.4f;
     }
 
-    // CPU reference
+    // CPU reference (n_kv_heads == n_heads: no GQA)
     ref_attention(h_q.data(), h_k.data(), h_v.data(), h_ref.data(),
-                  n_heads, head_dim, seq_len, scale);
+                  n_heads, n_heads, head_dim, seq_len, scale);
 
     // Allocate device memory
     float * d_q      = sycl::malloc_device<float>(q_size, q);
@@ -601,7 +608,7 @@ static bool test_persistent_attention(sycl::queue & q) {
     desc.v_cache  = d_v;
     desc.output   = d_output;
     desc.n_heads  = n_heads;
-    desc.n_kv_heads = n_heads;  // No GQA for now
+    desc.n_kv_heads = n_heads;  // No GQA for this test
     desc.head_dim = head_dim;
     desc.seq_len  = seq_len;
     desc.scale    = scale;
@@ -666,7 +673,7 @@ static bool test_persistent_attention_long_seq(sycl::queue & q) {
     }
 
     ref_attention(h_q.data(), h_k.data(), h_v.data(), h_ref.data(),
-                  n_heads, head_dim, seq_len, scale);
+                  n_heads, n_heads, head_dim, seq_len, scale);
 
     float * d_q      = sycl::malloc_device<float>(q_size, q);
     float * d_k      = sycl::malloc_device<float>(kv_size, q);
@@ -734,6 +741,126 @@ static bool test_persistent_attention_long_seq(sycl::queue & q) {
 }
 
 // =============================================================================
+// Test: Persistent Attention with GQA (Grouped Query Attention)
+// =============================================================================
+static bool test_persistent_attention_gqa(sycl::queue & q) {
+    // GQA: 4:1 ratio — 8 query heads share 2 KV heads
+    // Heads 0-3 share kv_head 0, heads 4-7 share kv_head 1
+    const int   n_heads    = 8;
+    const int   n_kv_heads = 2;
+    const int   head_dim   = 64;
+    const int   seq_len    = 32;
+    const float scale      = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    const int q_size      = n_heads * head_dim;
+    const int kv_size     = n_kv_heads * seq_len * head_dim;  // KV cache sized by n_kv_heads
+    const int output_size = n_heads * head_dim;
+
+    // Create deterministic test data
+    std::vector<float> h_q(q_size);
+    std::vector<float> h_k(kv_size);
+    std::vector<float> h_v(kv_size);
+    std::vector<float> h_output(output_size, 0.0f);
+    std::vector<float> h_ref(output_size, 0.0f);
+
+    // Initialize with deterministic patterns
+    for (int i = 0; i < q_size; i++) {
+        h_q[i] = std::sin(i * 0.1f) * 0.5f;
+    }
+    for (int i = 0; i < kv_size; i++) {
+        h_k[i] = std::cos(i * 0.07f) * 0.3f;
+        h_v[i] = std::sin(i * 0.03f + 1.0f) * 0.4f;
+    }
+
+    // CPU reference with GQA
+    ref_attention(h_q.data(), h_k.data(), h_v.data(), h_ref.data(),
+                  n_heads, n_kv_heads, head_dim, seq_len, scale);
+
+    // Verify that the CPU reference produces shared outputs:
+    // Query heads sharing the same KV head should produce different outputs
+    // (because they have different Q vectors) but use the same K/V data.
+    // Heads 0 and 1 share kv_head 0, so they use the same K/V but different Q.
+    // Quick sanity: heads 0 and 1 outputs should differ (different Q).
+    bool q_heads_differ = false;
+    for (int d = 0; d < head_dim; d++) {
+        if (std::abs(h_ref[0 * head_dim + d] - h_ref[1 * head_dim + d]) > 1e-6f) {
+            q_heads_differ = true;
+            break;
+        }
+    }
+    if (!q_heads_differ) {
+        printf("    WARNING: GQA ref heads 0 and 1 have identical output (unexpected)\n");
+    }
+
+    // Allocate device memory
+    float * d_q      = sycl::malloc_device<float>(q_size, q);
+    float * d_k      = sycl::malloc_device<float>(kv_size, q);
+    float * d_v      = sycl::malloc_device<float>(kv_size, q);
+    float * d_output = sycl::malloc_device<float>(output_size, q);
+
+    q.memcpy(d_q, h_q.data(), q_size * sizeof(float)).wait();
+    q.memcpy(d_k, h_k.data(), kv_size * sizeof(float)).wait();
+    q.memcpy(d_v, h_v.data(), kv_size * sizeof(float)).wait();
+    q.memset(d_output, 0, output_size * sizeof(float)).wait();
+
+    // Configure and run persistent kernel
+    ggml_sycl::UnifiedKernel     kernel(q);
+    ggml_sycl_unified::XMXConfig config = {};
+    config.supported                    = true;
+    config.slm_size                     = 64 * 1024;
+    kernel.configure(config);
+
+    kernel.begin_persistent(1, 1, 4096, 4096, n_heads, n_kv_heads, head_dim, 0);
+
+    AttentionDescriptor desc = {};
+    desc.q          = d_q;
+    desc.k_cache    = d_k;
+    desc.v_cache    = d_v;
+    desc.output     = d_output;
+    desc.n_heads    = n_heads;
+    desc.n_kv_heads = n_kv_heads;  // GQA: 4:1 ratio
+    desc.head_dim   = head_dim;
+    desc.seq_len    = seq_len;
+    desc.scale      = scale;
+    kernel.add_attention(0, desc);
+
+    kernel.execute_persistent();
+
+    // Read back results
+    q.memcpy(h_output.data(), d_output, output_size * sizeof(float)).wait();
+
+    float error  = max_abs_error(h_output, h_ref);
+    bool  passed = error < TEST_TOLERANCE;
+
+    auto stats = kernel.get_last_stats();
+    printf("    ops=%d, tiles=%d, time=%.2f ms\n",
+           stats.n_operations, stats.total_tiles, stats.kernel_time_ms);
+    printf("    n_heads=%d, n_kv_heads=%d, ratio=%d:1\n",
+           n_heads, n_kv_heads, n_heads / n_kv_heads);
+
+    // Print debug info if failed
+    if (!passed) {
+        printf("    First 8 output values per head:\n");
+        for (int h = 0; h < n_heads; h++) {
+            printf("    Head %d (kv_head=%d):", h, h / (n_heads / n_kv_heads));
+            for (int d = 0; d < 4 && d < head_dim; d++) {
+                int idx = h * head_dim + d;
+                printf(" got=%.4f ref=%.4f", h_output[idx], h_ref[idx]);
+            }
+            printf("\n");
+        }
+    }
+
+    sycl::free(d_q, q);
+    sycl::free(d_k, q);
+    sycl::free(d_v, q);
+    sycl::free(d_output, q);
+
+    print_result("persistent_attention_gqa (heads=8, kv_heads=2, dim=64, seq=32)", passed, error);
+    return passed;
+}
+
+// =============================================================================
 // Test: Plan cancellation
 // =============================================================================
 static bool test_persistent_cancel(sycl::queue & q) {
@@ -788,6 +915,7 @@ int main() {
         printf("\nAttention Tests:\n");
         if (test_persistent_attention(q))          { passed++; } else { failed++; }
         if (test_persistent_attention_long_seq(q))  { passed++; } else { failed++; }
+        if (test_persistent_attention_gqa(q))       { passed++; } else { failed++; }
 
         printf("\nDiagnostics Tests:\n");
         if (test_persistent_stats(q))    { passed++; } else { failed++; }

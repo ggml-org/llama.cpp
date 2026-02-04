@@ -276,6 +276,7 @@ struct OperationDescriptor {
     float         eps;
     float         scale;
     int           quant_type;
+    int           n_kv_heads;   // For GQA support in attention (0 = same as n_heads)
 };
 
 // =============================================================================

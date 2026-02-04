@@ -3921,7 +3921,8 @@ struct alignas(64) DeviceOperation {
     float        scale;
     int          quant_type;
     int          n_tiles;        // Number of tiles for this operation
-    int          pad[2];         // Padding to 64-byte alignment
+    int          n_kv_heads;     // Number of KV heads for GQA (0 = same as n_heads)
+    int          pad[1];         // Padding to 64-byte alignment
 };
 
 // Arguments passed to the persistent kernel
@@ -4207,30 +4208,34 @@ private:
         //   Pass 1: Compute scores, find global max and softmax denominator
         //   Pass 2: Accumulate weighted V values using softmax probabilities
         //
-        // TODO: Add GQA support (n_kv_heads != n_heads). Currently assumes 1:1 mapping.
-
         constexpr int SG_SIZE = 16;
         constexpr int N_SGS   = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
 
-        const int tid     = item_.get_local_id(0);
-        const int head    = tile_idx;  // One tile per head
-        const int seq_len  = op.M;      // Number of tokens in KV cache
-        const int n_heads  = op.N;
-        const int head_dim = op.K;
-        const float scale  = op.scale;  // 1/sqrt(head_dim)
+        const int tid        = item_.get_local_id(0);
+        const int head       = tile_idx;  // One tile per head
+        const int seq_len    = op.M;      // Number of tokens in KV cache
+        const int n_heads    = op.N;
+        const int head_dim   = op.K;
+        const int n_kv_heads = op.n_kv_heads;
+        const float scale    = op.scale;  // 1/sqrt(head_dim)
 
         if (head >= n_heads) return;
+
+        // GQA: multiple query heads share the same KV head
+        // For n_heads=32, n_kv_heads=8: heads 0-3 share kv_head 0, heads 4-7 share kv_head 1, etc.
+        const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads)
+                            ? head / (n_heads / n_kv_heads)
+                            : head;
 
         const float * q       = static_cast<const float *>(op.input);
         const float * k_cache = static_cast<const float *>(op.weights);
         const float * v_cache = static_cast<const float *>(op.aux);
         float *       output  = static_cast<float *>(op.output);
 
-        // Pointers for this head
+        // Query and output use query head index; KV cache uses kv_head for GQA
         const float * q_head = q + head * head_dim;
-        // For KV cache: head h, position p, dimension d -> offset = h * seq_len * head_dim + p * head_dim + d
-        const float * k_head = k_cache + head * seq_len * head_dim;
-        const float * v_head = v_cache + head * seq_len * head_dim;
+        const float * k_head = k_cache + kv_head * seq_len * head_dim;
+        const float * v_head = v_cache + kv_head * seq_len * head_dim;
         float *       o_head = output + head * head_dim;
 
         auto sg = item_.get_sub_group();
@@ -4528,6 +4533,7 @@ void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc) {
     op.N = desc.n_heads;
     op.K = desc.head_dim;
     op.scale = desc.scale;
+    op.n_kv_heads = desc.n_kv_heads;  // GQA: propagate KV head count
 
     current_plan_->operations.push_back(op);
 }
@@ -4618,6 +4624,7 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.eps              = src.eps;
         dst.scale            = src.scale;
         dst.quant_type       = src.quant_type;
+        dst.n_kv_heads       = src.n_kv_heads;
         memset(dst.pad, 0, sizeof(dst.pad));
 
         // Calculate tiles for this operation
