@@ -86,7 +86,7 @@ static inline bool apir_decoder_peek_internal(apir_decoder * dec,
     assert(val_size <= size);
 
     if (unlikely(size > (size_t) (dec->end - dec->cur))) {
-        GGML_LOG_ERROR("reading too much from the decoder ...\n");
+        GGML_LOG_ERROR("%s: reading too much from the decoder ...\n", __func__);
         apir_decoder_set_fatal(dec);
         memset(val, 0, val_size);
         return false;
@@ -103,7 +103,7 @@ static inline void apir_decoder_peek(apir_decoder * dec, size_t size, void * val
 
 static inline const void * apir_decoder_use_inplace(apir_decoder * dec, size_t size) {
     if (unlikely(size > (size_t) (dec->end - dec->cur))) {
-        GGML_LOG_ERROR("reading too much from the decoder ...\n");
+        GGML_LOG_ERROR("%s: reading too much from the decoder ...\n", __func__);
         apir_decoder_set_fatal(dec);
         return NULL;
     }
@@ -221,7 +221,7 @@ static inline uint64_t apir_decode_array_size(apir_decoder * dec, uint64_t expec
     uint64_t size;
     apir_decode_uint64_t(dec, &size);
     if (size != expected_size) {
-        GGML_LOG_ERROR("Couldn't decode array from the decoder\n");
+        GGML_LOG_ERROR("%s: Couldn't decode array from the decoder\n", __func__);
         apir_decoder_set_fatal(dec);
         size = 0;
     }
@@ -322,7 +322,7 @@ static inline void apir_decode_char_array(apir_decoder * dec, char * val, size_t
     if (size) {
         val[size - 1] = '\0';
     } else {
-        GGML_LOG_ERROR("Couldn't decode the blog array\n");
+        GGML_LOG_ERROR("%s: Couldn't decode the blog array\n", __func__);
         apir_decoder_set_fatal(dec);
     }
 }
@@ -332,7 +332,8 @@ static inline void apir_decode_char_array(apir_decoder * dec, char * val, size_t
 static inline void * apir_decoder_alloc_array(size_t size, size_t count) {
     size_t alloc_size;
     if (unlikely(__builtin_mul_overflow(size, count, &alloc_size))) {
-        GGML_LOG_ERROR("overflow in array allocation of %zu * %zu bytes\n", size, count);
+        GGML_LOG_ERROR("%s: overflow in array allocation of %zu * %zu bytes\n",
+                       __func__, size, count);
         return NULL;
     }
 

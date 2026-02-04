@@ -40,7 +40,7 @@ uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
 
     if (!shmem_data) {
-        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Couldn't get the shmem addr from virgl\n", __func__);
         return 1;
     }
 
@@ -71,7 +71,7 @@ uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl
 
     void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
     if (!shmem_data) {
-        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Couldn't get the shmem addr from virgl\n", __func__);
         return 1;
     }
 
@@ -121,7 +121,7 @@ uint32_t backend_buffer_free_buffer(apir_encoder * enc, apir_decoder * dec, virg
     buffer = apir_decode_ggml_buffer(dec);
 
     if (!apir_untrack_backend_buffer(buffer)) {
-        GGML_LOG_WARN("%s: unknown buffer %p\n", __func__, (void *) buffer);
+        GGML_LOG_WARN(GGML_VIRTGPU_BCK "%s: unknown buffer %p\n", __func__, (void *) buffer);
         return 1;
     }
 

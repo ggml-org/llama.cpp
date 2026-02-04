@@ -11,6 +11,8 @@
 #include "shared/apir_cs.h"
 #include "shared/apir_cs_ggml.h"
 
+#define GGML_VIRTGPU_BCK "ggml-virtgpu-backend: "
+
 struct virgl_apir_context {
     uint32_t               ctx_id;
     virgl_apir_callbacks * iface;

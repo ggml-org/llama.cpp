@@ -35,14 +35,8 @@ void apir_backend_deinit(uint32_t virgl_ctx_id) {
         buffer->iface.free_buffer(buffer);
     }
 
-    if (dev) {
-        size_t free, total;
-        dev->iface.get_memory(dev, &free, &total);
-        GGML_LOG_INFO("%s: free memory: %ld MB\n", __func__, (size_t) free / 1024 / 1024);
-    }
-
     if (backend_library_handle) {
-        GGML_LOG_INFO("%s: The GGML backend library was loaded. Unloading it.\n", __func__);
+        GGML_LOG_INFO(GGML_VIRTGPU_BCK "The GGML backend library was loaded. Unloading it.\n");
         dlclose(backend_library_handle);
         backend_library_handle = NULL;
     }
@@ -65,7 +59,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
         if (apir_logfile) {
             ggml_log_set(log_to_file_callback, apir_logfile);
         } else {
-            GGML_LOG_INFO("Could not open the log file at '%s'\n", apir_log_to_file);
+            GGML_LOG_INFO(GGML_VIRTGPU_BCK "Could not open the log file at '%s'\n", apir_log_to_file);
         }
     }
 
@@ -74,7 +68,10 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
     const char * library_reg = virgl_library_reg ? virgl_library_reg : GGML_DEFAULT_BACKEND_REG;
 
     if (!library_name) {
-        GGML_LOG_ERROR("cannot open the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK
+                       "%s: cannot open the GGML library: env var '%s' not defined\n",
+                       __func__, APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
+
 
         return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
     }
@@ -82,13 +79,16 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
     backend_library_handle = dlopen(library_name, RTLD_LAZY);
 
     if (!backend_library_handle) {
-        GGML_LOG_ERROR("cannot open the GGML library: %s\n", dlerror());
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK
+                       "%s: cannot open the GGML library: %s\n", __func__, dlerror());
 
         return APIR_LOAD_LIBRARY_CANNOT_OPEN;
     }
 
     if (!library_reg) {
-        GGML_LOG_ERROR("cannot register the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK
+                       "%s: cannot register the GGML library: env var '%s' not defined\n",
+                       __func__, APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
 
         return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
     }
@@ -96,8 +96,10 @@ ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct 
     void * ggml_backend_reg_fct = dlsym(backend_library_handle, library_reg);
     dlsym_error                 = dlerror();
     if (dlsym_error) {
-        GGML_LOG_ERROR("cannot find the GGML backend registration symbol '%s' (from %s): %s\n", library_reg,
-              APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV, dlsym_error);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK
+                       "%s: cannot find the GGML backend registration symbol '%s' (from %s): %s\n",
+                       __func__, library_reg, APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV, dlsym_error);
+
 
         return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
     }
@@ -134,7 +136,9 @@ uint32_t apir_backend_dispatcher(uint32_t               virgl_ctx_id,
     };
 
     if (cmd_type >= APIR_BACKEND_DISPATCH_TABLE_COUNT) {
-        GGML_LOG_ERROR("Received an invalid dispatch index (%d >= %d)\n", cmd_type, APIR_BACKEND_DISPATCH_TABLE_COUNT);
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK
+                       "%s: Received an invalid dispatch index (%d >= %d)\n",
+                        __func__, cmd_type, APIR_BACKEND_DISPATCH_TABLE_COUNT);
         return APIR_BACKEND_FORWARD_INDEX_INVALID;
     }
 

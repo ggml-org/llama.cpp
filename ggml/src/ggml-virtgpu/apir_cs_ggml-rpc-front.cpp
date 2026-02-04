@@ -36,7 +36,7 @@ apir_rpc_tensor apir_serialize_tensor(const ggml_tensor * tensor) {
     result.data      = reinterpret_cast<uint64_t>(tensor->data);
     if (tensor->data) {
         if (!tensor->buffer) {
-            GGML_ABORT("tensor has data but not buffer");
+            GGML_ABORT("%s: tensor has data but not buffer", __func__);
         }
         // tensor->data is serialized as an offset to the buffer base address
         result.data -= reinterpret_cast<uint64_t>(BUFFER_TO_GGML_CONTEXT(tensor->buffer)->base);
