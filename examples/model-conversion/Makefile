@@ -33,11 +33,14 @@ DEVICE ?= auto
 causal-convert-model-bf16: OUTTYPE=bf16
 causal-convert-model-bf16: causal-convert-model
 
+causal-convert-model-debug: DEBUG=--debug
+causal-convert-model-debug: causal-convert-model
+
 causal-convert-model:
 	$(call validate_model_path,causal-convert-model)
 	@MODEL_NAME="$(MODEL_NAME)" OUTTYPE="$(OUTTYPE)" MODEL_PATH="$(MODEL_PATH)" \
 	METADATA_OVERRIDE="$(METADATA_OVERRIDE)" \
-	./scripts/causal/convert-model.sh
+	./scripts/causal/convert-model.sh $(DEBUG)
 
 causal-convert-mm-model-bf16: OUTTYPE=bf16
 causal-convert-mm-model-bf16: MM_OUTTYPE=f16

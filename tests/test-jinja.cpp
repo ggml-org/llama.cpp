@@ -189,9 +189,21 @@ static void test_conditionals(testing & t) {
         "negated"
     );
 
-    test_template(t, "in operator",
+    test_template(t, "in operator (element in array)",
         "{% if 'x' in items %}found{% endif %}",
         {{"items", json::array({"x", "y"})}},
+        "found"
+    );
+
+    test_template(t, "in operator (substring)",
+        "{% if 'bc' in 'abcd' %}found{% endif %}",
+        json::object(),
+        "found"
+    );
+
+    test_template(t, "in operator (object key)",
+        "{% if 'key' in obj %}found{% endif %}",
+        {{"obj", {{"key", 1}, {"other", 2}}}},
         "found"
     );
 
@@ -1035,6 +1047,42 @@ static void test_tests(testing & t) {
         "{{ 'yes' if x is iterable }}",
         json::object(),
         "yes"
+    );
+
+    test_template(t, "is in (array, true)",
+        "{{ 'yes' if 2 is in([1, 2, 3]) }}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "is in (array, false)",
+        "{{ 'yes' if 5 is in([1, 2, 3]) else 'no' }}",
+        json::object(),
+        "no"
+    );
+
+    test_template(t, "is in (string)",
+        "{{ 'yes' if 'bc' is in('abcde') }}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "is in (object keys)",
+        "{{ 'yes' if 'a' is in(obj) }}",
+        {{"obj", {{"a", 1}, {"b", 2}}}},
+        "yes"
+    );
+
+    test_template(t, "reject with in test",
+        "{{ items | reject('in', skip) | join(', ') }}",
+        {{"items", json::array({"a", "b", "c", "d"})}, {"skip", json::array({"b", "d"})}},
+        "a, c"
+    );
+
+    test_template(t, "select with in test",
+        "{{ items | select('in', keep) | join(', ') }}",
+        {{"items", json::array({"a", "b", "c", "d"})}, {"keep", json::array({"b", "c"})}},
+        "b, c"
     );
 }
 

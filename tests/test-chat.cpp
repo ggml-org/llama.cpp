@@ -592,7 +592,7 @@ static void test_peg_parser(common_chat_templates * tmpls, const std::function<v
             }
             if (diff.tool_call_index != std::string::npos) {
                 if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", diff.tool_call_delta.id});
                 }
                 if (!diff.tool_call_delta.arguments.empty()) {
                     msg_accum.tool_calls.back().arguments += diff.tool_call_delta.arguments;
@@ -3799,6 +3799,134 @@ static void test_template_output_peg_parsers() {
         });
     }
 
+    {
+        // Solar-Open-100B
+        auto tmpls = read_templates("models/templates/upstage-Solar-Open-100B.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|><|begin|>assistant<|content|>Hello, world!\nWhat's up?";
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test basic message and reasoning_effort = low
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>Hello, world!\nWhat's up?";
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|tool_calls|>"
+                      "<|tool_call:begin|>123456789"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_call_id;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_thoughts_call_idx;
+        });
+
+        // Test tool call with reasoning and tool_choice = required
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.params.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            t.expect = message_assist_thoughts_call_idx;
+        });
+
+        // Test tool call without reasoning and tool_choice = required
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.params.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.expect = message_assist_call_idx;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>"
+                      "<|tool_call:begin|>1"
+                      "<|tool_call:name|>special_function_with_opt"
+                      "<|tool_call:args|>{\"arg1\": 1, \"arg2\": 2}"
+                      "<|tool_call:end|>";
+
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.reasoning_content = "I'm\nthinking";
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        "0",
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        "1",
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I need to output the invoice details in JSON<|end|>"
+                      "<|begin|>assistant<|content|>"
+                      R"({"amount": 123.45, "date": "2025-12-03"})";
+
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+
+        // Test response format no reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>"
+                      R"({"amount": 123.45, "date": "2025-12-03"})";
+
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.params.json_schema = invoice_schema;
+
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
 }
 
 static void test_msg_diffs_compute() {
