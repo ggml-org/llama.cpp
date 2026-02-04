@@ -116,7 +116,7 @@ class RemotingCodebaseGenerator:
                         'frontend_return': func_metadata.get('frontend_return', 'void'),
                         'frontend_extra_params': func_metadata.get('frontend_extra_params', []),
                         'group_description': group_description,
-                        'newly_added': func_metadata.get('newly_added', False)
+                        'deprecated': func_metadata.get('deprecated', False),
                     })
                     enum_value += 1
 
@@ -165,6 +165,9 @@ class RemotingCodebaseGenerator:
 
             signature = "uint32_t"
             params = "apir_encoder *enc, apir_decoder *dec, virgl_apir_context *ctx"
+            if func['deprecated']:
+                decl_lines.append(f"/* {func['enum_name']} is deprecated. Keeping the handler for backward compatibility. */")
+
             decl_lines.append(f"{signature} {func['backend_function']}({params});")
 
         # Switch cases
@@ -176,7 +179,9 @@ class RemotingCodebaseGenerator:
                 switch_lines.append(f"  /* {func['group_description']} */")
                 current_group = func['group_name']
 
-            switch_lines.append(f"  case {func['enum_name']}: return \"{func['backend_function']}\";")
+            deprecated = " (DEPRECATED)" if func['deprecated'] else ""
+
+            switch_lines.append(f"  case {func['enum_name']}: return \"{func['backend_function']}{deprecated}\";")
 
         # Dispatch table
         table_lines = []
@@ -188,7 +193,8 @@ class RemotingCodebaseGenerator:
                 table_lines.append("")
                 current_group = func['group_name']
 
-            table_lines.append(f"  /* {func['enum_name']}  = */ {func['backend_function']},")
+            deprecated = " /* DEPRECATED */" if func['deprecated'] else ""
+            table_lines.append(f"  /* {func['enum_name']}  = */ {func['backend_function']}{deprecated},")
 
         header_content = f'''\
 #pragma once
@@ -224,6 +230,10 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
                 decl_lines.append("")
                 decl_lines.append(f"/* {func['group_description']} */")
                 current_group = func['group_name']
+
+            if func['deprecated']:
+                decl_lines.append(f"/* {func['frontend_function']} is deprecated. */")
+                continue
 
             # Build parameter list
             params = [self.naming_patterns['frontend_base_param']]
@@ -287,7 +297,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
         generated_files = [apir_backend_path, backend_dispatched_path, virtgpu_forward_path]
 
         if not self.clang_format_available:
-            logging.warning("\n⚠️clang-format not found in PATH. Generated files will not be formatted."
+            logging.warning("\n⚠️clang-format not found in PATH. Generated files will not be formatted.\n"
                             "   Install clang-format to enable automatic code formatting.")
         else:
             logging.info("\n🎨 Formatting files with clang-format...")

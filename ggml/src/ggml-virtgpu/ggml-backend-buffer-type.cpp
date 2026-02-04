@@ -6,7 +6,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
 
     ggml_backend_remoting_buffer_context * context = (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
     if (!context) {
-        GGML_ABORT("Couldn't allocate the buffer context ...");
+        GGML_ABORT(GGML_VIRTGPU "%s: Couldn't allocate the buffer context ...", __func__);
     }
 
     context->gpu = gpu;
@@ -20,7 +20,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
         context->base         = context->apir_context.shmem.mmap_ptr;
         context->is_from_ptr  = true;
     } else {
-        context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
+        context->apir_context = apir_buffer_type_alloc_buffer(gpu, gpu->cached_buffer_type.host_handle, size);
         context->is_from_ptr  = false;
         context->base         = NULL;
     }
@@ -34,36 +34,19 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
 static const char * ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
-    return apir_buffer_type_get_name(gpu, buft);
+    return gpu->cached_buffer_type.name;
 }
 
 static size_t ggml_backend_remoting_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
-    static size_t align = 0;
-
-    if (align == 0) {
-        align = apir_buffer_type_get_alignment(gpu, buft);
-    }
-
-    return align;
+    return gpu->cached_buffer_type.alignment;
 }
 
 static size_t ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
-    static size_t max_size = 0;
-    if (max_size == 0) {
-        max_size = apir_buffer_type_get_max_size(gpu, buft);
-    }
-
-    return max_size;
-}
-
-static bool ggml_backend_remoting_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    virtgpu * gpu = BUFT_TO_GPU(buft);
-
-    return apir_buffer_type_is_host(gpu, buft);
+    return gpu->cached_buffer_type.max_size;
 }
 
 static size_t ggml_backend_remoting_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
@@ -76,7 +59,7 @@ static size_t ggml_backend_remoting_buffer_type_get_alloc_size(ggml_backend_buff
         return ggml_nbytes(tensor);
     }
 
-    return apir_buffer_type_get_alloc_size(gpu, buft, tensor);
+    return apir_buffer_type_get_alloc_size(gpu, gpu->cached_buffer_type.host_handle, tensor);
 }
 
 const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
