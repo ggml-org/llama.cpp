@@ -4,13 +4,18 @@ license_add_file("cpp-httplib" "LICENSE")
 find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
-list(REMOVE_ITEM C_FLAGS   -Werror)
-list(REMOVE_ITEM CXX_FLAGS -Werror)
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 if (NOT MSVC)
     # disable warnings in 3rd party code
     target_compile_options(${TARGET} PRIVATE -w)
+    get_target_property(target_options ${TARGET} COMPILE_OPTIONS)
+    list(REMOVE_ITEM target_options "-Werror")
+    set_target_properties(${TARGET} PROPERTIES COMPILE_OPTIONS "${target_options}")
+else()
+    get_target_property(target_options ${TARGET} COMPILE_OPTIONS)
+    list(REMOVE_ITEM target_options "/WX")
+    set_target_properties(${TARGET} PROPERTIES COMPILE_OPTIONS "${target_options}")
 endif()
 
 target_link_libraries(${TARGET} PRIVATE Threads::Threads)
