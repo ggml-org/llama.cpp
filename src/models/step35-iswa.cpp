@@ -50,15 +50,13 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
             }
 
             // RoPE (partial rotary factors per layer)
-            ggml_tensor * rope_factors = nullptr;
-            // Match HF behavior (Step35Attention): rope_scaling / rope_parameters may be gated by attention type.
-            // bit0 -> full/dense layers, bit1 -> sliding/SWA layers.
+            // Step3.5 matches HF behavior: RoPE scaling is applied on dense (full-attention) layers only.
+            // We already have the SWA pattern in hparams (loaded from sliding_window_pattern), so no extra mask is needed.
             const bool is_swa = hparams.is_swa(il);
-            const uint32_t apply_mask = hparams.rope_scaling_apply_mask;
-            if ((is_swa && (apply_mask & 0x2)) || (!is_swa && (apply_mask & 0x1))) {
-                rope_factors = model.get_rope_factors(cparams, il);
-            }
-            const int64_t n_rot_l = hparams.rope_n_rot(il);
+            ggml_tensor * rope_factors = is_swa ? nullptr : model.get_rope_factors(cparams, il);
+            // Step3.5 partial rotary factors are tied to the SWA pattern:
+            // dense layers use half-rotary, SWA layers use full rotary.
+            const int64_t n_rot_l = is_swa ? hparams.n_rot : (hparams.n_rot / 2);
             Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, rope_factors,
                 n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,

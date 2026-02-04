@@ -146,6 +146,8 @@ class Keys:
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
+        SWIGLU_LIMITS                     = "{arch}.swiglu_limits"
+        SWIGLU_LIMITS_SHARED              = "{arch}.swiglu_limits_shared"
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
 
@@ -187,7 +189,6 @@ class Keys:
         SCALING_TYPE              = "{arch}.rope.scaling.type"
         SCALING_FACTOR            = "{arch}.rope.scaling.factor"
         SCALING_ATTN_FACTOR       = "{arch}.rope.scaling.attn_factor"
-        SCALING_APPLY_MASK        = "{arch}.rope.scaling.apply_mask"
         SCALING_ORIG_CTX_LEN      = "{arch}.rope.scaling.original_context_length"
         SCALING_FINETUNED         = "{arch}.rope.scaling.finetuned"
         SCALING_YARN_LOG_MUL      = "{arch}.rope.scaling.yarn_log_multiplier"

@@ -920,7 +920,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -7914,43 +7914,22 @@ class MimoV2Model(TextModel):
 
 @ModelBase.register("Step3p5ForCausalLM")
 class Step35Model(TextModel):
-    """
-    Step3.5 interleaved sliding-window attention + MoE with sigmoid routing and expert selection bias.
-    """
-
     model_arch = gguf.MODEL_ARCH.STEP35
 
     def set_gguf_parameters(self):
         rope_theta_per_layer = None
-        rope_theta = self.hparams.get("rope_theta", None)
+        rope_theta = self.hparams.get("rope_theta")
         if isinstance(rope_theta, list):
             rope_theta_per_layer = rope_theta
-            if len(rope_theta) == 0:
-                raise ValueError("rope_theta list must not be empty")
-            rope_theta0 = float(rope_theta[0])
-            self.hparams["rope_theta"] = rope_theta0
-            if isinstance(getattr(self, "rope_parameters", None), dict) and isinstance(self.rope_parameters.get("rope_theta", None), list):
-                self.rope_parameters["rope_theta"] = rope_theta0
+            self.hparams["rope_theta"] = float(rope_theta[0])
+            self.hparams["local_rope_theta"] = float(rope_theta[1])
+            self.rope_parameters["rope_theta"] = self.hparams["rope_theta"]
+            self.rope_parameters["sliding_attention"] = {"rope_theta": self.hparams["local_rope_theta"]}
 
         super().set_gguf_parameters()
 
-        def _truncate_to_block_count(name: str, values: list, *, allow_none: bool = False) -> list:
-            if not isinstance(values, list):
-                raise ValueError(f"{name} must be a list, got {type(values)}")
-            if len(values) < self.block_count:
-                raise ValueError(f"{name} must have length >= {self.block_count}, got {len(values)}")
-            if len(values) != self.block_count:
-                logger.warning(
-                    "%s length mismatch: expected %d, got %d; truncating to %d",
-                    name, self.block_count, len(values), self.block_count,
-                )
-                values = values[: self.block_count]
-            if not allow_none and any(v is None for v in values):
-                raise ValueError(f"{name} must not contain None")
-            return values
-
         layer_types = self.hparams.get("layer_types", [])
-        attn_other = self.hparams.get("attention_other_setting", {}) or {}
+        attn_other = self.hparams.get("attention_other_setting") or {}
 
         n_head_base = self.hparams["num_attention_heads"]
         n_kv_base   = self.hparams["num_attention_groups"]
@@ -7958,13 +7937,10 @@ class Step35Model(TextModel):
         n_head_swa = attn_other.get("num_attention_heads", n_head_base)
         n_kv_swa   = attn_other.get("num_attention_groups", n_kv_base)
 
-        if layer_types:
-            layer_types = _truncate_to_block_count("layer_types", layer_types, allow_none=False)
-            head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
-            kv_arr   = [n_kv_swa   if lt == "sliding_attention" else n_kv_base   for lt in layer_types]
-            swa_pat  = [1 if lt == "sliding_attention" else 0 for lt in layer_types]
-        else:
-            raise ValueError(f"layer_types is not set: {layer_types}")
+        layer_types = layer_types[: self.block_count]
+        head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
+        kv_arr   = [n_kv_swa   if lt == "sliding_attention" else n_kv_base   for lt in layer_types]
+        swa_pat  = [1 if lt == "sliding_attention" else 0 for lt in layer_types]
 
         self.gguf_writer.add_head_count(head_arr)
         self.gguf_writer.add_head_count_kv(kv_arr)
@@ -7974,22 +7950,16 @@ class Step35Model(TextModel):
 
         self.gguf_writer.add_value_length(self.hparams["head_dim"])
 
-        # Whether rope_scaling/rope_parameters are applied
-        # based on attention type, encoded as a small bitmask:
-        # bit0 -> apply on full_attention (dense layers)
-        # bit1 -> apply on sliding_attention (SWA layers)
-        yarn_only_types = self.hparams.get("yarn_only_types", None)
-        self.gguf_writer.add_rope_scaling_apply_mask(yarn_only_types)
-
         # MoE params
         self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
         self.gguf_writer.add_expert_used_count(self.hparams["moe_top_k"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
         self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["share_expert_dim"])
 
-        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
-        self.gguf_writer.add_expert_weights_scale(self.hparams.get("moe_router_scaling_factor", 1.0))
-        self.gguf_writer.add_expert_weights_norm(bool(self.hparams.get("norm_expert_weight", False)))
+        if (moe_router_scaling_factor := self.hparams.get("moe_router_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(moe_router_scaling_factor)
+        if (norm_expert_weight := self.hparams.get("norm_expert_weight")) is not None:
+            self.gguf_writer.add_expert_weights_norm(norm_expert_weight)
 
         # leading dense blocks
         leading_dense = 0
@@ -8001,30 +7971,15 @@ class Step35Model(TextModel):
         self.gguf_writer.add_leading_dense_block_count(leading_dense)
         self.gguf_writer.add_moe_every_n_layers(int(self.hparams.get("moe_every_n_layer", 1)))
 
-        # RoPE: Step35 uses per-layer partial rotary factors; llama.cpp currently only supports a single rope dim.
-        # Check that partial_rotary_factors exists, is the right length, and all factors > 0
-        partial_rotary_factors = self.hparams.get("partial_rotary_factors", None)
-        if partial_rotary_factors is None:
-            raise ValueError("partial_rotary_factors must be present in hparams")
-        partial_rotary_factors = _truncate_to_block_count("partial_rotary_factors", partial_rotary_factors, allow_none=False)
-        rope_dim_per_layer = [int(self.hparams["head_dim"] * factor) for factor in partial_rotary_factors]
-        self.gguf_writer.add_rope_dimension_count_per_layer(rope_dim_per_layer)
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-5))
 
-        # Step35: per-layer rope_theta support
-        if rope_theta_per_layer is not None:
-            rope_theta_per_layer = _truncate_to_block_count("rope_theta", rope_theta_per_layer, allow_none=False)
-            freq_base_per_layer = [float(v) for v in rope_theta_per_layer]
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.rope.freq_base_per_layer", freq_base_per_layer)
-
         # Optional per-layer SwiGLU clamps (HF: swiglu_limits / swiglu_limits_shared).
-        for key in ("swiglu_limits", "swiglu_limits_shared"):
-            limits = self.hparams.get(key, None)
-            if limits is None:
-                continue
-            limits = _truncate_to_block_count(key, limits, allow_none=True)
-            limits_f = [0.0 if v is None else float(v) for v in limits]
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.{key}", limits_f)
+        if (limits := self.hparams.get("swiglu_limits")) is not None:
+            limits_f = [0.0 if v is None else float(v) for v in limits[: self.block_count]]
+            self.gguf_writer.add_swiglu_limits(limits_f)
+        if (limits_shared := self.hparams.get("swiglu_limits_shared")) is not None:
+            limits_shared_f = [0.0 if v is None else float(v) for v in limits_shared[: self.block_count]]
+            self.gguf_writer.add_swiglu_limits_shared(limits_shared_f)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # remove mtp layers

@@ -224,7 +224,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_VALUE_LENGTH_MLA,             "%s.attention.value_length_mla"             },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,           "%s.rope.dimension_count"                 },
-    { LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, "%s.rope.dimension_count_per_layer"       },
     { LLM_KV_ROPE_DIMENSION_SECTIONS,        "%s.rope.dimension_sections"              },
     { LLM_KV_ROPE_FREQ_BASE,                 "%s.rope.freq_base"                       },
     { LLM_KV_ROPE_FREQ_BASE_SWA,             "%s.rope.freq_base_swa"                   },

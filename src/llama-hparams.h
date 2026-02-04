@@ -110,16 +110,8 @@ struct llama_hparams {
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa = 1.0f;
 
-    bool has_rope_freq_base_per_layer = false;
-    std::array<float, LLAMA_MAX_LAYERS> rope_freq_base_per_layer;
-
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
-
-    // Step35: optionally apply rope_scaling only for certain attention types (HF "yarn_only_types").
-    // bit0 -> apply on full/dense layers, bit1 -> apply on sliding/SWA layers.
-    // Default 3 keeps backwards compatibility (apply everywhere).
-    uint32_t rope_scaling_apply_mask = 0x3;
 
     float    yarn_ext_factor  = -1.0f;
     float    yarn_attn_factor =  1.0f;
@@ -214,7 +206,6 @@ struct llama_hparams {
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
-    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_dim_per_layer;
 
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_limits;
@@ -340,7 +331,6 @@ struct llama_hparams {
 
     bool use_mrope() const;
 
-    uint32_t rope_n_rot(uint32_t il) const;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

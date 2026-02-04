@@ -824,6 +824,12 @@ class GGUFWriter:
     def add_expert_gating_func(self, value: ExpertGatingFuncType) -> None:
         self.add_uint32(Keys.LLM.EXPERT_GATING_FUNC.format(arch=self.arch), value.value)
 
+    def add_swiglu_limits(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_LIMITS.format(arch=self.arch), values)
+
+    def add_swiglu_limits_shared(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_LIMITS_SHARED.format(arch=self.arch), values)
+
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
 
@@ -964,16 +970,6 @@ class GGUFWriter:
 
     def add_rope_scaling_yarn_beta_slow(self, value: float) -> None:
         self.add_float32(Keys.Rope.SCALING_YARN_BETA_SLOW.format(arch=self.arch), value)
-
-    def add_rope_scaling_apply_mask(self, yarn_only_types: Sequence[str] | None) -> None:
-        apply_mask = 0x3  # default: apply on all layers (backwards compatible)
-        if isinstance(yarn_only_types, list):
-            apply_mask = 0
-            if "full_attention" in yarn_only_types:
-                apply_mask |= 0x1
-            if "sliding_attention" in yarn_only_types:
-                apply_mask |= 0x2
-        self.add_uint32(Keys.Rope.SCALING_APPLY_MASK.format(arch=self.arch), int(apply_mask))
 
     def add_ssm_conv_kernel(self, value: int) -> None:
         self.add_uint32(Keys.SSM.CONV_KERNEL.format(arch=self.arch), value)

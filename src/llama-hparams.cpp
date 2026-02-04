@@ -232,8 +232,3 @@ uint32_t llama_hparams::n_layer_kv() const {
 bool llama_hparams::use_mrope() const {
     return rope_sections[0] > 0 && rope_sections[1] > 0;
 }
-
-uint32_t llama_hparams::rope_n_rot(uint32_t il) const {
-    const uint32_t v = rope_dim_per_layer[il];
-    return v ? v : n_rot;
-}

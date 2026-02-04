@@ -2502,24 +2502,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
                 ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
-                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_COUNT_PER_LAYER, hparams.rope_dim_per_layer, hparams.n_layer);
                 ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS,        hparams.swiglu_limits,        hparams.n_layer);
                 ml.get_key_or_arr(LLM_KV_SWIGLU_LIMITS_SHARED, hparams.swiglu_limits_shared, hparams.n_layer);
-
-                // Optional: Step35-only gating for applying rope scaling (HF: yarn_only_types).
-                // Default is 3 (apply on all layers) if the key is absent.
-                ml.get_key(
-                    format("%s.rope.scaling.apply_mask", ml.get_arch_name().c_str()),
-                    hparams.rope_scaling_apply_mask,
-                    false
-                );
-
-                hparams.has_rope_freq_base_per_layer = ml.get_key_or_arr(
-                    format("%s.rope.freq_base_per_layer", ml.get_arch_name().c_str()),
-                    hparams.rope_freq_base_per_layer,
-                    hparams.n_layer,
-                    false
-                );
 
                 type = LLM_TYPE_UNKNOWN;
             } break;
@@ -7160,7 +7144,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // ("rope_freqs.weight") and ggml uses only the first (n_rot_l/2) entries per layer.
                     uint32_t n_rot_max = 0;
                     for (int i = 0; i < n_layer; ++i) {
-                        n_rot_max = std::max(n_rot_max, hparams.rope_n_rot(i));
+                        n_rot_max = std::max(n_rot_max, hparams.n_rot);
                     }
                     if (n_rot_max == 0) {
                         n_rot_max = n_rot;
@@ -7727,9 +7711,6 @@ const ggml_tensor * llama_model::get_tensor(const char * name) const {
 }
 
 float llama_model::get_rope_freq_base (const llama_cparams & cparams, int il) const {
-    if (hparams.has_rope_freq_base_per_layer) {
-        return hparams.rope_freq_base_per_layer[il];
-    }
     return hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
 }
 
