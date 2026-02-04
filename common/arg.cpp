@@ -1578,6 +1578,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--blue-noise"},
+        "use blue noise RNG for sampling instead of white noise",
+        [](common_params & params) {
+            params.sampling.blue_noise = true;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--temp"}, "N",
         string_format("temperature (default: %.2f)", (double)params.sampling.temp),
         [](common_params & params, const std::string & value) {

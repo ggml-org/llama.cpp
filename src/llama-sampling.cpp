@@ -369,7 +369,7 @@ struct blue_noise_rng {
         const int n = (int)states.size();
         position  = 0;
 
-        // 5 reachable states with stationary distribution 3:3:2:1:1 (out of 10)
+        // 5 reachable states with distribution 3:3:2:1:1
         static const int8_t tbl[10][2] = {
             { 0,  0}, { 0,  0}, { 0,  0},
             {-1,  0}, {-1,  0}, {-1,  0},
@@ -1335,6 +1335,197 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
             /* .seed        = */ seed,
             /* .seed_cur    = */ seed_cur,
             /* .rng         = */ std::mt19937(seed_cur),
+            /* .inp_uniform = */ nullptr,
+        }
+    );
+}
+
+// dist (blue noise)
+
+struct llama_sampler_dist_blue_noise : public llama_sampler_backend {
+    const uint32_t seed;
+          uint32_t seed_cur;
+
+    blue_noise_rng bn_rng;
+
+    ggml_tensor * inp_uniform;
+};
+
+static const char * llama_sampler_dist_blue_noise_name(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+    return sctx->get_name();
+}
+
+static void llama_sampler_dist_blue_noise_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+
+    // edge cases
+    if (cur_p->size == 0) {
+        cur_p->selected = -1;
+        return;
+    }
+
+    cur_p->selected = 0;
+
+    if (cur_p->size == 1) {
+        cur_p->data[0].p = 1.0f;
+        return;
+    }
+
+    // max logit for numerical stability
+    float max_l = cur_p->data[0].logit;
+    if (!cur_p->sorted) {
+        for (size_t i = 1; i < cur_p->size; ++i) {
+            max_l = std::max(max_l, cur_p->data[i].logit);
+        }
+    }
+
+    // apply softmax to obtain the probabilities
+    double sum_cum = 0.0f;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        float p = expf(cur_p->data[i].logit - max_l);
+        cur_p->data[i].p = p;
+        sum_cum += p;
+    }
+
+    // sample using blue noise RNG
+    const double rnd = ctx->bn_rng.nextf();
+
+          double sum_run = 0.0f;
+    const double sum_tgt = sum_cum*rnd;
+
+    bool found = false;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        if (!found) {
+            sum_run += cur_p->data[i].p;
+            if (sum_run >= sum_tgt) {
+                cur_p->selected = i;
+                found = true;
+            }
+        }
+
+        // normalize probs
+        cur_p->data[i].p /= sum_cum;
+    }
+
+    assert(found);
+    if (!found) {
+        cur_p->selected = cur_p->size - 1;
+    }
+}
+
+static void llama_sampler_dist_blue_noise_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+    ctx->seed_cur = get_rng_seed(ctx->seed);
+    ctx->bn_rng.init(16, ctx->seed_cur);
+}
+
+static struct llama_sampler * llama_sampler_dist_blue_noise_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_dist_blue_noise *) smpl->ctx;
+    auto * result = llama_sampler_init_dist_blue_noise(ctx->seed);
+
+    // copy the state
+    {
+        auto * result_ctx = (llama_sampler_dist_blue_noise *) result->ctx;
+
+        result_ctx->seed_cur = ctx->seed_cur;
+        result_ctx->bn_rng   = ctx->bn_rng;
+    }
+
+    return result;
+}
+
+static void llama_sampler_dist_blue_noise_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_dist_blue_noise *) smpl->ctx;
+}
+
+static bool llama_sampler_dist_blue_noise_backend_init(
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
+    auto * sctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+
+    const bool res = llama_sampler_backend_support(smpl, buft);
+
+    sctx->init(res);
+
+    return res;
+}
+
+static void llama_sampler_dist_blue_noise_backend_apply(
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
+    GGML_UNUSED(gf);
+
+    auto * sctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+
+    sctx->inp_uniform = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+    ggml_set_name (sctx->inp_uniform, "uniform");
+    ggml_set_input(sctx->inp_uniform);
+
+    struct ggml_tensor * probs = ggml_soft_max(ctx, data->logits);
+    ggml_set_name(probs, "dist_probs");
+
+    struct ggml_tensor * cumsum = ggml_cumsum(ctx, probs);
+    ggml_set_name(cumsum, "dist_cumsum");
+
+    struct ggml_tensor * diff = ggml_sub(ctx, cumsum, sctx->inp_uniform);
+    ggml_set_name(diff, "dist_cumsum");
+
+    struct ggml_tensor * mask = ggml_step(ctx, diff);
+    ggml_set_name(mask, "dist_mask");
+
+    struct ggml_tensor * idxf = ggml_sum(ctx, mask);
+    ggml_set_name(idxf, "dist_index_f32");
+
+    struct ggml_tensor * idx = ggml_cast(ctx, ggml_scale_bias(ctx, idxf, -1.0f, mask->ne[0]), GGML_TYPE_I32);
+    ggml_set_name(idx, "dist_index_i32");
+
+    struct ggml_tensor * sampled_token = idx;
+    if (data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
+
+        sampled_token = ggml_get_rows(ctx, candidates, idx);
+        ggml_set_name(sampled_token, "dist_sampled_token");
+    }
+
+    data->sampled = sampled_token;
+    data->probs = probs;
+}
+
+static void llama_sampler_dist_blue_noise_backend_set_input(struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_dist_blue_noise *) smpl->ctx;
+
+    GGML_ASSERT(sctx->inp_uniform != nullptr);
+
+    const float rnd = (float)sctx->bn_rng.nextf();
+
+    ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
+}
+
+static struct llama_sampler_i llama_sampler_dist_blue_noise_i = {
+    /* .name              = */ llama_sampler_dist_blue_noise_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ llama_sampler_dist_blue_noise_apply,
+    /* .reset             = */ llama_sampler_dist_blue_noise_reset,
+    /* .clone             = */ llama_sampler_dist_blue_noise_clone,
+    /* .free              = */ llama_sampler_dist_blue_noise_free,
+    /* .backend_init      = */ llama_sampler_dist_blue_noise_backend_init,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_dist_blue_noise_backend_apply,
+    /* .backend_set_input = */ llama_sampler_dist_blue_noise_backend_set_input,
+};
+
+struct llama_sampler * llama_sampler_init_dist_blue_noise(uint32_t seed) {
+    auto seed_cur = get_rng_seed(seed);
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_dist_blue_noise_i,
+        /* .ctx   = */ new llama_sampler_dist_blue_noise {
+            ("dist-blue-noise"),
+            /* .seed        = */ seed,
+            /* .seed_cur    = */ seed_cur,
+            /* .bn_rng      = */ blue_noise_rng(16, seed_cur),
             /* .inp_uniform = */ nullptr,
         }
     );
@@ -3926,6 +4117,10 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {
     if (smpl->iface == &llama_sampler_dist_i) {
         return ((const llama_sampler_dist *) smpl->ctx)->seed_cur;
+    }
+
+    if (smpl->iface == &llama_sampler_dist_blue_noise_i) {
+        return ((const llama_sampler_dist_blue_noise *) smpl->ctx)->seed_cur;
     }
 
     if (smpl->iface == &llama_sampler_mirostat_i) {
