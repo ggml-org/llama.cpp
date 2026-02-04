@@ -3198,20 +3198,16 @@ void unified_cache::prefetch_worker_loop() {
 }
 
 layer_weight_pointers unified_cache::await_layer(int layer_id) {
-    // Wait until the layer is marked ready by the prefetch worker
+    // Wait until the layer is marked ready by the prefetch worker,
+    // then read layout and weights in the same critical section to avoid TOCTOU.
+    ggml_layout_mode layout;
+    layer_weight_set weights;
     {
         std::unique_lock<std::mutex> lock(layer_state_mutex_);
         layer_ready_cv_.wait(lock, [this, layer_id] {
             auto it = layer_ready_.find(layer_id);
             return it != layer_ready_.end() && it->second;
         });
-    }
-
-    // Look up the layout that was used for this layer
-    ggml_layout_mode layout;
-    layer_weight_set weights;
-    {
-        std::lock_guard<std::mutex> lock(layer_state_mutex_);
         layout  = layer_layouts_[layer_id];
         weights = layer_weights_[layer_id];
     }
@@ -3228,6 +3224,10 @@ layer_weight_pointers unified_cache::await_layer(int layer_id) {
     ptrs.gate_proj = try_get_cached_fast(weights.gate_proj, layout);
     ptrs.up_proj   = try_get_cached_fast(weights.up_proj,   layout);
     ptrs.down_proj = try_get_cached_fast(weights.down_proj, layout);
+
+    // Fused weight lookups (optional, zero cache_id means not set)
+    if (weights.attn_qkv_proj.valid)    ptrs.attn_qkv_proj    = try_get_cached_fast(weights.attn_qkv_proj,    layout);
+    if (weights.ffn_gate_up_proj.valid) ptrs.ffn_gate_up_proj  = try_get_cached_fast(weights.ffn_gate_up_proj, layout);
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] await_layer layer=%d pointers resolved\n", layer_id);
     return ptrs;
@@ -3267,25 +3267,30 @@ void unified_cache::release_layer(int layer_id) {
 }
 
 void unified_cache::start_prefetch_worker() {
-    bool expected = false;
-    if (!prefetch_started_.compare_exchange_strong(expected, true)) {
+    std::lock_guard<std::mutex> lock(prefetch_lifecycle_mutex_);
+    if (prefetch_started_.load()) {
         return;  // Already started
     }
 
     prefetch_shutdown_.store(false);
     prefetch_worker_ = std::thread([this] { prefetch_worker_loop(); });
+    prefetch_started_.store(true);
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] prefetch worker started\n");
 }
 
 void unified_cache::stop_prefetch_worker() {
+    std::lock_guard<std::mutex> lock(prefetch_lifecycle_mutex_);
     if (!prefetch_started_.load()) {
         return;  // Never started
     }
 
     // Signal shutdown and wake the worker
-    prefetch_shutdown_.store(true);
-    prefetch_cv_.notify_all();
+    {
+        std::lock_guard<std::mutex> qlock(prefetch_mutex_);
+        prefetch_shutdown_.store(true);
+    }
+    prefetch_cv_.notify_one();
 
     // Join the worker thread
     if (prefetch_worker_.joinable()) {

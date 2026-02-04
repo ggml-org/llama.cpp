@@ -457,15 +457,17 @@ enum class prefetch_priority {
 // Result of await_layer - contains device pointers to all layer weights.
 // Populated by looking up each weight in the cache after prefetch completes.
 struct layer_weight_pointers {
-    void * attn_norm   = nullptr;
-    void * q_proj      = nullptr;
-    void * k_proj      = nullptr;
-    void * v_proj      = nullptr;
-    void * o_proj      = nullptr;
-    void * ffn_norm    = nullptr;
-    void * gate_proj   = nullptr;
-    void * up_proj     = nullptr;
-    void * down_proj   = nullptr;
+    void * attn_norm        = nullptr;
+    void * q_proj           = nullptr;
+    void * k_proj           = nullptr;
+    void * v_proj           = nullptr;
+    void * o_proj           = nullptr;
+    void * ffn_norm         = nullptr;
+    void * gate_proj        = nullptr;
+    void * up_proj          = nullptr;
+    void * down_proj        = nullptr;
+    void * attn_qkv_proj    = nullptr;  // Fused QKV (optional)
+    void * ffn_gate_up_proj = nullptr;  // Fused gate+up (optional)
 };
 
 // Unified GPU cache for both dense weights and MoE experts
@@ -603,12 +605,6 @@ class unified_cache {
 
     // Release a prefetched layer (unpins weights, allows eviction).
     void release_layer(int layer_id);
-
-    // Start the background prefetch worker thread (called lazily on first queue_layer_prefetch).
-    void start_prefetch_worker();
-
-    // Stop the background prefetch worker thread (called from destructor).
-    void stop_prefetch_worker();
 
     // === Memory Management ===
 
@@ -881,6 +877,13 @@ class unified_cache {
     std::thread                      prefetch_worker_;
     std::atomic<bool>                prefetch_shutdown_{ false };
     std::atomic<bool>                prefetch_started_{ false };
+    std::mutex                       prefetch_lifecycle_mutex_;  // Guards start/stop of prefetch_worker_
+
+    // Start the background prefetch worker thread (called lazily on first queue_layer_prefetch).
+    void start_prefetch_worker();
+
+    // Stop the background prefetch worker thread (called from destructor).
+    void stop_prefetch_worker();
 
     // Per-layer ready tracking
     // Guarded by layer_state_mutex_
