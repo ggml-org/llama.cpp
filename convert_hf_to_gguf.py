@@ -7992,11 +7992,10 @@ class Step35Model(TextModel):
             data_torch += 1.0
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
-            return [(self.map_tensor_name(name + ".bias"), data_torch)]
+            name += ".bias"
             
         if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
-            w = data_torch.squeeze()
-            return [(self.map_tensor_name(name), w.contiguous())]
+            data_torch = data_torch.squeeze().contiguous()
 
         return super().modify_tensors(data_torch, name, bid)
 
@@ -8004,9 +8003,9 @@ class Step35Model(TextModel):
         # Step35 can optionally use Llama-3 style RoPE scaling (HF: rope_scaling.rope_type == "llama3").
         # llama.cpp represents this via a single extra tensor: "rope_freqs.weight" (aka MODEL_TENSOR.ROPE_FREQS).
         rope_params = self.rope_parameters.get("full_attention", self.rope_parameters)
-        rope_type = (rope_params.get("rope_type") or rope_params.get("type") or "")
+        rope_type = rope_params.get("rope_type") or ""
         if rope_type.lower() != "llama3":
-            return ()
+            return
 
         # Step35 configs can carry per-layer rope_theta as a list; for llama3 rope factors we use the base value.
         rope_theta = self.hparams.get("rope_theta", 10000.0)
@@ -8015,8 +8014,7 @@ class Step35Model(TextModel):
                 raise ValueError("rope_theta list must not be empty")
             rope_theta = rope_theta[0]
         base = float(rope_theta)
-        dim = self.hparams.get("head_dim")
-        if dim is None:
+        if (dim := self.hparams.get("head_dim")) is None:
             dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         dim = int(dim)
 
