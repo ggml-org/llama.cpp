@@ -3940,6 +3940,13 @@ struct PersistentKernelArgs {
 // This class encapsulates the persistent kernel's work-stealing loop.
 // Each work-group processes all operations sequentially, work-stealing tiles
 // within each operation. Split barriers synchronize between operations.
+//
+// SLM layout per operation type:
+//   RMS_NORM:     [0..n_warps-1] for cross-warp reduction
+//   SILU_MUL:     not used
+//   MATMUL:       not used
+//   ATTENTION:    [0..head_dim-1] query cache, [head_dim..head_dim+2*N_SGS-1] reduction
+// Operations are serialized with device-scope barriers, so SLM is safely reused.
 
 template<int BLOCK_SIZE>
 class PersistentTGKernelImpl {
@@ -4662,8 +4669,10 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Start with a reasonable number of work-groups
     // For device-scope barriers, all work-groups must participate
     const int n_workgroups = 16;
-    const int slm_floats   = std::max(BLOCK_SIZE / 16,              // At least n_warps for reduction
-                                      current_plan_->hidden_dim);   // For RMS norm
+    const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int slm_floats   = std::max({BLOCK_SIZE / 16,               // At least n_warps for reduction
+                                       current_plan_->hidden_dim,      // For RMS norm
+                                       attention_slm});                // For attention tile
 
     // Launch persistent kernel - single kernel for all operations
     auto start = std::chrono::high_resolution_clock::now();

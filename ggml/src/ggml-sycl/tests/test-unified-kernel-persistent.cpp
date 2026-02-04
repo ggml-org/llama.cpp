@@ -724,7 +724,12 @@ static bool test_persistent_attention_long_seq(sycl::queue & q) {
     sycl::free(d_v, q);
     sycl::free(d_output, q);
 
-    print_result("persistent_attention_long_seq (heads=2, dim=128, seq=512)", passed, error);
+    if (passed) {
+        printf("  [PASS] persistent_attention_long_seq (heads=2, dim=128, seq=512) (max_error=%.2e)\n", error);
+    } else {
+        printf("  [FAIL] persistent_attention_long_seq (heads=2, dim=128, seq=512) (max_error=%.2e, tolerance=%.2e)\n",
+               error, long_seq_tol);
+    }
     return passed;
 }
 
