@@ -887,6 +887,7 @@
 		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		background: var(--code-background);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+		min-height: var(--min-message-height);
 		max-height: var(--max-message-height);
 	}
 
@@ -897,6 +898,7 @@
 	/* Scroll container for code blocks (both streaming and completed) */
 	div :global(.code-block-scroll-container),
 	.streaming-code-scroll-container {
+		min-height: var(--min-message-height);
 		max-height: var(--max-message-height);
 		overflow-y: auto;
 		overflow-x: auto;

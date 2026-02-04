@@ -81,7 +81,9 @@
 	let isAttachment = $derived(variant === McpPromptVariant.ATTACHMENT);
 	let textSizeClass = $derived(isAttachment ? 'text-sm' : 'text-md');
 	let maxHeightStyle = $derived(
-		isAttachment ? 'max-height: 10rem;' : 'max-height: var(--max-message-height);'
+		isAttachment
+			? 'max-height: 10rem;'
+			: 'min-height: var(--min-message-height); max-height: var(--max-message-height);'
 	);
 
 	const serverFavicon = $derived(mcpStore.getServerFavicon(prompt.serverName));
