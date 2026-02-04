@@ -21,6 +21,7 @@ static __global__ void mul_mat_vec_f(
     int channel_y;
     int sample_dst;
 
+    GGML_CUDA_PDL_SYNC();
     if constexpr (is_multi_token_id) {
         // Multi-token MUL_MAT_ID path, adding these in the normal path causes a perf regression for n_tokens=1 case
         token_idx  = blockIdx.z;
@@ -79,7 +80,6 @@ static __global__ void mul_mat_vec_f(
         gate_x += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x   + row*stride_row;
     }
 
-    GGML_CUDA_PDL_SYNC();
     const int channel_bias = ids ? channel_x : channel_dst;
 
     if constexpr (has_fusion) {

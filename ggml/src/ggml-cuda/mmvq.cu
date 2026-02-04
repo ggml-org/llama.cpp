@@ -162,7 +162,6 @@ static __global__ void mul_mat_vec_q(
     const     int blocks_per_row_x = ncols_x / qk;
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
-    GGML_CUDA_PDL_SYNC();
     const uint32_t channel_dst = blockIdx.y;
 
     uint32_t token_idx = 0;
@@ -170,6 +169,7 @@ static __global__ void mul_mat_vec_q(
     uint32_t channel_y;
     uint32_t sample_dst;
 
+    GGML_CUDA_PDL_SYNC();
     if constexpr (is_multi_token_id) {
         // Multi-token MUL_MAT_ID path, adding these in the normal path causes a perf regression for n_tokens=1 case
         token_idx  = blockIdx.z;
@@ -247,10 +247,6 @@ static __global__ void mul_mat_vec_q(
 
         // x block quant index when casting the quants to int
         const int kqs = vdr * (tid % (qi/vdr));
-
-    if (!ids) {
-        GGML_CUDA_PDL_SYNC();
-    }
 
 #pragma unroll
         for (int j = 0; j < ncols_dst; ++j) {

@@ -109,7 +109,6 @@ static __global__ void rms_norm_f32(const float * x,
 
     static_assert(!do_add || do_multiply, "fusing add is not supported without multiplying");
 
-    GGML_CUDA_PDL_SYNC();
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
@@ -129,6 +128,7 @@ static __global__ void rms_norm_f32(const float * x,
 
     float tmp = 0.0f; // partial sum for thread in warp
 
+    GGML_CUDA_PDL_SYNC();
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         tmp += xi * xi;
