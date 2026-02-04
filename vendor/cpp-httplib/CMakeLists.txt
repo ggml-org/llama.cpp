@@ -3,6 +3,7 @@ license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
+remove_definitions(-DLLAMA_FATAL_WARNINGS)
 llama_add_compile_flags()
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
