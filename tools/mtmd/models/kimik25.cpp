@@ -26,7 +26,7 @@ ggml_tensor * clip_graph_kimik25::resize_position_embeddings_3d(uint32_t interpo
 
     pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
     pos_embd = ggml_interpolate(ctx0, pos_embd, height, width, n_embd, 1, mode);
-    pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);
+    pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
     pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
     return pos_embd;
 }
