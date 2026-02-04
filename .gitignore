@@ -136,6 +136,5 @@ poetry.toml
 # IDE
 /*.code-workspace
 /.windsurf/
-/.agent/
 # emscripten
 a.out.*
