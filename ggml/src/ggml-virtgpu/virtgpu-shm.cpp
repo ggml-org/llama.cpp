@@ -85,8 +85,7 @@ int virtgpu_shmem_create(virtgpu * gpu, size_t size, virtgpu_shmem * shmem) {
     void * ptr = virtgpu_ioctl_map(gpu, gem_handle, size);
     if (!ptr) {
         virtgpu_ioctl_gem_close(gpu, gem_handle);
-        GGML_LOG_ERROR("virtgpu_ioctl_map FAILED\n");
-        exit(1);
+        GGML_LOG_ERROR(GGML_VIRTGPU "%s: virtgpu_ioctl_map failed\n", __func__);
         return 1;
     }
 

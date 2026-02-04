@@ -39,11 +39,17 @@ static inline void apir_encode_ggml_tensor(apir_encoder * enc, const ggml_tensor
 
 static inline const ggml_tensor * apir_decode_ggml_tensor(apir_decoder * dec) {
     const apir_rpc_tensor * apir_rpc_tensor = apir_decode_apir_rpc_tensor_inplace(dec);
+
+    if (!apir_rpc_tensor) {
+        return NULL;
+    }
+
     ggml_init_params params{
         /*.mem_size   =*/ ggml_tensor_overhead(),
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
+
     ggml_context * ctx = ggml_init(params);
 
     const ggml_tensor * tensor = apir_deserialize_tensor(ctx, apir_rpc_tensor);
@@ -69,6 +75,10 @@ static inline ggml_backend_buffer_type_t apir_decode_ggml_buffer_type(apir_decod
     apir_decoder_read(dec, sizeof(handle), &handle, sizeof(handle));
 
     return (ggml_backend_buffer_type_t) handle;
+}
+
+static inline void apir_encode_apir_buffer_type_host_handle(apir_encoder * enc, apir_buffer_type_host_handle_t handle) {
+    apir_encoder_write(enc, sizeof(handle), &handle, sizeof(handle));
 }
 
 static inline apir_buffer_type_host_handle_t apir_decode_apir_buffer_type_host_handle(apir_decoder * dec) {
@@ -154,13 +164,13 @@ static inline void apir_encode_ggml_tensor_inline(apir_encoder * enc, const ggml
     size_t tensor_size = sizeof(*tensor);
 
     if (tensor->extra) {
-        GGML_ABORT("Cannot pass tensors with extra");
+        GGML_ABORT("%s: Cannot pass tensors with extra", __func__);
     }
 
     if (tensor->src[0] && tensor->buffer) {
         static int first = 1;
         if (first) {
-            GGML_LOG_WARN("Cannot pass tensors with src and buffer\n");
+            GGML_LOG_WARN("%s: Cannot pass tensors with src and buffer\n", __func__);
             first = 0;
         }
     }
