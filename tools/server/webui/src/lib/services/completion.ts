@@ -242,10 +242,6 @@ export class CompletionService {
 
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
-						if (data === '[DONE]') {
-							streamFinished = true;
-							continue;
-						}
 
 						try {
 							const parsed: ApiCompletionStreamChunk = JSON.parse(data);
