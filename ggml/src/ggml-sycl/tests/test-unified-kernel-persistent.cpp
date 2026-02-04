@@ -861,6 +861,136 @@ static bool test_persistent_attention_gqa(sycl::queue & q) {
 }
 
 // =============================================================================
+// CPU Reference: Neox-style RoPE
+// =============================================================================
+
+static void ref_rope_neox(float * q, float * k, const float * cos_cache, const float * sin_cache,
+                          int n_heads, int n_kv_heads, int head_dim) {
+    const int half_dim = head_dim / 2;
+
+    // Apply to Q heads
+    for (int h = 0; h < n_heads; h++) {
+        float * data = q + h * head_dim;
+        for (int i = 0; i < half_dim; i++) {
+            float x0 = data[i];
+            float x1 = data[i + half_dim];
+            data[i]            = x0 * cos_cache[i] - x1 * sin_cache[i];
+            data[i + half_dim] = x0 * sin_cache[i] + x1 * cos_cache[i];
+        }
+    }
+
+    // Apply to K heads
+    for (int h = 0; h < n_kv_heads; h++) {
+        float * data = k + h * head_dim;
+        for (int i = 0; i < half_dim; i++) {
+            float x0 = data[i];
+            float x1 = data[i + half_dim];
+            data[i]            = x0 * cos_cache[i] - x1 * sin_cache[i];
+            data[i + half_dim] = x0 * sin_cache[i] + x1 * cos_cache[i];
+        }
+    }
+}
+
+// =============================================================================
+// Test: Persistent RoPE (neox-style rotary position embeddings)
+// =============================================================================
+static bool test_persistent_rope(sycl::queue & q) {
+    // Mistral-like config: 32 query heads, 8 KV heads (GQA 4:1), 128-dim heads
+    const int n_heads    = 32;
+    const int n_kv_heads = 8;
+    const int head_dim   = 128;
+    const int half_dim   = head_dim / 2;
+    const int position   = 42;
+
+    const int q_size = n_heads * head_dim;
+    const int k_size = n_kv_heads * head_dim;
+
+    // Initialize Q and K with deterministic patterns
+    std::vector<float> h_q(q_size);
+    std::vector<float> h_k(k_size);
+    for (int i = 0; i < q_size; i++) {
+        h_q[i] = std::sin(i * 0.01f) * 2.0f;
+    }
+    for (int i = 0; i < k_size; i++) {
+        h_k[i] = std::cos(i * 0.02f) * 1.5f;
+    }
+
+    // Pre-compute cos/sin caches for the given position
+    std::vector<float> h_cos(half_dim);
+    std::vector<float> h_sin(half_dim);
+    for (int i = 0; i < half_dim; i++) {
+        float freq = 1.0f / std::pow(10000.0f, static_cast<float>(2 * i) / head_dim);
+        float angle = position * freq;
+        h_cos[i] = std::cos(angle);
+        h_sin[i] = std::sin(angle);
+    }
+
+    // CPU reference
+    std::vector<float> h_q_ref(h_q);
+    std::vector<float> h_k_ref(h_k);
+    ref_rope_neox(h_q_ref.data(), h_k_ref.data(), h_cos.data(), h_sin.data(),
+                  n_heads, n_kv_heads, head_dim);
+
+    // Allocate device memory
+    float * d_q   = sycl::malloc_device<float>(q_size, q);
+    float * d_k   = sycl::malloc_device<float>(k_size, q);
+    float * d_cos = sycl::malloc_device<float>(half_dim, q);
+    float * d_sin = sycl::malloc_device<float>(half_dim, q);
+
+    q.memcpy(d_q, h_q.data(), q_size * sizeof(float)).wait();
+    q.memcpy(d_k, h_k.data(), k_size * sizeof(float)).wait();
+    q.memcpy(d_cos, h_cos.data(), half_dim * sizeof(float)).wait();
+    q.memcpy(d_sin, h_sin.data(), half_dim * sizeof(float)).wait();
+
+    ggml_sycl::UnifiedKernel     kernel(q);
+    ggml_sycl_unified::XMXConfig config = {};
+    config.supported                    = true;
+    config.slm_size                     = 64 * 1024;
+    kernel.configure(config);
+
+    kernel.begin_persistent(1, 1, 4096, 11008, n_heads, n_kv_heads, head_dim, 0);
+
+    RopeDescriptor desc = {};
+    desc.q         = d_q;
+    desc.k         = d_k;
+    desc.cos_cache = d_cos;
+    desc.sin_cache = d_sin;
+    desc.n_heads   = n_heads;
+    desc.head_dim  = head_dim;
+    desc.position  = position;
+    kernel.add_rope(0, desc);
+
+    kernel.execute_persistent();
+
+    // Read back results (RoPE is in-place)
+    std::vector<float> h_q_out(q_size);
+    std::vector<float> h_k_out(k_size);
+    q.memcpy(h_q_out.data(), d_q, q_size * sizeof(float)).wait();
+    q.memcpy(h_k_out.data(), d_k, k_size * sizeof(float)).wait();
+
+    float q_error = max_abs_error(h_q_out, h_q_ref);
+    float k_error = max_abs_error(h_k_out, h_k_ref);
+    float error   = std::max(q_error, k_error);
+
+    // RoPE uses exact same FP ops, so tolerance can be tight
+    const float rope_tol = 1e-5f;
+    bool passed = error < rope_tol;
+
+    auto stats = kernel.get_last_stats();
+    printf("    ops=%d, tiles=%d, time=%.2f ms\n",
+           stats.n_operations, stats.total_tiles, stats.kernel_time_ms);
+    printf("    q_error=%.2e, k_error=%.2e\n", q_error, k_error);
+
+    sycl::free(d_q, q);
+    sycl::free(d_k, q);
+    sycl::free(d_cos, q);
+    sycl::free(d_sin, q);
+
+    print_result("persistent_rope (n_heads=32, n_kv_heads=8, head_dim=128)", passed, error);
+    return passed;
+}
+
+// =============================================================================
 // Test: Plan cancellation
 // =============================================================================
 static bool test_persistent_cancel(sycl::queue & q) {
@@ -916,6 +1046,9 @@ int main() {
         if (test_persistent_attention(q))          { passed++; } else { failed++; }
         if (test_persistent_attention_long_seq(q))  { passed++; } else { failed++; }
         if (test_persistent_attention_gqa(q))       { passed++; } else { failed++; }
+
+        printf("\nRoPE Tests:\n");
+        if (test_persistent_rope(q))                 { passed++; } else { failed++; }
 
         printf("\nDiagnostics Tests:\n");
         if (test_persistent_stats(q))    { passed++; } else { failed++; }

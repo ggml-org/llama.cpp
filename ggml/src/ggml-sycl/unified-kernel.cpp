@@ -3930,6 +3930,8 @@ struct PersistentKernelArgs {
     const DeviceOperation * operations;
     int                     n_operations;
     int *                   tile_counter;
+    int *                   barrier_counter;  // Atomic counter for device-scope barrier
+    int *                   barrier_sense;    // Sense flag for sense-reversing barrier
     void *                  scratch_buffers[4];
     int                     hidden_dim;
     int                     intermediate_dim;
@@ -3940,7 +3942,8 @@ struct PersistentKernelArgs {
 // =============================================================================
 // This class encapsulates the persistent kernel's work-stealing loop.
 // Each work-group processes all operations sequentially, work-stealing tiles
-// within each operation. Split barriers synchronize between operations.
+// within each operation. An atomic sense-reversing barrier synchronizes
+// between operations (replacing unreliable device-scope split barriers).
 //
 // SLM layout per operation type:
 //   RMS_NORM:     [0..n_warps-1] for cross-warp reduction
@@ -3961,7 +3964,6 @@ public:
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
         const int n_wgs    = item_.get_group_range(0);
-        (void)n_wgs;
 
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
             const DeviceOperation & op = args_.operations[op_idx];
@@ -3988,15 +3990,12 @@ public:
                 dispatch_operation(op, tile_idx);
             }
 
-            // Synchronize all work-groups between operations:
-            // Each work-group waits at a workgroup barrier to ensure its own threads
-            // are done, then uses device-scope split barrier to wait for ALL work-groups
-            sycl::group_barrier(item_.get_group());
-
-            // Device-scope split barrier: ensures all work-groups have finished
-            // the current operation before any starts the next
-            split_barrier_arrive(ScopeDevice, SemanticsGlobalMem);
-            split_barrier_wait(ScopeDevice, SemanticsGlobalMem);
+            // Synchronize all work-groups between operations using atomic barrier.
+            // The device-scope split barrier (SPV_INTEL_split_barrier) is unreliable
+            // on some Intel GPU driver versions, so we use a sense-reversing atomic
+            // barrier instead. This guarantees all work-groups complete the current
+            // operation before any proceeds to reset the tile counter.
+            device_barrier(local_id, wg_id, n_wgs);
 
             // Reset tile counter for next operation (one thread globally)
             if (local_id == 0 && wg_id == 0) {
@@ -4007,9 +4006,8 @@ public:
                 counter.store(0);
             }
 
-            // Ensure counter reset is visible to all work-groups
-            split_barrier_arrive(ScopeDevice, SemanticsGlobalMem);
-            split_barrier_wait(ScopeDevice, SemanticsGlobalMem);
+            // Ensure counter reset is visible to all work-groups before proceeding
+            device_barrier(local_id, wg_id, n_wgs);
         }
     }
 
@@ -4017,6 +4015,45 @@ private:
     const PersistentKernelArgs &    args_;
     sycl::local_accessor<float, 1> slm_;
     sycl::nd_item<1>               item_;
+
+    // Atomic sense-reversing barrier for device-scope synchronization.
+    // All work-groups must call this; it blocks until all n_wgs have arrived.
+    // Uses a counter + sense flag to allow reuse across multiple barrier calls.
+    // Only thread 0 from each WG participates in the global coordination;
+    // all other threads wait via a workgroup barrier.
+    void device_barrier(int local_id, int wg_id, int n_wgs) {
+        // First synchronize within the work-group
+        sycl::group_barrier(item_.get_group());
+
+        // Only thread 0 per work-group participates in device-scope barrier
+        if (local_id == 0) {
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                cnt(*args_.barrier_counter);
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                sense(*args_.barrier_sense);
+
+            // Read current sense value before arriving
+            int cur_sense = sense.load();
+
+            // Last WG to arrive flips the sense and resets the counter
+            if (cnt.fetch_add(1) == n_wgs - 1) {
+                cnt.store(0);
+                sense.store(1 - cur_sense);
+            } else {
+                // Spin until the sense flips (meaning last WG arrived)
+                while (sense.load() == cur_sense) {
+                    // Busy-wait
+                }
+            }
+        }
+
+        // Synchronize within WG so all threads see the barrier completion
+        sycl::group_barrier(item_.get_group());
+    }
 
     void dispatch_operation(const DeviceOperation & op, int tile_idx) {
         switch (static_cast<OperationType>(op.type)) {
@@ -4039,7 +4076,7 @@ private:
                 compute_attention_tile(op, tile_idx);
                 break;
             case OperationType::ROPE:
-                // RoPE not yet implemented in persistent kernel
+                compute_rope_tile(op, tile_idx);
                 break;
             case OperationType::SOFTMAX:
                 break;
@@ -4363,6 +4400,52 @@ private:
             o_head[d] = acc;
         }
     }
+
+    void compute_rope_tile(const DeviceOperation & op, int tile_idx) {
+        // RoPE: Apply neox-style rotary position embeddings to Q and K.
+        // In TG mode (M=1), Q has [n_heads * head_dim] and K has [n_kv_heads * head_dim].
+        // cos/sin caches are pre-computed for the current position, size = head_dim/2 each.
+        // This is a cooperative operation - all threads in the work-group participate.
+
+        (void)tile_idx;  // Single tile, not used
+
+        const int tid        = item_.get_local_id(0);
+        const int n_heads    = op.N;
+        const int head_dim   = op.K;
+        const int n_kv_heads = op.n_kv_heads;
+        const int half_dim   = head_dim / 2;
+
+        float *       q_data    = const_cast<float *>(static_cast<const float *>(op.input));
+        float *       k_data    = static_cast<float *>(op.aux);
+        const float * cos_cache = static_cast<const float *>(op.weights);
+        const float * sin_cache = static_cast<const float *>(op.output);
+
+        // Total elements to rotate: (n_heads + n_kv_heads) heads, each with half_dim pairs
+        const int total_heads = n_heads + n_kv_heads;
+        const int total_pairs = total_heads * half_dim;
+
+        // Each thread processes multiple pairs stride-style
+        for (int idx = tid; idx < total_pairs; idx += BLOCK_SIZE) {
+            const int head_idx = idx / half_dim;
+            const int dim_idx  = idx % half_dim;
+
+            // Determine if this is a Q head or K head
+            float * data;
+            if (head_idx < n_heads) {
+                data = q_data + head_idx * head_dim;
+            } else {
+                data = k_data + (head_idx - n_heads) * head_dim;
+            }
+
+            const float x0 = data[dim_idx];
+            const float x1 = data[dim_idx + half_dim];
+            const float cos_val = cos_cache[dim_idx];
+            const float sin_val = sin_cache[dim_idx];
+
+            data[dim_idx]            = x0 * cos_val - x1 * sin_val;
+            data[dim_idx + half_dim] = x0 * sin_val + x1 * cos_val;
+        }
+    }
 };
 
 // -----------------------------------------------------------------------------
@@ -4571,6 +4654,7 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
     op.N = desc.n_heads;
     op.K = desc.head_dim;
     op.M = desc.position;
+    op.n_kv_heads = current_plan_->n_kv_heads;
 
     current_plan_->operations.push_back(op);
 }
@@ -4605,6 +4689,7 @@ void UnifiedKernel::launch_persistent_kernel() {
     const size_t n_ops = current_plan_->operations.size();
     std::vector<DeviceOperation> host_ops(n_ops);
 
+
     int total_tiles = 0;
     for (size_t i = 0; i < n_ops; i++) {
         const auto & src = current_plan_->operations[i];
@@ -4627,6 +4712,7 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.n_kv_heads       = src.n_kv_heads;
         memset(dst.pad, 0, sizeof(dst.pad));
 
+
         // Calculate tiles for this operation
         switch (src.type) {
             case OperationType::RMS_NORM:
@@ -4647,6 +4733,9 @@ void UnifiedKernel::launch_persistent_kernel() {
             case OperationType::ATTENTION:
                 dst.n_tiles = src.N;  // One tile per head
                 break;
+            case OperationType::ROPE:
+                dst.n_tiles = 1;  // Single cooperative operation (all threads work together)
+                break;
             default:
                 dst.n_tiles = 1;
         }
@@ -4660,11 +4749,19 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Reset tile counter
     queue_.memset(tile_counter_, 0, sizeof(int)).wait();
 
+    // Allocate and initialize atomic barrier state (counter=0, sense=0)
+    int * barrier_counter = sycl::malloc_device<int>(1, queue_);
+    int * barrier_sense   = sycl::malloc_device<int>(1, queue_);
+    queue_.memset(barrier_counter, 0, sizeof(int)).wait();
+    queue_.memset(barrier_sense, 0, sizeof(int)).wait();
+
     // Build kernel args
     PersistentKernelArgs args = {};
     args.operations           = d_ops;
     args.n_operations         = static_cast<int>(n_ops);
     args.tile_counter         = tile_counter_;
+    args.barrier_counter      = barrier_counter;
+    args.barrier_sense        = barrier_sense;
     for (int i = 0; i < 4; i++) {
         args.scratch_buffers[i] = persistent_buffers_[i];
     }
@@ -4674,7 +4771,7 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
     // Start with a reasonable number of work-groups
-    // For device-scope barriers, all work-groups must participate
+    // For the atomic barrier, all work-groups must participate
     const int n_workgroups = 16;
     const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
     const int slm_floats   = std::max({BLOCK_SIZE / 16,               // At least n_warps for reduction
@@ -4707,8 +4804,10 @@ void UnifiedKernel::launch_persistent_kernel() {
     last_stats_.total_tiles          = total_tiles;
     last_stats_.kernel_time_ms       = elapsed_ms;
 
-    // Cleanup device operation table
+    // Cleanup device operation table and barrier state
     sycl::free(d_ops, queue_);
+    sycl::free(barrier_counter, queue_);
+    sycl::free(barrier_sense, queue_);
 }
 
 // -----------------------------------------------------------------------------
