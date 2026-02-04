@@ -30,12 +30,6 @@ target_compile_definitions(${TARGET} PRIVATE
     CPPHTTPLIB_TCP_NODELAY=1
 )
 
-if(LLAMA_FATAL_WARNINGS)
-    # disable fatal warnings in 3rd party code
-    string(REPLACE "-Werror" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    string(REPLACE "-Werror" "" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
-endif()
-
 set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
 
 if (LLAMA_BUILD_BORINGSSL)
@@ -151,6 +145,19 @@ elseif (LLAMA_OPENSSL)
         endif()
     else()
         message(WARNING "OpenSSL not found, HTTPS support disabled")
+    endif()
+endif()
+
+if(LLAMA_FATAL_WARNINGS)
+    # disable fatal warnings in 3rd party code
+    if (MSVC)
+        get_target_property(target_options ${TARGET} COMPILE_OPTIONS)
+        list(REMOVE_ITEM target_options "/WX")
+        set_target_properties(${TARGET} PROPERTIES COMPILE_OPTIONS "${target_options}")
+    else()
+        get_target_property(target_options ${TARGET} COMPILE_OPTIONS)
+        list(REMOVE_ITEM target_options "-Werror")
+        set_target_properties(${TARGET} PROPERTIES COMPILE_OPTIONS "${target_options}")
     endif()
 endif()
 
