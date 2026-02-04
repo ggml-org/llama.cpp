@@ -831,7 +831,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "max_position_embedding", "n_ctx", "n_positions", "max_length", "max_sequence_length", "model_max_length"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions", "max_length", "max_sequence_length", "model_max_length"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -7988,14 +7988,8 @@ class Step35Model(TextModel):
             n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
             if il >= n_main:
                 return []
-        if name.endswith(".weight"):
-            if (
-                name == "model.norm.weight"
-                or re.fullmatch(r"model\.layers\.\d+\.input_layernorm\.weight", name) is not None
-                or re.fullmatch(r"model\.layers\.\d+\.post_attention_layernorm\.weight", name) is not None
-                or re.fullmatch(r"model\.layers\.\d+\.self_attn\.(q_norm|k_norm)\.weight", name) is not None
-            ):
-                data_torch = data_torch + 1
+        if name.endswith("norm.weight"):
+            data_torch += 1.0
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
             return [(self.map_tensor_name(name + ".bias"), data_torch)]
