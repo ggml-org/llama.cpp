@@ -1020,7 +1020,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             if (gate && type_gate == LLM_FFN_PAR) {
                 // Step35: HF clamps gate (after SiLU) and up before multiplication
                 if (arch == LLM_ARCH_STEP35 && il >= 0) {
-                    const float limit = hparams.swiglu_limits_shared[il];
+                    const float limit = hparams.swiglu_clamp_shexp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
                         ggml_tensor * gate_act = ggml_silu(ctx0, cur);
@@ -1342,7 +1342,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             if (gate_exps) {
                 // Step35: per-layer clamp for routed experts
                 if (arch == LLM_ARCH_STEP35 && il >= 0) {
-                    const float limit = hparams.swiglu_limits[il];
+                    const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
                     if (limit > eps) {
                         ggml_tensor * gate_act = ggml_silu(ctx0, cur);
