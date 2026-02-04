@@ -215,6 +215,17 @@ export class MCPService {
 		}
 		const { transport, type: transportType } = this.createTransport(serverConfig);
 
+		// Setup WebSocket reconnection handler
+		if (transportType === MCPTransportType.WEBSOCKET) {
+			transport.onclose = () => {
+				console.log(`[MCPService][${serverName}] WebSocket closed, notifying for reconnection`);
+				onPhase?.(
+					MCPConnectionPhase.DISCONNECTED,
+					this.createLog(MCPConnectionPhase.DISCONNECTED, 'WebSocket connection closed')
+				);
+			};
+		}
+
 		// Phase: Transport ready
 		onPhase?.(
 			MCPConnectionPhase.TRANSPORT_READY,
@@ -319,6 +330,10 @@ export class MCPService {
 	static async disconnect(connection: MCPConnection): Promise<void> {
 		console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
 		try {
+			// Prevent reconnection on voluntary disconnect
+			if (connection.transport.onclose) {
+				connection.transport.onclose = undefined;
+			}
 			await connection.client.close();
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Error during disconnect:`, error);
