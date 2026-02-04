@@ -11,3 +11,7 @@ export const DEFAULT_MCP_CONFIG = {
 export const MCP_SERVER_ID_PREFIX = 'LlamaCpp-WebUI-MCP-Server-';
 export const DEFAULT_CLIENT_VERSION = '1.0.0';
 export const DEFAULT_IMAGE_MIME_TYPE = 'image/png';
+
+export const MCP_RECONNECT_INITIAL_DELAY = 1000;
+export const MCP_RECONNECT_BACKOFF_MULTIPLIER = 2;
+export const MCP_RECONNECT_MAX_DELAY = 30000;

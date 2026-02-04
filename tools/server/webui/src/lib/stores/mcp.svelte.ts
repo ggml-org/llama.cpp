@@ -25,7 +25,13 @@ import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { parseMcpServerSettings, detectMcpTransportFromUrl } from '$lib/utils';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus, MCPRefType } from '$lib/enums';
-import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import {
+	DEFAULT_MCP_CONFIG,
+	MCP_SERVER_ID_PREFIX,
+	MCP_RECONNECT_INITIAL_DELAY,
+	MCP_RECONNECT_BACKOFF_MULTIPLIER,
+	MCP_RECONNECT_MAX_DELAY
+} from '$lib/constants/mcp';
 import type {
 	MCPToolCall,
 	OpenAIToolDefinition,
@@ -189,6 +195,7 @@ class MCPStore {
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
+	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
@@ -405,13 +412,22 @@ class MCPStore {
 		const capabilities = mcpConfig.capabilities ?? DEFAULT_MCP_CONFIG.capabilities;
 		const results = await Promise.allSettled(
 			serverEntries.map(async ([name, serverConfig]) => {
+				// Store config for reconnection
+				this.serverConfigs.set(name, serverConfig);
+
 				const listChangedHandlers = this.createListChangedHandlers(name);
 				const connection = await MCPService.connect(
 					name,
 					serverConfig,
 					clientInfo,
 					capabilities,
-					undefined,
+					(phase) => {
+						// Handle WebSocket disconnection
+						if (phase === MCPConnectionPhase.DISCONNECTED) {
+							console.log(`[MCPStore][${name}] Connection lost, starting auto-reconnect`);
+							this.autoReconnect(name);
+						}
+					},
 					listChangedHandlers
 				);
 				return { name, connection };
@@ -534,8 +550,55 @@ class MCPStore {
 		);
 		this.connections.clear();
 		this.toolsIndex.clear();
+		this.serverConfigs.clear();
 		this.configSignature = null;
 		this.updateState({ isInitializing: false, error: null, toolCount: 0, connectedServers: [] });
+	}
+
+	/**
+	 * Auto-reconnect to a server with exponential backoff.
+	 * Continues indefinitely until successful.
+	 */
+	private async autoReconnect(serverName: string): Promise<void> {
+		const serverConfig = this.serverConfigs.get(serverName);
+		if (!serverConfig) {
+			console.error(`[MCPStore] No config found for ${serverName}, cannot reconnect`);
+			return;
+		}
+
+		let backoff = MCP_RECONNECT_INITIAL_DELAY;
+
+		while (true) {
+			await new Promise((resolve) => setTimeout(resolve, backoff));
+
+			console.log(`[MCPStore][${serverName}] Auto-reconnecting...`);
+
+			try {
+				const listChangedHandlers = this.createListChangedHandlers(serverName);
+				const connection = await MCPService.connect(
+					serverName,
+					serverConfig,
+					DEFAULT_MCP_CONFIG.clientInfo,
+					DEFAULT_MCP_CONFIG.capabilities,
+					undefined,
+					listChangedHandlers
+				);
+
+				// Replace old connection with new one
+				this.connections.set(serverName, connection);
+
+				// Rebuild tool index for this server
+				for (const tool of connection.tools) {
+					this.toolsIndex.set(tool.name, serverName);
+				}
+
+				console.log(`[MCPStore][${serverName}] Reconnected successfully`);
+				break;
+			} catch (error) {
+				console.warn(`[MCPStore][${serverName}] Reconnection failed:`, error);
+				backoff = Math.min(backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER, MCP_RECONNECT_MAX_DELAY);
+			}
+		}
 	}
 
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
@@ -865,16 +928,21 @@ class MCPStore {
 		const headers = this.parseHeaders(server.headers);
 
 		try {
+			const serverConfig: MCPServerConfig = {
+				url: trimmedUrl,
+				transport: detectMcpTransportFromUrl(trimmedUrl),
+				handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
+				requestTimeoutMs: timeoutMs,
+				headers,
+				useProxy: server.useProxy
+			};
+
+			// Store config for reconnection
+			this.serverConfigs.set(server.id, serverConfig);
+
 			const connection = await MCPService.connect(
 				server.id,
-				{
-					url: trimmedUrl,
-					transport: detectMcpTransportFromUrl(trimmedUrl),
-					handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-					requestTimeoutMs: timeoutMs,
-					headers,
-					useProxy: server.useProxy
-				},
+				serverConfig,
 				DEFAULT_MCP_CONFIG.clientInfo,
 				DEFAULT_MCP_CONFIG.capabilities,
 				(phase, log) => {
@@ -885,6 +953,14 @@ class MCPStore {
 						phase,
 						logs: [...logs]
 					});
+
+					// Handle WebSocket disconnection
+					if (phase === MCPConnectionPhase.DISCONNECTED && promoteToActive) {
+						console.log(
+							`[MCPStore][${server.id}] Connection lost during health check, starting auto-reconnect`
+						);
+						this.autoReconnect(server.id);
+					}
 				}
 			);
 			const tools = connection.tools.map((tool) => ({
