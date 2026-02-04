@@ -192,10 +192,7 @@ struct webgpu_buf_pool {
         free.clear();
     }
 
-    ~webgpu_buf_pool() {
-        this->cleanup();
-    }
-
+    ~webgpu_buf_pool() { this->cleanup(); }
 };
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -258,17 +255,14 @@ struct webgpu_gpu_profile_buf_pool {
         free.clear();
     }
 
-    ~webgpu_gpu_profile_buf_pool() {
-        this->cleanup();
-    }
-
+    ~webgpu_gpu_profile_buf_pool() { this->cleanup(); }
 };
 #endif
 
 struct webgpu_pipeline {
     wgpu::ComputePipeline pipeline;
     std::string           name;
-    std::shared_ptr<void>                context = nullptr;
+    std::shared_ptr<void> context = nullptr;
 };
 
 struct webgpu_command {
@@ -336,12 +330,8 @@ struct webgpu_global_context_struct {
         debug_host_buf.Destroy();
         debug_dev_buf.Destroy();
 #endif
-
     }
-
 };
-
-
 
 typedef std::shared_ptr<webgpu_global_context_struct> webgpu_global_context;
 
@@ -388,7 +378,6 @@ struct webgpu_context_struct {
     std::unordered_map<ggml_webgpu_pad_pipeline_key, webgpu_pipeline, ggml_webgpu_pad_pipeline_key_hash> pad_pipelines;
 
     size_t memset_bytes_per_thread;
-
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -1299,7 +1288,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         ctx->flash_attn_pipelines.emplace(key, pipeline);
     }
 
-    auto * decisions = static_cast<ggml_webgpu_flash_attn_shader_decisions*>(pipeline.context.get()); 
+    auto * decisions = static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context.get());
 
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions->q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
@@ -1332,7 +1321,7 @@ static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * s
         ctx->unary_pipelines.emplace(pipeline_key, pipeline);
     }
 
-    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions*>(pipeline.context.get());
+    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
 
     uint32_t ne = (uint32_t) ggml_nelements(dst);
 
@@ -1787,7 +1776,7 @@ static webgpu_command ggml_webgpu_argsort(webgpu_context & ctx, ggml_tensor * sr
         argsort_pipeline.context = processed.decisions;
         ctx->argsort_pipelines.emplace(order, argsort_pipeline);
     }
-    auto * argsort_decisions = static_cast<ggml_webgpu_argsort_shader_decisions*>(argsort_pipeline.context.get());
+    auto * argsort_decisions = static_cast<ggml_webgpu_argsort_shader_decisions *>(argsort_pipeline.context.get());
 
     webgpu_pipeline argsort_merge_pipeline;
     it = ctx->argsort_merge_pipelines.find(order);
