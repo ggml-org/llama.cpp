@@ -6,8 +6,11 @@ find_package(Threads REQUIRED)
 llama_add_compile_flags()
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
-if (NOT MSVC)
-    # disable warnings in 3rd party code
+
+# disable warnings in 3rd party code
+if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(${TARGET} PRIVATE /w)
+else()
     target_compile_options(${TARGET} PRIVATE -w)
 endif()
 
@@ -148,16 +151,20 @@ elseif (LLAMA_OPENSSL)
     endif()
 endif()
 
-if((LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL) AND LLAMA_FATAL_WARNINGS)
-    # disable fatal warnings in 3rd party code
-    if (MSVC)
-        get_target_property(target_options crypto COMPILE_OPTIONS)
-        list(REMOVE_ITEM target_options "/WX")
-        set_target_properties(crypto PROPERTIES COMPILE_OPTIONS "${target_options}")
+# disable warnings in 3rd party code
+if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(ssl PRIVATE /w)
+        target_compile_options(crypto PRIVATE /w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE /w)
+        endif()
     else()
-        get_target_property(target_options crypto COMPILE_OPTIONS)
-        list(REMOVE_ITEM target_options "-Werror")
-        set_target_properties(crypto PROPERTIES COMPILE_OPTIONS "${target_options}")
+        target_compile_options(ssl PRIVATE -w)
+        target_compile_options(crypto PRIVATE -w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE -w)
+        endif()
     endif()
 endif()
 
