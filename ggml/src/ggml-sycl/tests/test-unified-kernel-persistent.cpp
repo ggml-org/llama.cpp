@@ -494,6 +494,241 @@ static bool test_persistent_dmmv_matmul(sycl::queue & q) {
 }
 
 // =============================================================================
+// CPU Reference: Attention (single query, M=1)
+// =============================================================================
+
+// Standard attention: output[h][d] = sum_p softmax(score[p]) * v[h][p][d]
+// where score[p] = dot(q[h], k[h][p]) * scale
+static void ref_attention(const float * q, const float * k_cache, const float * v_cache,
+                          float * output, int n_heads, int head_dim, int seq_len, float scale) {
+    for (int h = 0; h < n_heads; h++) {
+        const float * q_head = q + h * head_dim;
+        const float * k_head = k_cache + h * seq_len * head_dim;
+        const float * v_head = v_cache + h * seq_len * head_dim;
+        float *       o_head = output + h * head_dim;
+
+        // Compute scores and find max for numerical stability
+        std::vector<float> scores(seq_len);
+        float max_score = -INFINITY;
+        for (int p = 0; p < seq_len; p++) {
+            float dot = 0.0f;
+            for (int d = 0; d < head_dim; d++) {
+                dot += q_head[d] * k_head[p * head_dim + d];
+            }
+            scores[p] = dot * scale;
+            max_score = std::max(max_score, scores[p]);
+        }
+
+        // Softmax
+        float sum_exp = 0.0f;
+        for (int p = 0; p < seq_len; p++) {
+            scores[p] = std::exp(scores[p] - max_score);
+            sum_exp += scores[p];
+        }
+        for (int p = 0; p < seq_len; p++) {
+            scores[p] /= sum_exp;
+        }
+
+        // Value aggregation
+        for (int d = 0; d < head_dim; d++) {
+            float acc = 0.0f;
+            for (int p = 0; p < seq_len; p++) {
+                acc += scores[p] * v_head[p * head_dim + d];
+            }
+            o_head[d] = acc;
+        }
+    }
+}
+
+// =============================================================================
+// Test: Persistent Attention (single operation in persistent kernel)
+// =============================================================================
+static bool test_persistent_attention(sycl::queue & q) {
+    const int   n_heads  = 4;
+    const int   head_dim = 64;
+    const int   seq_len  = 32;
+    const float scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    const int q_size      = n_heads * head_dim;
+    const int kv_size     = n_heads * seq_len * head_dim;
+    const int output_size = n_heads * head_dim;
+
+    // Create deterministic test data
+    std::vector<float> h_q(q_size);
+    std::vector<float> h_k(kv_size);
+    std::vector<float> h_v(kv_size);
+    std::vector<float> h_output(output_size, 0.0f);
+    std::vector<float> h_ref(output_size, 0.0f);
+
+    // Initialize with deterministic patterns
+    for (int i = 0; i < q_size; i++) {
+        h_q[i] = std::sin(i * 0.1f) * 0.5f;
+    }
+    for (int i = 0; i < kv_size; i++) {
+        h_k[i] = std::cos(i * 0.07f) * 0.3f;
+        h_v[i] = std::sin(i * 0.03f + 1.0f) * 0.4f;
+    }
+
+    // CPU reference
+    ref_attention(h_q.data(), h_k.data(), h_v.data(), h_ref.data(),
+                  n_heads, head_dim, seq_len, scale);
+
+    // Allocate device memory
+    float * d_q      = sycl::malloc_device<float>(q_size, q);
+    float * d_k      = sycl::malloc_device<float>(kv_size, q);
+    float * d_v      = sycl::malloc_device<float>(kv_size, q);
+    float * d_output = sycl::malloc_device<float>(output_size, q);
+
+    q.memcpy(d_q, h_q.data(), q_size * sizeof(float)).wait();
+    q.memcpy(d_k, h_k.data(), kv_size * sizeof(float)).wait();
+    q.memcpy(d_v, h_v.data(), kv_size * sizeof(float)).wait();
+    q.memset(d_output, 0, output_size * sizeof(float)).wait();
+
+    // Configure and run persistent kernel
+    ggml_sycl::UnifiedKernel     kernel(q);
+    ggml_sycl_unified::XMXConfig config = {};
+    config.supported                    = true;
+    config.slm_size                     = 64 * 1024;
+    kernel.configure(config);
+
+    // begin_persistent(n_layers, batch_size, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type)
+    // hidden_dim must be >= head_dim + 32 for SLM (query + reduction space)
+    kernel.begin_persistent(1, 1, 4096, 4096, n_heads, n_heads, head_dim, 0);
+
+    AttentionDescriptor desc = {};
+    desc.q        = d_q;
+    desc.k_cache  = d_k;
+    desc.v_cache  = d_v;
+    desc.output   = d_output;
+    desc.n_heads  = n_heads;
+    desc.n_kv_heads = n_heads;  // No GQA for now
+    desc.head_dim = head_dim;
+    desc.seq_len  = seq_len;
+    desc.scale    = scale;
+    kernel.add_attention(0, desc);
+
+    kernel.execute_persistent();
+
+    // Read back results
+    q.memcpy(h_output.data(), d_output, output_size * sizeof(float)).wait();
+
+    float error  = max_abs_error(h_output, h_ref);
+    bool  passed = error < TEST_TOLERANCE;
+
+    auto stats = kernel.get_last_stats();
+    printf("    ops=%d, tiles=%d, time=%.2f ms\n",
+           stats.n_operations, stats.total_tiles, stats.kernel_time_ms);
+
+    // Print debug info if failed
+    if (!passed) {
+        printf("    First 8 output values:\n");
+        for (int i = 0; i < 8 && i < output_size; i++) {
+            printf("      [%d] got=%.6f ref=%.6f diff=%.2e\n",
+                   i, h_output[i], h_ref[i], std::abs(h_output[i] - h_ref[i]));
+        }
+    }
+
+    sycl::free(d_q, q);
+    sycl::free(d_k, q);
+    sycl::free(d_v, q);
+    sycl::free(d_output, q);
+
+    print_result("persistent_attention (heads=4, dim=64, seq=32)", passed, error);
+    return passed;
+}
+
+// =============================================================================
+// Test: Persistent Attention with longer sequence
+// =============================================================================
+static bool test_persistent_attention_long_seq(sycl::queue & q) {
+    const int   n_heads  = 2;
+    const int   head_dim = 128;   // Mistral head_dim
+    const int   seq_len  = 512;   // Longer sequence
+    const float scale    = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    const int q_size      = n_heads * head_dim;
+    const int kv_size     = n_heads * seq_len * head_dim;
+    const int output_size = n_heads * head_dim;
+
+    std::vector<float> h_q(q_size);
+    std::vector<float> h_k(kv_size);
+    std::vector<float> h_v(kv_size);
+    std::vector<float> h_output(output_size, 0.0f);
+    std::vector<float> h_ref(output_size, 0.0f);
+
+    // Initialize with varied patterns to exercise softmax
+    for (int i = 0; i < q_size; i++) {
+        h_q[i] = std::sin(i * 0.05f) * 0.3f;
+    }
+    for (int i = 0; i < kv_size; i++) {
+        h_k[i] = std::cos(i * 0.013f) * 0.2f;
+        h_v[i] = std::sin(i * 0.017f + 2.0f) * 0.5f;
+    }
+
+    ref_attention(h_q.data(), h_k.data(), h_v.data(), h_ref.data(),
+                  n_heads, head_dim, seq_len, scale);
+
+    float * d_q      = sycl::malloc_device<float>(q_size, q);
+    float * d_k      = sycl::malloc_device<float>(kv_size, q);
+    float * d_v      = sycl::malloc_device<float>(kv_size, q);
+    float * d_output = sycl::malloc_device<float>(output_size, q);
+
+    q.memcpy(d_q, h_q.data(), q_size * sizeof(float)).wait();
+    q.memcpy(d_k, h_k.data(), kv_size * sizeof(float)).wait();
+    q.memcpy(d_v, h_v.data(), kv_size * sizeof(float)).wait();
+    q.memset(d_output, 0, output_size * sizeof(float)).wait();
+
+    ggml_sycl::UnifiedKernel     kernel(q);
+    ggml_sycl_unified::XMXConfig config = {};
+    config.supported                    = true;
+    config.slm_size                     = 64 * 1024;
+    kernel.configure(config);
+
+    kernel.begin_persistent(1, 1, 4096, 4096, n_heads, n_heads, head_dim, 0);
+
+    AttentionDescriptor desc = {};
+    desc.q        = d_q;
+    desc.k_cache  = d_k;
+    desc.v_cache  = d_v;
+    desc.output   = d_output;
+    desc.n_heads  = n_heads;
+    desc.n_kv_heads = n_heads;
+    desc.head_dim = head_dim;
+    desc.seq_len  = seq_len;
+    desc.scale    = scale;
+    kernel.add_attention(0, desc);
+
+    kernel.execute_persistent();
+
+    q.memcpy(h_output.data(), d_output, output_size * sizeof(float)).wait();
+
+    // Use slightly relaxed tolerance for longer sequences (more FP accumulation)
+    const float long_seq_tol = 5e-3f;
+    float error  = max_abs_error(h_output, h_ref);
+    bool  passed = error < long_seq_tol;
+
+    auto stats = kernel.get_last_stats();
+    printf("    ops=%d, tiles=%d, time=%.2f ms\n",
+           stats.n_operations, stats.total_tiles, stats.kernel_time_ms);
+
+    if (!passed) {
+        printf("    First 8 output values:\n");
+        for (int i = 0; i < 8 && i < output_size; i++) {
+            printf("      [%d] got=%.6f ref=%.6f diff=%.2e\n",
+                   i, h_output[i], h_ref[i], std::abs(h_output[i] - h_ref[i]));
+        }
+    }
+
+    sycl::free(d_q, q);
+    sycl::free(d_k, q);
+    sycl::free(d_v, q);
+    sycl::free(d_output, q);
+
+    print_result("persistent_attention_long_seq (heads=2, dim=128, seq=512)", passed, error);
+    return passed;
+}
+
+// =============================================================================
 // Test: Plan cancellation
 // =============================================================================
 static bool test_persistent_cancel(sycl::queue & q) {
@@ -544,6 +779,10 @@ int main() {
 
         printf("\nDMMV Matmul Tests:\n");
         if (test_persistent_dmmv_matmul(q)) { passed++; } else { failed++; }
+
+        printf("\nAttention Tests:\n");
+        if (test_persistent_attention(q))          { passed++; } else { failed++; }
+        if (test_persistent_attention_long_seq(q))  { passed++; } else { failed++; }
 
         printf("\nDiagnostics Tests:\n");
         if (test_persistent_stats(q))    { passed++; } else { failed++; }

@@ -4187,9 +4187,169 @@ private:
     }
 
     void compute_attention_tile(const DeviceOperation & op, int tile_idx) {
-        // TODO: Implement attention tile (score, softmax, value aggregation)
-        (void)op;
-        (void)tile_idx;
+        // Self-attention for M=1 (single query token) in token generation.
+        // tile_idx = head index. Each work-group processes one attention head.
+        //
+        // Memory layout:
+        //   q:       [n_heads * head_dim] — interleaved by head
+        //   k_cache: [n_heads * seq_len * head_dim] — k[h][p][d]
+        //   v_cache: [n_heads * seq_len * head_dim] — v[h][p][d]
+        //   output:  [n_heads * head_dim]
+        //
+        // Algorithm: Two-pass attention
+        //   Pass 1: Compute scores, find global max and softmax denominator
+        //   Pass 2: Accumulate weighted V values using softmax probabilities
+        //
+        // TODO: Add GQA support (n_kv_heads != n_heads). Currently assumes 1:1 mapping.
+
+        constexpr int SG_SIZE = 16;
+        constexpr int N_SGS   = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+
+        const int tid     = item_.get_local_id(0);
+        const int head    = tile_idx;  // One tile per head
+        const int seq_len  = op.M;      // Number of tokens in KV cache
+        const int n_heads  = op.N;
+        const int head_dim = op.K;
+        const float scale  = op.scale;  // 1/sqrt(head_dim)
+
+        if (head >= n_heads) return;
+
+        const float * q       = static_cast<const float *>(op.input);
+        const float * k_cache = static_cast<const float *>(op.weights);
+        const float * v_cache = static_cast<const float *>(op.aux);
+        float *       output  = static_cast<float *>(op.output);
+
+        // Pointers for this head
+        const float * q_head = q + head * head_dim;
+        // For KV cache: head h, position p, dimension d -> offset = h * seq_len * head_dim + p * head_dim + d
+        const float * k_head = k_cache + head * seq_len * head_dim;
+        const float * v_head = v_cache + head * seq_len * head_dim;
+        float *       o_head = output + head * head_dim;
+
+        auto sg = item_.get_sub_group();
+        const int warp_id = sg.get_group_linear_id();
+        const int lane_id = sg.get_local_linear_id();
+
+        // ====================================================================
+        // Load query vector into SLM for fast repeated access
+        // SLM layout: [0..head_dim-1] = query vector
+        // ====================================================================
+        for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
+            slm_[d] = q_head[d];
+        }
+        sycl::group_barrier(item_.get_group());
+
+        // ====================================================================
+        // Pass 1: Compute attention scores with online softmax
+        // Each thread handles positions: tid, tid+BLOCK_SIZE, tid+2*BLOCK_SIZE, ...
+        // For each position, compute full dot product over head_dim dimensions.
+        // Track per-thread running max and sum_exp for numerically stable softmax.
+        // ====================================================================
+        float thread_max     = -1e30f;
+        float thread_sum_exp = 0.0f;
+
+        for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
+            // Dot product: score = sum_d(q[d] * k[p][d]) * scale
+            float score = 0.0f;
+            const float * k_pos = k_head + p * head_dim;
+            for (int d = 0; d < head_dim; d++) {
+                score += slm_[d] * k_pos[d];
+            }
+            score *= scale;
+
+            // Online softmax update
+            if (score > thread_max) {
+                // Rescale existing sum_exp when max increases
+                thread_sum_exp = thread_sum_exp * sycl::exp(thread_max - score);
+                thread_max = score;
+            }
+            thread_sum_exp += sycl::exp(score - thread_max);
+        }
+
+        // ====================================================================
+        // Cross-thread reduction of (max, sum_exp) for global softmax
+        // Two-level: sub-group shuffle, then SLM-based cross-sub-group
+        // ====================================================================
+
+        // Sub-group reduction of max
+        float sg_max = thread_max;
+        for (int offset = SG_SIZE >> 1; offset > 0; offset >>= 1) {
+            float other = sycl::shift_group_left(sg, sg_max, offset);
+            sg_max = sycl::fmax(sg_max, other);
+        }
+
+        // Rescale sum_exp to sub-group max
+        float sg_sum_exp = thread_sum_exp * sycl::exp(thread_max - sg_max);
+        sg_sum_exp = sycl::reduce_over_group(sg, sg_sum_exp, sycl::plus<float>());
+
+        // Cross-sub-group reduction via SLM
+        // Use SLM[head_dim .. head_dim + 2*N_SGS - 1] for (max, sum_exp) pairs
+        const int slm_reduce_base = head_dim;  // After query storage
+        if (lane_id == 0) {
+            slm_[slm_reduce_base + warp_id]         = sg_max;
+            slm_[slm_reduce_base + N_SGS + warp_id] = sg_sum_exp;
+        }
+        sycl::group_barrier(item_.get_group());
+
+        // Sub-group 0 does the final reduction across all sub-groups
+        float global_max     = -1e30f;
+        float global_sum_exp = 0.0f;
+        if (warp_id == 0) {
+            float local_max     = (lane_id < N_SGS) ? slm_[slm_reduce_base + lane_id] : -1e30f;
+            float local_sum_exp = (lane_id < N_SGS) ? slm_[slm_reduce_base + N_SGS + lane_id] : 0.0f;
+
+            // Reduce max across sub-groups
+            float reduced_max = local_max;
+            for (int offset = SG_SIZE >> 1; offset > 0; offset >>= 1) {
+                float other = sycl::shift_group_left(sg, reduced_max, offset);
+                reduced_max = sycl::fmax(reduced_max, other);
+            }
+
+            // Rescale sum_exp to global max and reduce
+            float rescaled_sum = local_sum_exp * sycl::exp(local_max - reduced_max);
+            rescaled_sum = sycl::reduce_over_group(sg, rescaled_sum, sycl::plus<float>());
+
+            if (lane_id == 0) {
+                slm_[slm_reduce_base]     = reduced_max;
+                slm_[slm_reduce_base + 1] = rescaled_sum;
+            }
+        }
+        sycl::group_barrier(item_.get_group());
+
+        global_max     = slm_[slm_reduce_base];
+        global_sum_exp = slm_[slm_reduce_base + 1];
+
+        // Avoid division by zero for empty sequences
+        const float inv_sum = (global_sum_exp > 0.0f) ? (1.0f / global_sum_exp) : 0.0f;
+
+        // ====================================================================
+        // Pass 2: Value aggregation
+        // Each thread handles output dimensions: tid, tid+BLOCK_SIZE, ...
+        // For each dimension, loop over all sequence positions and accumulate
+        // softmax(score) * v[pos][d].
+        // Scores are recomputed to avoid storing seq_len floats.
+        // ====================================================================
+        for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
+            float acc = 0.0f;
+
+            for (int p = 0; p < seq_len; p++) {
+                // Recompute score for position p
+                const float * k_pos = k_head + p * head_dim;
+                float score = 0.0f;
+                for (int dd = 0; dd < head_dim; dd++) {
+                    score += slm_[dd] * k_pos[dd];
+                }
+                score *= scale;
+
+                // Softmax probability
+                float prob = sycl::exp(score - global_max) * inv_sum;
+
+                // Weighted V accumulation
+                acc += prob * v_head[p * head_dim + d];
+            }
+
+            o_head[d] = acc;
+        }
     }
 };
 
