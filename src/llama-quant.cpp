@@ -13,6 +13,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <queue>
 #include <random>
 #include <regex>
 #include <thread>
@@ -728,6 +729,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::string name;
         std::snprintf(hex, sizeof(hex), "%016" PRIx64, (uint64_t)model_id);
         ml.get_key(LLM_KV_GENERAL_NAME, name, false);
+        name.erase(0, name.find_last_of('/') + 1);
         std::replace(name.begin(), name.end(), ' ', '_');
         name.empty() ? checkpoint_file = ml.arch_name : checkpoint_file = name;
         checkpoint_file += "-" + std::string(hex) + (valid_wce ? "-wce" : "-mse") + ".bpw_state";
@@ -1500,7 +1502,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             ch.candidates.push_back(fb);
         }
 
-        auto simplify_pareto = [](std::vector<type_scores> & candidates) {
+        auto simplify_pareto = [&](std::vector<type_scores> & candidates) {
             std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
                 return a.bytes < b.bytes || (a.bytes == b.bytes && a.error < b.error);
             });
