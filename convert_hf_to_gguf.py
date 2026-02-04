@@ -7928,19 +7928,19 @@ class Step35Model(TextModel):
 
         super().set_gguf_parameters()
 
-        layer_types = self.hparams.get("layer_types", [])
+        layer_types = self.hparams.get("layer_types") or []
         attn_other = self.hparams.get("attention_other_setting") or {}
 
         n_head_base = self.hparams["num_attention_heads"]
-        n_kv_base   = self.hparams["num_attention_groups"]
+        n_kv_base = self.hparams["num_attention_groups"]
 
         n_head_swa = attn_other.get("num_attention_heads", n_head_base)
-        n_kv_swa   = attn_other.get("num_attention_groups", n_kv_base)
+        n_kv_swa = attn_other.get("num_attention_groups", n_kv_base)
 
         layer_types = layer_types[: self.block_count]
         head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
-        kv_arr   = [n_kv_swa   if lt == "sliding_attention" else n_kv_base   for lt in layer_types]
-        swa_pat  = [1 if lt == "sliding_attention" else 0 for lt in layer_types]
+        kv_arr   = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
+        swa_pat  = [lt == "sliding_attention" for lt in layer_types]
 
         self.gguf_writer.add_head_count(head_arr)
         self.gguf_writer.add_head_count_kv(kv_arr)
