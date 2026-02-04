@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500">
+  <style>
+    .bg { fill: #0d1117; }
+    .title { fill: #c9d1d9; font-family: -apple-system, system-ui, sans-serif; font-size: 18px; font-weight: 600; }
+    .axis-label { fill: #8b949e; font-family: -apple-system, system-ui, sans-serif; font-size: 12px; font-weight: 500; }
+    .tick-label { fill: #8b949e; font-family: ui-monospace, monospace; font-size: 10px; }
+    .grid-line { stroke: #21262d; stroke-width: 1; stroke-dasharray: 3,3; }
+    .axis-line { stroke: #484f58; stroke-width: 2; }
+    .data-line { stroke: #3fb950; stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .data-point { fill: #3fb950; }
+    .stock-point { fill: #f85149; stroke: #f85149; stroke-width: 2; }
+    .stock-label { fill: #f85149; font-family: -apple-system, system-ui, sans-serif; font-size: 12px; font-weight: 600; }
+  </style>
+
+  <!-- Background -->
+  <rect class="bg" width="800" height="500"/>
+
+  <!-- Title -->
+  <text x="400" y="30" class="title" text-anchor="middle">TG Performance vs Power Limit (tg128, d=2048, batch=512, FA, KV: K=q8_0 V=f16)</text>
+
+  <!-- Axis labels -->
+  <text x="400" y="480" class="axis-label" text-anchor="middle">Power Limit (W)</text>
+  <text x="40" y="250" class="axis-label" text-anchor="middle" transform="rotate(-90 40 250)">Tokens/Second</text>
+
+  <!-- Grid and axis -->
+  <line x1="80" y1="60" x2="80" y2="440" class="axis-line"/>
+  <line x1="80" y1="440" x2="760" y2="440" class="axis-line"/>
+
+  <!-- Y-axis grid lines and labels (75-135 tok/s, step 10) -->
+  <line x1="80" y1="440" x2="760" y2="440" class="grid-line"/>
+  <text x="70" y="445" class="tick-label" text-anchor="end">75</text>
+
+  <line x1="80" y1="377" x2="760" y2="377" class="grid-line"/>
+  <text x="70" y="382" class="tick-label" text-anchor="end">85</text>
+
+  <line x1="80" y1="314" x2="760" y2="314" class="grid-line"/>
+  <text x="70" y="319" class="tick-label" text-anchor="end">95</text>
+
+  <line x1="80" y1="251" x2="760" y2="251" class="grid-line"/>
+  <text x="70" y="256" class="tick-label" text-anchor="end">105</text>
+
+  <line x1="80" y1="188" x2="760" y2="188" class="grid-line"/>
+  <text x="70" y="193" class="tick-label" text-anchor="end">115</text>
+
+  <line x1="80" y1="125" x2="760" y2="125" class="grid-line"/>
+  <text x="70" y="130" class="tick-label" text-anchor="end">125</text>
+
+  <line x1="80" y1="62" x2="760" y2="62" class="grid-line"/>
+  <text x="70" y="67" class="tick-label" text-anchor="end">135</text>
+
+  <!-- X-axis labels (100-300W, step 50) -->
+  <text x="80" y="460" class="tick-label" text-anchor="middle">100</text>
+  <text x="250" y="460" class="tick-label" text-anchor="middle">150</text>
+  <text x="420" y="460" class="tick-label" text-anchor="middle">200</text>
+  <text x="590" y="460" class="tick-label" text-anchor="middle">250</text>
+  <text x="760" y="460" class="tick-label" text-anchor="middle">300</text>
+
+  <!-- Data line -->
+  <polyline class="data-line" points="
+    80,362
+    114,325
+    148,297
+    182,271
+    216,245
+    250,231
+    284,210
+    318,198
+    352,191
+    386,175
+    420,161
+    454,165
+    488,147
+    522,142
+    556,128
+    590,125
+    624,101
+    658,97
+    692,103
+    726,96
+    760,103
+  "/>
+
+  <!-- Data points -->
+  <circle class="data-point" cx="80" cy="362" r="3"/>
+  <circle class="data-point" cx="114" cy="325" r="3"/>
+  <circle class="data-point" cx="148" cy="297" r="3"/>
+  <circle class="data-point" cx="182" cy="271" r="3"/>
+  <circle class="data-point" cx="216" cy="245" r="3"/>
+  <circle class="data-point" cx="250" cy="231" r="3"/>
+  <circle class="data-point" cx="284" cy="210" r="3"/>
+  <circle class="data-point" cx="318" cy="198" r="3"/>
+  <circle class="data-point" cx="352" cy="191" r="3"/>
+  <circle class="data-point" cx="386" cy="175" r="3"/>
+  <circle class="data-point" cx="420" cy="161" r="3"/>
+  <circle class="data-point" cx="454" cy="165" r="3"/>
+  <circle class="data-point" cx="488" cy="147" r="3"/>
+  <circle class="data-point" cx="522" cy="142" r="3"/>
+  <circle class="data-point" cx="556" cy="128" r="3"/>
+  <circle class="data-point" cx="590" cy="125" r="3"/>
+  <circle class="data-point" cx="624" cy="101" r="3"/>
+  <circle class="data-point" cx="658" cy="97" r="3"/>
+  <circle class="data-point" cx="692" cy="103" r="3"/>
+  <circle class="data-point" cx="726" cy="96" r="3"/>
+  <circle class="data-point" cx="760" cy="103" r="3"/>
+
+  <!-- Stock configuration marker (225W) -->
+  <circle class="stock-point" cx="505" cy="144" r="5"/>
+  <text x="505" y="129" class="stock-label" text-anchor="middle">stock</text>
+
+</svg>

@@ -11,11 +11,9 @@
 #define SOFTMAX_FTZ_THRESHOLD -20.0f                   // Softmax exp. of values smaller than this are flushed to zero to avoid NaNs.
 
 // log(2) = 0.6931, by adding this to the KQ maximum used for the softmax the numerical range representable
-//     by the VKQ accumulators is effectively being shifted up by a factor of 2.
+//     by the VKQ accumulators is effectively being shifted up by a factor of 8.
 // This reduces issues with numerical overflow but also causes larger values to be flushed to zero.
 // However, as the output from FlashAttention will usually be used as an input for a matrix multiplication this should be negligible.
-// Still, the value range should be shifted as much as necessary but as little as possible.
-// The macro on the following line shifts it by a factor of 2**3=8, as was needed to fix https://github.com/ggml-org/llama.cpp/issues/18606 .
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
 typedef void (* fattn_kernel_t)(
@@ -276,8 +274,8 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
     }
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
-        sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
+        amax = fmaxf(amax, ggml_cuda_shfl_xor_sync<32>(amax, mask));
+        sum +=             ggml_cuda_shfl_xor_sync<32>(sum,  mask);
     }
 
     const float d = amax / 127;
@@ -962,6 +960,20 @@ void launch_fattn(
                 nwaves_best = nwaves;
                 efficiency_percent_best = efficiency_percent;
                 parallel_blocks = parallel_blocks_test;
+            }
+        }
+
+        // AMD GFX906 optimization: Different Split-K for PP vs TG
+        const bool is_amd = !GGML_CUDA_CC_IS_NVIDIA(cc);
+        const bool is_prompt_processing = Q->ne[1] > 1;  // Q->ne[1] = num query tokens
+
+        if (is_amd) {
+            if (is_prompt_processing) {
+                // PP: Disable Split-K to avoid combine overhead
+                parallel_blocks = 1;
+            } else {
+                // TG: Use auto-tuned value for better SM utilization
+                // (parallel_blocks already set by auto-tuner)
             }
         }
 

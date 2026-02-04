@@ -3,6 +3,13 @@
 #include "unary.cuh"
 #include "vecdotq.cuh"
 
+// GFX906-specific warp-cooperative MMVQ kernels (compile with -DGGML_HIP_GFX906)
+#if defined(GGML_HIP_GFX906)
+#include "gfx906/matmul/mmvq-q4_0.cuh"
+#include "gfx906/matmul/mmvq-q4_1.cuh"
+#include "gfx906/matmul/mmvq-q8_0.cuh"
+#endif
+
 #include <cstdint>
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
@@ -510,12 +517,53 @@ static void mul_mat_vec_q_switch_type(
         const int ids_stride, cudaStream_t stream) {
     switch (type_x) {
         case GGML_TYPE_Q4_0:
+#if defined(GGML_HIP_GFX906)
+            // GFX906: Use warp-cooperative kernel for ncols_dst=1 (token generation) without fusion
+            {
+                const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
+
+                if (ncols_dst == 1 && !has_fusion && ncols_x <= 1024) {
+                    const uint3 nchannels_y_fd   = ids ? init_fastdiv_values(nchannels_y) : make_uint3(0, 0, 0);
+                    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0) : init_fastdiv_values(nchannels_dst / nchannels_x);
+                    const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst / nsamples_x);
+
+                    gfx906_launch_mul_mat_vec_q4_0_warp_coop(
+                        vx, vy, ids, dst,
+                        ncols_x, nchannels_y_fd, stride_row_x, stride_col_dst,
+                        channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                        nrows_x, nchannels_dst, nsamples_dst, stream);
+                    break;
+                }
+            }
+#endif
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_Q4_0>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         case GGML_TYPE_Q4_1:
+#if defined(GGML_HIP_GFX906)
+            // GFX906: Use warp-cooperative kernel for ncols_dst=1 (token generation) without fusion
+            {
+                const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
+
+                // Use warp-coop for small matrices only (MoE experts, <= 1024 cols)
+                if (ncols_dst == 1 && !has_fusion && ncols_x <= 1024) {
+                    const uint3 nchannels_y_fd   = ids ? init_fastdiv_values(nchannels_y) : make_uint3(0, 0, 0);
+                    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0) : init_fastdiv_values(nchannels_dst / nchannels_x);
+                    const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst / nsamples_x);
+
+                    gfx906_launch_mul_mat_vec_q4_1_warp_coop(
+                        vx, vy, ids, dst,
+                        ncols_x, nchannels_y_fd, stride_row_x, stride_col_dst,
+                        channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                        nrows_x, nchannels_dst, nsamples_dst, stream);
+                    break;
+                }
+            }
+#endif
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_Q4_1>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,
@@ -534,6 +582,26 @@ static void mul_mat_vec_q_switch_type(
                  nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride, stream);
             break;
         case GGML_TYPE_Q8_0:
+#if defined(GGML_HIP_GFX906)
+            // GFX906: Use warp-cooperative kernel for ncols_dst=1 (token generation) without fusion
+            {
+                const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
+
+                if (ncols_dst == 1 && !has_fusion && ncols_x <= 1024) {
+                    const uint3 nchannels_y_fd   = ids ? init_fastdiv_values(nchannels_y) : make_uint3(0, 0, 0);
+                    const uint3 channel_ratio_fd = ids ? make_uint3(0, 0, 0) : init_fastdiv_values(nchannels_dst / nchannels_x);
+                    const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst / nsamples_x);
+
+                    gfx906_launch_mul_mat_vec_q8_0_warp_coop(
+                        vx, vy, ids, dst,
+                        ncols_x, nchannels_y_fd, stride_row_x, stride_col_dst,
+                        channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
+                        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                        nrows_x, nchannels_dst, nsamples_dst, stream);
+                    break;
+                }
+            }
+#endif
             mul_mat_vec_q_switch_ncols_dst<GGML_TYPE_Q8_0>
                 (vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y, stride_col_dst,
                  nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst,

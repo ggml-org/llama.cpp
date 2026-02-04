@@ -6,6 +6,11 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+// GFX906 Q8 Flash Attention kernel
+#ifdef GGML_USE_HIP
+    #include "gfx906/attention/fattn-q8.cuh"
+#endif
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -275,6 +280,9 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_WMMA_F16 = 300,
     BEST_FATTN_KERNEL_MMA_F16  = 400,
+#ifdef GGML_USE_HIP
+    BEST_FATTN_KERNEL_TILE_Q8  = 250,
+#endif
 };
 
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -448,23 +456,49 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                     return BEST_FATTN_KERNEL_VEC;
                 }
             }
-        } else {
+        }
+#ifndef GGML_USE_HIP
+        else {
             if (Q->ne[1] <= 2) {
                 return BEST_FATTN_KERNEL_VEC;
             }
         }
+#endif
     }
+
+#ifdef GGML_USE_HIP
+    if (K->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q8_0) {
+        const bool q8_head_size_supported = (K->ne[0] % 32 == 0) &&
+                                            (K->ne[0] != 40) &&
+                                            (K->ne[0] != 80) &&
+                                            (K->ne[0] != 112) &&
+                                            (K->ne[0] != 576);
+
+        if (q8_head_size_supported) {
+            return BEST_FATTN_KERNEL_TILE_Q8;
+        }
+    }
+#endif
+
     return BEST_FATTN_KERNEL_TILE;
 }
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
+
+    best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst);
+
+    switch (kernel) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
         case BEST_FATTN_KERNEL_TILE:
             ggml_cuda_flash_attn_ext_tile(ctx, dst);
             break;
+#ifdef GGML_USE_HIP
+        case BEST_FATTN_KERNEL_TILE_Q8:
+            ggml_cuda_flash_attn_ext_tile_q8(ctx, dst);
+            break;
+#endif // GGML_USE_HIP
         case BEST_FATTN_KERNEL_VEC:
             ggml_cuda_flash_attn_ext_vec(ctx, dst);
             break;
