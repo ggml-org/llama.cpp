@@ -309,6 +309,12 @@ common_peg_parser universal_peg_generator::build_tool_parser(
 
             if (!m.func_close.empty()) {
                 func_parser = func_parser + p.space() + p.tool_close(p.literal(m.func_close));
+            } else if (!m.per_call_end.empty()) {
+                // When there's no func_close but there is a per_call_end marker, use peek() to ensure
+                // we only emit tool_close when we can actually see the closing marker. This prevents
+                // premature closing during partial parsing when we've seen e.g. "</" which could be
+                // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
+                func_parser = func_parser + p.tool_close(p.peek(p.literal(m.per_call_end)));
             } else {
                 func_parser = func_parser + p.tool_close(p.space()); // force this to process tool closing callbacks in mapper
             }

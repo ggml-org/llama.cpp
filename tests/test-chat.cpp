@@ -338,6 +338,24 @@ static common_chat_tool magic_tool{
     })",
 };
 
+static common_chat_tool magic_int_tool{
+    /* .name = */ "magic_int",
+    /* .description = */ "Magic tool that takes a hash",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "ref": {
+                "type": "integer"
+            },
+            "name": {
+                "type": "string"
+            }
+        },
+        "required": ["ref"]
+    })",
+};
+
+
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
 
@@ -2115,6 +2133,60 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "magic", R"({"name": "fooBar", "ref": "5123123"})", {} },
             })
             .run();
+
+        // Test that numeric values are correctly interpreted as numbers when schema calls for number
+        tst.test(
+               "Let me call the special function\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n42555916\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Let me call the special function")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 42555916})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Let me call the special function with opt\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n42555916\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool_with_optional_param })
+            .expect_reasoning("Let me call the special function with opt")
+            .expect_tool_calls({
+                { "special_function_with_opt", R"({"arg1": 42555916})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Let me call the magic_int function\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=magic_int>\n"
+               "<parameter=ref>\n42555916\n</parameter>\n"
+               "<parameter=name>\nbaz\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Let me call the magic_int function")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42555916, "name": "baz"})", {} },
+            })
+            .run();
+
     }
 }
 
