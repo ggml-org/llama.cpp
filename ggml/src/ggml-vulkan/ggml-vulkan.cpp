@@ -19,6 +19,12 @@ using vk::DispatchLoaderDynamic;
 DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #define VULKAN_HPP_DEFAULT_DISPATCHER ggml_vk_default_dispatcher()
 
+#if defined(__ANDROID__)
+#ifndef VK_USE_PLATFORM_ANDROID_KHR
+#define VK_USE_PLATFORM_ANDROID_KHR
+#endif
+#endif
+
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
@@ -38,6 +44,29 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <mutex>
 #include <future>
 #include <thread>
+
+#if defined(__ANDROID__)
+#include <android/hardware_buffer.h>
+#include <vulkan/vulkan_android.h>
+#include <dlfcn.h>
+
+typedef int (*pfn_AHardwareBuffer_allocate)(const AHardwareBuffer_Desc*, AHardwareBuffer**);
+typedef void (*pfn_AHardwareBuffer_release)(AHardwareBuffer*);
+
+static pfn_AHardwareBuffer_allocate ggml_vk_AHardwareBuffer_allocate = nullptr;
+static pfn_AHardwareBuffer_release ggml_vk_AHardwareBuffer_release = nullptr;
+
+static void ggml_vk_load_ahb_funcs() {
+    static bool loaded = false;
+    if (loaded) return;
+    void* handle = dlopen("libandroid.so", RTLD_NOW);
+    if (handle) {
+        ggml_vk_AHardwareBuffer_allocate = (pfn_AHardwareBuffer_allocate)dlsym(handle, "AHardwareBuffer_allocate");
+        ggml_vk_AHardwareBuffer_release = (pfn_AHardwareBuffer_release)dlsym(handle, "AHardwareBuffer_release");
+    }
+    loaded = true;
+}
+#endif
 
 #if defined(_MSC_VER)
 # define NOMINMAX 1
@@ -593,6 +622,9 @@ struct vk_device_struct {
     uint32_t partials_binding_alignment;
 
     bool shader_64b_indexing;
+
+    bool ahb_buffer_support;
+    uint64_t non_coherent_atom_size;
 
     bool integer_dot_product;
     // 0: default, 1: force mmvq, -1: disable mmvq
@@ -2605,6 +2637,154 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, const std
     return buf;
 }
 
+#if defined(__ANDROID__)
+static vk_buffer ggml_vk_create_buffer_ahb(vk_device& device, size_t size) {
+    ggml_vk_load_ahb_funcs();
+    if (!ggml_vk_AHardwareBuffer_allocate || !ggml_vk_AHardwareBuffer_release) {
+        return nullptr;
+    }
+
+    VK_LOG_DEBUG("ggml_vk_create_buffer_ahb(" << device->name << ", " << size << ")");
+    size_t aligned_size = (size + 4095) & ~4095;
+
+    AHardwareBuffer_Desc desc = {};
+    desc.width = aligned_size;
+    desc.height = 1;
+    desc.layers = 1;
+    desc.format = AHARDWAREBUFFER_FORMAT_BLOB;
+    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_DATA_BUFFER;
+
+    AHardwareBuffer* ahb = nullptr;
+    if (ggml_vk_AHardwareBuffer_allocate(&desc, &ahb) != 0) {
+        return nullptr;
+    }
+
+    vk::ExternalMemoryBufferCreateInfo external_memory_bci;
+    external_memory_bci.handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eAndroidHardwareBufferANDROID;
+
+    vk::BufferCreateInfo buffer_create_info{
+        vk::BufferCreateFlags(),
+        size,
+        vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst,
+        vk::SharingMode::eExclusive,
+        0,
+        nullptr,
+    };
+    if (device->buffer_device_address) {
+        buffer_create_info.usage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+    }
+    buffer_create_info.setPNext(&external_memory_bci);
+
+    vk::Buffer vk_buf = device->device.createBuffer(buffer_create_info);
+
+    VkAndroidHardwareBufferPropertiesANDROID ahb_props = {};
+    ahb_props.sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID;
+
+    // Use dispatcher for extension functions
+    auto& d = VULKAN_HPP_DEFAULT_DISPATCHER;
+    if (d.vkGetAndroidHardwareBufferPropertiesANDROID(device->device, ahb, &ahb_props) != VK_SUCCESS) {
+        device->device.destroyBuffer(vk_buf);
+        ggml_vk_AHardwareBuffer_release(ahb);
+        return nullptr;
+    }
+
+    vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+    uint32_t memory_type_idx = (uint32_t)-1;
+
+    // Prefer HostVisible + HostCoherent
+    for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+        if ((ahb_props.memoryTypeBits & (1u << i))) {
+            vk::MemoryPropertyFlags flags = mem_props.memoryTypes[i].propertyFlags;
+            if ((flags & vk::MemoryPropertyFlagBits::eHostVisible) && (flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+                memory_type_idx = i;
+                break;
+            }
+        }
+    }
+
+    // Fallback to just HostVisible
+    if (memory_type_idx == (uint32_t)-1) {
+        for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+            if ((ahb_props.memoryTypeBits & (1u << i))) {
+                vk::MemoryPropertyFlags flags = mem_props.memoryTypes[i].propertyFlags;
+                if (flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+                    memory_type_idx = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Fallback to first available
+    if (memory_type_idx == (uint32_t)-1) {
+        for (uint32_t i = 0; i < mem_props.memoryTypeCount; ++i) {
+            if ((ahb_props.memoryTypeBits & (1u << i))) {
+                memory_type_idx = i;
+                break;
+            }
+        }
+    }
+
+    if (memory_type_idx == (uint32_t)-1) {
+        device->device.destroyBuffer(vk_buf);
+        ggml_vk_AHardwareBuffer_release(ahb);
+        return nullptr;
+    }
+
+    VkImportAndroidHardwareBufferInfoANDROID import_info = {};
+    import_info.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID;
+    import_info.buffer = ahb;
+
+    VkMemoryAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = ahb_props.allocationSize;
+    alloc_info.memoryTypeIndex = memory_type_idx;
+    alloc_info.pNext = &import_info;
+
+    VkMemoryAllocateFlagsInfo mem_flags_info = {};
+    if (device->buffer_device_address) {
+        mem_flags_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO;
+        mem_flags_info.flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT;
+        mem_flags_info.pNext = &import_info;
+        alloc_info.pNext = &mem_flags_info;
+    }
+
+    VkDeviceMemory dev_mem;
+    if (d.vkAllocateMemory(device->device, &alloc_info, nullptr, &dev_mem) != VK_SUCCESS) {
+        device->device.destroyBuffer(vk_buf);
+        ggml_vk_AHardwareBuffer_release(ahb);
+        return nullptr;
+    }
+
+    device->device.bindBufferMemory(vk_buf, (vk::DeviceMemory)dev_mem, 0);
+
+    vk_buffer buf = std::make_shared<vk_buffer_struct>();
+    buf->buffer = vk_buf;
+    buf->device_memory = (vk::DeviceMemory)dev_mem;
+    buf->device = device;
+    buf->size = size;
+    buf->memory_property_flags = mem_props.memoryTypes[memory_type_idx].propertyFlags;
+
+    if (device->buffer_device_address) {
+        const vk::BufferDeviceAddressInfo addressInfo(buf->buffer);
+        buf->bda_addr = device->device.getBufferAddress(addressInfo);
+    }
+
+    // Attempt to map
+    try {
+        buf->ptr = device->device.mapMemory((vk::DeviceMemory)dev_mem, 0, VK_WHOLE_SIZE);
+    } catch (...) {
+        buf->ptr = nullptr;
+    }
+
+    // AHB reference is now held by Vulkan (via import), we can release ours.
+    ggml_vk_AHardwareBuffer_release(ahb);
+
+    device->memory_logger->log_allocation(buf, size);
+    return buf;
+}
+#endif
+
 static vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk::MemoryPropertyFlags req_flags, vk::MemoryPropertyFlags fallback_flags = vk::MemoryPropertyFlags(0)) {
     try {
         return ggml_vk_create_buffer(device, size, {req_flags, fallback_flags});
@@ -2618,6 +2798,13 @@ static vk_buffer ggml_vk_create_buffer_check(vk_device& device, size_t size, vk:
 static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
     vk_buffer buf;
     try {
+#if defined(__ANDROID__)
+        static bool use_ahb = getenv("GGML_VK_AHB") != nullptr;
+        if (use_ahb && device->ahb_buffer_support) {
+             buf = ggml_vk_create_buffer_ahb(device, size);
+             if (buf) return buf;
+        }
+#endif
         if (device->prefer_host_memory) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
@@ -4654,6 +4841,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->physical_device.getProperties2(&props2);
         device->properties = props2.properties;
+        device->non_coherent_atom_size = device->properties.limits.nonCoherentAtomSize;
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
 
@@ -5037,6 +5225,23 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->fp16) {
             device_extensions.push_back("VK_KHR_shader_float16_int8");
         }
+
+#if defined(__ANDROID__)
+        bool ahb_support = false;
+        for (const auto& properties : ext_props) {
+            if (strcmp(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, properties.extensionName) == 0) {
+                ahb_support = true;
+                break;
+            }
+        }
+        if (ahb_support) {
+            device_extensions.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+            device_extensions.push_back(VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME);
+            device_extensions.push_back(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+            device->ahb_buffer_support = true;
+            VK_LOG_DEBUG("ggml_vulkan: Android Hardware Buffer support enabled");
+        }
+#endif
 
 #if defined(VK_KHR_cooperative_matrix)
         if (device->coopmat_support) {
@@ -6455,10 +6660,17 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d(" << width << ", " << height << ")");
     // Buffer is already mapped
     if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
-        GGML_ASSERT(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
-
         for (size_t i = 0; i < height; i++) {
             memcpy((uint8_t *)dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width);
+        }
+
+        if (!(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            const size_t atom_size = dst->device->non_coherent_atom_size;
+            const size_t flush_offset = (offset / atom_size) * atom_size;
+            const size_t flush_end = ((offset + height * width + atom_size - 1) / atom_size) * atom_size;
+            const size_t flush_size = std::min(flush_end - flush_offset, dst->size - flush_offset);
+            vk::MappedMemoryRange range(dst->device_memory, flush_offset, flush_size);
+            (void) dst->device->device.flushMappedMemoryRanges(1, &range);
         }
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
@@ -6555,7 +6767,14 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
     if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma) {
-        GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+        if (!(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            const size_t atom_size = src->device->non_coherent_atom_size;
+            const size_t inv_offset = (offset / atom_size) * atom_size;
+            const size_t inv_end = ((offset + size + atom_size - 1) / atom_size) * atom_size;
+            const size_t inv_size = std::min(inv_end - inv_offset, src->size - inv_offset);
+            vk::MappedMemoryRange range(src->device_memory, inv_offset, inv_size);
+            (void) src->device->device.invalidateMappedMemoryRanges(1, &range);
+        }
 
         memcpy(dst, (uint8_t *) src->ptr + offset, size);
     } else {
@@ -6632,6 +6851,15 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     if (dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible &&
         dst->device->uma) {
         memset((uint8_t*)dst->ptr + offset, c, size);
+
+        if (!(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            const size_t atom_size = dst->device->non_coherent_atom_size;
+            const size_t flush_offset = (offset / atom_size) * atom_size;
+            const size_t flush_end = ((offset + size + atom_size - 1) / atom_size) * atom_size;
+            const size_t flush_size = std::min(flush_end - flush_offset, dst->size - flush_offset);
+            vk::MappedMemoryRange range(dst->device_memory, flush_offset, flush_size);
+            (void) dst->device->device.flushMappedMemoryRanges(1, &range);
+        }
         return;
     }
 
