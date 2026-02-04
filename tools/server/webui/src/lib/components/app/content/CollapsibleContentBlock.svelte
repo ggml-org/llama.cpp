@@ -88,7 +88,7 @@
 				bind:this={contentContainer}
 				class="overflow-y-auto border-t border-muted px-3 pb-3"
 				onscroll={handleScroll}
-				style="max-height: var(--max-message-height);"
+				style="min-height: var(--min-message-height); max-height: var(--max-message-height);"
 			>
 				{@render children()}
 			</div>
