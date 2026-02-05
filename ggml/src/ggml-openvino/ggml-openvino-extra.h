@@ -110,16 +110,19 @@ struct ggml_openvino_weight_extra : public ggml_openvino_extra_base {
         : ggml_openvino_extra_base(Type::WEIGHT), constant(std::move(c)) {}
 };
 
-// Extra data for quantized weight tensors - stores extracted weights/scales/biases and ov::Constant
+// Extra data for quantized weight tensors - stores extracted weights/scales/zp and ov::Constant
 struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
     ov::Tensor weights;   // U4 or U8 extracted weights
     ov::Tensor scales;    // F16 scales
-    ov::Tensor biases;    // F16 biases (zero points)
+    ov::Tensor zp;        // U4 or U8 zero points (same type as weights)
     std::shared_ptr<ov::Node> constant;  // Pre-built OpenVINO weight subgraph
 
-    ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor b, std::shared_ptr<ov::Node> c)
-        : ggml_openvino_extra_base(Type::QUANTIZED_WEIGHT),
-          weights(std::move(w)), scales(std::move(s)), biases(std::move(b)), constant(std::move(c)) {}
+    ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor z, std::shared_ptr<ov::Node> c) :
+        ggml_openvino_extra_base(Type::QUANTIZED_WEIGHT),
+        weights(std::move(w)),
+        scales(std::move(s)),
+        zp(std::move(z)),
+        constant(std::move(c)) {}
 };
 
 // Extra data for KV cache / compute tensors - stores ov::Tensor for infer_request
@@ -133,7 +136,7 @@ struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
 // =====================================================
 // Extracted Size Calculation for Quantized Tensors
 // =====================================================
-// For quantized tensors, we need extra space to store extracted weights, scales, and biases.
+// For quantized tensors, we need extra space to store extracted weights, scales, and zero points.
 // Returns the total size needed in the buffer for extracted data.
 
 struct ggml_openvino_extracted_layout {
@@ -142,10 +145,10 @@ struct ggml_openvino_extracted_layout {
     size_t weights_size;      // Size of weights in bytes
     size_t scales_offset;     // Offset to scales in buffer
     size_t scales_size;       // Size of scales in bytes
-    size_t biases_offset;     // Offset to biases in buffer
-    size_t biases_size;       // Size of biases in bytes
+    size_t zp_offset;         // Offset to zero points in buffer
+    size_t zp_size;           // Size of zero points in bytes (U4 or U8)
     bool is_u4;               // true for U4 weights, false for U8
-    int64_t weights_per_block;// weights per scale/bias block
+    int64_t weights_per_block;  // weights per scale/zp block
     bool is_symmetric;        // true for symmetric quantization
 
     // Requantization info

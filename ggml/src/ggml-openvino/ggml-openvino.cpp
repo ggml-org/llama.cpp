@@ -259,13 +259,15 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 ov::Shape weight_shape = {static_cast<size_t>(tensor->ne[1]), static_cast<size_t>(tensor->ne[0])};
                 ov::Shape scale_shape = {static_cast<size_t>(tensor->ne[1]),
                                          static_cast<size_t>(tensor->ne[0] / layout.weights_per_block)};
+                // zp shape: scalar for symmetric, per-block for asymmetric
+                ov::Shape zp_shape = layout.is_symmetric ? ov::Shape{} : scale_shape;
 
                 ov::Tensor weights(weight_type, weight_shape, buf_base + layout.weights_offset);
                 ov::Tensor scales(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
-                ov::Tensor biases(ov::element::f16, scale_shape, buf_base + layout.biases_offset);
+                ov::Tensor zp(weight_type, zp_shape, buf_base + layout.zp_offset);
 
                 auto * extra = new ggml_openvino_quantized_weight_extra(std::move(weights), std::move(scales),
-                                                                        std::move(biases), constant);
+                                                                        std::move(zp), constant);
                 ctx->tensor_extras[tensor] = extra;
                 tensor->extra = extra;
 
@@ -487,10 +489,9 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
     if (ggml_is_quantized(tensor->type) && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
         ggml_openvino_extracted_layout layout = ggml_openvino_get_extracted_layout(tensor);
         if (layout.total_size > 0) {
-            GGML_LOG_DEBUG(
-                "%s: tensor %s needs %zu bytes (original %zu, extracted: weights=%zu scales=%zu biases=%zu)\n",
-                __func__, tensor->name, layout.total_size, ggml_nbytes(tensor), layout.weights_size, layout.scales_size,
-                layout.biases_size);
+            GGML_LOG_DEBUG("%s: tensor %s needs %zu bytes (original %zu, extracted: weights=%zu scales=%zu zp=%zu)\n",
+                           __func__, tensor->name, layout.total_size, ggml_nbytes(tensor), layout.weights_size,
+                           layout.scales_size, layout.zp_size);
             return layout.total_size;
         }
     }

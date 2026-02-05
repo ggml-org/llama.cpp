@@ -209,12 +209,12 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         layout.is_requant = true;
         layout.requant_type = requant_type;
 
-        // Special case: requant to F16 - just store F16 weights, no scales/biases
+        // Special case: requant to F16 - just store F16 weights, no scales/zp
         if (requant_type.value() == ExtraQuantType::F16) {
             layout.weights_size = n_elements * sizeof(uint16_t);  // F16 = 2 bytes
             layout.total_size = layout.weights_size;
             layout.weights_offset = 0;
-            // No scales/biases for F16
+            // No scales/zp for F16
             return layout;
         }
 
@@ -255,14 +255,15 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
             layout.weights_size = layout.is_u4 ? (n_elements / 2) : n_elements;
             int64_t n_blocks = n_elements / layout.weights_per_block;
             layout.scales_size = n_blocks * sizeof(uint16_t);
-            // For symmetric quantization, we only need one bias value (not one per block)
-            layout.biases_size = layout.is_symmetric ? sizeof(uint16_t) : n_blocks * sizeof(uint16_t);
+            // For symmetric quantization, we only need one zp value (not one per block)
+            // Zero points are stored in U4 or U8 format matching the weight type
+            size_t n_zp_elements = layout.is_symmetric ? 1 : n_blocks;
+            layout.zp_size = layout.is_u4 ? ((n_zp_elements + 1) / 2) : n_zp_elements;
 
             layout.weights_offset = 0;
             layout.scales_offset = ((layout.weights_size + alignment - 1) / alignment) * alignment;
-            layout.biases_offset =
-                layout.scales_offset + ((layout.scales_size + alignment - 1) / alignment) * alignment;
-            layout.total_size = layout.biases_offset + layout.biases_size;
+            layout.zp_offset = layout.scales_offset + ((layout.scales_size + alignment - 1) / alignment) * alignment;
+            layout.total_size = layout.zp_offset + layout.zp_size;
             layout.total_size = std::max(layout.total_size, ggml_nbytes(tensor));
             return layout;
         }
@@ -305,17 +306,19 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // Weights: U4 = n_elements/2 bytes, U8 = n_elements bytes
     layout.weights_size = layout.is_u4 ? (n_elements / 2) : n_elements;
 
-    // Scales and biases: F16 per block
+    // Scales: F16 per block
     int64_t n_blocks = n_elements / layout.weights_per_block;
     layout.scales_size = n_blocks * sizeof(uint16_t);  // F16 = 2 bytes
-    // For symmetric quantization, we only need one bias value (not one per block)
-    layout.biases_size = layout.is_symmetric ? sizeof(uint16_t) : n_blocks * sizeof(uint16_t);
+    // Zero points: U4 or U8 matching weight type
+    // For symmetric quantization, we only need one zp value (not one per block)
+    size_t n_zp_elements = layout.is_symmetric ? 1 : n_blocks;
+    layout.zp_size = layout.is_u4 ? ((n_zp_elements + 1) / 2) : n_zp_elements;
 
-    // Layout in buffer: [weights | scales | biases] with alignment
+    // Layout in buffer: [weights | scales | zp] with alignment
     layout.weights_offset = 0;
     layout.scales_offset = ((layout.weights_size + alignment - 1) / alignment) * alignment;
-    layout.biases_offset = layout.scales_offset + ((layout.scales_size + alignment - 1) / alignment) * alignment;
-    layout.total_size = layout.biases_offset + layout.biases_size;
+    layout.zp_offset = layout.scales_offset + ((layout.scales_size + alignment - 1) / alignment) * alignment;
+    layout.total_size = layout.zp_offset + layout.zp_size;
 
     return layout;
 }

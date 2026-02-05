@@ -508,10 +508,10 @@ std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(ggml_cgraph * cgraph) {
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-    static std::mutex weights_mutex;
+    // static std::mutex weights_mutex;
     auto * nodes = cgraph->nodes;
     auto n_nodes = cgraph->n_nodes;
-    std::for_each(std::execution::par, nodes, nodes + n_nodes, [&](ggml_tensor * node) {
+    std::for_each(std::execution::seq, nodes, nodes + n_nodes, [&](ggml_tensor * node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             auto * src = node->src[i];
             if (src == nullptr) {
@@ -522,21 +522,26 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
             if (!src->view_src) {
                 ggml_backend_buffer * buffer = src->buffer;
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type)) {
-                    bool should_create = false;
-                    {
-                        std::lock_guard<std::mutex> lock(weights_mutex);
-                        if (model_weights.find(src_name) == model_weights.end()) {
-                            model_weights[src_name] = nullptr;
-                            should_create = true;
-                        }
-                    }
-                    if (should_create) {
+                    // bool should_create = false;
+                    // {
+                    //     std::lock_guard<std::mutex> lock(weights_mutex);
+                    //     if (model_weights.find(src_name) == model_weights.end()) {
+                    //         model_weights[src_name] = nullptr;
+                    //         should_create = true;
+                    //     }
+                    // }
+                    // if (should_create) {
+                    //     auto weight_node = create_weight_node(src);
+                    //     weight_node->set_friendly_name(src_name);
+                    //     {
+                    //         std::lock_guard<std::mutex> lock(weights_mutex);
+                    //         model_weights[src_name] = weight_node;
+                    //     }
+                    // }
+                    if (model_weights.find(src_name) == model_weights.end()) {
                         auto weight_node = create_weight_node(src);
                         weight_node->set_friendly_name(src_name);
-                        {
-                            std::lock_guard<std::mutex> lock(weights_mutex);
-                            model_weights[src_name] = weight_node;
-                        }
+                        model_weights[src_name] = weight_node;
                     }
                 }
             }
