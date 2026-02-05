@@ -5599,8 +5599,6 @@ void kernel_flash_attn_ext_impl(
                     }
                 } else if (blk_cur == 2) {
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
-                        const short j = jj*NSG + sgitg;
-
                         pm2[jj] += NW;
                     }
                 }
