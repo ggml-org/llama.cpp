@@ -13,7 +13,8 @@
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
 		ChatSettingsFields,
-		McpLogo
+		McpLogo,
+		McpServersSettings
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -488,6 +489,19 @@
 
 				{#if currentSection.title === 'Import/Export'}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === 'MCP'}
+					<div class="space-y-6">
+						<ChatSettingsFields
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+							onThemeChange={handleThemeChange}
+						/>
+
+						<div class="border-t border-border/30 pt-6">
+							<McpServersSettings />
+						</div>
+					</div>
 				{:else}
 					<div class="space-y-6">
 						<ChatSettingsFields
