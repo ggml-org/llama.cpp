@@ -4,6 +4,7 @@ import logging
 
 logging.basicConfig(filename='mcp_dummy.log', level=logging.DEBUG)
 
+
 def main():
     logging.info("Starting MCP Dummy Server")
     while True:
@@ -65,7 +66,7 @@ def main():
                 else:
                     # Ignore notifications or other methods
                     if req_id is not None:
-                         resp["error"] = {"code": -32601, "message": "Method not found"}
+                        resp["error"] = {"code": -32601, "message": "Method not found"}
                     else:
                         continue
 
@@ -76,6 +77,7 @@ def main():
         except Exception as e:
             logging.error(f"Error: {e}")
             break
+
 
 if __name__ == "__main__":
     main()
