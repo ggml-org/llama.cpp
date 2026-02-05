@@ -209,11 +209,13 @@
 			type="button"
 			variant="secondary"
 			onclick={onStop}
-			class="h-8 w-8 rounded-full bg-transparent p-0 hover:bg-destructive/20"
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
-			<Square class="h-8 w-8 fill-destructive stroke-destructive" />
+			<Square
+				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
+			/>
 		</Button>
 	{:else if shouldShowRecordButton}
 		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
