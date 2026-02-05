@@ -63,13 +63,10 @@
   outputs =
     { self, flake-parts, ... }@inputs:
     let
-      # We could include the git revisions in the package names but those would
-      # needlessly trigger rebuilds:
-      # llamaVersion = self.dirtyShortRev or self.shortRev;
-
-      # Nix already uses cryptographic hashes for versioning, so we'll just fix
-      # the fake semver for now:
-      llamaVersion = "0.0.0";
+      # Use the git revision for dev builds. This triggers rebuilds only when
+      # the git tree actually changes, which is acceptable for a development
+      # fork. Falls back to "0.0.0" for builds outside a git repo.
+      llamaVersion = self.dirtyShortRev or self.shortRev or "0.0.0";
     in
     flake-parts.lib.mkFlake { inherit inputs; }
 
@@ -80,6 +77,7 @@
           .devops/nix/apps.nix
           .devops/nix/devshells.nix
           .devops/nix/jetson-support.nix
+          .devops/nix/nixos-module.nix
         ];
 
         # An overlay can be used to have a more granular control over llama-cpp's
@@ -149,22 +147,51 @@
 
             # We don't use the overlay here so as to avoid making too many instances of nixpkgs,
             # cf. https://zimbatm.com/notes/1000-instances-of-nixpkgs
-            packages =
-              {
-                default = config.legacyPackages.llamaPackages.llama-cpp;
-                vulkan = config.packages.default.override { useVulkan = true; };
-                windows = config.legacyPackages.llamaPackagesWindows.llama-cpp;
-                python-scripts = config.legacyPackages.llamaPackages.python-scripts;
-              }
-              // lib.optionalAttrs pkgs.stdenv.isLinux {
-                cuda = config.legacyPackages.llamaPackagesCuda.llama-cpp;
+            packages = {
+              default = config.legacyPackages.llamaPackages.llama-cpp;
+              vulkan = config.packages.default.override { useVulkan = true; };
+              windows = config.legacyPackages.llamaPackagesWindows.llama-cpp;
+              python-scripts = config.legacyPackages.llamaPackages.python-scripts;
+            }
+            // lib.optionalAttrs pkgs.stdenv.isLinux {
+              cuda = config.legacyPackages.llamaPackagesCuda.llama-cpp;
 
-                mpi-cpu = config.packages.default.override { useMpi = true; };
-                mpi-cuda = config.packages.default.override { useMpi = true; };
+              mpi-cpu = config.packages.default.override { useMpi = true; };
+              mpi-cuda = config.packages.default.override { useMpi = true; };
+            }
+            // lib.optionalAttrs (system == "x86_64-linux") (
+              let
+                rocmBase = config.legacyPackages.llamaPackagesRocm.llama-cpp;
+                rocmFor = gfx: rocmBase.override { rocmGpuTargets = gfx; };
+                dockerFor = llama: config.legacyPackages.llamaPackagesRocm.docker.override { llama-cpp = llama; };
+              in
+              {
+                rocm = rocmBase; # All supported GPU architectures
+
+                # Card-specific ROCm builds — targets a single GPU for faster compilation
+                rocm-gfx906 = rocmFor "gfx906"; # MI50, MI60
+                rocm-gfx908 = rocmFor "gfx908"; # MI100
+                rocm-gfx90a = rocmFor "gfx90a"; # MI210, MI250, MI250X
+                rocm-gfx942 = rocmFor "gfx942"; # MI300A, MI300X, MI325X
+                rocm-gfx1030 = rocmFor "gfx1030"; # Radeon PRO W6800, Radeon PRO V620
+                rocm-gfx1100 = rocmFor "gfx1100"; # Radeon RX 7900 XTX, Radeon RX 7900 XT
+                rocm-gfx1101 = rocmFor "gfx1101"; # Radeon RX 7800 XT, Radeon RX 7700 XT, Radeon PRO W7700
+                rocm-gfx1200 = rocmFor "gfx1200"; # Radeon RX 9060 XT
+                rocm-gfx1201 = rocmFor "gfx1201"; # Radeon RX 9070 XT, Radeon RX 9070
+
+                # Docker images — GPU-specific containers (reuses cached llama-cpp derivation)
+                docker-rocm = dockerFor rocmBase;
+                docker-rocm-gfx906 = dockerFor (rocmFor "gfx906");
+                docker-rocm-gfx908 = dockerFor (rocmFor "gfx908");
+                docker-rocm-gfx90a = dockerFor (rocmFor "gfx90a");
+                docker-rocm-gfx942 = dockerFor (rocmFor "gfx942");
+                docker-rocm-gfx1030 = dockerFor (rocmFor "gfx1030");
+                docker-rocm-gfx1100 = dockerFor (rocmFor "gfx1100");
+                docker-rocm-gfx1101 = dockerFor (rocmFor "gfx1101");
+                docker-rocm-gfx1200 = dockerFor (rocmFor "gfx1200");
+                docker-rocm-gfx1201 = dockerFor (rocmFor "gfx1201");
               }
-              // lib.optionalAttrs (system == "x86_64-linux") {
-                rocm = config.legacyPackages.llamaPackagesRocm.llama-cpp;
-              };
+            );
 
             # Packages exposed in `.#checks` will be built by the CI and by
             # `nix flake check`.
@@ -174,6 +201,20 @@
             # TODO: Build more once https://github.com/ggml-org/llama.cpp/issues/6346 has been addressed
             checks = {
               inherit (config.packages) default vulkan;
+
+              nix-formatting =
+                pkgs.runCommandLocal "check-nix-formatting"
+                  {
+                    nativeBuildInputs = [ pkgs.nixfmt-rfc-style ];
+                    src = lib.fileset.toSource {
+                      root = ./.;
+                      fileset = lib.fileset.fileFilter (f: f.hasExt "nix") ./.;
+                    };
+                  }
+                  ''
+                    nixfmt --check "$src"
+                    touch $out
+                  '';
             };
           };
       };

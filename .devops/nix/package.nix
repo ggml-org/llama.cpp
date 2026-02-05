@@ -17,6 +17,7 @@
   vulkan-headers,
   vulkan-loader,
   curl,
+  openssl,
   shaderc,
   useBlas ?
     builtins.all (x: !x) [
@@ -52,55 +53,72 @@ let
     strings
     ;
 
+  # Safety: shadow stdenv to force use of effectiveStdenv.
+  # callPackage auto-injects stdenv, but CUDA builds require backendStdenv
+  # for consistent libstdc++. This throw catches accidental uses at eval time.
   stdenv = throw "Use effectiveStdenv instead";
 
-  suffices =
-    lib.optionals useBlas [ "BLAS" ]
-    ++ lib.optionals useCuda [ "CUDA" ]
-    ++ lib.optionals useMetalKit [ "MetalKit" ]
-    ++ lib.optionals useMpi [ "MPI" ]
-    ++ lib.optionals useRocm [ "ROCm" ]
-    ++ lib.optionals useVulkan [ "Vulkan" ];
-
-  pnameSuffix =
-    strings.optionalString (suffices != [ ])
-      "-${strings.concatMapStringsSep "-" strings.toLower suffices}";
-  descriptionSuffix = strings.optionalString (
-    suffices != [ ]
-  ) ", accelerated with ${strings.concatStringsSep ", " suffices}";
+  # Import backend definitions
+  backendDefs = import ./backends.nix {
+    inherit lib cmakeBool cmakeFeature;
+  };
 
   xcrunHost = runCommand "xcrunHost" { } ''
     mkdir -p $out/bin
     ln -s /usr/bin/xcrun $out/bin
   '';
 
+  # Build the list of active backends by checking each use* flag
+  activeBackends =
+    optionals useBlas [
+      (backendDefs.blas { inherit blas; })
+    ]
+    ++ optionals useCuda [
+      (backendDefs.cuda { inherit cudaPackages autoAddDriverRunpath; })
+    ]
+    ++ optionals useRocm [
+      (backendDefs.rocm { inherit rocmPackages rocmGpuTargets; })
+    ]
+    ++ optionals useMetalKit [
+      (backendDefs.metalkit { inherit darwin precompileMetalShaders xcrunHost; })
+    ]
+    ++ optionals useVulkan [
+      (backendDefs.vulkan { inherit vulkan-headers vulkan-loader shaderc; })
+    ]
+    ++ optionals useMpi [
+      (backendDefs.mpi { inherit mpi; })
+    ];
+
+  # Merge all active backend configs into a single attrset
+  emptyBackend = {
+    suffixes = [ ];
+    buildInputs = [ ];
+    nativeBuildInputs = [ ];
+    cmakeFlags = [ ];
+    env = { };
+  };
+
+  mergedBackends = lib.foldl' (acc: backend: {
+    suffixes = acc.suffixes ++ [ backend.suffix ];
+    buildInputs = acc.buildInputs ++ backend.buildInputs;
+    nativeBuildInputs = acc.nativeBuildInputs ++ backend.nativeBuildInputs;
+    cmakeFlags = acc.cmakeFlags ++ backend.cmakeFlags;
+    env = acc.env // backend.env;
+  }) emptyBackend activeBackends;
+
+  pnameSuffix =
+    strings.optionalString (mergedBackends.suffixes != [ ])
+      "-${strings.concatMapStringsSep "-" strings.toLower mergedBackends.suffixes}";
+  descriptionSuffix = strings.optionalString (
+    mergedBackends.suffixes != [ ]
+  ) ", accelerated with ${strings.concatStringsSep ", " mergedBackends.suffixes}";
+
   # apple_sdk is supposed to choose sane defaults, no need to handle isAarch64
   # separately
-  darwinBuildInputs =
-    with darwin.apple_sdk.frameworks;
-    [
-      Accelerate
-      CoreVideo
-      CoreGraphics
-    ]
-    ++ optionals useMetalKit [ MetalKit ];
-
-  cudaBuildInputs = with cudaPackages; [
-    cuda_cudart
-    cuda_cccl # <nv/target>
-    libcublas
-  ];
-
-  rocmBuildInputs = with rocmPackages; [
-    clr
-    hipblas
-    rocblas
-  ];
-
-  vulkanBuildInputs = [
-    vulkan-headers
-    vulkan-loader
-    shaderc
+  darwinBuildInputs = with darwin.apple_sdk.frameworks; [
+    Accelerate
+    CoreVideo
+    CoreGraphics
   ];
 in
 
@@ -127,76 +145,48 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  postPatch = ''
-  '';
+  postPatch = "";
 
-  # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
-  # `default.metallib` may be compiled with Metal compiler from XCode
-  # and we need to escape sandbox on MacOS to access Metal compiler.
-  # `xcrun` is used find the path of the Metal compiler, which is varible
-  # and not on $PATH
-  # see https://github.com/ggml-org/llama.cpp/pull/6118 for discussion
+  # Last-resort sandbox escape, only used for Darwin Metal precompilation.
+  # When precompileMetalShaders is true, the build needs `xcrun` to locate
+  # the Metal compiler, which lives outside the Nix sandbox at a variable
+  # system path. This is safe because the Metal shader compilation is
+  # deterministic — the escape only grants read access to Apple's toolchain.
+  # See https://github.com/ggml-org/llama.cpp/pull/6118 for discussion.
   __noChroot = effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders;
 
-  nativeBuildInputs =
-    [
-      cmake
-      ninja
-      pkg-config
-      git
-    ]
-    ++ optionals useCuda [
-      cudaPackages.cuda_nvcc
+  nativeBuildInputs = [
+    cmake
+    ninja
+    pkg-config
+    git
+  ]
+  ++ mergedBackends.nativeBuildInputs
+  ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [ glibc.static ];
 
-      autoAddDriverRunpath
-    ]
-    ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [ glibc.static ]
-    ++ optionals (effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
+  buildInputs = [
+    curl
+    openssl
+  ] # For HTTPS model downloads (cpp-httplib + OpenSSL)
+  ++ optionals effectiveStdenv.isDarwin darwinBuildInputs
+  ++ mergedBackends.buildInputs;
 
-  buildInputs =
-    optionals effectiveStdenv.isDarwin darwinBuildInputs
-    ++ optionals useCuda cudaBuildInputs
-    ++ optionals useMpi [ mpi ]
-    ++ optionals useRocm rocmBuildInputs
-    ++ optionals useBlas [ blas ]
-    ++ optionals useVulkan vulkanBuildInputs;
+  cmakeFlags = [
+    (cmakeBool "LLAMA_BUILD_SERVER" true)
+    (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
+    (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
+    (cmakeBool "GGML_NATIVE" true) # Enable CPU-native optimizations (AVX2, etc)
+    (cmakeBool "GGML_BLAS" useBlas)
+    (cmakeBool "GGML_CUDA" useCuda)
+    (cmakeBool "GGML_HIP" useRocm)
+    (cmakeBool "GGML_METAL" useMetalKit)
+    (cmakeBool "GGML_VULKAN" useVulkan)
+    (cmakeBool "GGML_STATIC" enableStatic)
+    (cmakeBool "GGML_RPC" useRpc)
+  ]
+  ++ mergedBackends.cmakeFlags;
 
-  cmakeFlags =
-    [
-      (cmakeBool "LLAMA_BUILD_SERVER" true)
-      (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
-      (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
-      (cmakeBool "GGML_NATIVE" false)
-      (cmakeBool "GGML_BLAS" useBlas)
-      (cmakeBool "GGML_CUDA" useCuda)
-      (cmakeBool "GGML_HIP" useRocm)
-      (cmakeBool "GGML_METAL" useMetalKit)
-      (cmakeBool "GGML_VULKAN" useVulkan)
-      (cmakeBool "GGML_STATIC" enableStatic)
-      (cmakeBool "GGML_RPC" useRpc)
-    ]
-    ++ optionals useCuda [
-      (
-        with cudaPackages.flags;
-        cmakeFeature "CMAKE_CUDA_ARCHITECTURES" (
-          builtins.concatStringsSep ";" (map dropDot cudaCapabilities)
-        )
-      )
-    ]
-    ++ optionals useRocm [
-      (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
-    ]
-    ++ optionals useMetalKit [
-      (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
-      (cmakeBool "GGML_METAL_EMBED_LIBRARY" (!precompileMetalShaders))
-    ];
-
-  # Environment variables needed for ROCm
-  env = optionalAttrs useRocm {
-    ROCM_PATH = "${rocmPackages.clr}";
-    HIP_DEVICE_LIB_PATH = "${rocmPackages.rocm-device-libs}/amdgcn/bitcode";
-  };
+  env = mergedBackends.env;
 
   # TODO(SomeoneSerge): It's better to add proper install targets at the CMake level,
   # if they haven't been added yet.

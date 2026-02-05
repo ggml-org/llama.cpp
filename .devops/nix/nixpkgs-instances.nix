@@ -7,14 +7,16 @@
     { lib, system, ... }:
     {
       _module.args = {
-        # Note: bringing up https://zimbatm.com/notes/1000-instances-of-nixpkgs
-        # again, the below creates several nixpkgs instances which the
-        # flake-centric CLI will be forced to evaluate e.g. on `nix flake show`.
+        # Why separate nixpkgs instances?
         #
-        # This is currently "slow" and "expensive", on a certain scale.
-        # This also isn't "right" in that this hinders dependency injection at
-        # the level of flake inputs. This might get removed in the foreseeable
-        # future.
+        # CUDA and ROCm require config-level settings (cudaSupport, rocmSupport)
+        # that propagate through the *entire* dependency tree. For example,
+        # openmpi, ucc, and ucx all need to be built with CUDA/ROCm support
+        # when the top-level package uses them. Overlays cannot achieve this —
+        # they modify individual packages, not the config that flows into every
+        # callPackage invocation. This is a fundamental nixpkgs constraint.
+        #
+        # Cf. https://zimbatm.com/notes/1000-instances-of-nixpkgs
         #
         # Note that you can use these expressions without Nix
         # (`pkgs.callPackage ./devops/nix/scope.nix { }` is the entry point).
@@ -39,6 +41,15 @@
         pkgsRocm = import inputs.nixpkgs {
           inherit system;
           config.rocmSupport = true;
+          config.allowUnfreePredicate =
+            p:
+            builtins.all (
+              license:
+              license.free
+              || builtins.elem license.shortName [
+                "AMD ROCm License"
+              ]
+            ) (p.meta.licenses or (lib.toList p.meta.license));
         };
       };
     };
