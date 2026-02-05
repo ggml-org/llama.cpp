@@ -19,10 +19,11 @@
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
 
-const uint32_t row_split = 4;
+const uint32_t row_split = (Br < 4) ? 1 : 4;
 const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = WorkGroupSize / D_split / row_split;
 const uint32_t cols_per_thread = Bc / cols_per_iter;
+const uint32_t num_subgroups = WorkGroupSize / SubGroupSize;
 
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
@@ -42,8 +43,10 @@ D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in ACC_
     return elem;
 }
 
-shared float tmpsh[WorkGroupSize];
-shared vec4 tmpshv4[WorkGroupSize];
+const uint32_t tmpsh_reduction_size = row_split == 1 ? num_subgroups * D_split : 0;
+const uint32_t tmpsh_size = tmpsh_reduction_size > 4 ? tmpsh_reduction_size : 4;
+shared float tmpsh[tmpsh_size];
+shared ACC_TYPEV4 tmpsh_accv4[tmpsh_size];
 
 shared FLOAT_TYPE masksh[Bc][Br];
 
@@ -279,7 +282,7 @@ void main() {
                 FLOAT_TYPEV4 Vf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * v_stride / 4 + d * D_split + d_tid]);
 #endif
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                    Of[r][d] += ACC_TYPE(Pf[r][c] * Vf);
+                    Of[r][d] += ACC_TYPEV4(Pf[r][c] * Vf);
                 }
             }
         }
@@ -293,57 +296,67 @@ void main() {
     // reduce across threads
 
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-        float rowmaxf, eMf;
+        float rowmaxf = Mf[r];
 
-        tmpsh[tid] = Mf[r];
         // Compute max across the row
-        barrier();
-        [[unroll]] for (int s = int(gl_WorkGroupSize.x) / 2; s >= D_split; s >>= 1) {
-            if (tid < s) {
-                tmpsh[tid] = max(tmpsh[tid], tmpsh[tid + s]);
+        [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+            rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
+        }
+        if (row_split == 1) {
+            // Reduce inside workgroup with shmem
+            barrier();
+            if (gl_SubgroupInvocationID == d_tid) {
+                tmpsh[gl_SubgroupID * D_split + d_tid] = rowmaxf;
             }
             barrier();
+            rowmaxf = max(max(max(tmpsh[0 * D_split + d_tid],
+                                  tmpsh[1 * D_split + d_tid]),
+                                  tmpsh[2 * D_split + d_tid]),
+                                  tmpsh[3 * D_split + d_tid]);
         }
-        rowmaxf = tmpsh[d_tid];
-        barrier();
 
         float Moldf = Mf[r];
 
         // M = max(rowmax, Mold)
         // eM = e^(Mold - M)
         Mf[r] = max(rowmaxf, Moldf);
-        eMf = exp(Moldf - Mf[r]);
+        float eMf = exp(Moldf - Mf[r]);
 
         Lf[r] = eMf*Lf[r];
 
-        tmpsh[tid] = Lf[r];
-
         // Compute sum across the row
-        barrier();
-        [[unroll]] for (int s = int(gl_WorkGroupSize.x) / 2; s >= D_split; s >>= 1) {
-            if (tid < s) {
-                tmpsh[tid] = tmpsh[tid] + tmpsh[tid + s];
+        [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+            Lf[r] += subgroupShuffleXor(Lf[r], s);
+        }
+        if (row_split == 1) {
+            barrier();
+            if (gl_SubgroupInvocationID == d_tid) {
+                tmpsh[gl_SubgroupID * D_split + d_tid] = Lf[r];
             }
             barrier();
+            Lf[r] = tmpsh[0 * D_split + d_tid] +
+                    tmpsh[1 * D_split + d_tid] +
+                    tmpsh[2 * D_split + d_tid] +
+                    tmpsh[3 * D_split + d_tid];
         }
-        Lf[r] = tmpsh[d_tid];
-        barrier();
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-
             Of[r][d] = ACC_TYPE(eMf) * Of[r][d];
-            tmpshv4[tid] = Of[r][d];
 
-            barrier();
-            [[unroll]] for (int s = int(gl_WorkGroupSize.x) / 2; s >= D_split; s >>= 1) {
-                if (tid < s) {
-                    Of[r][d] += ACC_TYPEV4(tmpshv4[tid + s]);
-                    tmpshv4[tid] = Of[r][d];
+            [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+                Of[r][d] += subgroupShuffleXor(Of[r][d], s);
+            }
+            if (row_split == 1) {
+                barrier();
+                if (gl_SubgroupInvocationID == d_tid) {
+                    tmpsh_accv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
                 }
                 barrier();
+                Of[r][d] = tmpsh_accv4[0 * D_split + d_tid] +
+                           tmpsh_accv4[1 * D_split + d_tid] +
+                           tmpsh_accv4[2 * D_split + d_tid] +
+                           tmpsh_accv4[3 * D_split + d_tid];
             }
-            Of[r][d] = ACC_TYPEV4(tmpshv4[d_tid]);
-            barrier();
         }
     }
 
