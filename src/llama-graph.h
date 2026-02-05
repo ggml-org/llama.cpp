@@ -1015,6 +1015,6 @@ struct llm_graph_context {
             ggml_tensor * dense_2,
             ggml_tensor * dense_3) const;
 };
-void llm_graph_dump_outputs_fp32(ggml_cgraph * gf, const char * out_dir = "dump_out");
+
 // TODO: better name
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional);

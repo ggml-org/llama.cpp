@@ -1028,10 +1028,10 @@ ggml_tensor * llm_graph_context::build_ffn(
                         gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
                         cb(gate_act, "ffn_silu_clamped", il);
 
-                        ggml_tensor * up_clamped = ggml_clamp(ctx0, tmp, -limit, limit);
-                        cb(up_clamped, "ffn_up_clamped", il);
+                        tmp = ggml_clamp(ctx0, tmp, -limit, limit);
+                        cb(tmp, "ffn_up_clamped", il);
 
-                        cur = ggml_mul(ctx0, gate_act, up_clamped);
+                        cur = ggml_mul(ctx0, gate_act, tmp);
                         cb(cur, "ffn_swiglu_limited", il);
                         type_gate = LLM_FFN_SEQ;
                         break;
@@ -1350,10 +1350,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         gate_act = ggml_clamp(ctx0, gate_act, -INFINITY, limit);
                         cb(gate_act, "ffn_moe_silu_clamped", il);
 
-                        ggml_tensor * up_clamped = ggml_clamp(ctx0, up, -limit, limit);
-                        cb(up_clamped, "ffn_moe_up_clamped", il);
+                        up = ggml_clamp(ctx0, up, -limit, limit);
+                        cb(up, "ffn_moe_up_clamped", il);
 
-                        cur = ggml_mul(ctx0, gate_act, up_clamped);
+                        cur = ggml_mul(ctx0, gate_act, up);
                         cb(cur, "ffn_moe_swiglu_limited", il);
                         break;
                     }
