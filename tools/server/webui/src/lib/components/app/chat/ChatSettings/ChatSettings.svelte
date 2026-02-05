@@ -27,6 +27,8 @@
 	import type { Component } from 'svelte';
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
+	import type { SettingsSectionTitle } from '$lib/constants/settings-sections';
 
 	interface Props {
 		onSave?: () => void;
@@ -244,12 +246,12 @@
 			]
 		},
 		{
-			title: 'Import/Export',
+			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
 			icon: Database,
 			fields: []
 		},
 		{
-			title: 'MCP',
+			title: SETTINGS_SECTION_TITLES.MCP,
 			icon: McpLogo,
 			fields: [
 				{
@@ -270,7 +272,7 @@
 			]
 		},
 		{
-			title: 'Developer',
+			title: SETTINGS_SECTION_TITLES.DEVELOPER,
 			icon: Code,
 			fields: [
 				{
@@ -310,9 +312,7 @@
 		// }
 	];
 
-	let activeSection = $derived<SettingsSectionTitle>(
-		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
-	);
+	let activeSection = $state<SettingsSectionTitle>(SETTINGS_SECTION_TITLES.GENERAL);
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
@@ -507,7 +507,7 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
-				{:else if currentSection.title === 'MCP'}
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
 					<div class="space-y-6">
 						<ChatSettingsFields
 							fields={currentSection.fields}
