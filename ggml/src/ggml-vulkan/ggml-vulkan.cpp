@@ -2761,11 +2761,11 @@ static constexpr uint32_t scalar_flash_attention_num_small_rows = 1;
 
 static uint32_t get_fa_scalar_num_large_rows(uint32_t hsk, uint32_t hsv, bool small_cache) {
     if (hsv >= 192) {
-        return 2;
-    } else if ((hsv | hsk) & 8 || small_cache) {
-        return 4;
-    } else {
         return 8;
+    } else if ((hsv | hsk) & 8 || small_cache) {
+        return 8;
+    } else {
+        return 16;
     }
 }
 
@@ -2791,13 +2791,7 @@ static std::array<uint32_t, 2> fa_rows_cols(FaCodePath path, uint32_t hsk, uint3
         if (small_rows) {
             return {scalar_flash_attention_num_small_rows, 64};
         } else {
-            if ((hsv | hsk) & 8) {
-                // HSV/HSK not being a multiple of 16 makes D_split smaller, which makes cols_per_iter
-                // larger, and Bc needs to be >= cols_per_thread. 64 is large enough, 32 is not.
-                return {get_fa_scalar_num_large_rows(hsk, hsv, small_cache), 64};
-            } else {
-                return {get_fa_scalar_num_large_rows(hsk, hsv, small_cache), 32};
-            }
+            return {get_fa_scalar_num_large_rows(hsk, hsv, small_cache), 64};
         }
     }
 
@@ -3215,7 +3209,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
             wg_size = (rows_cols[1] / 16) * device->subgroup_size; // enough subgroups for Bc/MatBc
             break;
         default:
-            wg_size = device->subgroup_size * 4;
+            if (device->subgroup_size > 32 && rows_cols[0] < 4) {
+                wg_size = device->subgroup_size * 2;
+            } else {
+                wg_size = device->subgroup_size * 4;
+            }
             break;
         }
 

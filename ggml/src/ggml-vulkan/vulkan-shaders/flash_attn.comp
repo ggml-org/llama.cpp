@@ -309,10 +309,10 @@ void main() {
                 tmpsh[gl_SubgroupID * D_split + d_tid] = rowmaxf;
             }
             barrier();
-            rowmaxf = max(max(max(tmpsh[0 * D_split + d_tid],
-                                  tmpsh[1 * D_split + d_tid]),
-                                  tmpsh[2 * D_split + d_tid]),
-                                  tmpsh[3 * D_split + d_tid]);
+            rowmaxf = tmpsh[d_tid];
+            [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                rowmaxf = max(rowmaxf, tmpsh[s * D_split + d_tid]);
+            }
         }
 
         float Moldf = Mf[r];
@@ -334,10 +334,10 @@ void main() {
                 tmpsh[gl_SubgroupID * D_split + d_tid] = Lf[r];
             }
             barrier();
-            Lf[r] = tmpsh[0 * D_split + d_tid] +
-                    tmpsh[1 * D_split + d_tid] +
-                    tmpsh[2 * D_split + d_tid] +
-                    tmpsh[3 * D_split + d_tid];
+            Lf[r] = tmpsh[d_tid];
+            [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                Lf[r] += tmpsh[s * D_split + d_tid];
+            }
         }
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
@@ -352,10 +352,10 @@ void main() {
                     tmpsh_accv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
                 }
                 barrier();
-                Of[r][d] = tmpsh_accv4[0 * D_split + d_tid] +
-                           tmpsh_accv4[1 * D_split + d_tid] +
-                           tmpsh_accv4[2 * D_split + d_tid] +
-                           tmpsh_accv4[3 * D_split + d_tid];
+                Of[r][d] = tmpsh_accv4[d_tid];
+                [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                    Of[r][d] += tmpsh_accv4[s * D_split + d_tid];
+                }
             }
         }
     }
