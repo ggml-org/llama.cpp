@@ -5,6 +5,7 @@
 #include "server-common.h"
 #include "server-http.h"
 
+#include <atomic>
 #include <mutex>
 #include <condition_variable>
 #include <functional>
@@ -96,6 +97,10 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // idle watchdog
+    std::thread watchdog_thread;
+    std::atomic<bool> watchdog_running{false};
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
@@ -134,6 +139,10 @@ public:
     // load the model if not loaded, otherwise do nothing (thread-safe)
     // return false if model is already loaded; return true otherwise (meta may need to be refreshed)
     bool ensure_model_loaded(const std::string & name);
+
+    // start/stop the idle watchdog thread that terminates idle model instances
+    void start_idle_watchdog(int unload_idle_seconds);
+    void stop_idle_watchdog();
 
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);

@@ -132,6 +132,8 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        models_routes->models.start_idle_watchdog(params.stop_idle_seconds);
+
         // proxy handlers
         // note: routes.get_health stays the same
         routes.get_metrics                 = models_routes->proxy_get;
@@ -210,6 +212,7 @@ int main(int argc, char ** argv) {
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             if (models_routes.has_value()) {
+                models_routes->models.stop_idle_watchdog();
                 models_routes->models.unload_all();
             }
             llama_backend_free();

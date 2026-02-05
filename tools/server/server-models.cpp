@@ -94,6 +94,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    preset.unset_option("LLAMA_ARG_STOP_IDLE_SECONDS");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -610,6 +611,49 @@ void server_models::unload(const std::string & name) {
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not loaded\n", name.c_str());
+        }
+    }
+}
+
+void server_models::start_idle_watchdog(int unload_idle_seconds) {
+    if (unload_idle_seconds < 0) {
+        return; // disabled
+    }
+    watchdog_running.store(true);
+    watchdog_thread = std::thread([this, unload_idle_seconds]() {
+        const int64_t threshold_ms = (int64_t)unload_idle_seconds * 1000;
+        SRV_INF("idle watchdog started, unload after %d seconds of inactivity\n", unload_idle_seconds);
+        while (watchdog_running.load()) {
+            // collect names of idle models under lock
+            std::vector<std::string> to_unload;
+            {
+                std::lock_guard<std::mutex> lk(mutex);
+                int64_t now = ggml_time_ms();
+                for (const auto & [name, inst] : mapping) {
+                    if (inst.meta.is_active() && inst.meta.last_used > 0 && (now - inst.meta.last_used) > threshold_ms) {
+                        to_unload.push_back(name);
+                    }
+                }
+            }
+            // unload outside lock (unload() acquires its own lock)
+            for (const auto & name : to_unload) {
+                SRV_INF("idle watchdog: unloading idle model name=%s\n", name.c_str());
+                unload(name);
+            }
+            // sleep in 100ms increments for responsive shutdown
+            for (int i = 0; i < 10 && watchdog_running.load(); i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        }
+        SRV_INF("%s", "idle watchdog stopped\n");
+    });
+}
+
+void server_models::stop_idle_watchdog() {
+    if (watchdog_running.load()) {
+        watchdog_running.store(false);
+        if (watchdog_thread.joinable()) {
+            watchdog_thread.join();
         }
     }
 }

@@ -210,6 +210,7 @@ For the ful list of features, please refer to [server's changelog](https://githu
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
 | `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
+| `--stop-idle-seconds SECONDS` | for router server, fully terminate model instances after N seconds of inactivity (default: -1; -1 = disabled)<br/>(env: LLAMA_ARG_STOP_IDLE_SECONDS) |
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
 | `--reasoning-budget N` | controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
@@ -1688,6 +1689,8 @@ Example of an error:
 The server supports an automatic sleep mode that activates after a specified period of inactivity (no incoming tasks). This feature, introduced in [PR #18228](https://github.com/ggml-org/llama.cpp/pull/18228), can be enabled using the `--sleep-idle-seconds` command-line argument. It works seamlessly in both single-model and multi-model configurations.
 
 When the server enters sleep mode, the model and its associated memory (including the KV cache) are unloaded from RAM to conserve resources. Any new incoming task will automatically trigger the model to reload.
+
+**Note:** In router mode, `--sleep-idle-seconds` applies to each child server process individually (VRAM/RAM unload within the process). To fully terminate idle model subprocesses instead, use `--stop-idle-seconds`. When a terminated model is requested again, the router will re-spawn its process automatically (requires `--models-autoload`, which is enabled by default).
 
 The sleeping status can be retrieved from the `GET /props` endpoint (or `/props?model=(model_name)` in router mode).
 

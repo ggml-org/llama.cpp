@@ -2998,6 +2998,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--stop-idle-seconds"}, "SECONDS",
+        string_format("for router server, fully terminate model instances after N seconds of inactivity (default: %d; -1 = disabled)", params.stop_idle_seconds),
+        [](common_params & params, int value) {
+            if (value == 0 || value < -1) {
+                throw std::invalid_argument("invalid value: cannot be 0 or less than -1");
+            }
+            params.stop_idle_seconds = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STOP_IDLE_SECONDS"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),
