@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "pre_wgsl.hpp"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,9 +19,9 @@
 #define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
 
 struct ggml_webgpu_processed_shader {
-    std::string wgsl;
-    std::string variant;
-    std::shared_ptr<void>      decisions;
+    std::string           wgsl;
+    std::string           variant;
+    std::shared_ptr<void> decisions;
 };
 
 // Same hash combine function as in boost
@@ -192,13 +193,13 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl                                         = preprocessor.preprocess(shader_src, defines);
-    result.variant                                      = variant;
-    auto decisions = std::make_shared<ggml_webgpu_flash_attn_shader_decisions>();
-    decisions->q_tile                                   = q_tile;
-    decisions->kv_tile                                  = kv_tile;
-    decisions->wg_size                                  = wg_size;
-    result.decisions                                    = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_flash_attn_shader_decisions>();
+    decisions->q_tile  = q_tile;
+    decisions->kv_tile = kv_tile;
+    decisions->wg_size = wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
@@ -270,11 +271,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_pad_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-    decisions->wg_size                               = context.max_wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
@@ -305,11 +306,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_shader(
     }
     defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    auto decisions = std::make_shared<ggml_webgpu_argsort_shader_decisions>();
-    decisions->wg_size                               = wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_argsort_shader_decisions>();
+    decisions->wg_size = wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
@@ -324,11 +325,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_merge_shader(
     uint32_t wg_size = std::min(GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE, context.max_wg_size);
     defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    auto decisions = std::make_shared<ggml_webgpu_argsort_shader_decisions>();
-    decisions->wg_size                               = wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_argsort_shader_decisions>();
+    decisions->wg_size = wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
@@ -391,11 +392,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_set_rows_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-    decisions->wg_size                               = context.max_wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
@@ -457,11 +458,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_unary_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    auto decisions = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-    decisions->wg_size                               = context.max_wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
     return result;
 }
 
