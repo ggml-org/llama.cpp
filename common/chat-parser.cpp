@@ -1140,9 +1140,6 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
         return;
     }
 
-    // DEBUG: trace input
-    // fprintf(stderr, "hermes_parse: input='%s'\n", builder.input().substr(builder.pos()).c_str());
-
     static const common_regex open_regex(
         "(?:"
             "(```(?:xml|json)?\\n\\s*)?" // match 1 (block_start)
@@ -1163,7 +1160,6 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
     );
 
     while (auto res = builder.try_find_regex(open_regex)) {
-        // fprintf(stderr, "hermes_parse: found regex match\n");
         const auto & block_start = res->groups[1];
         std::string block_end = block_start.empty() ? "" : "```";
 
@@ -1176,23 +1172,16 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
 
             if (auto tool_call = builder.try_consume_json_with_dumped_args({{"arguments"}})) {
                 if (!builder.add_tool_call(tool_call->value) || tool_call->is_partial) {
-                    fprintf(stderr, "hermes: json tool add failed or partial (partial=%d)\n", tool_call->is_partial);
                     throw common_chat_msg_partial_exception("incomplete tool call");
                 }
                 builder.consume_spaces();
-                // builder.consume_literal(close_tag); // Handle mismatched close tag gracefully?
-                if (!builder.try_consume_literal(close_tag)) {
-                     fprintf(stderr, "hermes: failed to consume close tag '%s'. Remaining: '%s'\n", close_tag.c_str(), builder.input().substr(builder.pos()).c_str());
-                     // If closing tag is missing, is it partial?
-                     throw common_chat_msg_partial_exception("missing close tag");
-                }
+                builder.consume_literal(close_tag);
                 builder.consume_spaces();
                 if (!block_end.empty()) {
                     builder.consume_literal(block_end);
                     builder.consume_spaces();
                 }
             } else {
-                fprintf(stderr, "hermes: failed to consume json\n");
                 throw common_chat_msg_partial_exception("failed to parse tool call");
             }
         } else {
