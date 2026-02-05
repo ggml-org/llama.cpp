@@ -67,7 +67,7 @@ struct common_ngram_map {
     std::vector<common_ngram_map_key> keys; // key n-grams which occur several times in token-history
     uint16_t min_hits;   // minimum number of key hits to consider a draft
 
-    bool     show_key_map_stats = true; // true, if statistics of the key_map should be printed.
+    bool     show_key_map_stats = false; // true, if statistics of the key_map should be printed.
 
     common_ngram_map(uint16_t sz_key, uint16_t sz_value, bool only_keys,
                      uint16_t min_hits)
