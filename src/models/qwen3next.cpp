@@ -409,7 +409,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
 
     // Apply the gated delta rule for the single timestep
     // last_recurrent_state = last_recurrent_state * g_t
-    state = ggml_mul(ctx0, state, g_t);
+    state = ggml_mul_inplace(ctx0, state, g_t);
 
     // kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
     ggml_tensor * k_t_unsqueezed = ggml_reshape_4d(ctx0, k, 1, S_v, H_v, n_seqs);
@@ -424,8 +424,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
     ggml_tensor * delta  = ggml_mul(ctx0, v_diff, beta_t);
 
     // last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta
-    ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k_t_unsqueezed, S_v, S_v, H_v, n_seqs), delta);
-    state                   = ggml_add(ctx0, state, k_t_delta);
+    ggml_tensor * k_t_delta = ggml_mul_inplace(ctx0, ggml_repeat_4d(ctx0, k_t_unsqueezed, S_v, S_v, H_v, n_seqs), delta);
+    ggml_add_inplace(ctx0, state, k_t_delta);
 
     // Compute the attention output
     // core_attn_out = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
