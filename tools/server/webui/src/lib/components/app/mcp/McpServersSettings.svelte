@@ -6,6 +6,7 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { McpServerCard, McpServerCardSkeleton, McpServerForm } from '$lib/components/app/mcp';
+	import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 
 	let servers = $derived(mcpStore.getServersSorted());
 
@@ -56,11 +57,18 @@
 	function saveNewServer() {
 		if (newServerUrlError) return;
 
+		const newServerId = crypto.randomUUID
+			? crypto.randomUUID()
+			: `${MCP_SERVER_ID_PREFIX}${Date.now()}`;
+
 		mcpStore.addServer({
+			id: newServerId,
 			enabled: true,
 			url: newServerUrl.trim(),
 			headers: newServerHeaders.trim() || undefined
 		});
+
+		conversationsStore.setMcpServerOverride(newServerId, true);
 
 		isAddingServer = false;
 		newServerUrl = '';
