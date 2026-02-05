@@ -334,6 +334,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
     cur_p->size = k;
 }
 
+// generative error diffusion for sequential blue noise
 // pseudo-random number generator with ~6db/octave blue noise
 // this generator produces a uniform distribution
 // important: blue noise properties cannot be preserved when 
