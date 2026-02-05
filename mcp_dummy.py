@@ -17,13 +17,13 @@ def main():
                 req = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            
+
             if "method" in req:
                 method = req["method"]
                 req_id = req.get("id")
-                
+
                 resp = {"jsonrpc": "2.0", "id": req_id}
-                
+
                 if method == "initialize":
                     resp["result"] = {
                         "protocolVersion": "2024-11-05",
@@ -51,9 +51,9 @@ def main():
                     params = req.get("params", {})
                     name = params.get("name")
                     args = params.get("arguments", {})
-                    
+
                     logging.info(f"Tool call: {name} with {args}")
-                    
+
                     content = [{"type": "text", "text": f"Weather in {args.get('location')} is 25C"}]
                     # For simplicity, return raw content or follow MCP spec?
                     # MCP spec: result: { content: [ {type: "text", text: "..."} ] }

@@ -178,7 +178,7 @@ class mcp_server {
         if (err_thread.joinable()) {
             err_thread.join();
         }
-        
+
         // 5. Cleanup
         if (running) {
              subprocess_destroy(&process);

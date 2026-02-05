@@ -168,7 +168,7 @@ struct cli_context {
             buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             input_files.push_back(std::move(buf));
             return mtmd_default_marker();
-        } 
+        }
         return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     }
 
@@ -363,7 +363,7 @@ int main(int argc, char ** argv) {
         // process commands
         if (string_starts_with(buffer, "/exit")) {
             break;
-        } 
+        }
         if (string_starts_with(buffer, "/regen")) {
             if (ctx_cli.messages.size() >= 2) {
                 size_t last_idx = ctx_cli.messages.size() - 1;
