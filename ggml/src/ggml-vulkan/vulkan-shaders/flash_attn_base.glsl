@@ -10,6 +10,7 @@ layout (constant_id = 5) const uint32_t Clamp = 0;
 layout (constant_id = 6) const uint32_t D_split = 16;
 layout (constant_id = 7) const uint32_t SubGroupSize = 32;
 layout (constant_id = 8) const uint32_t K_LOAD_SHMEM = 0;
+layout (constant_id = 9) const bool     USE_MASK_OPT = false;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -65,6 +66,11 @@ layout (push_constant) uniform parameter {
 layout (binding = 4) readonly buffer S {float data_s[];};
 
 layout (binding = 5) writeonly buffer O {D_TYPE data_o[];};
+
+layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
+
+#define MASK_OPT_ALL_NEG_INF 1
+#define MASK_OPT_ALL_ZERO 2
 
 #define BINDING_IDX_K 0
 #define BINDING_IDX_V 1

@@ -169,20 +169,22 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     const int blck0 = 128;
     const int blck1 = 64;
 
-    // number of INF blocks
-    const int n_inf_blocks = 0.1*(ne0*ne1*ne2*ne3)/(blck0*blck1);
+    // number of INF/zero blocks
+    const int n_inf_zero_blocks = 0.2*(ne0*ne1*ne2*ne3)/(blck0*blck1);
 
-    for (int b = 0; b < n_inf_blocks; b++) {
+    for (int b = 0; b < n_inf_zero_blocks; b++) {
         const int p3 = (rd() % ne3);
         const int p2 = (rd() % ne2);
         const int p1 = (rd() % ne1);
         const int p0 = (rd() % ne0);
 
+        bool inf = rd() & 1;
+
         for (int i1 = 0; i1 < blck1 && p1 + i1 < ne1; i1++) {
             const int idx = p3*ne2*ne1*ne0 + p2*ne1*ne0 + (p1 + i1)*ne0 + p0;
 
             for (int i0 = 0; i0 < blck0 && p0 + i0 < ne0; i0++) {
-                data_f32[idx + i0] = -INFINITY;
+                data_f32[idx + i0] = inf ? -INFINITY : 0.0f;
             }
         }
     }
