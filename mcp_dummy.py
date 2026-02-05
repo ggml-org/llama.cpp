@@ -2,7 +2,7 @@ import sys
 import json
 import logging
 
-logging.basicConfig(filename='/devel/tools/llama.cpp/mcp_dummy.log', level=logging.DEBUG)
+logging.basicConfig(filename='mcp_dummy.log', level=logging.DEBUG)
 
 def main():
     logging.info("Starting MCP Dummy Server")
