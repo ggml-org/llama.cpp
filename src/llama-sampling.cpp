@@ -3847,6 +3847,9 @@ static void llama_sampler_thought_accept(struct llama_sampler * smpl, llama_toke
         ctx->thinking = true;
         ctx->count = 0;
     } else if (token == ctx->token_end_id) {
+        if (ctx->thinking) {
+            LLAMA_LOG_INFO("%s: thinking length: %d\n", __func__, ctx->count);
+        }
         ctx->thinking = false;
     } else if (ctx->thinking) {
         ctx->count++;
