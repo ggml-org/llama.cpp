@@ -571,6 +571,7 @@ extern "C" {
         GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
+        GGML_OP_MOE_SUM,
 
         GGML_OP_COUNT,
     };
@@ -1665,6 +1666,15 @@ extern "C" {
             struct ggml_tensor  * a,  // destination
             struct ggml_tensor  * b,  // source
             struct ggml_tensor  * c); // row indices
+
+    // a TS  [hidden_dim, n_expert_used, n_tokens]
+    // b TS  [hidden_dim, n_tokens]
+    //
+    // Sum the outputs from multiple experts for MoE models
+    GGML_API struct ggml_tensor * ggml_moe_sum(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int n_expert_used);
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,

@@ -2574,6 +2574,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                     return false;
             }
             break;
+        case GGML_OP_MOE_SUM:
+            ggml_cuda_op_moe_sum(ctx, dst);
+            break;
         case GGML_OP_NORM:
             ggml_cuda_op_norm(ctx, dst);
             break;
@@ -4561,6 +4564,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return false;
             }
             break;
+        case GGML_OP_MOE_SUM:
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op);
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {

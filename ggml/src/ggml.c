@@ -1045,9 +1045,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+    "MOE_SUM",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1154,9 +1155,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+    "moe_sum(x, n)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3013,6 +3015,22 @@ struct ggml_tensor * ggml_swiglu_oai(
     struct ggml_tensor * result = ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SWIGLU_OAI, false);
     ggml_set_op_params_f32(result, 2, alpha);
     ggml_set_op_params_f32(result, 3, limit);
+
+    return result;
+}
+
+// ggml_moe_sum
+
+struct ggml_tensor * ggml_moe_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                   n_expert_used) {
+    GGML_ASSERT(a->ne[1] == n_expert_used);
+    const int64_t ne[2] = {a->ne[0], a->ne[2]};
+    struct ggml_tensor * result = ggml_new_tensor(ctx, a->type, 2, ne);
+
+    result->op     = GGML_OP_MOE_SUM;
+    result->src[0] = a;
 
     return result;
 }

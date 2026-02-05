@@ -2155,6 +2155,38 @@ struct test_swiglu_oai : public test_case {
     }
 };
 
+// GGML_OP_MOE_SUM
+struct test_moe_sum : public test_case {
+    const ggml_type type;
+    const int64_t hidden_dim;
+    const int64_t n_expert_used;
+    const int64_t n_tokens;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, hidden_dim, n_expert_used, n_tokens);
+    }
+
+    // F16 has limited precision when summing multiple expert outputs
+    double max_nmse_err() override {
+        return type == GGML_TYPE_F16 ? 1e-6 : 1e-7;
+    }
+
+    test_moe_sum(ggml_type type = GGML_TYPE_F32,
+            int64_t hidden_dim = 128,
+            int64_t n_expert_used = 4,
+            int64_t n_tokens = 16)
+        : type(type), hidden_dim(hidden_dim), n_expert_used(n_expert_used), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_3d(ctx, type, hidden_dim, n_expert_used, n_tokens);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+        ggml_tensor * out = ggml_moe_sum(ctx, a, n_expert_used);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_GET_ROWS
 struct test_get_rows : public test_case {
     const ggml_type type;
@@ -7021,6 +7053,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         for (float alpha : {.5f, 1.702f}) {
             for (float limit : {2.0f, 7.0f}) {
                 test_cases.emplace_back(new test_swiglu_oai(GGML_TYPE_F32, { 128, 2, 2, 2 }, v, alpha, limit));
+            }
+        }
+    }
+
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int64_t n_expert_used : {2, 4, 8}) {
+            for (int64_t hidden_dim : {64, 128, 256, 4096}) {
+                for (int64_t n_tokens : {16, 32, 128, 256}) {
+                    test_cases.emplace_back(new test_moe_sum(type, hidden_dim, n_expert_used, n_tokens));
+                }
             }
         }
     }
