@@ -5,13 +5,13 @@
     {
       config,
       lib,
+      pkgs,
       system,
       ...
     }:
     {
       devShells =
         let
-          pkgs = import inputs.nixpkgs { inherit system; };
           stdenv = pkgs.stdenv;
           scripts = config.packages.python-scripts;
         in
@@ -37,7 +37,7 @@
                     ];
                     # Extra packages that *may* be used by some scripts
                     packages = [
-                        pkgs.python3Packages.tiktoken
+                      pkgs.python3Packages.tiktoken
                     ];
                     shellHook = ''
                       echo "Entering ${name} devShell"

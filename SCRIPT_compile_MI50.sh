@@ -171,8 +171,8 @@ rm -rf build && mkdir -p build && cd build
 {
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=$ROCM_PATH/llvm/bin/clang \
-    -DCMAKE_CXX_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
+    -DCMAKE_C_COMPILER="$ROCM_PATH"/llvm/bin/clang \
+    -DCMAKE_CXX_COMPILER="$ROCM_PATH"/llvm/bin/clang++ \
     -DCMAKE_HIP_ARCHITECTURES="$AMDGPU_ARCH" \
     -DCMAKE_HIP_COMPILER_FORCED=1 \
     -DCMAKE_C_FLAGS="-O3 -march=native -mtune=native -DNDEBUG -ffast-math -fno-finite-math-only -ffp-contract=fast" \
@@ -196,7 +196,7 @@ cmake .. \
     -DLLAMA_STATIC=OFF
 
 
-make -j$(nproc)
+make -j"$(nproc)"
 
 echo ""
 echo "Build complete: ./build/bin/llama-cli, llama-server, llama-bench"
