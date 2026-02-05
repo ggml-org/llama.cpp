@@ -27,6 +27,24 @@
 		getServerLabel,
 		onPromptClick
 	}: Props = $props();
+
+	let listContainer = $state<HTMLDivElement | null>(null);
+
+	$effect(() => {
+		if (listContainer && selectedIndex >= 0 && selectedIndex < prompts.length) {
+			const selectedElement = listContainer.querySelector(
+				`[data-prompt-index="${selectedIndex}"]`
+			) as HTMLElement;
+
+			if (selectedElement) {
+				selectedElement.scrollIntoView({
+					behavior: 'smooth',
+					block: 'nearest',
+					inline: 'nearest'
+				});
+			}
+		}
+	});
 </script>
 
 <ScrollArea>
@@ -36,7 +54,7 @@
 		</div>
 	{/if}
 
-	<div class="max-h-64 p-2" class:pt-13={showSearchInput}>
+	<div bind:this={listContainer} class="max-h-64 p-2" class:pt-13={showSearchInput}>
 		{#if isLoading}
 			<ChatFormPromptPickerListItemSkeleton />
 		{:else if prompts.length === 0}
@@ -49,6 +67,7 @@
 				{@const serverLabel = server ? getServerLabel(server) : prompt.serverName}
 
 				<ChatFormPromptPickerListItem
+					data-prompt-index={index}
 					{prompt}
 					{server}
 					{serverLabel}

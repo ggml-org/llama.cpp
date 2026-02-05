@@ -270,8 +270,8 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
-			if (selectedIndex < filteredPrompts.length - 1) {
-				selectedIndex++;
+			if (filteredPrompts.length > 0) {
+				selectedIndex = (selectedIndex + 1) % filteredPrompts.length;
 			}
 
 			return true;
@@ -279,8 +279,8 @@
 
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
-			if (selectedIndex > 0) {
-				selectedIndex--;
+			if (filteredPrompts.length > 0) {
+				selectedIndex = selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
 			}
 
 			return true;
