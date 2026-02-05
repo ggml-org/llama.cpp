@@ -71,6 +71,7 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix
 static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix.dataset";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_PRIOR_W    = "quantize.imatrix.prior_weight";
 
 // TODO: share with imatrix.cpp
 static const char * const LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
@@ -136,6 +137,7 @@ static void usage(const char * executable) {
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
+    printf("  --prior-weight N: how many tokens the neutral prior is worth (when using imatrix)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
@@ -217,7 +219,7 @@ static int load_legacy_imatrix(const std::string & imatrix_file, std::vector<std
     return m_last_call;
 }
 
-static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data, float & prior_weight) {
 
     struct ggml_context * ctx = nullptr;
     struct gguf_init_params meta_gguf_params = {
@@ -227,6 +229,7 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
     struct gguf_context * ctx_gguf = gguf_init_from_file(imatrix_file.c_str(), meta_gguf_params);
     if (!ctx_gguf) {
         fprintf(stderr, "%s: imatrix file '%s' is using old format\n", __func__, imatrix_file.c_str());
+        prior_weight = 0.0f; // can't use a prior weight without having proper activation counts
         return load_legacy_imatrix(imatrix_file, imatrix_datasets, imatrix_data);
     }
     const int32_t n_entries = gguf_get_n_tensors(ctx_gguf);
@@ -292,8 +295,15 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
         for (int64_t j = 0; j < ne1; ++j) {
             const float count = ((const float *) counts->data)[j];
             if (count > 0.0f) {
+                float sumw = 0.0f;
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count;
+                    sumw += ((const float *) sums->data)[j*ne0 + i];
+                }
+                // the neutral prior is equal weights, and it should reduce the variance by weighted-averaging with the mean
+                const float prior_value = sumw / ne0;
+
+                for (int64_t i = 0; i < ne0; ++i) {
+                    e[j*ne0 + i] = (((const float *) sums->data)[j*ne0 + i] + prior_value * prior_weight) / (count + prior_weight);
                 }
             } else {
                 // Partial imatrix data, this tensor never got any input during calibration
@@ -335,10 +345,11 @@ static int prepare_imatrix(const std::string & imatrix_file,
         std::vector<std::string> & imatrix_dataset,
         const std::vector<std::string> & included_weights,
         const std::vector<std::string> & excluded_weights,
-        std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+        std::unordered_map<std::string, std::vector<float>> & imatrix_data,
+        float & prior_weight) {
     int m_last_call = -1;
     if (!imatrix_file.empty()) {
-        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data);
+        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data, prior_weight);
     }
     if (imatrix_data.empty()) {
         return m_last_call;
@@ -473,6 +484,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_quantization> tensor_types;
     std::vector<int> prune_layers;
+    float prior_weight = 1.0f;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -535,6 +547,16 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
+        } else if (strcmp(argv[arg_idx], "--prior-weight") == 0) {
+            if (arg_idx < argc-1) {
+                try {
+                    prior_weight = std::stof(argv[++arg_idx]);
+                } catch (...) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else {
             usage(argv[0]);
         }
@@ -550,7 +572,7 @@ int main(int argc, char ** argv) {
 
     std::vector<std::string> imatrix_datasets;
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data, prior_weight);
     if (!imatrix_data.empty()) {
         params.imatrix = &imatrix_data;
         {
@@ -584,6 +606,14 @@ int main(int argc, char ** argv) {
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS);
             kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
             kvo.val_i64 = m_last_call;
+            kv_overrides.emplace_back(std::move(kvo));
+        }
+
+        {
+            llama_model_kv_override kvo;
+            std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_PRIOR_W);
+            kvo.tag = LLAMA_KV_OVERRIDE_TYPE_FLOAT;
+            kvo.val_f64 = prior_weight;
             kv_overrides.emplace_back(std::move(kvo));
         }
     }
