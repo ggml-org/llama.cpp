@@ -844,7 +844,6 @@ void ggml_gemv_q5_K_8x4_q8_K(int                        n,
             int16_t         bsums_arr[8];
             vst1q_s16(bsums_arr, bsums);
 
-            // Preload to maximize qh reuse
             uint8x16_t qh[col_groups][8];
             for (int c = 0; c < col_groups; c++) {
                 for (int i = 0; i < 8; i++) {
@@ -879,8 +878,7 @@ void ggml_gemv_q5_K_8x4_q8_K(int                        n,
                     uint8x16_t hbit_hi[8];
                     int8x16_t  q5_lo[8];
                     int8x16_t  q5_hi[8];
-                    // Already tried unrolling this loop, no perf difference
-                    // Compiler seems to be able to unroll and schedule well enough
+
                     for (int i = 0; i < 8; i++) {
                         q5_cols[i] = vld1q_u8(q5_ptr[b].qs + sb * QK_K + i * 32 + 16 * c);
                         hbit_lo[i] = vandq_u8(qh[c][i], mone);
