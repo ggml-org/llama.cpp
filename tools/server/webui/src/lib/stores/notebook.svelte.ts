@@ -8,12 +8,14 @@ export class NotebookStore {
 	abortController: AbortController | null = null;
 
 	// Statistics
+	cacheTokens = $state(0);
 	promptTokens = $state(0);
 	promptMs = $state(0);
 	predictedTokens = $state(0);
 	predictedMs = $state(0);
 	totalTokens = $state(0);
 	generationStartTokens = $state(0);
+	generationEndTokens = $state(0);
 	tokenizeTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	error = $state<{
@@ -35,12 +37,13 @@ export class NotebookStore {
 		this.error = null;
 
 		// Reset stats
+		this.cacheTokens = 0;
 		this.promptTokens = 0;
 		this.promptMs = 0;
 		this.predictedTokens = 0;
 		this.predictedMs = 0;
 
-		// Snapshot the current total tokens as the baseline for this generation
+		// Save number of tokens before generation
 		this.generationStartTokens = this.totalTokens;
 
 		try {
@@ -57,6 +60,7 @@ export class NotebookStore {
 					},
 					onTimings: (timings: ChatMessageTimings, promptProgress: ChatMessagePromptProgress) => {
 						if (timings) {
+							if (timings.cache_n) this.cacheTokens = timings.cache_n;
 							if (timings.prompt_n) this.promptTokens = timings.prompt_n;
 							if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
 							if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
@@ -71,11 +75,10 @@ export class NotebookStore {
 						}
 
 						// Update totalTokens live
-						this.totalTokens = this.generationStartTokens + this.predictedTokens;
+						this.totalTokens = this.cacheTokens + this.promptTokens + this.predictedTokens;
 					},
 					onComplete: () => {
 						this.isGenerating = false;
-						this.totalTokens = this.generationStartTokens + this.predictedTokens;
 					},
 					onError: (error: unknown) => {
 						if (error instanceof Error && error.name === 'AbortError') {
@@ -100,6 +103,8 @@ export class NotebookStore {
 			};
 			this.isGenerating = false;
 		}
+		// Save number of tokens after generation
+		this.generationEndTokens = this.totalTokens;
 	}
 
 	dismissError() {
@@ -111,6 +116,7 @@ export class NotebookStore {
 			this.undoneContent = this.content;
 			this.content = this.previousContent;
 			this.previousContent = null;
+			this.totalTokens = this.generationStartTokens;
 		}
 	}
 
@@ -119,6 +125,7 @@ export class NotebookStore {
 			this.previousContent = this.content;
 			this.content = this.undoneContent;
 			this.undoneContent = null;
+			this.totalTokens = this.generationEndTokens;
 		}
 	}
 
