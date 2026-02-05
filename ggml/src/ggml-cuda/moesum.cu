@@ -1,3 +1,6 @@
+// Set GGML_DISABLE_MOE_SUM_CUDA=1 to disable moe_sum CUDA implementation
+// This allows fallback to ggml_cuda_op_fused_add for comparison testing
+#ifndef GGML_DISABLE_MOE_SUM_CUDA
 #include "moesum.cuh"
 
 template <typename T>
@@ -340,3 +343,7 @@ void ggml_cuda_op_moe_sum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         }
     }
 }
+#else
+// When GGML_DISABLE_MOE_SUM_CUDA is defined, this file is empty
+// ggml_moe_sum will fall back to CPU implementation or ggml_cuda_op_fused_add
+#endif // GGML_DISABLE_MOE_SUM_CUDA

@@ -138,3 +138,5 @@ poetry.toml
 /.windsurf/
 # emscripten
 a.out.*
+.clangd/
+compile_commands.json
