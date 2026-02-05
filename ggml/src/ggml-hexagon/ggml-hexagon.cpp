@@ -2123,6 +2123,11 @@ static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * s
         return false;
     }
 
+    if (src0->ne[0] > (16*1024)) {
+        // reject tensors with huge rows for now
+        return false;
+    }
+
     return true;
 }
 
