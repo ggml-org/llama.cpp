@@ -22,7 +22,7 @@
 #    include <windows.h>
 #endif
 
-const char * LLAMA_ASCII_LOGO = R"(
+static const char * LLAMA_ASCII_LOGO = R"(
 ▄▄ ▄▄
 ██ ██
 ██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
@@ -39,7 +39,7 @@ static bool should_stop() {
 }
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
-static void signal_handler(int) {
+static void signal_handler(int /*unused*/) {
     if (g_is_interrupted.load()) {
         // second Ctrl+C - exit immediately
         // make sure to clear colors before exiting (not using LOG or console.cpp here to avoid deadlock)
@@ -119,9 +119,9 @@ struct cli_context {
                 out_result = std::move(result);
                 return curr_content;
             }
-            auto res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
+            auto *res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
             if (res_partial) {
-                out_timings = std::move(res_partial->timings);
+                out_timings = res_partial->timings;
                 for (const auto & diff : res_partial->oaicompat_msg_diffs) {
                     if (!diff.content_delta.empty()) {
                         if (is_thinking) {
@@ -144,9 +144,9 @@ struct cli_context {
                     }
                 }
             }
-            auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+            auto *res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
             if (res_final) {
-                out_timings = std::move(res_final->timings);
+                out_timings = res_final->timings;
                 out_result  = std::move(result);
                 break;
             }
@@ -168,10 +168,8 @@ struct cli_context {
             buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             input_files.push_back(std::move(buf));
             return mtmd_default_marker();
-        } else {
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            return content;
-        }
+        } 
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     }
 
     common_chat_params format_chat() const {
@@ -365,7 +363,8 @@ int main(int argc, char ** argv) {
         // process commands
         if (string_starts_with(buffer, "/exit")) {
             break;
-        } else if (string_starts_with(buffer, "/regen")) {
+        } 
+        if (string_starts_with(buffer, "/regen")) {
             if (ctx_cli.messages.size() >= 2) {
                 size_t last_idx = ctx_cli.messages.size() - 1;
                 ctx_cli.messages.erase(last_idx);
@@ -418,7 +417,7 @@ int main(int argc, char ** argv) {
         while (true) {
             server_task_result_ptr result;
             std::string            assistant_content = ctx_cli.generate_completion(timings, result);
-            auto                   res_final         = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+            auto *                 res_final         = dynamic_cast<server_task_result_cmpl_final *>(result.get());
 
             if (res_final && !res_final->oaicompat_msg.tool_calls.empty()) {
                 ctx_cli.messages.push_back(res_final->oaicompat_msg.to_json_oaicompat());
@@ -443,38 +442,36 @@ int main(int argc, char ** argv) {
                     }
 
                     std::string request_id = tc.name + tc.arguments;
-                    if (!mcp.get_yolo() && ctx_cli.approved_requests.find(request_id) == ctx_cli.approved_requests.end()) {
-                         // Prompt user
-                         fprintf(stdout, "\n\033[1;33mTool call: %s\033[0m\n", tc.name.c_str());
-                         fprintf(stdout, "Arguments: %s\n", args.dump(2).c_str());
-                         fprintf(stdout, "Approve? [y]es, [n]o, [A]lways allow feature: ");
-                         fflush(stdout);
+                    if (!mcp.get_yolo() &&
+                        ctx_cli.approved_requests.find(request_id) == ctx_cli.approved_requests.end()) {
+                        // Prompt user
+                        fprintf(stdout, "\n\n\033[1;33mTool call: %s\033[0m\n", tc.name.c_str());
+                        fprintf(stdout, "Arguments: %s\n", args.dump(2).c_str());
+                        fprintf(stdout, "Approve? [y]es, [n]o, [A]lways allow feature: ");
+                        fflush(stdout);
 
-                         char c = ' ';
-                         std::string line;
-                         // We are in main loop which might have console settings. 
-                         // Use console::readline or similar? 
-                         // But for single char input, standard cin/getline might interfere with console lib state if it's separate.
-                         // Given `console::readline` is used above, let's use standard input as fallback or just try cin.
-                         
-                         // Simple blocking read
-                         std::cin >> c;
-                         std::getline(std::cin, line); // consume rest
+                        char        c = ' ';
+                        std::string line;
 
-                         if (c == 'y' || c == 'Y') {
-                             // approved once
-                         } else if (c == 'A') {
-                             ctx_cli.approved_requests.insert(request_id);
-                         } else {
-                             json err_msg = {
-                                { "role",         "tool"                    },
+                        console::readline(line, false);
+                        if (!line.empty()) {
+                            c = line[0];
+                        }
+
+                        if (c == 'y' || c == 'Y') {
+                            // approved once
+                        } else if (c == 'A') {
+                            ctx_cli.approved_requests.insert(request_id);
+                        } else {
+                            json err_msg = {
+                                { "role",         "tool"                       },
                                 { "content",      "User denied tool execution" },
-                                { "tool_call_id", tc.id                     },
-                                { "name",         tc.name                   }
+                                { "tool_call_id", tc.id                        },
+                                { "name",         tc.name                      }
                             };
                             ctx_cli.messages.push_back(err_msg);
                             continue;
-                         }
+                        }
                     }
 
                     json res      = mcp.call_tool(tc.name, args);

@@ -188,6 +188,11 @@ class mcp_server {
     }
 
     json send_request(const std::string & method, const json & params = json::object()) {
+        if (!running) {
+            LOG_ERR("Cannot send request to %s: server not running\n", name.c_str());
+            return nullptr;
+        }
+
         int               id;
         std::future<json> future;
         {
@@ -206,13 +211,19 @@ class mcp_server {
         std::string req_str    = req.dump() + "\n";
         FILE *      stdin_file = subprocess_stdin(&process);
         if (stdin_file) {
+            LOG_DBG("MCP request to %s [id=%d]: %s\n", name.c_str(), id, method.c_str());
             fwrite(req_str.c_str(), 1, req_str.size(), stdin_file);
             fflush(stdin_file);
+        } else {
+            LOG_ERR("Cannot send request to %s: stdin is null\n", name.c_str());
+            std::lock_guard<std::mutex> lock(mutex);
+            pending_requests.erase(id);
+            return nullptr;
         }
 
         // Wait for response with timeout
-        if (future.wait_for(std::chrono::seconds(10)) == std::future_status::timeout) {
-            LOG_ERR("Timeout waiting for response from %s (method: %s)\n", name.c_str(), method.c_str());
+        if (future.wait_for(std::chrono::seconds(30)) == std::future_status::timeout) {
+            LOG_ERR("Timeout waiting for response from %s (method: %s, id: %d)\n", name.c_str(), method.c_str(), id);
             std::lock_guard<std::mutex> lock(mutex);
             pending_requests.erase(id);
             return nullptr;
@@ -310,6 +321,7 @@ class mcp_server {
 
   private:
     void read_loop() {
+        LOG_DBG("MCP read_loop started for %s\n", name.c_str());
         char buffer[4096];
         while (!stop_read && running) {
             unsigned bytes_read = subprocess_read_stdout(&process, buffer, sizeof(buffer));
@@ -321,7 +333,7 @@ class mcp_server {
                 // when stop() is called concurrently.
                 // Just break the loop. The process is likely dead or dying.
                 if (!stop_read) {
-                    LOG_ERR("MCP process died (stdout closed)\n");
+                    LOG_ERR("MCP server %s: read_loop exiting (stdout closed/EOF)\n", name.c_str());
                 }
                 running = false;
                 break;
@@ -339,28 +351,36 @@ class mcp_server {
 
                 try {
                     json msg = json::parse(line);
-                    if (msg.contains("id")) {
-                        // Response
-                        int id = msg["id"].get<int>();
+                    if (msg.contains("id") && !msg["id"].is_null()) {
+                        // Response - handle both int and string IDs (JSON-RPC allows both)
+                        int id;
+                        if (msg["id"].is_string()) {
+                            id = std::stoi(msg["id"].get<std::string>());
+                        } else {
+                            id = msg["id"].get<int>();
+                        }
                         std::lock_guard<std::mutex> lock(mutex);
                         if (pending_requests.count(id)) {
+                            LOG_DBG("MCP response received from %s [id=%d]\n", name.c_str(), id);
                             pending_requests[id].set_value(msg);
                             pending_requests.erase(id);
                         } else {
-                            // ID not found
+                            LOG_WRN("MCP response for unknown id %d from %s: %s\n", id, name.c_str(), line.c_str());
                         }
                     } else {
                         // Notification or request from server -> ignore for now or log
                         // MCP servers might send notifications (e.g. logging)
-                        LOG_ERR("MCP Notification from %s: %s\n", name.c_str(), line.c_str());
+                        LOG_INF("MCP Notification from %s: %s\n", name.c_str(), line.c_str());
                     }
                 } catch (const std::exception & e) {
                     // Not a full JSON yet? Or invalid?
                     // If it was a line, it should be valid JSON-RPC
-                    LOG_WRN("Failed to parse JSON from %s: %s\n", name.c_str(), e.what());
+                    LOG_WRN("Failed to parse JSON from %s: %s (line: %s)\n", name.c_str(), e.what(), line.c_str());
                 }
             }
         }
+        LOG_DBG("MCP read_loop exiting for %s (stop_read=%d, running=%d)\n",
+                name.c_str(), stop_read.load(), running.load());
     }
 
     void err_loop() {

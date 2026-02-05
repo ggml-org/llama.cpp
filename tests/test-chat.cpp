@@ -69,8 +69,8 @@ static common_chat_msg normalize(const common_chat_msg & msg) {
     for (auto & tool_call : normalized.tool_calls) {
         try {
             tool_call.arguments = json::parse(tool_call.arguments).dump();
-        } catch (const std::exception &) {
-            // Do nothing
+        } catch (const std::exception &e) {
+            LOG_DBG("Normalize failed on tool call: %s\n", e.what());
         }
     }
     return normalized;
@@ -183,7 +183,7 @@ static void assert_msg_equals(const common_chat_msg & expected, const common_cha
     }
 }
 
-common_chat_tool special_function_tool {
+static common_chat_tool special_function_tool {
     /* .name = */ "special_function",
     /* .description = */ "I'm special",
     /* .parameters = */ R"({
@@ -197,7 +197,7 @@ common_chat_tool special_function_tool {
         "required": ["arg1"]
     })",
 };
-common_chat_tool special_function_tool_with_optional_param {
+static common_chat_tool special_function_tool_with_optional_param {
     /* .name = */ "special_function_with_opt",
     /* .description = */ "I'm special but have optional stuff",
     /* .parameters = */ R"({
