@@ -1178,7 +1178,6 @@ void ggml_gemv_q6_K_8x4_q8_K(int                        n,
                         q8_h[i] = (int8x16_t) vld1q_dup_s32((const int32_t *) (q8_base_h + i * 4));
                     }
 
-                    // TODO: Test other qh repack patterns to reduce loads
                     const int ql_off_base = sb * QK_K / 2;
                     const int qh_off_base = ql_off_base & 255;  // wraps after 256 bytes
 
@@ -1367,7 +1366,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         q8_h[i] = (int8x16_t) vld1q_dup_s64((const int64_t *) (q8_base_h + i * 8));
                     }
 
-                    // TODO: Test other qh repack patterns to reduce loads
                     const int ql_off_base = sb * QK_K / 2;
                     const int qh_off_base = ql_off_base & 255;  // wraps after 256 bytes
 
