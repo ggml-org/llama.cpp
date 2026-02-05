@@ -272,13 +272,42 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
         std::string value_content = std::string(trim_trailing_space(trim_leading_space(node.text, 1), 1));
 
         std::string value_to_add;
-        if (!value_content.empty()) {
+        if (value_content.empty() && is_arg_string_value) {
+            // Empty string value - start with opening quote
+            // arg_close will add the closing quote
+            if (!current_tool->name.empty()) {
+                value_to_add        = "\"";
+                needs_closing_quote = true;
+            } else {
+                value_to_add               = "\"";
+                buffer_needs_closing_quote = true;
+            }
+        } else if (!value_content.empty() && is_arg_string_value) {
+            // Schema declares this as string type - always treat as literal string value
+            // Never try to parse as JSON (this ensures consistent handling of quoted strings
+            // like "foo" which would otherwise be parsed as JSON string 'foo')
+            if (!current_tool->name.empty()) {
+                if (!needs_closing_quote) {
+                    value_to_add        = "\"";
+                    needs_closing_quote = true;
+                }
+            } else {
+                if (!buffer_needs_closing_quote) {
+                    value_to_add               = "\"";
+                    buffer_needs_closing_quote = true;
+                }
+            }
+            // Escape special characters in the string content
+            std::string escaped = json(value_content).dump();
+            // Remove the surrounding quotes from the escaped string
+            if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
+                escaped = escaped.substr(1, escaped.size() - 2);
+            }
+            value_to_add += escaped;
+        } else if (!value_content.empty()) {
             // For potential containers, normalize Python-style single quotes to JSON double quotes first
             // This ensures consistent output during both partial and final parsing
-            // Note: is_arg_string_value means the schema explicitly declares this as a string type,
-            // so we should NOT treat it as a potential container even if it starts with [ or {
-            bool is_potential_container = !is_arg_string_value &&
-                (value_content[0] == '[' || value_content[0] == '{');
+            bool is_potential_container = value_content[0] == '[' || value_content[0] == '{';
             if (is_potential_container) {
                 value_content = normalize_quotes_to_json(value_content);
             }
@@ -301,25 +330,6 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                     } else {
                         buffer_needs_closing_quote = true;
                     }
-                } else if (is_arg_string_value) {
-                    // Schema declares this as string type but it parsed as non-string (e.g., number)
-                    // Force treatment as string value - add opening quote and escape content
-                    if (!current_tool->name.empty()) {
-                        if (!needs_closing_quote) {
-                            value_to_add        = "\"";
-                            needs_closing_quote = true;
-                        }
-                    } else {
-                        if (!buffer_needs_closing_quote) {
-                            value_to_add               = "\"";
-                            buffer_needs_closing_quote = true;
-                        }
-                    }
-                    std::string escaped = json(value_content).dump();
-                    if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
-                        escaped = escaped.substr(1, escaped.size() - 2);
-                    }
-                    value_to_add += escaped;
                 } else {
                     // For non-string values (number, bool, null, object, array), add raw value content
                     // Using raw content instead of dump() ensures monotonicity for streaming

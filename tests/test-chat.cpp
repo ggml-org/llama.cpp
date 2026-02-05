@@ -355,6 +355,40 @@ static common_chat_tool magic_int_tool{
     })",
 };
 
+static common_chat_tool string_param_tool{
+    /* .name = */ "string_param",
+    /* .description = */ "Tool with string parameter for testing",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "text": {
+                "type": "string",
+                "description": "A text parameter"
+            }
+        },
+        "required": []
+    })",
+};
+
+static common_chat_tool quoted_unquoted_tool{
+    /* .name = */ "quoted_unquoted",
+    /* .description = */ "Tool with two string parameters, one for quoted string, one for unquoted",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "quoted": {
+                "type": "string",
+                "description": "Quoted value"
+            }, 
+            "unquoted": {
+                "type": "string",
+                "description": "Unquoted value"
+            }
+        },
+        "required": ["quoted", "unquoted"]
+    })",
+};
+
 
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
@@ -2184,6 +2218,59 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Let me call the magic_int function")
             .expect_tool_calls({
                 { "magic_int", R"({"ref": 42555916, "name": "baz"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Call string_param with empty text\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=string_param>\n"
+               "<parameter=text>\n\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ string_param_tool })
+            .expect_reasoning("Call string_param with empty text")
+            .expect_tool_calls({
+                { "string_param", R"({"text": ""})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Test simple quoted unquoted\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=quoted_unquoted>\n"
+               "<parameter=quoted>\n\"foo\"\n</parameter>\n"
+               "<parameter=unquoted>\nfoo\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ quoted_unquoted_tool })
+            .expect_reasoning("Test simple quoted unquoted")
+            .expect_tool_calls({
+                { "quoted_unquoted", R"({"quoted": "\"foo\"", "unquoted": "foo"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Test complex quoted unquoted\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=quoted_unquoted>\n"
+               "<parameter=quoted>\n\"printf(\\\"foo\\\");\"\n</parameter>\n"
+               "<parameter=unquoted>\nprintf(\"foo\");\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ quoted_unquoted_tool })
+            .expect_reasoning("Test complex quoted unquoted")
+            .expect_tool_calls({
+                { "quoted_unquoted", R"({ "quoted" : "\"printf(\\\"foo\\\");\"", "unquoted": "printf(\"foo\");" })", {} }
             })
             .run();
 
