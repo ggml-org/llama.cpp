@@ -320,6 +320,45 @@ VRAM usage:  ~5.4 GiB (model 604 MiB + KV cache 4.5 GiB at 40k context)
 
 The `-hf` flag downloads and caches models to `~/.cache/llama.cpp/`. HTTPS support is provided by OpenSSL via the bundled cpp-httplib library.
 
+**Recommended models for MI50 (32 GB VRAM):**
+
+[Qwen3-Coder 30B](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF) — MoE model (30B total, 3B active), strong at coding and agentic tasks:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=9.0.6 \
+ROCR_VISIBLE_DEVICES=1 \
+  ./result/bin/llama-server \
+    -hf unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF \
+    -ngl 99 \
+    -fa on \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --jinja
+```
+
+| Quant | Size | Fits 32 GB? |
+|-------|------|-------------|
+| Q4_K_M | ~18.6 GB | Yes |
+| Q5_K_M | ~21.7 GB | Yes |
+| Q6_K | ~25.1 GB | Tight |
+| Q8_0 | ~32.5 GB | No |
+
+[GPT-OSS 20B](https://huggingface.co/ggml-org/gpt-oss-20b-GGUF) — OpenAI's open-weight MoE model with native MXFP4 quantization (~12 GB regardless of quant level):
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=9.0.6 \
+ROCR_VISIBLE_DEVICES=1 \
+  ./result/bin/llama-server \
+    -hf ggml-org/gpt-oss-20b-GGUF \
+    -ngl 99 \
+    -fa on \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --jinja
+```
+
+Both models use Mixture of Experts (MoE) — only a fraction of parameters are active per token, so inference speed is much better than the total parameter count suggests. See the [llama.cpp GPT-OSS guide](https://github.com/ggml-org/llama.cpp/discussions/15396) for more details.
+
 ### Using the Overlay
 
 For integration into your own flake:
