@@ -89,6 +89,7 @@
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
@@ -113,6 +114,12 @@
 	$effect(() => {
 		if (isEditing && textareaElement) {
 			autoResizeTextarea(textareaElement);
+		}
+	});
+
+	$effect(() => {
+		if (isLoading() && !message?.content?.trim()) {
+			processingState.startMonitoring();
 		}
 	});
 
@@ -186,7 +193,7 @@
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getProcessingMessage()}
+					{processingState.getPromptProgressText() ?? processingState.getProcessingMessage()}
 				</span>
 			</div>
 		</div>
@@ -242,9 +249,9 @@
 		</div>
 	{/if}
 
-	<div class="info my-6 grid gap-4">
+	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel()}
-			<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelector
 						currentModel={displayedModel()}
@@ -258,11 +265,30 @@
 
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 					<ChatMessageStatistics
+						promptTokens={message.timings.prompt_n}
+						promptMs={message.timings.prompt_ms}
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
 					/>
+				{:else if isLoading() && currentConfig.showMessageStats}
+					{@const liveStats = processingState.getLiveProcessingStats()}
+					{@const genStats = processingState.getLiveGenerationStats()}
+					{@const promptProgress = processingState.processingState?.promptProgress}
+					{@const isStillProcessingPrompt =
+						promptProgress && promptProgress.processed < promptProgress.total}
+
+					{#if liveStats || genStats}
+						<ChatMessageStatistics
+							isLive={true}
+							isProcessingPrompt={!!isStillProcessingPrompt}
+							promptTokens={liveStats?.tokensProcessed}
+							promptMs={liveStats?.timeMs}
+							predictedTokens={genStats?.tokensGenerated}
+							predictedMs={genStats?.timeMs}
+						/>
+					{/if}
 				{/if}
-			</span>
+			</div>
 		{/if}
 
 		{#if config().showToolCalls}

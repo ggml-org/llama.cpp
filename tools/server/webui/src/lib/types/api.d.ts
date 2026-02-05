@@ -149,6 +149,7 @@ export interface ApiLlamaCppServerProps {
 			reasoning_in_content: boolean;
 			thinking_forced_open: boolean;
 			samplers: string[];
+			backend_sampling: boolean;
 			'speculative.n_max': number;
 			'speculative.n_min': number;
 			'speculative.p_min': number;
@@ -176,6 +177,7 @@ export interface ApiLlamaCppServerProps {
 	bos_token: string;
 	eos_token: string;
 	build_info: string;
+	webui_settings?: Record<string, string | number | boolean>;
 }
 
 export interface ApiChatCompletionRequest {
@@ -185,6 +187,7 @@ export interface ApiChatCompletionRequest {
 	}>;
 	stream?: boolean;
 	model?: string;
+	return_progress?: boolean;
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -210,6 +213,7 @@ export interface ApiChatCompletionRequest {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string[];
+	backend_sampling?: boolean;
 	// Custom parameters (JSON string)
 	custom?: Record<string, unknown>;
 	timings_per_token?: boolean;
@@ -310,6 +314,7 @@ export interface ApiSlotData {
 		reasoning_in_content: boolean;
 		thinking_forced_open: boolean;
 		samplers: string[];
+		backend_sampling: boolean;
 		'speculative.n_max': number;
 		'speculative.n_min': number;
 		'speculative.p_min': number;
@@ -340,7 +345,9 @@ export interface ApiProcessingState {
 	tokensPerSecond?: number;
 	// Progress information from prompt_progress
 	progressPercent?: number;
+	promptProgress?: ChatMessagePromptProgress;
 	promptTokens?: number;
+	promptMs?: number;
 	cacheTokens?: number;
 }
 

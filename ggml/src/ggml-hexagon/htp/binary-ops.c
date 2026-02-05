@@ -2,36 +2,25 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
-
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <HAP_ps.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
-#include <qurt_thread.h>
 #include <string.h>
+
+#include "hex-dma.h"
+#include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "hvx-utils.h"
-#include "ops-utils.h"
 
-typedef void (*hvx_elemwise_f32_func)(const uint8_t * src0,
-                                      const uint8_t * src1,
-                                      uint8_t *       data_dst,
-                                      const int       num_elems);
+typedef void (*hvx_elemwise_f32_func)(uint8_t * data_dst, const uint8_t * src0, const uint8_t * src1, const uint32_t num_elems);
 
 static hvx_elemwise_f32_func func_table_HVX[]     = { hvx_mul_f32, hvx_add_f32, hvx_sub_f32 };
-static hvx_elemwise_f32_func func_table_HVX_opt[] = { hvx_mul_f32_opt, hvx_add_f32_opt, hvx_sub_f32_opt };
+static hvx_elemwise_f32_func func_table_HVX_opt[] = { hvx_mul_f32_aa, hvx_add_f32_aa, hvx_sub_f32_aa };
 
 #define htp_binary_preamble            \
     const struct htp_tensor * src0 = &octx->src0; \
@@ -98,9 +87,8 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
 
     int is_aligned = 1;
     int opt_path   = 0;
-    if ((0 == htp_is_aligned((void *) src0->data, VLEN)) || (0 == htp_is_aligned((void *) src1->data, VLEN)) ||
-        (0 == htp_is_aligned((void *) dst->data, VLEN))) {
-        FARF(HIGH, "binary-f32: unaligned addresses in elementwise op, possibly slower execution\n");
+    if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
+        (0 == hex_is_aligned((void *) dst->data, VLEN))) {
         is_aligned = 0;
     }
     if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
@@ -130,24 +118,24 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
         const uint8_t * restrict src1_ptr = data_src1 + i13 * nb13 + i12 * nb12 + i11 * src1_row_size;
 
         if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0_ptr + ne00, 1, src0_row_size, src0_row_size);
+            hex_l2fetch(src0_ptr + ne00, src0_row_size, src0_row_size, 1);
             if (src1_row_size == src0_row_size) {
-                htp_l2fetch(src1_ptr, 1, src1_row_size, src1_row_size);
+                hex_l2fetch(src1_ptr, src1_row_size, src1_row_size, 1);
             }
         }
 
         const uint32_t nr0 = ne00 / ne10;
         if (nr0 > 1) {
             if ((1 == is_aligned) && (nr0 == ne00)) {
-                hvx_bcast_fp32_a(spad_data_th, *(float *) src1_ptr, nr0);
+                hvx_splat_f32_a(spad_data_th, *(float *) src1_ptr, nr0);
             } else {
                 for (uint32_t r = 0; r < nr0; r++) {
                     memcpy(spad_data_th + r * nb11, (const uint8_t *) src1_ptr, nb11);
                 }
             }
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) spad_data_th, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) spad_data_th, ne00);
         } else {
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, ne00);
         }
 
         src0_ptr += src0_row_size;
@@ -185,11 +173,6 @@ static void binary_add_id_job_f32_per_thread(struct htp_ops_context * octx,
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    if ((0 == htp_is_aligned((void *) src0->data, VLEN)) || (0 == htp_is_aligned((void *) src1->data, VLEN)) ||
-        (0 == htp_is_aligned((void *) dst->data, VLEN))) {
-        FARF(HIGH, "add-id-f32: unaligned addresses, possibly slower execution\n");
-    }
-
     const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
@@ -210,9 +193,9 @@ static void binary_add_id_job_f32_per_thread(struct htp_ops_context * octx,
         const float * restrict src1_ptr = (const float *) (data_src1 + 0 + 0 + i11 * nb11);
 
         if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0_ptr + ne00, 1, src0_row_size, src0_row_size);
+            hex_l2fetch(src0_ptr + ne00, src0_row_size, src0_row_size, 1);
             if (src1_row_size == src0_row_size) {
-                htp_l2fetch(src1_ptr + ne10, 1, src1_row_size, src1_row_size);
+                hex_l2fetch(src1_ptr + ne10, src1_row_size, src1_row_size, 1);
             }
         }
 
@@ -221,9 +204,9 @@ static void binary_add_id_job_f32_per_thread(struct htp_ops_context * octx,
             for (uint32_t r = 0; r < nr0; r++) {
                 memcpy(spad_data + r * nb10, (const uint8_t *) src1_ptr, nb10);
             }
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) spad_data, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) spad_data, ne00);
         } else {
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, ne00);
         }
     }
 
@@ -299,9 +282,9 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
     const size_t dst_row_size  = dst->nb[1];
 
     // VTCM scratchpads for all tensors
-    octx->dst_spad.size  = htp_round_up(dst_row_size, 128) * n_threads;
-    octx->src0_spad.size = htp_round_up(src0_row_size, 128) * n_threads;
-    octx->src1_spad.size = htp_round_up(src1_row_size, 128) * n_threads;
+    octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
+    octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
+    octx->src1_spad.size = hex_round_up(src1_row_size, 128) * n_threads;
 
     size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
 

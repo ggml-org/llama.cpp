@@ -1,55 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-        xmlns:tools="http://schemas.android.com/tools"
-        android:id="@+id/main"
-        android:layout_height="match_parent"
-        android:layout_width="match_parent">
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_height="match_parent"
+    android:layout_width="match_parent">
 
     <LinearLayout
         android:fitsSystemWindows="true"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
+        android:layout_marginEnd="4dp"
         tools:context=".MainActivity">
 
-        <FrameLayout
+        <ScrollView
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="1">
+            android:layout_weight="1"
+            android:fadeScrollbars="false">
 
-            <ScrollView
+            <TextView
+                android:id="@+id/gguf"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:fadeScrollbars="false">
+                android:padding="16dp"
+                android:text="Selected GGUF model's metadata will show here."
+                style="@style/TextAppearance.MaterialComponents.Body2" />
 
-                <TextView
-                    android:id="@+id/gguf"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_margin="16dp"
-                    android:text="Selected GGUF model's metadata will show here."
-                    style="@style/TextAppearance.MaterialComponents.Body2"
-                    android:maxLines="100" />
+        </ScrollView>
 
-            </ScrollView>
-
-        </FrameLayout>
+        <com.google.android.material.divider.MaterialDivider
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_marginHorizontal="16dp" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="4"
-            android:padding="16dp"
             android:fadeScrollbars="false"
+            android:scrollbars="vertical"
             app:reverseLayout="true"
             tools:listitem="@layout/item_message_assistant"/>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="4dp">
 
             <EditText
                 android:id="@+id/user_input"
@@ -67,7 +68,7 @@
                 style="@style/Widget.Material3.FloatingActionButton.Primary"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_margin="8dp"
+                android:layout_margin="12dp"
                 android:src="@drawable/outline_folder_open_24" />
 
         </LinearLayout>

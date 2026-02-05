@@ -7,7 +7,7 @@ ggml_tensor * llm_build_eagle3_encode::build_inp_embd() const {
 
     // Input: Target model features (3 layers concatenated: low, mid, high)
     // Data will be provided via ubatch->embd in encode_eagle3_features()
-    auto inp_target = std::make_unique<llm_graph_input_embd>();
+    auto inp_target = std::make_unique<llm_graph_input_embd>(n_embd_target_features);
     inp_target->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_target_features, n_tokens);
     ggml_set_input(inp_target->embd);
 

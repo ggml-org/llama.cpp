@@ -24,6 +24,7 @@ add_library(llama
             llama-kv-cache-iswa.cpp
             llama-memory.cpp
             llama-memory-hybrid.cpp
+            llama-memory-hybrid-iswa.cpp
             llama-memory-recurrent.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
@@ -63,6 +64,7 @@ add_library(llama
             models/ernie4-5.cpp
             models/exaone.cpp
             models/exaone4.cpp
+            models/exaone-moe.cpp
             models/falcon-h1.cpp
             models/falcon.cpp
             models/gemma-embedding.cpp
@@ -88,9 +90,12 @@ add_library(llama
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
+            models/maincoder.cpp
             models/mamba.cpp
+            models/mimo2-iswa.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/modern-bert.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp
@@ -106,6 +111,7 @@ add_library(llama
             models/phi3.cpp
             models/plamo.cpp
             models/plamo2.cpp
+            models/plamo3.cpp
             models/plm.cpp
             models/qwen.cpp
             models/qwen2.cpp

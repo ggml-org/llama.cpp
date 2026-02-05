@@ -43,6 +43,7 @@ export interface SettingsChatServiceOptions {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string | string[];
+	backend_sampling?: boolean;
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
@@ -51,7 +52,7 @@ export interface SettingsChatServiceOptions {
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
 	onModel?: (model: string) => void;
-	onTimings?: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,
 		reasoningContent?: string,

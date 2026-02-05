@@ -66,19 +66,28 @@ struct cli_context {
         defaults.stream = true; // make sure we always use streaming mode
         defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
-        defaults.oaicompat_chat_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     }
 
     std::string generate_completion(result_timings & out_timings) {
         server_response_reader rd = ctx_server.get_response_reader();
+        auto chat_params = format_chat();
         {
             // TODO: reduce some copies here in the future
             server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
-            task.id        = rd.get_new_id();
-            task.index     = 0;
-            task.params    = defaults;    // copy
-            task.cli_input = messages;    // copy
-            task.cli_files = input_files; // copy
+            task.id         = rd.get_new_id();
+            task.index      = 0;
+            task.params     = defaults;           // copy
+            task.cli_prompt = chat_params.prompt; // copy
+            task.cli_files  = input_files;        // copy
+            task.cli        = true;
+
+            // chat template settings
+            task.params.chat_parser_params = common_chat_parser_params(chat_params);
+            task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            if (!chat_params.parser.empty()) {
+                task.params.chat_parser_params.parser.load(chat_params.parser);
+            }
+
             rd.post_task({std::move(task)});
         }
 
@@ -156,6 +165,25 @@ struct cli_context {
             return content;
         }
     }
+
+    common_chat_params format_chat() {
+        auto meta = ctx_server.get_meta();
+        auto & chat_params = meta.chat_params;
+
+        common_chat_templates_inputs inputs;
+        inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
+        inputs.tools                 = {}; // TODO
+        inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+        inputs.json_schema           = ""; // TODO
+        inputs.grammar               = ""; // TODO
+        inputs.use_jinja             = chat_params.use_jinja;
+        inputs.parallel_tool_calls   = false;
+        inputs.add_generation_prompt = true;
+        inputs.enable_thinking       = chat_params.enable_thinking;
+
+        // Apply chat template to the list of messages
+        return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
+    }
 };
 
 int main(int argc, char ** argv) {
@@ -209,8 +237,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    ctx_cli.ctx_server.init();
-
     console::spinner::stop();
     console::log("\n");
 
@@ -218,7 +244,7 @@ int main(int argc, char ** argv) {
         ctx_cli.ctx_server.start_loop();
     });
 
-    auto inf = ctx_cli.ctx_server.get_info();
+    auto inf = ctx_cli.ctx_server.get_meta();
     std::string modalities = "text";
     if (inf.has_inp_image) {
         modalities += ", vision";

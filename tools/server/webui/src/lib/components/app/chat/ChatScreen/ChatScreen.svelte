@@ -17,7 +17,13 @@
 		AUTO_SCROLL_INTERVAL,
 		INITIAL_SCROLL_DELAY
 	} from '$lib/constants/auto-scroll';
-	import { chatStore, errorDialog, isLoading } from '$lib/stores/chat.svelte';
+	import {
+		chatStore,
+		errorDialog,
+		isLoading,
+		isEditing,
+		getAddFilesHandler
+	} from '$lib/stores/chat.svelte';
 	import {
 		conversationsStore,
 		activeMessages,
@@ -181,7 +187,18 @@
 		dragCounter = 0;
 
 		if (event.dataTransfer?.files) {
-			processFiles(Array.from(event.dataTransfer.files));
+			const files = Array.from(event.dataTransfer.files);
+
+			if (isEditing()) {
+				const handler = getAddFilesHandler();
+
+				if (handler) {
+					handler(files);
+					return;
+				}
+			}
+
+			processFiles(files);
 		}
 	}
 
@@ -410,7 +427,7 @@
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
-					disabled={hasPropsError}
+					disabled={hasPropsError || isEditing()}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
@@ -587,7 +604,7 @@
 
 		&::after {
 			content: '';
-			position: fixed;
+			position: absolute;
 			bottom: 0;
 			z-index: -1;
 			left: 0;
