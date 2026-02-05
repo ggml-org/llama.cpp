@@ -22,6 +22,7 @@ add_library(${HTP_LIB} SHARED
     matmul-ops.c
     binary-ops.c
     unary-ops.c
+    sum-rows-ops.c
     softmax-ops.c
     act-ops.c
     rope-ops.c

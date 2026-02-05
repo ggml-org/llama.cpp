@@ -65,6 +65,9 @@ enum htp_op {
     HTP_OP_GET_ROWS       = 17,
     HTP_OP_CPY            = 18,
     HTP_OP_ARGSORT        = 19,
+    HTP_OP_SQR            = 20,
+    HTP_OP_SQRT           = 21,
+    HTP_OP_SUM_ROWS       = 22,
     INVALID
 };
 
