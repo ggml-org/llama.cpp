@@ -1451,6 +1451,17 @@ extern "C" {
     //
     LLAMA_API struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * vocab);
 
+    /// @details Sampling based on the "thinking" token count.
+    /// @param vocab The vocabulary that this grammar will be used with.
+    /// @param budget The minimum number of tokens to think for.
+    /// @param token_start The token that signals the start of thinking.
+    /// @param token_end The token that signals the end of thinking.
+    LLAMA_API struct llama_sampler * llama_sampler_init_thought(
+            const struct llama_vocab * vocab,
+                             int32_t   budget,
+                          const char * token_start,
+                          const char * token_end);
+
     // Returns the seed used by the sampler if applicable, LLAMA_DEFAULT_SEED otherwise
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 

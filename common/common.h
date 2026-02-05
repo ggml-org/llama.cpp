@@ -122,6 +122,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
     COMMON_SAMPLER_TYPE_ADAPTIVE_P  = 12,
+    COMMON_SAMPLER_TYPE_THOUGHT     = 13,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -206,11 +207,15 @@ struct common_params_sampling {
     float   top_n_sigma        = -1.00f; // -1.0 = disabled
     float   mirostat_tau       = 5.00f;  // target entropy
     float   mirostat_eta       = 0.10f;  // learning rate
+    int32_t thinking_budget    = -1;     // minimum number of thinking tokens
     bool    ignore_eos         = false;
     bool    no_perf            = false;  // disable performance metrics
     bool    timing_per_token   = false;
 
     uint64_t user_sampling_config = 0; // bitfield to track user-specified samplers
+
+    std::string thinking_token_start = "<think>";
+    std::string thinking_token_end   = "</think>";
 
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 
@@ -218,6 +223,7 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_PENALTIES,
         COMMON_SAMPLER_TYPE_DRY,
         COMMON_SAMPLER_TYPE_TOP_N_SIGMA,
+        COMMON_SAMPLER_TYPE_THOUGHT,
         COMMON_SAMPLER_TYPE_TOP_K,
         COMMON_SAMPLER_TYPE_TYPICAL_P,
         COMMON_SAMPLER_TYPE_TOP_P,

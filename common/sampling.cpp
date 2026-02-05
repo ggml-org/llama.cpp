@@ -273,6 +273,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
                 case COMMON_SAMPLER_TYPE_TOP_K:
                     samplers.push_back(llama_sampler_init_top_k(params.top_k));
                     break;
+                case COMMON_SAMPLER_TYPE_THOUGHT:
+                    samplers.push_back(llama_sampler_init_thought(vocab, params.thinking_budget, params.thinking_token_start.c_str(), params.thinking_token_end.c_str()));
+                    break;
                 case COMMON_SAMPLER_TYPE_TOP_P:
                     samplers.push_back(llama_sampler_init_top_p(params.top_p, params.min_keep));
                     break;
@@ -640,6 +643,7 @@ char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
         case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
         case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return 'a';
+        // case COMMON_SAMPLER_TYPE_THOUGHT:     return '?'; // no single char representation
         default : return '?';
     }
 }
@@ -657,6 +661,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
         case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
         case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return "adaptive_p";
+        case COMMON_SAMPLER_TYPE_THOUGHT:     return "thought";
         default : return "";
     }
 }
@@ -674,6 +679,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "infill",      COMMON_SAMPLER_TYPE_INFILL },
         { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
         { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "thought",     COMMON_SAMPLER_TYPE_THOUGHT },
     };
 
     // since samplers names are written multiple ways
@@ -690,6 +696,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
+        { "thought",     COMMON_SAMPLER_TYPE_THOUGHT },
     };
 
     std::vector<common_sampler_type> samplers;

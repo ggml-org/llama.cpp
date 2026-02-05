@@ -3822,6 +3822,122 @@ struct llama_sampler * llama_sampler_init_infill(const struct llama_vocab * voca
     );
 }
 
+// thought
+
+struct llama_sampler_thought {
+    const struct llama_vocab * vocab;
+
+    const int32_t budget;
+
+    llama_token token_start_id;
+    llama_token token_end_id;
+
+    bool thinking;
+    int32_t count;
+};
+
+static const char * llama_sampler_thought_name(const struct llama_sampler * /*smpl*/) {
+    return "thought";
+}
+
+static void llama_sampler_thought_accept(struct llama_sampler * smpl, llama_token token) {
+    auto * ctx = (llama_sampler_thought *) smpl->ctx;
+
+    if (token == ctx->token_start_id) {
+        ctx->thinking = true;
+        ctx->count = 0;
+    } else if (token == ctx->token_end_id) {
+        ctx->thinking = false;
+    } else if (ctx->thinking) {
+        ctx->count++;
+    }
+}
+
+static void llama_sampler_thought_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_thought *) smpl->ctx;
+
+    if (!ctx->thinking || ctx->count >= ctx->budget) {
+        return;
+    }
+
+    // if thinking, suppress the end thinking token
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        if (cur_p->data[i].id == ctx->token_end_id) {
+            cur_p->data[i].logit = -INFINITY;
+            cur_p->sorted = false;
+            break;
+        }
+    }
+}
+
+static void llama_sampler_thought_reset(struct llama_sampler * smpl) {
+    auto * ctx = (llama_sampler_thought *) smpl->ctx;
+    ctx->thinking = false;
+    ctx->count = 0;
+}
+
+static struct llama_sampler * llama_sampler_thought_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_thought *) smpl->ctx;
+    auto * result = llama_sampler_init_thought(ctx->vocab, ctx->budget, NULL, NULL);
+
+    // copy the state
+    {
+        auto * result_ctx = (llama_sampler_thought *) result->ctx;
+
+        result_ctx->token_start_id = ctx->token_start_id;
+        result_ctx->token_end_id   = ctx->token_end_id;
+        result_ctx->thinking       = ctx->thinking;
+        result_ctx->count          = ctx->count;
+    }
+
+    return result;
+}
+
+static void llama_sampler_thought_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_thought *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_thought_i = {
+    /* .name              = */ llama_sampler_thought_name,
+    /* .accept            = */ llama_sampler_thought_accept,
+    /* .apply             = */ llama_sampler_thought_apply,
+    /* .reset             = */ llama_sampler_thought_reset,
+    /* .clone             = */ llama_sampler_thought_clone,
+    /* .free              = */ llama_sampler_thought_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_thought(const struct llama_vocab * vocab, int32_t budget, const char * token_start, const char * token_end) {
+    llama_token token_start_id = LLAMA_TOKEN_NULL;
+    llama_token token_end_id   = LLAMA_TOKEN_NULL;
+
+    if (token_start) {
+        token_start_id = vocab->text_to_token(token_start);
+    }
+
+    if (token_end) {
+        token_end_id = vocab->text_to_token(token_end);
+    }
+
+    LLAMA_LOG_INFO("%s: thinking_budget = %d, token_start = '%s' (%d), token_end = '%s' (%d)\n",
+            __func__, budget, token_start ? token_start : "", token_start_id, token_end ? token_end : "", token_end_id);
+
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_thought_i,
+        /* .ctx   = */ new llama_sampler_thought {
+            /* .vocab          = */ vocab,
+            /* .budget         = */ budget,
+            /* .token_start_id = */ token_start_id,
+            /* .token_end_id   = */ token_end_id,
+            /* .thinking       = */ false,
+            /* .count          = */ 0,
+        }
+    );
+}
+
 // utils
 
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {
