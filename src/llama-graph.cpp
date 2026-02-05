@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <unordered_set>
 
@@ -1335,10 +1336,19 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //
     // Use ggml_moe_sum when experts tensor is contiguous and we have multiple experts
     // This is more efficient than the ggml_add loop, especially for GPU kernels
+    //
+    // Set LLAMA_DISABLE_MOE_SUM=1 environment variable to disable moe_sum and use
+    // the ggml_add loop instead (useful for performance comparison)
 
     ggml_tensor * moe_out = nullptr;
 
-    if (n_expert_used > 1 && ggml_is_contiguous(experts)) {
+    // Check for environment variable to disable moe_sum (for benchmarking/comparison)
+    static const bool disable_moe_sum = []() {
+        const char * env = std::getenv("LLAMA_DISABLE_MOE_SUM");
+        return env != nullptr && (env[0] == '1' || strcmp(env, "true") == 0);
+    }();
+
+    if (n_expert_used > 1 && !disable_moe_sum && ggml_is_contiguous(experts)) {
         // Fast path: use ggml_moe_sum for contiguous tensors
         moe_out = ggml_moe_sum(ctx0, experts, n_expert_used);
     } else {
