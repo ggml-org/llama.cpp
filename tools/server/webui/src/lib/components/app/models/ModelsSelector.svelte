@@ -42,7 +42,11 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let options = $derived(modelOptions());
+	let options = $derived(modelOptions().filter((option) => {
+		// Exclude models that are marked as not for webui use
+		const modelProps = modelsStore.getModelProps(option.model);
+		return modelProps?.webui !== false;
+	}));
 	let loading = $derived(modelsLoading());
 	let updating = $derived(modelsUpdating());
 	let activeId = $derived(selectedModelId());
@@ -245,6 +249,10 @@
 			return options.find((option) => option.id === activeId);
 		}
 
+		if (options.length === 1) {
+			// Only one option - show it
+			return options[0];
+		}
 		// No selection - return undefined to show "Select model"
 		return undefined;
 	}
