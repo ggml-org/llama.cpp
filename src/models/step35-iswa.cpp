@@ -82,14 +82,12 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
                 // reshape + broadcast to [n_embd_head_v, n_head_l, n_tokens]
                 ggml_tensor * attn_3d = ggml_reshape_3d(ctx0, attn_out, n_embd_head_v, n_head_l, n_tokens);
                 ggml_tensor * gate_3d = ggml_reshape_3d(ctx0, gate,       1,          n_head_l, n_tokens);
-                gate_3d = ggml_repeat(ctx0, gate_3d, attn_3d);
-                cb(gate_3d, "attn_gate_bcast", il);
+                cb(gate_3d, "attn_gate_3d", il);
 
                 attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
                 cb(attn_3d, "attn_gated_3d", il);
 
-                attn_out = ggml_cont_2d(ctx0, ggml_reshape_2d(ctx0, attn_3d, n_embd_head_v * n_head_l, n_tokens),
-                                        n_embd_head_v * n_head_l, n_tokens);
+                attn_out = ggml_cont_2d(ctx0, attn_3d, n_embd_head_v * n_head_l, n_tokens);
                 cb(attn_out, "attn_gated", il);
             }
 

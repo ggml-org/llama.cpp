@@ -7987,7 +7987,7 @@ class Step35Model(TextModel):
             il = int(m.group(1))
             n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
             if il >= n_main:
-                return []
+                return
         if name.endswith("norm.weight"):
             data_torch += 1.0
         # Map router bias (expert selection bias) to a GGUF bias tensor
@@ -7997,7 +7997,7 @@ class Step35Model(TextModel):
         if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
             data_torch = data_torch.squeeze().contiguous()
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # Step35 can optionally use Llama-3 style RoPE scaling (HF: rope_scaling.rope_type == "llama3").
