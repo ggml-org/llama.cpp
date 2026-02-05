@@ -196,6 +196,7 @@ class MCPStore {
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
 	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
+	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
@@ -560,44 +561,60 @@ class MCPStore {
 	 * Continues indefinitely until successful.
 	 */
 	private async autoReconnect(serverName: string): Promise<void> {
+		// Guard against concurrent reconnections
+		if (this.reconnectingServers.has(serverName)) {
+			console.log(`[MCPStore][${serverName}] Reconnection already in progress, skipping`);
+			return;
+		}
+
 		const serverConfig = this.serverConfigs.get(serverName);
 		if (!serverConfig) {
 			console.error(`[MCPStore] No config found for ${serverName}, cannot reconnect`);
 			return;
 		}
 
+		this.reconnectingServers.add(serverName);
 		let backoff = MCP_RECONNECT_INITIAL_DELAY;
 
-		while (true) {
-			await new Promise((resolve) => setTimeout(resolve, backoff));
+		try {
+			while (true) {
+				await new Promise((resolve) => setTimeout(resolve, backoff));
 
-			console.log(`[MCPStore][${serverName}] Auto-reconnecting...`);
+				console.log(`[MCPStore][${serverName}] Auto-reconnecting...`);
 
-			try {
-				const listChangedHandlers = this.createListChangedHandlers(serverName);
-				const connection = await MCPService.connect(
-					serverName,
-					serverConfig,
-					DEFAULT_MCP_CONFIG.clientInfo,
-					DEFAULT_MCP_CONFIG.capabilities,
-					undefined,
-					listChangedHandlers
-				);
+				try {
+					const listChangedHandlers = this.createListChangedHandlers(serverName);
+					const connection = await MCPService.connect(
+						serverName,
+						serverConfig,
+						DEFAULT_MCP_CONFIG.clientInfo,
+						DEFAULT_MCP_CONFIG.capabilities,
+						(phase) => {
+							if (phase === MCPConnectionPhase.DISCONNECTED) {
+								console.log(`[MCPStore][${serverName}] Connection lost, restarting auto-reconnect`);
+								this.autoReconnect(serverName);
+							}
+						},
+						listChangedHandlers
+					);
 
-				// Replace old connection with new one
-				this.connections.set(serverName, connection);
+					// Replace old connection with new one
+					this.connections.set(serverName, connection);
 
-				// Rebuild tool index for this server
-				for (const tool of connection.tools) {
-					this.toolsIndex.set(tool.name, serverName);
+					// Rebuild tool index for this server
+					for (const tool of connection.tools) {
+						this.toolsIndex.set(tool.name, serverName);
+					}
+
+					console.log(`[MCPStore][${serverName}] Reconnected successfully`);
+					break;
+				} catch (error) {
+					console.warn(`[MCPStore][${serverName}] Reconnection failed:`, error);
+					backoff = Math.min(backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER, MCP_RECONNECT_MAX_DELAY);
 				}
-
-				console.log(`[MCPStore][${serverName}] Reconnected successfully`);
-				break;
-			} catch (error) {
-				console.warn(`[MCPStore][${serverName}] Reconnection failed:`, error);
-				backoff = Math.min(backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER, MCP_RECONNECT_MAX_DELAY);
 			}
+		} finally {
+			this.reconnectingServers.delete(serverName);
 		}
 	}
 
