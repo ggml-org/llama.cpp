@@ -5561,9 +5561,9 @@ static void ggml_vk_instance_init() {
                 // Check if there are two physical devices corresponding to the same GPU
                 // This handles the case where the same GPU appears with different drivers (e.g., RADV + AMDVLK on Linux),
                 // see https://github.com/ggml-org/llama.cpp/pull/7582 for original deduplication.
-                // However, for MoltenVK on macOS, multiple GPUs on the same card may report the same UUID,
-                // see https://github.com/KhronosGroup/MoltenVK/issues/2683. Until this is fixed, we'll only deduplicate
-                // when drivers differ (same driver + same UUID = likely different GPUs)
+                // MoltenVK on macOS may report the same UUID for distinct GPUs on multi-GPU cards,
+                // see https://github.com/KhronosGroup/MoltenVK/issues/2683. Skip when both old/new
+                // driver is MoltenVK
                 auto old_device = std::find_if(
                     vk_instance.device_indices.begin(),
                     vk_instance.device_indices.end(),
@@ -5580,11 +5580,9 @@ static void ggml_vk_instance_init() {
                             old_id.deviceLUIDValid && new_id.deviceLUIDValid &&
                             std::equal(std::begin(old_id.deviceLUID), std::end(old_id.deviceLUID), std::begin(new_id.deviceLUID))
                         );
+                        bool both_molten_vk = (new_driver.driverID == vk::DriverId::eMoltenvk && old_driver.driverID == vk::DriverId::eMoltenvk);
 
-                        // Only deduplicate if same UUID AND different drivers
-                        // (same driver + same UUID on MoltenVK = likely different GPUs on multi-GPU card)
-                        bool different_driver = (old_driver.driverID != new_driver.driverID);
-                        return same_uuid && different_driver;
+                        return same_uuid && !both_molten_vk;
                     }
                 );
                 if (old_device == vk_instance.device_indices.end()) {
