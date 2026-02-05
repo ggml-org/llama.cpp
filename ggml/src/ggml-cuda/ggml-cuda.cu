@@ -3402,6 +3402,72 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
+static void ggml_cuda_graph_instantiate_pdl(ggml_cuda_graph * graph) {
+
+
+#if CUDA_VERSION >= 12000
+        // Set programmatic dependent launch (PDL) properties for all edges
+        // This will only have an effect on Hopper and later GPUs, but is harmless on older GPUs.
+        // Only allow PDL if it hasn't been disabled due to presence of library kernels in CUDA graph
+        // since we can't add corresponding CUDA API sync calls to these.
+        // TO DO identify graph nodes that contain such library kernels and refrain from setting PDL
+        // launch properties only on those nodes (non-trivial).
+    if (graph->allow_pdl) {
+
+        size_t num_nodes = 0;
+        // First call with null arg gives number of nodes
+        CUDA_CHECK(cudaGraphGetNodes(graph->graph, nullptr, &num_nodes));
+
+        if (num_nodes > graph->graph_nodes.size()) {
+            graph->graph_nodes.resize(num_nodes);
+        }
+        if (num_nodes > 0) {
+            // This call gives actual nodes
+            CUDA_CHECK(cudaGraphGetNodes(graph->graph, graph->graph_nodes.data(), &num_nodes));
+        }
+
+        size_t max_dependencies = 0;
+        for (size_t i = 0; i < num_nodes; i++) {
+            size_t num_dependencies = 0;
+            // First call with null arg gives number of dependencies
+            CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
+            if (num_dependencies > max_dependencies)
+                max_dependencies = num_dependencies;
+        }
+        if (max_dependencies > graph->graph_dependencies.size()) {
+            graph->graph_dependencies.resize(max_dependencies);
+        }
+
+        if (num_nodes > 0) {
+            cudaGraphNodeType prev_node_type = cudaGraphNodeTypeKernel;
+            for (size_t i = 0; i < num_nodes; i++) {
+                cudaGraphNodeType node_type;
+                CUDA_CHECK(cudaGraphNodeGetType(graph->graph_nodes[i], &node_type));
+                if (node_type == cudaGraphNodeTypeKernel && prev_node_type == cudaGraphNodeTypeKernel) {
+                    size_t num_dependencies = 0;
+                    // First call with null arg gives number of dependencies
+                    CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
+                    if (num_dependencies > 0) {
+                        // This call gives actual dependencies
+                        CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], graph->graph_dependencies.data(), nullptr, &num_dependencies));
+                        for (size_t j = 0; j < num_dependencies; j++) {
+                            cudaGraphEdgeData edge_data = {};
+                            edge_data.type = cudaGraphDependencyTypeProgrammatic;
+                            edge_data.from_port = cudaGraphKernelNodePortProgrammatic;
+                            edge_data.to_port = 0;
+                            // Remove existing dependency and add it back with PDL edge properties
+                            CUDA_CHECK(cudaGraphRemoveDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], nullptr, 1));
+                            CUDA_CHECK(cudaGraphAddDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], &edge_data, 1));
+                        }
+                    }
+                }
+                prev_node_type = node_type;
+            }
+        }
+    }
+#endif // CUDA_VERSION >=12000
+}
+
 static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
@@ -3910,68 +3976,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             }
 
             CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
-            
-#if CUDA_VERSION >= 12030
-            // Set programmatic dependent launch (PDL) properties for all edges
-            // This will only have an effect on Hopper and later GPUs, but is harmless on older GPUs.
-            // Only allow PDL if it hasn't been disabled due to presence of library kernels in CUDA graph
-            // since we can't add corresponding CUDA API sync calls to these.
-            // TO DO identify graph nodes that contain such library kernels and refrain from setting PDL
-            // launch properties only on those nodes (non-trivial).
-            if (graph->allow_pdl) {
-
-                size_t num_nodes = 0;
-                // First call with null arg gives number of nodes
-                CUDA_CHECK(cudaGraphGetNodes(graph->graph, nullptr, &num_nodes));
-
-                if (num_nodes > graph->graph_nodes.size()) {
-                    graph->graph_nodes.resize(num_nodes);
-                }
-                if (num_nodes > 0) {
-                    // This call gives actual nodes
-                    CUDA_CHECK(cudaGraphGetNodes(graph->graph, graph->graph_nodes.data(), &num_nodes));
-                }
-
-                size_t max_dependencies = 0;
-                for (size_t i = 0; i < num_nodes; i++) {
-                    size_t num_dependencies = 0;
-                    // First call with null arg gives number of dependencies
-                    CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
-                    if (num_dependencies > max_dependencies)
-                        max_dependencies = num_dependencies;
-                }
-                if (max_dependencies > graph->graph_dependencies.size()) {
-                    graph->graph_dependencies.resize(max_dependencies);
-                }
-
-                if (num_nodes > 0) {
-                    cudaGraphNodeType prev_node_type = cudaGraphNodeTypeKernel;
-                    for (size_t i = 0; i < num_nodes; i++) {
-                        cudaGraphNodeType node_type;
-                        CUDA_CHECK(cudaGraphNodeGetType(graph->graph_nodes[i], &node_type));
-                        if (node_type == cudaGraphNodeTypeKernel && prev_node_type == cudaGraphNodeTypeKernel) {
-                            size_t num_dependencies = 0;
-                            // First call with null arg gives number of dependencies
-                            CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
-                            if (num_dependencies > 0) {
-                                // This call gives actual dependencies
-                                CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], graph->graph_dependencies.data(), nullptr, &num_dependencies));
-                                for (size_t j = 0; j < num_dependencies; j++) {
-                                    cudaGraphEdgeData edge_data = {};
-                                    edge_data.type = cudaGraphDependencyTypeProgrammatic;
-                                    edge_data.from_port = cudaGraphKernelNodePortProgrammatic;
-                                    edge_data.to_port = 0;
-                                    // Remove existing dependency and add it back with PDL edge properties
-                                    CUDA_CHECK(cudaGraphRemoveDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], nullptr, 1));
-                                    CUDA_CHECK(cudaGraphAddDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], &edge_data, 1));
-                                }
-                            }
-                        }
-                        prev_node_type = node_type;
-                }
-            }
-        }
-#endif // CUDA_VERSION >=12000
+            ggml_cuda_graph_instantiate_pdl(graph);
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
