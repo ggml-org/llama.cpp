@@ -189,3 +189,8 @@ python regenerate_remoting.py
 * This work focused on improving the performance of llama.cpp running
   on MacOS containers, and is mainly tested on this platform. The
   linux support (via `krun`) is in progress.
+
+## See Also
+
+- [Backend configuration](configuration.md)
+- [Testing](testing.md)
