@@ -3844,6 +3844,7 @@ static void llama_sampler_thought_accept(struct llama_sampler * smpl, llama_toke
     auto * ctx = (llama_sampler_thought *) smpl->ctx;
 
     if (token == ctx->token_start_id) {
+        LLAMA_LOG_INFO("%s: thinking start, budget: %d\n", __func__, ctx->budget);
         ctx->thinking = true;
         ctx->count = 0;
     } else if (token == ctx->token_end_id) {
@@ -3925,8 +3926,10 @@ struct llama_sampler * llama_sampler_init_thought(const struct llama_vocab * voc
         token_end_id = vocab->text_to_token(token_end);
     }
 
-    LLAMA_LOG_INFO("%s: thinking_budget = %d, token_start = '%s' (%d), token_end = '%s' (%d)\n",
+    if (token_start || token_end) {
+        LLAMA_LOG_INFO("%s: thinking_budget = %d, token_start = '%s' (%d), token_end = '%s' (%d)\n",
             __func__, budget, token_start ? token_start : "", token_start_id, token_end ? token_end : "", token_end_id);
+    }
 
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_thought_i,
