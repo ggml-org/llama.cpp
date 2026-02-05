@@ -465,8 +465,6 @@ struct common_speculative_state_eagle3 : public common_speculative_state {
 struct common_speculative_state_ngram_simple : public common_speculative_state {
     common_ngram_simple_config config;
 
-    uint16_t check_id = 0; // used to control the frequency of generating drafts
-
     common_speculative_state_ngram_simple(
             enum common_speculative_type type,
             common_ngram_simple_config config)
@@ -481,11 +479,6 @@ struct common_speculative_state_ngram_simple : public common_speculative_state {
             const llama_tokens & prompt_tgt,
             llama_token id_last,
             llama_tokens & result) override {
-        ++check_id;
-        if (check_id < config.check_rate) {
-            return;
-        }
-        check_id = 0;
 
         result = common_ngram_simple_draft(config, prompt_tgt, id_last);
         GGML_UNUSED(params);
@@ -752,10 +745,9 @@ static common_ngram_map get_common_ngram_map(const common_speculative_config & c
     uint16_t size_key   = config.params.ngram_size_n;
     uint16_t size_value = config.params.ngram_size_m;
     bool     key_only   = (config.type == COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
-    uint16_t check_rate = config.params.ngram_check_rate;
     uint16_t min_hits   = config.params.ngram_min_hits;
 
-    return common_ngram_map(size_key, size_value, key_only, check_rate, min_hits);
+    return common_ngram_map(size_key, size_value, key_only, min_hits);
 }
 
 static common_speculative_state_ngram_cache create_state_ngram_cache(
@@ -895,12 +887,10 @@ common_speculative * common_speculative_init(
 
                 uint16_t ngram_size_key   = ngram_map.size_key;
                 uint16_t mgram_size_value = ngram_map.size_value;
-                uint16_t check_rate       = ngram_map.check_rate;
 
                 auto config_simple = common_ngram_simple_config {
                     /* .size_ngram      = */ ngram_size_key,
-                    /* .size_mgram      = */ mgram_size_value,
-                    /* .check_rate      = */ check_rate
+                    /* .size_mgram      = */ mgram_size_value
                 };
                 auto state = std::make_unique<common_speculative_state_ngram_simple>(
                     /* .type            = */ config.type,

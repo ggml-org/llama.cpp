@@ -119,8 +119,6 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         of lookup n-gram (default: 12)
 --spec-ngram-size-m N                   ngram size M for ngram-simple/ngram-map speculative decoding, length
                                         of draft m-gram (default: 48)
---spec-ngram-check-rate N               ngram check rate for ngram-simple/ngram-map speculative decoding
-                                        (default: 1)
 --spec-ngram-min-hits N                 minimum hits for ngram-map speculative decoding (default: 1)
 ```
 
@@ -152,10 +150,6 @@ The n-gram size N determines how many tokens in a row to look back when searchin
 Sets the size M of the draft m-gram for n-gram map based speculative decoding.
 The m-gram size determines how many tokens to draft when a match is found.
 Larger values can provide more speedup but may reduce acceptance rate.
-
-### `--spec-ngram-check-rate R`
-
-This option aims at performance if the n-gram lookup in history is to costly. A lookup will be executed at every R tokens (default is 1, every token).
 
 ### `--spec-ngram-min-hits H`
 
