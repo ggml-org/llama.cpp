@@ -931,9 +931,6 @@ class GGUFWriter:
 
     def add_rope_dimension_count(self, count: int) -> None:
         self.add_uint32(Keys.Rope.DIMENSION_COUNT.format(arch=self.arch), count)
-    
-    def add_rope_dimension_count_per_layer(self, values: Sequence[int]) -> None:
-        self.add_array(Keys.Rope.DIMENSION_COUNT_PER_LAYER.format(arch=self.arch), values)
 
     def add_rope_dimension_sections(self, dims: Sequence[int]) -> None:
         self.add_array(Keys.Rope.DIMENSION_SECTIONS.format(arch=self.arch), dims)

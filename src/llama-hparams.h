@@ -330,7 +330,6 @@ struct llama_hparams {
 
 
     bool use_mrope() const;
-
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

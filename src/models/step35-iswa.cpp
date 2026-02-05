@@ -6,7 +6,7 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
 
     inpL = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos     = build_inp_pos();
-    auto       * inp_attn    = build_attn_inp_kv_iswa();
+    auto        * inp_attn    = build_attn_inp_kv_iswa();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     
     for (int il = 0; il < n_layer; ++il) {
