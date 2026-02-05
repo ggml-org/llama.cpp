@@ -24,6 +24,7 @@
 /common/speculative.*                   @ggerganov
 /common/unicode.*                       @aldehir
 /convert_*.py                           @CISC
+/docs/backend/GGML-VirtGPU/             @kpouget
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
 /examples/convert-llama2c-to-ggml/      @ggerganov
