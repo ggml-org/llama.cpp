@@ -238,6 +238,16 @@ public:
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
+    template <typename T>
+    struct buffer_view {
+        T * data;
+        size_t size = 0;
+
+        bool has_data() const {
+            return data && size > 0;
+        }
+    };
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,
@@ -277,21 +287,13 @@ private:
     size_t  embd_size = 0; // capacity (of floats) for embeddings
     float * embd      = nullptr;
 
-    // TODO: simplify
     struct sampling_info {
         std::map<llama_seq_id, llama_sampler *> samplers;
 
-        float       * logits      = nullptr;
-        size_t        logits_size = 0;
-
-        llama_token * sampled      = nullptr;
-        size_t        sampled_size = 0;
-
-        float       * probs        = nullptr;
-        size_t        probs_size   = 0;
-
-        llama_token * candidates   = nullptr;
-        size_t        candidates_size = 0;
+        struct buffer_view<float>       logits     = {nullptr, 0};
+        struct buffer_view<llama_token> sampled    = {nullptr, 0};
+        struct buffer_view<float>       probs      = {nullptr, 0};
+        struct buffer_view<llama_token> candidates = {nullptr, 0};
 
         std::vector<uint32_t> logits_count;
         std::vector<uint32_t> probs_count;
