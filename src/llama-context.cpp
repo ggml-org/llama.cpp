@@ -1093,6 +1093,40 @@ bool llama_context::rm_adapter_lora(
     return false;
 }
 
+void llama_context::put_adapter_loras(size_t num_adapters, llama_adapter_lora ** adapters, float * scales) {
+    LLAMA_LOG_DEBUG("%s: adapters = %p\n", __func__, (void *) adapters);
+
+    if (are_adapter_loras_same(num_adapters, adapters, scales)) {
+        return;
+    }
+
+    clear_adapter_lora();
+
+    for (size_t i = 0; i < num_adapters; i ++) {
+        if (scales[i] != 0.0f) {
+            set_adapter_lora(adapters[i], scales[i]);
+        }
+    }
+}
+
+bool llama_context::are_adapter_loras_same(size_t num_adapters, llama_adapter_lora ** adapters, float * scales) {
+    LLAMA_LOG_DEBUG("%s: adapters = %p\n", __func__, (void *) adapters);
+
+    if (num_adapters != loras.size()) {
+        return false;
+    }
+
+    for (size_t i = 0; i < num_adapters; i ++) {
+        auto it = loras.find(adapters[i]);
+
+        if (it == loras.end() || it->second != scales[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void llama_context::clear_adapter_lora() {
     LLAMA_LOG_DEBUG("%s: call\n", __func__);
 
@@ -3241,6 +3275,10 @@ int32_t llama_rm_adapter_lora(
 
 void llama_clear_adapter_lora(llama_context * ctx) {
     ctx->clear_adapter_lora();
+}
+
+void llama_put_adapter_loras(llama_context * ctx, size_t num_adapters, llama_adapter_lora ** adapters, float * scales) {
+    ctx->put_adapter_loras(num_adapters, adapters, scales);
 }
 
 int32_t llama_apply_adapter_cvec(

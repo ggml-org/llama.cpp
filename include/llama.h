@@ -672,6 +672,9 @@ extern "C" {
     // Remove all LoRA adapters from given context
     LLAMA_API void llama_clear_adapter_lora(struct llama_context * ctx);
 
+    // Set LoRa adapters on the context. Will only modify if the adapters currently in context are different.
+    LLAMA_API void llama_put_adapter_loras(struct llama_context * ctx, size_t num_adapters, struct llama_adapter_lora ** adapters, float * scales);
+
     // Apply a loaded control vector to a llama_context, or if data is NULL, clear
     // the currently loaded vector.
     // n_embd should be the size of a single layer's control, and data should point

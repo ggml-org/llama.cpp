@@ -1344,12 +1344,15 @@ std::string get_model_endpoint() {
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
-    llama_clear_adapter_lora(ctx);
-    for (auto & la : lora) {
-        if (la.scale != 0.0f) {
-            llama_set_adapter_lora(ctx, la.ptr, la.scale);
-        }
+    std::vector<llama_adapter_lora*> loras;
+    std::vector<float> scales;
+
+    for (auto & la: lora) {
+        loras.push_back(la.ptr);
+        scales.push_back(la.scale);
     }
+
+    llama_put_adapter_loras(ctx, loras.size(), loras.data(), scales.data());
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {
