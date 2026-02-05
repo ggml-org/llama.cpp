@@ -335,6 +335,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
 }
 
 // pseudo-random number generator with ~6db/octave blue noise
+// this generator produces a uniform distribution
 // important: blue noise properties cannot be preserved when 
 // the generator is used for multiple purposes simultaneously
 // nor when multiple next calls are used to construct a larger value
