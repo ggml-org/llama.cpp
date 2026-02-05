@@ -13,11 +13,11 @@
 #include <signal.h>
 
 #if defined(_WIN32)
-#    define WIN32_LEAN_AND_MEAN
-#    ifndef NOMINMAX
-#        define NOMINMAX
-#    endif
-#    include <windows.h>
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 const char * LLAMA_ASCII_LOGO = R"(
@@ -31,12 +31,11 @@ const char * LLAMA_ASCII_LOGO = R"(
 )";
 
 static std::atomic<bool> g_is_interrupted = false;
-
 static bool should_stop() {
     return g_is_interrupted.load();
 }
 
-#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
 static void signal_handler(int) {
     if (g_is_interrupted.load()) {
         // second Ctrl+C - exit immediately
@@ -67,8 +66,8 @@ struct cli_context {
         defaults.n_predict   = params.n_predict;
         defaults.antiprompt  = params.antiprompt;
 
-        defaults.stream                                 = true;  // make sure we always use streaming mode
-        defaults.timings_per_token                      = true;  // in order to get timings even when we cancel mid-way
+        defaults.stream = true; // make sure we always use streaming mode
+        defaults.timings_per_token = true; // in order to get timings even when we cancel mid-way
         // defaults.return_progress = true; // TODO: show progress
     }
 
@@ -92,7 +91,7 @@ struct cli_context {
                 task.params.chat_parser_params.parser.load(chat_params.parser);
             }
 
-            rd.post_task({ std::move(task) });
+            rd.post_task({std::move(task)});
         }
 
         // wait for first result
@@ -101,7 +100,7 @@ struct cli_context {
 
         console::spinner::stop();
         std::string curr_content;
-        bool        is_thinking = false;
+        bool is_thinking = false;
 
         while (result) {
             if (should_stop()) {
@@ -193,7 +192,7 @@ struct cli_context {
 int main(int argc, char ** argv) {
     common_params params;
 
-    params.verbosity = LOG_LEVEL_ERROR;  // by default, less verbose logs
+    params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CLI)) {
         return 1;
@@ -219,14 +218,14 @@ int main(int argc, char ** argv) {
 
     console::set_display(DISPLAY_TYPE_RESET);
 
-#if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
+#if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
     sigint_action.sa_handler = signal_handler;
-    sigemptyset(&sigint_action.sa_mask);
+    sigemptyset (&sigint_action.sa_mask);
     sigint_action.sa_flags = 0;
     sigaction(SIGINT, &sigint_action, NULL);
     sigaction(SIGTERM, &sigint_action, NULL);
-#elif defined(_WIN32)
+#elif defined (_WIN32)
     auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
         return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
     };
