@@ -1,6 +1,5 @@
-#include "arg.h"
-#include "chat.h"
 #include "common.h"
+#include "arg.h"
 #include "console.h"
 // #include "log.h"
 
@@ -8,11 +7,10 @@
 #include "server-context.h"
 #include "server-task.h"
 
-#include <signal.h>
-
 #include <atomic>
 #include <fstream>
 #include <thread>
+#include <signal.h>
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN
@@ -22,7 +20,7 @@
 #    include <windows.h>
 #endif
 
-static const char * LLAMA_ASCII_LOGO = R"(
+const char * LLAMA_ASCII_LOGO = R"(
 ▄▄ ▄▄
 ██ ██
 ██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
@@ -39,7 +37,7 @@ static bool should_stop() {
 }
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
-static void signal_handler(int /*unused*/) {
+static void signal_handler(int) {
     if (g_is_interrupted.load()) {
         // second Ctrl+C - exit immediately
         // make sure to clear colors before exiting (not using LOG or console.cpp here to avoid deadlock)
@@ -268,9 +266,11 @@ int main(int argc, char ** argv) {
     console::spinner::stop();
     console::log("\n");
 
-    std::thread inference_thread([&ctx_cli]() { ctx_cli.ctx_server.start_loop(); });
+    std::thread inference_thread([&ctx_cli]() {
+        ctx_cli.ctx_server.start_loop();
+    });
 
-    auto        inf        = ctx_cli.ctx_server.get_meta();
+    auto inf = ctx_cli.ctx_server.get_meta();
     std::string modalities = "text";
     if (inf.has_inp_image) {
         modalities += ", vision";
@@ -281,8 +281,8 @@ int main(int argc, char ** argv) {
 
     if (!params.system_prompt.empty()) {
         ctx_cli.messages.push_back({
-            { "role",    "system"             },
-            { "content", params.system_prompt }
+            {"role",    "system"},
+            {"content", params.system_prompt}
         });
     }
 
@@ -316,7 +316,7 @@ int main(int argc, char ** argv) {
         if (params.prompt.empty()) {
             console::log("\n> ");
             std::string line;
-            bool        another_line = true;
+            bool another_line = true;
             do {
                 another_line = console::readline(line, params.multiline_input);
                 buffer += line;
@@ -338,7 +338,7 @@ int main(int argc, char ** argv) {
             } else {
                 console::log("\n> %s\n", buffer.c_str());
             }
-            params.prompt.clear();  // only use it once
+            params.prompt.clear(); // only use it once
         }
         console::set_display(DISPLAY_TYPE_RESET);
         console::log("\n");
@@ -349,7 +349,7 @@ int main(int argc, char ** argv) {
         }
 
         // remove trailing newline
-        if (!buffer.empty() && buffer.back() == '\n') {
+        if (!buffer.empty() &&buffer.back() == '\n') {
             buffer.pop_back();
         }
 
@@ -378,10 +378,11 @@ int main(int argc, char ** argv) {
             ctx_cli.input_files.clear();
             console::log("Chat history cleared.\n");
             continue;
-        } else if ((string_starts_with(buffer, "/image ") && inf.has_inp_image) ||
-                   (string_starts_with(buffer, "/audio ") && inf.has_inp_audio)) {
+        } else if (
+                (string_starts_with(buffer, "/image ") && inf.has_inp_image) ||
+                (string_starts_with(buffer, "/audio ") && inf.has_inp_audio)) {
             // just in case (bad copy-paste for example), we strip all trailing/leading spaces
-            std::string fname  = string_strip(buffer.substr(7));
+            std::string fname = string_strip(buffer.substr(7));
             std::string marker = ctx_cli.load_input_file(fname, true);
             if (marker.empty()) {
                 console::error("file does not exist or cannot be opened: '%s'\n", fname.c_str());
@@ -391,7 +392,7 @@ int main(int argc, char ** argv) {
             console::log("Loaded media from '%s'\n", fname.c_str());
             continue;
         } else if (string_starts_with(buffer, "/read ")) {
-            std::string fname  = string_strip(buffer.substr(6));
+            std::string fname = string_strip(buffer.substr(6));
             std::string marker = ctx_cli.load_input_file(fname, false);
             if (marker.empty()) {
                 console::error("file does not exist or cannot be opened: '%s'\n", fname.c_str());
@@ -408,8 +409,8 @@ int main(int argc, char ** argv) {
         // generate response
         if (add_user_msg) {
             ctx_cli.messages.push_back({
-                { "role",    "user"  },
-                { "content", cur_msg }
+                {"role",    "user"},
+                {"content", cur_msg}
             });
             cur_msg.clear();
         }
@@ -486,8 +487,8 @@ int main(int argc, char ** argv) {
                 // continue loop to generate with tool results
             } else {
                 json assistant_msg = {
-                    { "role",    "assistant"       },
-                    { "content", assistant_content }
+                    {"role",   "assistant"},
+                    {"content", assistant_content}
                 };
                 ctx_cli.messages.push_back(assistant_msg);
                 break;
@@ -498,8 +499,7 @@ int main(int argc, char ** argv) {
         if (params.show_timings) {
             console::set_display(DISPLAY_TYPE_INFO);
             console::log("\n");
-            console::log("[ Prompt: %.1f t/s | Generation: %.1f t/s ]\n", timings.prompt_per_second,
-                         timings.predicted_per_second);
+            console::log("[ Prompt: %.1f t/s | Generation: %.1f t/s ]\n", timings.prompt_per_second, timings.predicted_per_second);
             console::set_display(DISPLAY_TYPE_RESET);
         }
 
