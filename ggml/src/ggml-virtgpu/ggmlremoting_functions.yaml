@@ -24,10 +24,10 @@ functions:
         frontend_return: "int"
 
       get_name:
-        frontend_return: "const char *"
+        frontend_return: "char *"
 
       get_description:
-        frontend_return: "const char *"
+        frontend_return: "char *"
 
       get_type:
         frontend_return: "uint32_t"
@@ -64,35 +64,33 @@ functions:
     group_description: "buffer-type"
     functions:
       get_name:
-        frontend_return: "const char *"
+        frontend_return: "char *"
         frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        - "apir_buffer_type_host_handle_t host_handle"
 
       get_alignment:
         frontend_return: "size_t"
         frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        - "apir_buffer_type_host_handle_t host_handle"
 
       get_max_size:
         frontend_return: "size_t"
         frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        - "apir_buffer_type_host_handle_t host_handle"
 
       is_host:
-        frontend_return: "bool"
-        frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        deprecated: true
 
       alloc_buffer:
         frontend_return: "apir_buffer_context_t"
         frontend_extra_params:
-        - "ggml_backend_buffer_type_t buffer_buft"
+        - "apir_buffer_type_host_handle_t host_handle"
         - "size_t size"
 
       get_alloc_size:
         frontend_return: "size_t"
         frontend_extra_params:
-        - "ggml_backend_buffer_type_t buft"
+        - "apir_buffer_type_host_handle_t host_handle"
         - "const ggml_tensor *op"
 
   buffer:
