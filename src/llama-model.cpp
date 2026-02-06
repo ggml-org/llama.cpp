@@ -15,7 +15,6 @@
 #include <cassert>
 #include <cfloat>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -1611,18 +1610,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_FAIRY2I:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-
-                const char * ifairy_act_tensor_env = getenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
-                if (ifairy_act_tensor_env == nullptr) {
-                    if (setenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR", "1", 0) == 0) {
-                        LLAMA_LOG_INFO("%s: GGML_IFAIRY_VEC_DOT_ACT_TENSOR is unset, defaulting to 1 for FAIRY2I\n",
-                                       __func__);
-                    } else {
-                        LLAMA_LOG_WARN(
-                            "%s: failed to set GGML_IFAIRY_VEC_DOT_ACT_TENSOR=1 for FAIRY2I, using backend default\n",
-                            __func__);
-                    }
-                }
 
                 switch (hparams.n_layer) {
                     case 32:
