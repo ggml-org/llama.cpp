@@ -197,7 +197,11 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const details: string[] = [];
 
 		// Always show context info when we have valid data
-		if (stateToUse.contextUsed >= 0 && stateToUse.contextTotal > 0) {
+		if (
+			typeof stateToUse.contextTotal === 'number' &&
+			stateToUse.contextUsed >= 0 &&
+			stateToUse.contextTotal > 0
+		) {
 			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(

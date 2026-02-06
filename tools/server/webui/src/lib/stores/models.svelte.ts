@@ -178,7 +178,9 @@ class ModelsStore {
 	 */
 	getModelContextSize(modelId: string): number | null {
 		const props = this.getModelProps(modelId);
-		return props?.default_generation_settings?.n_ctx ?? null;
+		const nCtx = props?.default_generation_settings?.n_ctx;
+
+		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
 	/**

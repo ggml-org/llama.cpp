@@ -30,7 +30,6 @@ import {
 	findLeafNode,
 	isAbortError
 } from '$lib/utils';
-import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 import { REASONING_TAGS } from '$lib/constants/agentic';
 import {
@@ -1252,17 +1251,22 @@ class ChatStore {
 		}
 	}
 
-	private getContextTotal(): number {
+	private getContextTotal(): number | null {
 		const activeConvId = this.activeConversationId;
 		const activeState = activeConvId ? this.getProcessingState(activeConvId) : null;
-		if (activeState && activeState.contextTotal > 0) return activeState.contextTotal;
+
+		if (activeState && typeof activeState.contextTotal === 'number' && activeState.contextTotal > 0)
+			return activeState.contextTotal;
+
 		if (isRouterMode()) {
 			const modelContextSize = selectedModelContextSize();
-			if (modelContextSize && modelContextSize > 0) return modelContextSize;
+			if (typeof modelContextSize === 'number' && modelContextSize > 0) return modelContextSize;
+		} else {
+			const propsContextSize = contextSize();
+			if (typeof propsContextSize === 'number' && propsContextSize > 0) return propsContextSize;
 		}
-		const propsContextSize = contextSize();
-		if (propsContextSize && propsContextSize > 0) return propsContextSize;
-		return DEFAULT_CONTEXT;
+
+		return null;
 	}
 
 	updateProcessingStateFromTimings(
