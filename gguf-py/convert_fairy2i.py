@@ -290,6 +290,17 @@ def main() -> None:
     parser.add_argument("model_dir", type=Path, help="Path to Fairy2i-W2 model directory")
     parser.add_argument("output_file", type=Path, help="Output GGUF file path")
     parser.add_argument("--residual-steps", type=int, default=2, help="Residual quantization steps (only 2 is supported)")
+    parser.add_argument(
+        "--output-layer",
+        choices=["ifairy", "dense", "both"],
+        default="ifairy",
+        help="Output projection storage: ifairy (default), dense, or both (for A/B debugging)",
+    )
+    parser.add_argument(
+        "--qk-permute",
+        action="store_true",
+        help="Enable Llama q/k undo-permute during conversion (disabled by default for Fairy2i)",
+    )
     parser.add_argument("--verbose", action="store_true", help="Print conversion progress")
     args = parser.parse_args()
 
@@ -299,6 +310,8 @@ def main() -> None:
     model_dir: Path = args.model_dir
     output_file: Path = args.output_file
     verbose: bool = args.verbose
+    output_layer_mode: str = args.output_layer
+    do_qk_permute: bool = args.qk_permute
 
     config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
 
@@ -315,6 +328,7 @@ def main() -> None:
     if verbose:
         print(f"hidden_real={hidden_real}, hidden_complex={hidden_complex}")
         print(f"ff_complex={ff_complex}, ff_complex_padded={ff_complex_padded}")
+        print(f"output_layer_mode={output_layer_mode}, do_qk_permute={do_qk_permute}")
 
     weight_map = load_weight_map(model_dir)
     reader = TensorReader(model_dir, weight_map)
@@ -349,19 +363,29 @@ def main() -> None:
     del output_norm
     gc.collect()
 
-    if verbose:
-        print("adding output projection (wide-linear ifairy)")
     output_w = reader.get("lm_head.weight")
-    output_out_c = output_w.shape[0] // 2
-    output_in_c = output_w.shape[1] // 2
-    output_packed = quantize_linear_to_ifairy_stages(output_w, output_out_c, output_in_c)
-    for stage_name, stage_data in output_packed.items():
-        writer.add_tensor(
-            f"output.{stage_name}",
-            stage_data,
-            raw_dtype=gguf.GGMLQuantizationType.F16_I2,
-        )
-    del output_w, output_packed
+    if output_layer_mode in ("ifairy", "both"):
+        if verbose:
+            print("adding output projection (wide-linear ifairy)")
+        output_out_c = output_w.shape[0] // 2
+        output_in_c = output_w.shape[1] // 2
+        output_packed = quantize_linear_to_ifairy_stages(output_w, output_out_c, output_in_c)
+        for stage_name, stage_data in output_packed.items():
+            writer.add_tensor(
+                f"output.{stage_name}",
+                stage_data,
+                raw_dtype=gguf.GGMLQuantizationType.F16_I2,
+            )
+        del output_packed
+
+    if output_layer_mode in ("dense", "both"):
+        if verbose:
+            print("adding output projection (dense f16)")
+        output_dense = output_w.to(torch.float16).cpu().numpy()
+        writer.add_tensor("output", output_dense, raw_dtype=gguf.GGMLQuantizationType.F16)
+        del output_dense
+
+    del output_w
     gc.collect()
 
     linear_specs = [
@@ -388,9 +412,9 @@ def main() -> None:
             hf_key = f"model.layers.{il}.{hf_suffix}"
             w = reader.get(hf_key)
 
-            if permute_kind == "q":
+            if permute_kind == "q" and do_qk_permute:
                 w = undo_llama_permute(w, n_head)
-            elif permute_kind == "k":
+            elif permute_kind == "k" and do_qk_permute:
                 w = undo_llama_permute(w, n_head_kv)
 
             out_c = w.shape[0] // 2

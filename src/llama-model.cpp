@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -4564,6 +4565,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD), { n_embd, n_vocab }, 0);
 
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM), { n_embd * 2 }, 0);
+                    // Optional dense output for ablation/fallback.
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, TENSOR_NOT_REQUIRED);
 
                     if (n_vocab % 2 != 0) {
                         throw std::runtime_error(
@@ -4583,14 +4586,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1];
                     const bool has_output_fairy2i_any =
                         output_fairy2i.U[0] || output_fairy2i.U[1] || output_fairy2i.W[0] || output_fairy2i.W[1];
-                    if (!has_output_fairy2i) {
-                        if (has_output_fairy2i_any) {
-                            throw std::runtime_error(
-                                "incomplete FAIRY2I output tensor set: expected output.{U,W}.s{0,1}");
-                        }
-
-                        // Backward compatibility with earlier FAIRY2I GGUFs.
-                        output = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, 0);
+                    if (has_output_fairy2i_any && !has_output_fairy2i) {
+                        throw std::runtime_error("incomplete FAIRY2I output tensor set: expected output.{U,W}.s{0,1}");
+                    }
+                    if (!has_output_fairy2i && !output) {
+                        throw std::runtime_error("FAIRY2I requires either output.{U,W}.s{0,1} or dense output tensor");
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
@@ -14052,7 +14052,10 @@ struct llm_build_fairy2i : public llm_graph_context {
 
         const bool has_output_fairy2i = model.output_fairy2i.U[0] && model.output_fairy2i.U[1] &&
                                         model.output_fairy2i.W[0] && model.output_fairy2i.W[1];
-        if (has_output_fairy2i) {
+        const char * force_dense_output_env = getenv("LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT");
+        const bool   force_dense_output = force_dense_output_env != nullptr && strcmp(force_dense_output_env, "0") != 0;
+
+        if (has_output_fairy2i && !force_dense_output) {
             ggml_tensor * cur_conj = build_ifairy_conj(cur, -1, "result_norm_conj");
             cur                    = build_wide_linear(model.output_fairy2i, cur, cur_conj, -1, "result_output_wide");
             cur                    = ggml_ifairy_split(ctx0, cur);
