@@ -857,6 +857,8 @@ struct ggml_tensor * llama_model_loader::create_tensor(struct ggml_context * ctx
         n_created++;
     }
 
+    loaded_tensor_names.insert(name);
+
     return tensor;
 
 }
@@ -886,11 +888,20 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
 
     n_created++;
 
+    loaded_tensor_names.insert(name);
+
     return tensor;
 }
 
 void llama_model_loader::done_getting_tensors() const {
     if (n_created != n_tensors) {
+        // for debugging
+        for (const auto & it : weights_map) {
+            const std::string & name = it.first;
+            if (loaded_tensor_names.find(name) == loaded_tensor_names.end()) {
+                LLAMA_LOG_DEBUG("%s: tensor '%s' was not created\n", __func__, name.c_str());
+            }
+        }
         throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
     }
 }

@@ -89,6 +89,7 @@ add_library(llama
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
+            models/longcat-flash.cpp
             models/maincoder.cpp
             models/mamba.cpp
             models/mimo2-iswa.cpp

@@ -1257,6 +1257,9 @@ class TextModel(ModelBase):
         if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
             # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
             res = "exaone-moe"
+        if chkhsh == "27d87c17bcffe5262a1e80b2ceb9a5e002c4f8a17d796fd5afac9180dd8bd96e":
+            # ref: https://huggingface.co/meituan-longcat/LongCat-Flash-Chat
+            res = "longcat-flash"
 
         if res is None:
             logger.warning("\n")
@@ -10913,6 +10916,61 @@ class SolarOpenModel(Glm4MoeModel):
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])
         special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
+
+
+@ModelBase.register("LongcatFlashForCausalLM")
+class LongcatFlashModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.LONGCAT_FLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the model use double block, we need to adjust block count
+        self.block_count = self.hparams["num_layers"] * 2
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        # compat with deepseek2 base class hparam
+        self.hparams["num_hidden_layers"] = self.block_count
+        self.hparams["num_key_value_heads"] = self.hparams["num_attention_heads"]
+        self.hparams["intermediate_size"] = self.hparams["ffn_hidden_size"]
+        self.hparams["moe_intermediate_size"] = self.hparams["expert_ffn_hidden_size"]
+        self.hparams["num_experts_per_tok"] = self.hparams["moe_topk"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        zero_expert_num = self.hparams["zero_expert_num"]
+        zero_expert_type = self.hparams["zero_expert_type"]
+        assert zero_expert_type == "identity", "cpp implementation only supports 'identity' type"
+        self.gguf_writer.add_n_zero_experts(zero_expert_num)
+
+    def modify_tensors(self, data_torch, name, bid):
+        if bid is not None:
+            bid = bid * 2  # double block id
+
+        # Rename rules examples:
+        # model.layers.1.input_layernorm.0.weight --> model.layers.1.input_layernorm.weight
+        # model.layers.1.input_layernorm.1.weight --> model.layers.2.input_layernorm.weight
+        # model.layers.1.mlp.experts.0 --> model.layers.2.mlp.expert.0 (special case for experts)
+
+        name = name.replace('.mlps.', '.mlp.')
+        name = name.replace('.router.classifier.', '.gate.')
+        name = name.replace('.router.e_score_correction_bias', '.e_score_correction_bias')
+
+        # handle sub-block remapping
+        match = re.match(r'.*\.(\d+)\.([a-z_\.]+)\.(\d+)\..*', name)
+        if match and ".mlp.experts." not in name:
+            # convert block id from N.(name).M to (N+M).(name)
+            N = int(match.group(1))
+            middle = match.group(2)
+            M = int(match.group(3))
+            assert(N * 2 == bid)
+            new_bid = N * 2 + M
+            new_name = re.sub(r'\.(\d+)\.([a-z_\.]+)\.(\d+)\.', f'.{new_bid}.{middle}.', name)
+            yield from super().modify_tensors(data_torch, new_name, new_bid)
+        else:
+            # correct block inside name (fix for experts tensors)
+            if bid is not None:
+                name = name.replace(f'.{bid // 2}.', f'.{bid}.', 1)
+            yield from super().modify_tensors(data_torch, name, bid)
 
 
 ###### CONVERSION LOGIC ######

@@ -1075,6 +1075,9 @@ class GGUFWriter:
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
 
+    def add_n_zero_experts(self, n: int) -> None:
+        self.add_uint32(Keys.LLM.N_ZERO_EXPERTS.format(arch=self.arch), n)
+
     # for vision models
 
     def add_clip_has_vision_encoder(self, value: bool) -> None:

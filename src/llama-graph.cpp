@@ -1114,6 +1114,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
+    // longcat-flash use n_zero_experts
+    const int64_t n_probs = n_expert + hparams.n_zero_experts;
+
     ggml_tensor * logits = nullptr;
 
     if (probs_in == nullptr) {
@@ -1169,7 +1172,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // select top n_group_used expert groups
     // https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/e815299b0bcbac849fa540c768ef21845365c9eb/modeling_deepseek.py#L440-L457
     if (hparams.n_expert_groups > 1 && n_tokens > 0) {
-        const int64_t n_exp_per_group = n_expert / hparams.n_expert_groups;
+        const int64_t n_exp_per_group = n_probs / hparams.n_expert_groups;
 
         // organize experts into n_expert_groups
         ggml_tensor * selection_groups = ggml_reshape_3d(ctx0, selection_probs, n_exp_per_group, hparams.n_expert_groups, n_tokens); // [n_exp_per_group, n_expert_groups, n_tokens]
@@ -1187,7 +1190,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         // mask out the other groups
         selection_probs = ggml_get_rows(ctx0, selection_groups, expert_groups); // [n_exp_per_group, n_group_used, n_tokens]
         selection_probs = ggml_set_rows(ctx0, ggml_fill(ctx0, selection_groups, -INFINITY), selection_probs, expert_groups); // [n_exp_per_group, n_expert_groups, n_tokens]
-        selection_probs = ggml_reshape_2d(ctx0, selection_probs, n_expert, n_tokens); // [n_expert, n_tokens]
+        selection_probs = ggml_reshape_2d(ctx0, selection_probs, n_probs, n_tokens); // [n_probs, n_tokens]
         cb(selection_probs, "ffn_moe_probs_masked", il);
     }
 
@@ -1201,6 +1204,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
         selected_experts = ggml_cast(ctx0, ggml_scale(ctx0, f_sel, 1.0f / float(hparams.n_group_experts)), GGML_TYPE_I32);
         probs = ggml_reshape_3d(ctx0, probs, 1, hparams.n_expert, n_tokens);
+
+    } else if (arch == LLM_ARCH_LONGCAT_FLASH && hparams.n_zero_experts > 0) {
+        ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
+        // TODO (hard): how to implement zero-computation experts here?
+        probs = ggml_reshape_3d(ctx0, probs, 1, n_probs, n_tokens);
+
     } else {
         probs = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
     }

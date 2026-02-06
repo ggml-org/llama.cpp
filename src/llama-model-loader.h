@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -93,6 +94,8 @@ struct llama_model_loader {
     size_t size_done = 0;
     size_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
+
+    std::set<std::string> loaded_tensor_names; // for debugging
 
     llama_model_loader(
         const std::string & fname,
