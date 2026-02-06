@@ -886,27 +886,48 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 
 static enum ggml_backend_meta_split_state llama_meta_device_get_tensor_split(const struct ggml_tensor * tensor, void * userdata) {
     // attention
-    const std::regex pattern_qkv_weight("blk\\.\\d*\\.attn_(q|k|v).*");
+    const std::regex pattern_qkv_weight("blk\\.\\d*\\.attn_(q|k|v).weight");
     if (std::regex_match(tensor->name, pattern_qkv_weight)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE1;
     }
-    const std::regex pattern_kv_cache("cache_(k|v)_l\\d*");
-    if (std::regex_match(tensor->name, pattern_kv_cache)) {
+    const std::regex pattern_qkv_bias("blk\\.\\d*\\.attn_(q|k|v)\\.bias");
+    if (std::regex_match(tensor->name, pattern_qkv_bias)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE0;
     }
-    const std::regex pattern_attn_out("blk\\.\\d*\\.attn_output.*");
-    if (std::regex_match(tensor->name, pattern_attn_out)) {
+    const std::regex pattern_qk_norm("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
+    if (std::regex_match(tensor->name, pattern_qk_norm)) {
+        return tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_STATE_MIRRORED : GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+    const std::regex pattern_kv_cache("cache_(k|v)_l\\d*");
+    const std::regex pattern_attn_sinks("blk\\.\\d*\\.attn_sinks.weight");
+    if (std::regex_match(tensor->name, pattern_kv_cache) || std::regex_match(tensor->name, pattern_attn_sinks)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_attn_out_weight("blk\\.\\d*\\.attn_output.weight");
+    if (std::regex_match(tensor->name, pattern_attn_out_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_attn_out_bias("blk\\.\\d*\\.attn_output.bias");
+    if (std::regex_match(tensor->name, pattern_attn_out_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
     }
 
     // FFN
-    const std::regex pattern_ffn_up_gate("blk\\.\\d*\\.ffn_(up|gate).*");
-    if (std::regex_match(tensor->name, pattern_ffn_up_gate)) {
+    const std::regex pattern_ffn_up_gate_weight("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.weight");
+    if (std::regex_match(tensor->name, pattern_ffn_up_gate_weight)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE1;
     }
-    const std::regex pattern_ffn_down("blk\\.\\d*\\.ffn_down.*");
-    if (std::regex_match(tensor->name, pattern_ffn_down)) {
+    const std::regex pattern_ffn_up_gate_bias("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.bias");
+    if (std::regex_match(tensor->name, pattern_ffn_up_gate_bias)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_ffn_down_weight("blk\\.\\d*\\.ffn_down(_exps)?.weight");
+    if (std::regex_match(tensor->name, pattern_ffn_down_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_ffn_down_bias("blk\\.\\d*\\.ffn_down(_exps)?.bias");
+    if (std::regex_match(tensor->name, pattern_ffn_down_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
     }
 
     // output
