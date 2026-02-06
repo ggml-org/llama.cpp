@@ -319,6 +319,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     layout.scales_offset = ((layout.weights_size + alignment - 1) / alignment) * alignment;
     layout.zp_offset = layout.scales_offset + ((layout.scales_size + alignment - 1) / alignment) * alignment;
     layout.total_size = layout.zp_offset + layout.zp_size;
+    layout.total_size = std::max(layout.total_size, ggml_nbytes(tensor));
 
     return layout;
 }

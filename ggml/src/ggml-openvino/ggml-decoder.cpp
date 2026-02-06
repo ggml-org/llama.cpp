@@ -550,11 +550,6 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
     return model_weights;
 }
 
-// Static cache for quantized weight nodes (keyed by tensor data pointer)
-// This is a fallback for when tensors don't have pre-built constants in extra
-static std::unordered_map<const void *, std::shared_ptr<ov::Node>> s_quantized_weight_cache;
-static std::mutex s_quantized_weight_cache_mutex;
-
 std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor) {
     // Check if we have a pre-built constant from the OpenVINO backend buffer
     // This is set during ggml_backend_openvino_buffer_set_tensor
@@ -569,51 +564,62 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
         if (extra_base->type == ggml_openvino_extra_base::Type::WEIGHT) {
             // F16/F32/BF16 weight with shared-memory constant
             auto * weight_extra = static_cast<ggml_openvino_weight_extra *>(tensor->extra);
-            if (weight_extra->constant) {
-                GGML_LOG_DEBUG("%s: using pre-built constant for %s\n", __func__, tensor->name);
-                return weight_extra->constant;
+            if (weight_extra->weight_node) {
+                GGML_LOG_DEBUG("%s: using pre-built weight node for %s\n", __func__, tensor->name);
+                return weight_extra->weight_node;
             }
         } else if (extra_base->type == ggml_openvino_extra_base::Type::QUANTIZED_WEIGHT) {
             // Quantized weight with pre-extracted data
             auto * quant_extra = static_cast<ggml_openvino_quantized_weight_extra *>(tensor->extra);
-            if (quant_extra->constant) {
-                GGML_LOG_DEBUG("%s: using pre-extracted quantized constant for %s\n", __func__, tensor->name);
-                return quant_extra->constant;
+            if (quant_extra->weight_node) {
+                GGML_LOG_DEBUG("%s: using pre-extracted quantized weight node for %s\n", __func__, tensor->name);
+                return quant_extra->weight_node;
             }
         }
     }
 
-    // Fallback: Check static cache for quantized weights (keyed by data pointer)
-    // This handles cases where tensors weren't loaded through OpenVINO buffer
-    if (ggml_is_quantized(tensor->type)) {
-        std::lock_guard<std::mutex> lock(s_quantized_weight_cache_mutex);
-        auto it = s_quantized_weight_cache.find(tensor->data);
-        if (it != s_quantized_weight_cache.end()) {
-            GGML_LOG_DEBUG("%s: using cached quantized constant for %s\n", __func__, tensor->name);
-            return it->second;
-        }
-    }
+    // Fallback: tensor doesn't have a pre-built extra. The buffer type can only be
+    // openvino_host_buffer_type, which has enough space (get_alloc_size returns
+    // layout.total_size for quantized 2D tensors) to store extracted data in-place.
+    // Build the weight node and store it in tensor->extra for future reuse.
+    GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
 
-    GGML_LOG_DEBUG("%s: creating new constant for %s (extra=%p)\n", __func__, tensor->name, tensor->extra);
-
-    std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0,
-                                        GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K};
+    static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,
+                                                     GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
+                                                     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K};
     if (weight_types.find(tensor->type) == weight_types.end()) {
         throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
                                  ggml_type_name(tensor->type));
     }
 
-    std::shared_ptr<ov::Node> result = process_weight_tensor(tensor, tensor->data, nullptr);
-    result->set_friendly_name(tensor->name);
-
-    // Cache the quantized weight node for future reuse
+    OvWeight ov_weight;
     if (ggml_is_quantized(tensor->type)) {
-        std::lock_guard<std::mutex> lock(s_quantized_weight_cache_mutex);
-        s_quantized_weight_cache[tensor->data] = result;
-        GGML_LOG_DEBUG("%s: cached quantized constant for %s\n", __func__, tensor->name);
+        // For quantized weights, copy raw data to a temp buffer first because
+        // process_weight_tensor reads from data and writes extracted results
+        // (weights/scales/zp) to output_base_ptr — they would overlap if both
+        // point to tensor->data.
+        size_t raw_size = ggml_nbytes(tensor);
+        std::vector<uint8_t> tmp(raw_size);
+        memcpy(tmp.data(), tensor->data, raw_size);
+        ov_weight = process_weight_tensor(tensor, tmp.data(), tensor->data);
+    } else {
+        // For non-quantized weights (F16/F32/BF16), data is already in tensor->data.
+        // process_weight_tensor will create an ov::Tensor wrapping tensor->data directly.
+        ov_weight = process_weight_tensor(tensor, tensor->data, tensor->data);
     }
 
-    return result;
+    ov_weight.weight_node->set_friendly_name(tensor->name);
+
+    ggml_openvino_extra_base * extra;
+    if (ov_weight.is_quantized()) {
+        extra = new ggml_openvino_quantized_weight_extra(std::move(ov_weight.weights), std::move(ov_weight.scales),
+                                                         std::move(ov_weight.zp), ov_weight.weight_node);
+    } else {
+        extra = new ggml_openvino_weight_extra(std::move(ov_weight.weights), ov_weight.weight_node);
+    }
+    ggml_openvino_buffer_register_extra(tensor, extra);
+
+    return ov_weight.weight_node;
 }
 
 void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filename) {
