@@ -153,7 +153,7 @@
 		</Card>
 	{:else if isLoading}
 		<Card
-			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20 py-2 px-1"
+			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 px-1 py-2 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
 				class="overflow-y-auto {paddingClass}"

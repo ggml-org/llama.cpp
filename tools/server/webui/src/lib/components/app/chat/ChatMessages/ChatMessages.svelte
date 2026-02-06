@@ -133,7 +133,7 @@
 	});
 </script>
 
-<div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
+<div class="flex h-full flex-col space-y-10 pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, isLastAssistantMessage, siblingInfo } (message.id)}
 		<ChatMessage
 			class="mx-auto w-full max-w-[48rem]"
