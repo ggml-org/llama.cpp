@@ -79,11 +79,10 @@
 
 	let showArgBadges = $derived(hasArguments && !isLoading && !loadError);
 	let isAttachment = $derived(variant === McpPromptVariant.ATTACHMENT);
-	let textSizeClass = $derived(isAttachment ? 'text-sm' : 'text-md');
+	let textSizeClass = $derived(isAttachment ? 'text-xs' : 'text-md');
+	let paddingClass = $derived(isAttachment ? 'px-3 py-2' : 'px-3.75 py-2.5');
 	let maxHeightStyle = $derived(
-		isAttachment
-			? 'max-height: 10rem;'
-			: 'min-height: var(--min-message-height); max-height: var(--max-message-height);'
+		isAttachment ? 'max-height: 6rem;' : 'max-height: var(--max-message-height);'
 	);
 
 	const serverFavicon = $derived(mcpStore.getServerFavicon(prompt.serverName));
@@ -146,7 +145,7 @@
 			class="relative overflow-hidden rounded-[1.125rem] border border-destructive/50 bg-destructive/10 backdrop-blur-md"
 		>
 			<div
-				class="overflow-y-auto px-3.75 py-2.5"
+				class="overflow-y-auto {paddingClass}"
 				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 			>
 				<span class="{textSizeClass} text-destructive">{loadError}</span>
@@ -154,15 +153,17 @@
 		</Card>
 	{:else if isLoading}
 		<Card
-			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
+			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20 py-2 px-1"
 		>
 			<div
-				class="overflow-y-auto px-3.75 py-2.5"
+				class="overflow-y-auto {paddingClass}"
 				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 			>
-				<span class="{textSizeClass} text-purple-500 italic dark:text-purple-400">
-					Loading prompt content...
-				</span>
+				<div class="space-y-2">
+					<div class="h-3 w-3/4 animate-pulse rounded bg-foreground/20"></div>
+					<div class="h-3 w-full animate-pulse rounded bg-foreground/20"></div>
+					<div class="h-3 w-5/6 animate-pulse rounded bg-foreground/20"></div>
+				</div>
 			</div>
 		</Card>
 	{:else if hasContent}
@@ -170,7 +171,7 @@
 			class="relative overflow-hidden rounded-[1.125rem] border border-purple-200 bg-purple-500/10 py-0 text-foreground backdrop-blur-md dark:border-purple-800 dark:bg-purple-500/20"
 		>
 			<div
-				class="overflow-y-auto px-3.75 py-2.5"
+				class="overflow-y-auto {paddingClass}"
 				style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 			>
 				<span class="{textSizeClass} whitespace-pre-wrap">
