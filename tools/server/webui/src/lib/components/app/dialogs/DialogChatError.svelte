@@ -59,7 +59,12 @@
 						<span class="font-medium">Prompt tokens:</span>
 						{contextInfo.n_prompt_tokens.toLocaleString()}
 					</p>
-					<p><span class="font-medium">Context size:</span> {contextInfo.n_ctx.toLocaleString()}</p>
+					{#if contextInfo.n_ctx}
+						<p>
+							<span class="font-medium">Context size:</span>
+							{contextInfo.n_ctx.toLocaleString()}
+						</p>
+					{/if}
 				</div>
 			{/if}
 		</div>

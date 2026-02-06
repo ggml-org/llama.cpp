@@ -351,7 +351,7 @@ export interface ApiProcessingState {
 	tokensDecoded: number;
 	tokensRemaining: number;
 	contextUsed: number;
-	contextTotal: number;
+	contextTotal: number | null;
 	outputTokensUsed: number; // Total output tokens (thinking + regular content)
 	outputTokensMax: number; // Max output tokens allowed
 	temperature: number;

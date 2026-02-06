@@ -105,12 +105,21 @@
 							</Table.Row>
 
 							<!-- Context Size -->
-							<Table.Row>
-								<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
-								<Table.Cell
-									>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
-								>
-							</Table.Row>
+							{#if serverProps?.default_generation_settings?.n_ctx}
+								<Table.Row>
+									<Table.Cell class="h-10 align-middle font-medium">Context Size</Table.Cell>
+									<Table.Cell
+										>{formatNumber(serverProps.default_generation_settings.n_ctx)} tokens</Table.Cell
+									>
+								</Table.Row>
+							{:else}
+								<Table.Row>
+									<Table.Cell class="h-10 align-middle font-medium text-red-500"
+										>Context Size</Table.Cell
+									>
+									<Table.Cell class="text-red-500">Not available</Table.Cell>
+								</Table.Row>
+							{/if}
 
 							<!-- Training Context -->
 							{#if modelMeta?.n_ctx_train}

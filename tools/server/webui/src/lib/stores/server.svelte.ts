@@ -45,7 +45,9 @@ class ServerStore {
 	}
 
 	get contextSize(): number | null {
-		return this.props?.default_generation_settings?.n_ctx ?? null;
+		const nCtx = this.props?.default_generation_settings?.n_ctx;
+
+		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
 	get webuiSettings(): Record<string, string | number | boolean> | undefined {
