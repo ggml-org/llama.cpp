@@ -2005,15 +2005,15 @@ void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             __m256i iacc_b = _mm256_setzero_si256();
             __m256i iacc_min_b = _mm256_setzero_si256();
 
-            const __m256i q8sums = _mm256_loadu_si256((const __m256i * )(a_ptr[b].bsums));
+            const __m256i q8sums = _mm256_loadu_si256((const __m256i *)(a_ptr[b].bsums));
             __m256i q8s = _mm256_castsi128_si256(_mm_hadd_epi16(_mm256_castsi256_si128(q8sums), _mm256_extracti128_si256(q8sums, 1)));
             q8s = _mm256_permute2f128_si256(q8s, q8s, 0);
 
-            __m256i hmask = mone;
             // To get appropriate high bit from a byte
+            __m256i hmask = mone;
             int bit = 0;
 
-            // Load packed hbits from the 8 blocks interleaved in block_q3_Kx8
+            // Load packed hbits from the 8 blocks interleaved in block_q5_Kx8
             const __m256i rhs_raw_hbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh));
             const __m256i rhs_raw_hbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh + 32));
             const __m256i rhs_raw_hbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh + 64));
@@ -2075,18 +2075,17 @@ void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 const __m256i rhs_hbit_0123_03 =  _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(rhs_raw_hbit_0123_3, hmask), bit), 4);
                 const __m256i rhs_hbit_4567_03 =  _mm256_slli_epi16(_mm256_srli_epi16(_mm256_and_si256(rhs_raw_hbit_4567_3, hmask), bit), 4);
 
+                const __m256i rhs_vec_0123_00 = _mm256_add_epi8(rhs_lbit_0123_00, rhs_hbit_0123_00);
+                const __m256i rhs_vec_4567_00 = _mm256_add_epi8(rhs_lbit_4567_00, rhs_hbit_4567_00);
 
-                const __m256i rhs_vec_0123_00 = _mm256_add_epi8(rhs_lbit_0123_00,rhs_hbit_0123_00);
-                const __m256i rhs_vec_4567_00 = _mm256_add_epi8(rhs_lbit_4567_00,rhs_hbit_4567_00);
+                const __m256i rhs_vec_0123_01 = _mm256_add_epi8(rhs_lbit_0123_01, rhs_hbit_0123_01);
+                const __m256i rhs_vec_4567_01 = _mm256_add_epi8(rhs_lbit_4567_01, rhs_hbit_4567_01);
 
-                const __m256i rhs_vec_0123_01 = _mm256_add_epi8(rhs_lbit_0123_01,rhs_hbit_0123_01);
-                const __m256i rhs_vec_4567_01 = _mm256_add_epi8(rhs_lbit_4567_01,rhs_hbit_4567_01);
+                const __m256i rhs_vec_0123_02 = _mm256_add_epi8(rhs_lbit_0123_02, rhs_hbit_0123_02);
+                const __m256i rhs_vec_4567_02 = _mm256_add_epi8(rhs_lbit_4567_02, rhs_hbit_4567_02);
 
-                const __m256i rhs_vec_0123_02 = _mm256_add_epi8(rhs_lbit_0123_02,rhs_hbit_0123_02);
-                const __m256i rhs_vec_4567_02 = _mm256_add_epi8(rhs_lbit_4567_02,rhs_hbit_4567_02);
-
-                const __m256i rhs_vec_0123_03 = _mm256_add_epi8(rhs_lbit_0123_03,rhs_hbit_0123_03);
-                const __m256i rhs_vec_4567_03 = _mm256_add_epi8(rhs_lbit_4567_03,rhs_hbit_4567_03);
+                const __m256i rhs_vec_0123_03 = _mm256_add_epi8(rhs_lbit_0123_03, rhs_hbit_0123_03);
+                const __m256i rhs_vec_4567_03 = _mm256_add_epi8(rhs_lbit_4567_03, rhs_hbit_4567_03);
 
                 hmask = _mm256_slli_epi16(hmask, 1);
 
@@ -2104,23 +2103,23 @@ void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 bit = sb * 2 + 2;
 
-                const __m256i rhs_vec_0123_10 = _mm256_add_epi8(rhs_lbit_0123_10,rhs_hbit_0123_10);
-                const __m256i rhs_vec_4567_10 = _mm256_add_epi8(rhs_lbit_4567_10,rhs_hbit_4567_10);
+                const __m256i rhs_vec_0123_10 = _mm256_add_epi8(rhs_lbit_0123_10, rhs_hbit_0123_10);
+                const __m256i rhs_vec_4567_10 = _mm256_add_epi8(rhs_lbit_4567_10, rhs_hbit_4567_10);
 
-                const __m256i rhs_vec_0123_11 = _mm256_add_epi8(rhs_lbit_0123_11,rhs_hbit_0123_11);
-                const __m256i rhs_vec_4567_11 = _mm256_add_epi8(rhs_lbit_4567_11,rhs_hbit_4567_11);
+                const __m256i rhs_vec_0123_11 = _mm256_add_epi8(rhs_lbit_0123_11, rhs_hbit_0123_11);
+                const __m256i rhs_vec_4567_11 = _mm256_add_epi8(rhs_lbit_4567_11, rhs_hbit_4567_11);
 
-                const __m256i rhs_vec_0123_12 = _mm256_add_epi8(rhs_lbit_0123_12,rhs_hbit_0123_12);
-                const __m256i rhs_vec_4567_12 = _mm256_add_epi8(rhs_lbit_4567_12,rhs_hbit_4567_12);
+                const __m256i rhs_vec_0123_12 = _mm256_add_epi8(rhs_lbit_0123_12, rhs_hbit_0123_12);
+                const __m256i rhs_vec_4567_12 = _mm256_add_epi8(rhs_lbit_4567_12, rhs_hbit_4567_12);
 
-                const __m256i rhs_vec_0123_13 = _mm256_add_epi8(rhs_lbit_0123_13,rhs_hbit_0123_13);
-                const __m256i rhs_vec_4567_13 = _mm256_add_epi8(rhs_lbit_4567_13,rhs_hbit_4567_13);
+                const __m256i rhs_vec_0123_13 = _mm256_add_epi8(rhs_lbit_0123_13, rhs_hbit_0123_13);
+                const __m256i rhs_vec_4567_13 = _mm256_add_epi8(rhs_lbit_4567_13, rhs_hbit_4567_13);
 
                 hmask = _mm256_slli_epi16(hmask, 1);
 
                 uint32_t utmp_0[4], utmp_1[4];
 
-                // Scales and Mins of corresponding sub blocks from different Q8_K structures are stored together
+                // Scales and Mins of corresponding sub blocks from different Q5_K structures are stored together
                 // The below block is for eg to extract first sub block's scales and mins from different q5_K structures for the sb loop
                 memcpy(utmp_0, b_ptr[b].scales + 24 * sb, 12);
                 utmp_0[3] = ((utmp_0[2] >> 4) & kmask2) | (((utmp_0[1] >> 6) & kmask3) << 4);
@@ -2167,7 +2166,6 @@ void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // B0(4-7) B4(4-7) B1(4-7) B5(4-7) B2(4-7) B6(4-7) B3(4-7) B7(4-7) with A0(4-7)
                 // ...........................................................................
                 // B0(28-31) B4(28-31) B1(28-31) B5(28-31) B2(28-31) B6(28-31) B3(28-31) B7(28-31) with A0(28-31)
-
 
                 __m256i iacc_0 = _mm256_setzero_si256();
                 __m256i iacc_1 = _mm256_setzero_si256();
@@ -2226,7 +2224,6 @@ void ggml_gemv_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
 #else
-
     UNUSED(kmask1);
     UNUSED(kmask2);
     UNUSED(kmask3);
@@ -6736,7 +6733,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
 
-                    // Load the sixteen block_q3_k for eight sub blocks quantized values interleaved with each other in chunks of eight bytes - B0,B1 ....B6,B7
+                    // Load the sixteen block_q5_k for eight sub blocks quantized values interleaved with each other in chunks of eight bytes - B0,B1 ....B6,B7
                     // They are blended/permuted for further mul mat operations within the pipeline
                     const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i * )(b_ptr_0[b].qs + sb * 256));
                     const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i * )(b_ptr_0[b].qs + 32 + sb * 256));
@@ -6809,17 +6806,17 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     ++bit;
 
-                    const __m512i rhs_mat_014589CD_00 = _mm512_add_epi8(rhs_lbit_014589CD_00,rhs_hbit_014589CD_00);
-                    const __m512i rhs_mat_2367ABEF_00 = _mm512_add_epi8(rhs_lbit_2367ABEF_00,rhs_hbit_2367ABEF_00);
+                    const __m512i rhs_mat_014589CD_00 = _mm512_add_epi8(rhs_lbit_014589CD_00, rhs_hbit_014589CD_00);
+                    const __m512i rhs_mat_2367ABEF_00 = _mm512_add_epi8(rhs_lbit_2367ABEF_00, rhs_hbit_2367ABEF_00);
 
-                    const __m512i rhs_mat_014589CD_01 = _mm512_add_epi8(rhs_lbit_014589CD_01,rhs_hbit_014589CD_01);
-                    const __m512i rhs_mat_2367ABEF_01 = _mm512_add_epi8(rhs_lbit_2367ABEF_01,rhs_hbit_2367ABEF_01);
+                    const __m512i rhs_mat_014589CD_01 = _mm512_add_epi8(rhs_lbit_014589CD_01, rhs_hbit_014589CD_01);
+                    const __m512i rhs_mat_2367ABEF_01 = _mm512_add_epi8(rhs_lbit_2367ABEF_01, rhs_hbit_2367ABEF_01);
 
-                    const __m512i rhs_mat_014589CD_02 = _mm512_add_epi8(rhs_lbit_014589CD_02,rhs_hbit_014589CD_02);
-                    const __m512i rhs_mat_2367ABEF_02 = _mm512_add_epi8(rhs_lbit_2367ABEF_02,rhs_hbit_2367ABEF_02);
+                    const __m512i rhs_mat_014589CD_02 = _mm512_add_epi8(rhs_lbit_014589CD_02, rhs_hbit_014589CD_02);
+                    const __m512i rhs_mat_2367ABEF_02 = _mm512_add_epi8(rhs_lbit_2367ABEF_02, rhs_hbit_2367ABEF_02);
 
-                    const __m512i rhs_mat_014589CD_03 = _mm512_add_epi8(rhs_lbit_014589CD_03,rhs_hbit_014589CD_03);
-                    const __m512i rhs_mat_2367ABEF_03 = _mm512_add_epi8(rhs_lbit_2367ABEF_03,rhs_hbit_2367ABEF_03);
+                    const __m512i rhs_mat_014589CD_03 = _mm512_add_epi8(rhs_lbit_014589CD_03, rhs_hbit_014589CD_03);
+                    const __m512i rhs_mat_2367ABEF_03 = _mm512_add_epi8(rhs_lbit_2367ABEF_03, rhs_hbit_2367ABEF_03);
 
                     hmask_expanded = _mm512_slli_epi16(hmask_expanded, 1);
 
@@ -6901,8 +6898,8 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     uint32_t utmp_00[4], utmp_01[4], utmp_10[4], utmp_11[4];
 
-                    // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
-                    // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
+                    // Scales and Mins of corresponding sub blocks from different Q5_K structures are stored together
+                    // The below block is for eg to extract first sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_00, b_ptr_0[b].scales + 24 * sb, 12);
                     utmp_00[3] = ((utmp_00[2] >> 4) & kmask2) | (((utmp_00[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_00 = utmp_00[1] & kmask1;
@@ -6910,7 +6907,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_00[2] = uaux_00;
                     utmp_00[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_01, b_ptr_0[b].scales + 12 + sb * 24, 12);
                     utmp_01[3] = ((utmp_01[2] >> 4) & kmask2) | (((utmp_01[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_01 = utmp_01[1] & kmask1;
@@ -6925,7 +6922,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_10[2] = uaux_10;
                     utmp_10[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_11, b_ptr_1[b].scales + 12 + sb * 24, 12);
                     utmp_11[3] = ((utmp_11[2] >> 4) & kmask2) | (((utmp_11[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_11 = utmp_11[1] & kmask1;
@@ -6941,7 +6938,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i mins_and_scales_1 = _mm256_set_epi32(utmp_11[3], utmp_11[2], utmp_11[1], utmp_11[0], utmp_01[3], utmp_01[2], utmp_01[1], utmp_01[0]);
                     const __m512i scales_1 = _mm512_cvtepu8_epi16(_mm256_unpacklo_epi8(mins_and_scales_1, mins_and_scales_1));
 
-                    // Mins of first and second sub block of Q4_K block are arranged side by side
+                    // Mins of first and second sub block of Q5_K block are arranged side by side
                     const __m512i mins_01 = _mm512_cvtepu8_epi16(_mm256_unpacklo_epi8(_mm256_shuffle_epi32(mins_and_scales_0, 78), _mm256_shuffle_epi32(mins_and_scales_1, 78)));
 
                     const __m512i scale_014589CD_0 = _mm512_shuffle_epi32(scales_0, (_MM_PERM_ENUM)68);
@@ -6951,6 +6948,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m512i scale_2367ABEF_1 = _mm512_shuffle_epi32(scales_1, (_MM_PERM_ENUM)238);
 
                     for (int rp = 0; rp < 4; rp++) {
+
                         // Load the four block_q8_k quantized values interleaved with each other in chunks of eight bytes - A0,A1,A2,A3
                         // Loaded as set of 128 bit vectors and repeated and stored into a 256 bit vector before again repeating into 512 bit vector
                         __m256i lhs_mat_ymm_0123_00 = _mm256_loadu_si256((const __m256i * )((a_ptrs[rp][b].qs + 256 * sb)));
@@ -7115,7 +7113,6 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         acc_min_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_2), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[rp * 4 + 2]);
                         acc_min_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_3), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[rp * 4 + 3]);
                     }
-
                 }
             }
             // Store the accumulated values
@@ -7128,7 +7125,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     for (; y < nr / 4; y++) {
         const block_q8_Kx4 * a_ptr = a_ptr_start + (y * nb);
 
-        // Take group of eight block_q4_kx8 structures at each pass of the loop and perform dot product operation
+        // Take group of eight block_q5_kx8 structures at each pass of the loop and perform dot product operation
         for (int64_t x = 0; x < anc / 8; x += 2) {
             const block_q5_Kx8 * b_ptr_0 = b_ptr_start + ((x) * b_nb);
             const block_q5_Kx8 * b_ptr_1 = b_ptr_start + ((x + 1) * b_nb);
@@ -7146,10 +7143,10 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
             // For super block
             for (int64_t b = 0; b < nb; b++) {
-                // Scale values - Load the sixteen scale values from two block_q4_kx8 structures
+                // Scale values - Load the sixteen scale values from two block_q5_kx8 structures
                 const __m512 col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
 
-                // dmin values - Load the sixteen dmin values from two block_q4_kx8 structures
+                // dmin values - Load the sixteen dmin values from two block_q5_kx8 structures
                 const __m512 col_dmin_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].dmin, b_ptr_1[b].dmin);
 
                 __m512i hmask_expanded = mone_expanded;
@@ -7372,8 +7369,8 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     uint32_t utmp_00[4], utmp_01[4], utmp_10[4], utmp_11[4];
 
-                    // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
-                    // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
+                    // Scales and Mins of corresponding sub blocks from different Q5_K structures are stored together
+                    // The below block is for eg to extract first sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_00, b_ptr_0[b].scales + 24 * sb, 12);
                     utmp_00[3] = ((utmp_00[2] >> 4) & kmask2) | (((utmp_00[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_00 = utmp_00[1] & kmask1;
@@ -7381,7 +7378,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_00[2] = uaux_00;
                     utmp_00[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_01, b_ptr_0[b].scales + 12 + sb * 24, 12);
                     utmp_01[3] = ((utmp_01[2] >> 4) & kmask2) | (((utmp_01[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_01 = utmp_01[1] & kmask1;
@@ -7396,7 +7393,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_10[2] = uaux_10;
                     utmp_10[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_11, b_ptr_1[b].scales + 12 + sb * 24, 12);
                     utmp_11[3] = ((utmp_11[2] >> 4) & kmask2) | (((utmp_11[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_11 = utmp_11[1] & kmask1;
@@ -7412,7 +7409,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i mins_and_scales_1 = _mm256_set_epi32(utmp_11[3], utmp_11[2], utmp_11[1], utmp_11[0], utmp_01[3], utmp_01[2], utmp_01[1], utmp_01[0]);
                     const __m512i scales_1 = _mm512_cvtepu8_epi16(_mm256_unpacklo_epi8(mins_and_scales_1, mins_and_scales_1));
 
-                    // Mins of first and second sub block of Q4_K block are arranged side by side
+                    // Mins of first and second sub block of Q5_K block are arranged side by side
                     const __m512i mins_01 = _mm512_cvtepu8_epi16(_mm256_unpacklo_epi8(_mm256_shuffle_epi32(mins_and_scales_0, 78), _mm256_shuffle_epi32(mins_and_scales_1, 78)));
 
                     const __m512i scale_014589CD_0 = _mm512_shuffle_epi32(scales_0, (_MM_PERM_ENUM)68);
@@ -7633,6 +7630,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // dmin values - Load the eight dmin values of block_q5_kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
 
+                // To get appropriate high bit from a byte
                 __m256i hmask = mone;
                 int bit = 0;
 
@@ -7814,8 +7812,8 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     uint32_t utmp_0[4], utmp_1[4];
 
-                    // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
-                    // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
+                    // Scales and Mins of corresponding sub blocks from different Q5_K structures are stored together
+                    // The below block is for eg to extract first sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_0, b_ptr[b].scales + 24 * sb, 12);
                     utmp_0[3] = ((utmp_0[2] >> 4) & kmask2) | (((utmp_0[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_0 = utmp_0[1] & kmask1;
@@ -7823,7 +7821,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_0[2] = uaux_0;
                     utmp_0[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_1, b_ptr[b].scales + 12 + sb * 24, 12);
                     utmp_1[3] = ((utmp_1[2] >> 4) & kmask2) | (((utmp_1[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_1 = utmp_1[1] & kmask1;
@@ -7839,7 +7837,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m128i mins_and_scales_1 = _mm_set_epi32(utmp_1[3], utmp_1[2], utmp_1[1], utmp_1[0]);
                     const __m256i scales_1 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(mins_and_scales_1, mins_and_scales_1));
 
-                    // Mins of first and second sub block of Q4_K block are arranged side by side
+                    // Mins of first and second sub block of Q5_K block are arranged side by side
                     const __m256i mins_01 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(_mm_shuffle_epi32(mins_and_scales_0, 78), _mm_shuffle_epi32(mins_and_scales_1, 78)));
 
                     const __m256i scale_0145_0 = _mm256_shuffle_epi32(scales_0, 68);
@@ -7990,7 +7988,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                         // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
                         const __m128 row_scale_f32_sse = _mm_load_ps(a_ptrs[rp][b].d);
-                        const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);//GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
+                        const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
 
                         // Multiply with appropiate scales and accumulate (for both d and dmin) below
                         acc_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[rp * 4]);
@@ -8012,7 +8010,6 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             }
             for (int i = 0; i < 16; i++) {
                 _mm256_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), _mm256_sub_ps(acc_rows[i], acc_min_rows[i]));
-
             }
         }
     }
@@ -8020,6 +8017,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     for (; y < nr / 4; y++) {
         const block_q8_Kx4 * a_ptr = a_ptr_start + (y * nb);
 
+        // Take group of eight block_q5_kx8 structures at each pass of the loop and perform dot product operation
         for (int64_t x = xstart; x < nc / 8; x++) {
 
             const block_q5_Kx8 * b_ptr = b_ptr_start + (x * b_nb);
@@ -8043,6 +8041,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // dmin values - Load the eight dmin values of block_q5_kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
 
+                // To get appropriate high bit from a byte
                 __m256i hmask = mone;
                 int bit = 0;
 
@@ -8154,17 +8153,17 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     ++bit;
 
-                    const __m256i rhs_mat_0145_10 = _mm256_add_epi8(rhs_lbit_0145_10,rhs_hbit_0145_10);
-                    const __m256i rhs_mat_2367_10 = _mm256_add_epi8(rhs_lbit_2367_10,rhs_hbit_2367_10);
+                    const __m256i rhs_mat_0145_10 = _mm256_add_epi8(rhs_lbit_0145_10, rhs_hbit_0145_10);
+                    const __m256i rhs_mat_2367_10 = _mm256_add_epi8(rhs_lbit_2367_10, rhs_hbit_2367_10);
 
-                    const __m256i rhs_mat_0145_11 = _mm256_add_epi8(rhs_lbit_0145_11,rhs_hbit_0145_11);
-                    const __m256i rhs_mat_2367_11 = _mm256_add_epi8(rhs_lbit_2367_11,rhs_hbit_2367_11);
+                    const __m256i rhs_mat_0145_11 = _mm256_add_epi8(rhs_lbit_0145_11, rhs_hbit_0145_11);
+                    const __m256i rhs_mat_2367_11 = _mm256_add_epi8(rhs_lbit_2367_11, rhs_hbit_2367_11);
 
-                    const __m256i rhs_mat_0145_12 = _mm256_add_epi8(rhs_lbit_0145_12,rhs_hbit_0145_12);
-                    const __m256i rhs_mat_2367_12 = _mm256_add_epi8(rhs_lbit_2367_12,rhs_hbit_2367_12);
+                    const __m256i rhs_mat_0145_12 = _mm256_add_epi8(rhs_lbit_0145_12, rhs_hbit_0145_12);
+                    const __m256i rhs_mat_2367_12 = _mm256_add_epi8(rhs_lbit_2367_12, rhs_hbit_2367_12);
 
-                    const __m256i rhs_mat_0145_13 = _mm256_add_epi8(rhs_lbit_0145_13,rhs_hbit_0145_13);
-                    const __m256i rhs_mat_2367_13 = _mm256_add_epi8(rhs_lbit_2367_13,rhs_hbit_2367_13);
+                    const __m256i rhs_mat_0145_13 = _mm256_add_epi8(rhs_lbit_0145_13, rhs_hbit_0145_13);
+                    const __m256i rhs_mat_2367_13 = _mm256_add_epi8(rhs_lbit_2367_13, rhs_hbit_2367_13);
 
                     hmask = _mm256_slli_epi16(hmask, 1);
 
@@ -8221,8 +8220,8 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     uint32_t utmp_0[4], utmp_1[4];
 
-                    // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
-                    // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
+                    // Scales and Mins of corresponding sub blocks from different Q5_K structures are stored together
+                    // The below block is for eg to extract first sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_0, b_ptr[b].scales + 24 * sb, 12);
                     utmp_0[3] = ((utmp_0[2] >> 4) & kmask2) | (((utmp_0[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_0 = utmp_0[1] & kmask1;
@@ -8230,7 +8229,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     utmp_0[2] = uaux_0;
                     utmp_0[0] &= kmask1;
 
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    // The below block is for eg to extract second sub block's scales and mins from different Q5_K structures for the sb loop
                     memcpy(utmp_1, b_ptr[b].scales + 12 + sb * 24, 12);
                     utmp_1[3] = ((utmp_1[2] >> 4) & kmask2) | (((utmp_1[1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_1 = utmp_1[1] & kmask1;
@@ -8246,6 +8245,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m128i mins_and_scales_1 = _mm_set_epi32(utmp_1[3], utmp_1[2], utmp_1[1], utmp_1[0]);
                     const __m256i scales_1 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(mins_and_scales_1, mins_and_scales_1));
 
+                    // Mins of first and second sub block of Q5_K block are arranged side by side
                     const __m256i mins_01 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(_mm_shuffle_epi32(mins_and_scales_0, 78), _mm_shuffle_epi32(mins_and_scales_1, 78)));
 
                     const __m256i scale_0145_0 = _mm256_shuffle_epi32(scales_0, 68);
@@ -8394,7 +8394,7 @@ void ggml_gemm_q5_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
                     const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
-                    const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse); //GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
+                    const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
 
                     // Multiply with appropiate scales and accumulate (for both d and dmin) below
                     acc_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
