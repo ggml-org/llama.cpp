@@ -207,6 +207,9 @@ class Keys:
         GROUP_COUNT    = "{arch}.ssm.group_count"
         DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
+    class KDA:
+        HEAD_DIM = "{arch}.kda.head_dim"
+
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
 
@@ -461,6 +464,7 @@ class MODEL_ARCH(IntEnum):
     MIMO2            = auto()
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
+    KIMI_LINEAR      = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -551,6 +555,14 @@ class MODEL_TENSOR(IntEnum):
     SSM_NORM             = auto()
     SSM_OUT              = auto()
     SSM_BETA_ALPHA       = auto() # qwen3next
+    SSM_CONV1D_Q         = auto() # Kimi Linear
+    SSM_CONV1D_K         = auto() # Kimi Linear
+    SSM_CONV1D_V         = auto() # Kimi Linear
+    SSM_F_A              = auto() # Kimi Linear
+    SSM_F_B              = auto() # Kimi Linear
+    SSM_BETA             = auto() # Kimi Linear
+    SSM_G_A              = auto() # Kimi Linear
+    SSM_G_B              = auto() # Kimi Linear
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -882,6 +894,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MIMO2:            "mimo2",
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
+    MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -969,6 +982,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_NORM:                  "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
     MODEL_TENSOR.SSM_BETA_ALPHA:            "blk.{bid}.ssm_ba",
+    MODEL_TENSOR.SSM_CONV1D_Q:              "blk.{bid}.ssm_conv1d_q",         # Kimi Linear
+    MODEL_TENSOR.SSM_CONV1D_K:              "blk.{bid}.ssm_conv1d_k",         # Kimi Linear
+    MODEL_TENSOR.SSM_CONV1D_V:              "blk.{bid}.ssm_conv1d_v",         # Kimi Linear
+    MODEL_TENSOR.SSM_F_A:                   "blk.{bid}.ssm_f_a",              # Kimi Linear
+    MODEL_TENSOR.SSM_F_B:                   "blk.{bid}.ssm_f_b",              # Kimi Linear
+    MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",             # Kimi Linear
+    MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
+    MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -3379,6 +3400,47 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.KIMI_LINEAR: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.SSM_CONV1D_Q,
+        MODEL_TENSOR.SSM_CONV1D_K,
+        MODEL_TENSOR.SSM_CONV1D_V,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_G_A,
+        MODEL_TENSOR.SSM_G_B,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
     # TODO
 }
 
@@ -3705,6 +3767,9 @@ KEY_SSM_STATE_SIZE     = Keys.SSM.STATE_SIZE
 KEY_SSM_TIME_STEP_RANK = Keys.SSM.TIME_STEP_RANK
 KEY_SSM_GROUP_COUNT    = Keys.SSM.GROUP_COUNT
 KEY_SSM_DT_B_C_RMS     = Keys.SSM.DT_B_C_RMS
+
+# KDA
+KEY_KDA_HEAD_DIM       = Keys.KDA.HEAD_DIM
 
 # tokenization
 KEY_TOKENIZER_MODEL      = Keys.Tokenizer.MODEL
