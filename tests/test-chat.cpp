@@ -355,6 +355,21 @@ static common_chat_tool magic_int_tool{
     })",
 };
 
+static common_chat_tool amount_tool{
+    /* .name = */ "amount",
+    /* .description = */ "Amount converter",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "orig": {
+                "type": "number"
+            }
+        },
+        "required": ["orig"]
+    })",
+};
+
+
 static common_chat_tool string_param_tool{
     /* .name = */ "string_param",
     /* .description = */ "Tool with string parameter for testing",
@@ -2271,6 +2286,40 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Test complex quoted unquoted")
             .expect_tool_calls({
                 { "quoted_unquoted", R"({ "quoted" : "\"printf(\\\"foo\\\");\"", "unquoted": "printf(\"foo\");" })", {} }
+            })
+            .run();
+
+            tst.test(
+               "Test negative number\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=magic_int>\n"
+               "<parameter=ref>\n-14\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative number")
+            .expect_tool_calls({
+                { "magic_int", R"({ "ref" : -14 })", {} }
+            })
+            .run();
+
+            tst.test(
+               "Test decimal number\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=amount>\n"
+               "<parameter=orig>\n3.14\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal number")
+            .expect_tool_calls({
+                { "amount", R"({ "orig" : 3.14 })", {} }
             })
             .run();
 

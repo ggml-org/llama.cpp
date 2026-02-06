@@ -1307,7 +1307,11 @@ common_peg_parser common_peg_parser_builder::json_number() {
         auto int_part = choice({ literal("0"), sequence({ digit1_9, chars("[0-9]", 0, -1) }) });
         auto frac     = sequence({ literal("."), digits });
         auto exp      = sequence({ choice({ literal("e"), literal("E") }), optional(chars("[+-]", 1, 1)), digits });
-        return sequence({ optional(literal("-")), int_part, optional(frac), optional(exp), space() });
+        // Negative lookahead: only commit the number when the next character can't extend it.
+        // At EOF in partial mode, chars returns NEED_MORE → negate propagates NEED_MORE → number not committed.
+        // This prevents premature commits of partial numbers (e.g. "3" when "3.14" is incoming).
+        auto not_number_continuation = negate(chars("[0-9.eE+-]", 1, 1));
+        return sequence({ optional(literal("-")), int_part, optional(frac), optional(exp), not_number_continuation, space() });
     });
 }
 

@@ -77,7 +77,7 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
 
     // Use for schema-declared string types - won't be treated as potential JSON container
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
-    common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
+    common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_VALUE, p)); }
 
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
