@@ -151,7 +151,9 @@ int main(int argc, char ** argv) {
     }
 
     // make new context
-    llama_context * ctx3 = llama_init_from_model(model, common_context_params_to_llama(params));
+    auto params_ctx3 = common_context_params_to_llama(params);
+    params_ctx3.n_seq_max = 2;
+    llama_context * ctx3 = llama_init_from_model(model, params_ctx3);
 
     llama_sampler * smpl3 = llama_sampler_chain_init(sparams);
 
