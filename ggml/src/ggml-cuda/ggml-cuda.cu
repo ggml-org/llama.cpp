@@ -2807,7 +2807,7 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         return false;
     }
 
-    if (!(copy_from_host || ggml_backend_buffer_is_cuda(src->buffer)) || !ggml_backend_buffer_is_cuda(dst->buffer)) {
+    if (!(copy_from_host || ggml_backend_buffer_is_cuda(buf_src)) || !ggml_backend_buffer_is_cuda(dst->buffer)) {
         return false;
     }
 
