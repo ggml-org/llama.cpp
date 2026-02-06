@@ -497,9 +497,11 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
     return bpe_offsets;
 }
 
-template<typename CharT>
+template <typename CharT>
 static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT> & text, const std::basic_string<CharT> & regex, const std::vector<size_t> & offsets) {
-#ifdef _MSC_VER // Bypass bug in MSVC: https://github.com/ggml-org/llama.cpp/issues/17830
+    using BidirIt = typename std::basic_string<CharT>::const_iterator;
+#ifdef _MSC_VER
+    // Bypass bug in MSVC: https://github.com/ggml-org/llama.cpp/issues/17830
     constexpr auto regex_flags = std::regex_constants::ECMAScript;
 #else
     constexpr auto regex_flags = std::regex_constants::optimize | std::regex_constants::nosubs;
@@ -509,12 +511,12 @@ static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
     size_t start = 0;
     for (auto offset : offsets) {
-        std::regex_iterator<const CharT *> it(text.data() + start, text.data() + start + offset, expr);
-        std::regex_iterator<const CharT *> end;
+        std::regex_iterator<BidirIt> it(text.begin() + start, text.begin() + start + offset, expr);
+        std::regex_iterator<BidirIt> end;
 
         int64_t start_idx = 0;
         while (it != end) {
-            std::match_results<const CharT *> match = *it;
+            std::match_results<BidirIt> match = *it;
             if (match.position() > start_idx) {
                 bpe_offsets.emplace_back(match.position() - start_idx);
             }
@@ -530,16 +532,6 @@ static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT
     }
 
     return bpe_offsets;
-}
-
-// use std::wregex to split the text
-static std::vector<size_t> unicode_regex_split_stl(const std::wstring & wtext, const std::wstring & regex_expr, const std::vector<size_t> & offsets) {
-    return unicode_regex_split_stl<wchar_t>(wtext, regex_expr, offsets);
-}
-
-// use std::regex to split the text
-static std::vector<size_t> unicode_regex_split_stl(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
-    return unicode_regex_split_stl<char>(text, regex_expr, offsets);
 }
 
 // K2 system regex patterns (from tokenization_kimi.py):
