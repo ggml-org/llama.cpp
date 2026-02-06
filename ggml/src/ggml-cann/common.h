@@ -589,35 +589,22 @@ struct ggml_backend_cann_context {
 #endif
 
         // Read environment variables for multi-stream and operator fusion
-        bool env_multi_stream = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
-        bool env_operator_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
+        multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
+        operator_fusion_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
 
         // Handle conflicts and set final values
 #ifdef USE_ACL_GRAPH
-        if (acl_graph_mode && env_multi_stream) {
+        if (acl_graph_mode && multi_stream_enabled) {
             // ACL graph has higher performance, disable multi-stream
             multi_stream_enabled = false;
-            operator_fusion_enabled = env_operator_fusion;
-            GGML_LOG_INFO("%s: device %d multi-stream disabled (ACL graph mode has higher performance)\n", 
+            GGML_LOG_WARN("%s: device %d multi-stream disabled when ACL graph mode is enabled\n", 
                           __func__, device);
         } else
 #endif
-        if (env_multi_stream) {
+        if (multi_stream_enabled && operator_fusion_enabled) {
             // Multi-stream enabled, disable operator fusion (fusion has low benefit with multi-stream)
-            multi_stream_enabled = true;
-            operator_fusion_enabled = false;
-            if (env_operator_fusion) {
-                GGML_LOG_INFO("%s: device %d operator fusion disabled (low benefit with multi-stream enabled)\n", 
-                              __func__, device);
-            }
-            GGML_LOG_INFO("%s: device %d multi-stream execution enabled\n", __func__, device);
-        } else {
-            // Default single-stream mode
-            multi_stream_enabled = false;
-            operator_fusion_enabled = env_operator_fusion;
-            if (env_operator_fusion) {
-                GGML_LOG_INFO("%s: device %d operator fusion enabled\n", __func__, device);
-            }
+            GGML_LOG_WARN("%s: device %d operator fusion is not supported in multi-stream mode\n", 
+                            __func__, device);
         }
     }
 
