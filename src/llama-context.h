@@ -4,6 +4,7 @@
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#include "llama-impl.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -237,16 +238,6 @@ public:
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
-
-    template <typename T>
-    struct buffer_view {
-        T * data;
-        size_t size = 0;
-
-        bool has_data() const {
-            return data && size > 0;
-        }
-    };
 
 private:
     llm_graph_params graph_params(

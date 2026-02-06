@@ -1363,7 +1363,7 @@ static std::map<llama_seq_id, uint32_t> build_seq_to_output_row(const llama_ubat
 
 static void copy_tensor_async_ints(
     const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
-    const llama_context::buffer_view<llama_token> & sampled,
+    const buffer_view<llama_token> & sampled,
     const std::map<llama_seq_id, uint32_t> & seq_to_row,
     ggml_backend_sched_t sched) {
     if (!sampled.has_data()) {
@@ -1388,7 +1388,7 @@ static void copy_tensor_async_ints(
 
 static void copy_tensor_async_floats(
     const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
-    const llama_context::buffer_view<float> & dst,
+    const buffer_view<float> & dst,
     size_t stride,
     std::vector<uint32_t> & counts,
     const std::map<llama_seq_id, uint32_t> & seq_to_row,
@@ -1419,7 +1419,7 @@ static void copy_tensor_async_floats(
 
 static void copy_tensor_async_candidates(
     const std::map<llama_seq_id, ggml_tensor*> & tensor_map,
-    const llama_context::buffer_view<llama_token> & dst,
+    const buffer_view<llama_token> & dst,
     size_t stride,
     std::vector<uint32_t> & counts,
     const std::map<llama_seq_id, uint32_t> & seq_to_row,
