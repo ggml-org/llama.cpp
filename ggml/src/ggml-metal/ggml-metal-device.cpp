@@ -1412,8 +1412,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin(ggml_metal_l
 
     const bool is_c4 = (op->src[0]->ne[0] % 4 == 0) && (op->src[1]->ne[0] % 4 == 0);
 
+    const bool is_rb = ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) && (ggml_nrows(op->src[1]) == 1) && ggml_nelements(op) < 65536;
+
     snprintf(base, 256, "kernel_bin_fuse_%s_%s_%s%s", t0_str, t1_str, t_str, is_c4 ? "_4" : "");
-    snprintf(name, 256, "%s_op=%d_nf=%d", base, op_num, n_fuse);
+    snprintf(name, 256, "%s_op=%d_nf=%d_rb=%d", base, op_num, n_fuse, is_rb);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
@@ -1421,13 +1423,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin(ggml_metal_l
 
         ggml_metal_cv_set_int16(cv, op_num, FC_BIN + 0);
         ggml_metal_cv_set_int16(cv, n_fuse, FC_BIN + 1);
+        ggml_metal_cv_set_bool (cv, is_rb,  FC_BIN + 2);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
         ggml_metal_cv_free(cv);
     }
 
-    res.c4 = is_c4;
+    res.c4  = is_c4;
+    res.cnt = is_rb;
 
     return res;
 }

@@ -3014,20 +3014,21 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, bid_src1, 2);
     ggml_metal_encoder_set_buffer  (enc, bid_dst,  3);
 
-    const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    if (pipeline.cnt) {
+        const int n = pipeline.c4 ? ggml_nelements(op)/4 : ggml_nelements(op);
 
-    int nth = 1;
+        ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, 1, 1, 1);
+    } else {
+        const int nth_max = MIN(256, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
-    while (4*nth < args.ne0 && nth < nth_max) {
-        nth *= 2;
+        int nth = 1;
+
+        while (2*nth < args.ne0 && nth < nth_max) {
+            nth *= 2;
+        }
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
     }
-
-    int nb = 1;
-    while (4*nb < ne01 && nth*nb < nth_max) {
-        nb *= 2;
-    }
-
-    ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + nb - 1)/nb, ne02, ne03, nth, nb, 1);
 
     return n_fuse;
 }

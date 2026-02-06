@@ -55,6 +55,7 @@ struct ggml_metal_pipeline_with_params {
     size_t smem;
 
     bool c4;
+    bool cnt;
 };
 
 int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline);
