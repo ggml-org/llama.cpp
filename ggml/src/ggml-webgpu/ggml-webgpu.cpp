@@ -830,9 +830,8 @@ static bool ggml_webgpu_tensor_overlap(ggml_tensor * a, ggml_tensor * b) {
 }
 
 struct binary_overlap_flags {
-    bool inplace;           // src0 == dst
-    bool overlap;           // src0 == src1
-    bool overlap_src1_dst;  // src1 == dst
+    bool inplace;  // src0 == dst
+    bool overlap;  // src1 == dst
 };
 
 static binary_overlap_flags ggml_webgpu_detect_binary_overlap(ggml_tensor * src0,
@@ -840,8 +839,7 @@ static binary_overlap_flags ggml_webgpu_detect_binary_overlap(ggml_tensor * src0
                                                               ggml_tensor * dst) {
     binary_overlap_flags flags = {};
     flags.inplace              = ggml_webgpu_tensor_equal(src0, dst);
-    flags.overlap              = ggml_webgpu_tensor_overlap(src0, src1);
-    flags.overlap_src1_dst     = ggml_webgpu_tensor_overlap(src1, dst);
+    flags.overlap              = ggml_webgpu_tensor_overlap(src1, dst);
 
     return flags;
 }
@@ -1404,11 +1402,12 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
                                             ggml_tensor *    dst) {
     binary_overlap_flags flags = ggml_webgpu_detect_binary_overlap(src0, src1, dst);
 
-    ggml_webgpu_binary_pipeline_key       pipeline_key   = { .type             = dst->type,
-                                                             .op               = dst->op,
-                                                             .inplace          = flags.inplace,
-                                                             .overlap          = flags.overlap,
-                                                             .overlap_src1_dst = flags.overlap_src1_dst };
+    ggml_webgpu_binary_pipeline_key pipeline_key = {
+        .type    = dst->type,
+        .op      = dst->op,
+        .inplace = flags.inplace,
+        .overlap = flags.overlap,
+    };
     ggml_webgpu_binary_shader_lib_context shader_lib_ctx = {
         .key = pipeline_key, .max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup
     };
@@ -1458,33 +1457,18 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
         .size    = ggml_webgpu_tensor_binding_size(ctx, src0),
     });
 
-    if (!(flags.inplace && flags.overlap)) {
-        if (flags.inplace) {
-            entries.push_back({ .binding = 1,
-                                .buffer  = ggml_webgpu_tensor_buf(src1),
-                                .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-                                .size    = ggml_webgpu_tensor_binding_size(ctx, src1)
-            });
-        } else if (flags.overlap && !flags.overlap_src1_dst) {
-            entries.push_back({ .binding = 1,
-                                .buffer  = ggml_webgpu_tensor_buf(dst),
-                                .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-                                .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
-        } else if (flags.overlap_src1_dst) {
-            entries.push_back({ .binding = 1,
-                                .buffer  = ggml_webgpu_tensor_buf(src1),
-                                .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-                                .size    = ggml_webgpu_tensor_binding_size(ctx, src1) });
-        } else {
-            entries.push_back({ .binding = 1,
-                                .buffer  = ggml_webgpu_tensor_buf(src1),
-                                .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
-                                .size    = ggml_webgpu_tensor_binding_size(ctx, src1) });
-            entries.push_back({ .binding = 2,
-                                .buffer  = ggml_webgpu_tensor_buf(dst),
-                                .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-                                .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
-        }
+    entries.push_back({
+        .binding = 1,
+        .buffer  = ggml_webgpu_tensor_buf(src1),
+        .offset  = ggml_webgpu_tensor_align_offset(ctx, src1),
+        .size    = ggml_webgpu_tensor_binding_size(ctx, src1),
+    });
+
+    if (!flags.inplace && !flags.overlap) {
+        entries.push_back({ .binding = 2,
+                            .buffer  = ggml_webgpu_tensor_buf(dst),
+                            .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+                            .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
     uint32_t wg_x = CEIL_DIV(ne, decisions.wg_size);
