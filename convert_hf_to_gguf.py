@@ -1144,6 +1144,9 @@ class TextModel(ModelBase):
         if chkhsh == "27949a2493fc4a9f53f5b9b029c82689cfbe5d3a1929bb25e043089e28466de6":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-de
             res = "jina-v2-de"
+        if chkhsh == "c7699093ba4255a91e702aa38a596aa81669f3525dae06c2953267dde580f448":
+            # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-zh
+            res = "jina-v2-zh"
         if chkhsh == "c136ed14d01c2745d4f60a9596ae66800e2b61fa45643e72436041855ad4089d":
             # ref: https://huggingface.co/abacusai/Smaug-Llama-3-70B-Instruct
             res = "smaug-bpe"
@@ -1289,6 +1292,16 @@ class TextModel(ModelBase):
     def _set_vocab_gpt2(self) -> None:
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def _set_vocab_whitespace(self) -> None:
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("whitespace")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
@@ -7262,7 +7275,17 @@ class JinaBertV2Model(BertModel):
         if tokenizer_class == 'BertTokenizer':
             super().set_vocab()
         elif tokenizer_class == 'RobertaTokenizer':
-            self._set_vocab_gpt2()
+            pre_tokenizer_type = None
+            tokenizer_json_path = self.dir_model / "tokenizer.json"
+            if tokenizer_json_path.is_file():
+                with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+                    tokenizer_json = json.load(f)
+                    pre_tokenizer_type = tokenizer_json.get("pre_tokenizer", {}).get("type")
+
+            if pre_tokenizer_type == "Whitespace":
+                self._set_vocab_whitespace()
+            else:
+                self._set_vocab_gpt2()
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
