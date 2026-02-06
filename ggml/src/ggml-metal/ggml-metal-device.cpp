@@ -239,6 +239,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_unary(ggml_metal
                 case GGML_UNARY_OP_GELU_ERF:    op_str = "gelu_erf";    break;
                 case GGML_UNARY_OP_GELU_QUICK:  op_str = "gelu_quick";  break;
                 case GGML_UNARY_OP_SILU:        op_str = "silu";        break;
+                case GGML_UNARY_OP_FLOOR:       op_str = "floor";       break;
                 case GGML_UNARY_OP_ELU:         op_str = "elu";         break;
                 case GGML_UNARY_OP_NEG:         op_str = "neg";         break;
                 case GGML_UNARY_OP_ABS:         op_str = "abs";         break;
