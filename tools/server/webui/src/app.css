@@ -121,12 +121,12 @@
 	--chat-form-area-offset: 2rem;
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
-	
+
 @media (min-width: 640px) {
-	:root{
+	:root {
 		--chat-form-area-height: 24rem;
 		--chat-form-area-offset: 12rem;
-}
+	}
 }
 
 :root {
