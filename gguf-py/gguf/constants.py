@@ -3021,6 +3021,7 @@ class VisionProjectorType:
 
 # Items here are (block size, type size)
 QK_K = 256
+QK_IFAIRY = 256
 GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.F32:     (1, 4),
     GGMLQuantizationType.F16:     (1, 2),
@@ -3054,7 +3055,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
     GGMLQuantizationType.MXFP4:   (32, 1 + 16),
-    GGMLQuantizationType.F16_I2:  (256, 4 + 64), # newly added for ifairy
+    GGMLQuantizationType.F16_I2:  (QK_IFAIRY, 4 + QK_IFAIRY // 4), # newly added for ifairy
     GGMLQuantizationType.IFAIRY:  (4, 1), # newly added for ifairy
 }
 

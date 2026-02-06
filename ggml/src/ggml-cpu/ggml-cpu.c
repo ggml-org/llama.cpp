@@ -643,7 +643,7 @@ static void ggml_ifairy_lut_prepare_cgraph_indexes(const struct ggml_cgraph * cg
         if (node->type != GGML_TYPE_F32) {
             continue;
         }
-        if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
+        if (src0->ne[0] % QK_IFAIRY != 0 || src1->ne[0] != src0->ne[0]) {
             continue;
         }
 
@@ -1330,7 +1330,7 @@ void ggml_compute_forward_mul_mat(
     const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
-        src0->ne[0] % QK_K == 0 && src1->ne[0] == src0->ne[0]) {
+        src0->ne[0] % QK_IFAIRY == 0 && src1->ne[0] == src0->ne[0]) {
         enum ggml_ifairy_lut_impl impl = cfg->impl;
         if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C && src1->type != GGML_TYPE_F32) {
             if (cfg->dbg) {
@@ -1346,8 +1346,8 @@ void ggml_compute_forward_mul_mat(
         const int64_t K = ne00;
         const int64_t N = ne11;
 
-        const int64_t blocks_per_col = K / QK_K;
-        const int64_t groups         = blocks_per_col * ((QK_K + 2) / 3);
+        const int64_t blocks_per_col = K / QK_IFAIRY;
+        const int64_t groups         = blocks_per_col * QK_IFAIRY_GROUPS_PER_BLOCK;
 
         GGML_ASSERT(M >= 0);
         GGML_ASSERT(K >= 0);
@@ -1415,9 +1415,9 @@ void ggml_compute_forward_mul_mat(
                     const int64_t ib0 = (blocks_per_col * ith) / nth;
                     const int64_t ib1 = (blocks_per_col * (ith + 1)) / nth;
                     if (ib1 > ib0) {
-                        const int64_t k_part = (ib1 - ib0) * QK_K;
+                        const int64_t k_part = (ib1 - ib0) * QK_IFAIRY;
                         for (int64_t c = 0; c < N; ++c) {
-                            const float * x = act_f32 + c * act_f32_col_stride + ib0 * QK_K;
+                            const float * x = act_f32 + c * act_f32_col_stride + ib0 * QK_IFAIRY;
                             void *        y = act_q + c * blocks_per_col + ib0;
                             quantize_act(x, y, k_part);
                         }

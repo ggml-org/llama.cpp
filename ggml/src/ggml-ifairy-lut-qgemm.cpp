@@ -138,8 +138,8 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
     }
 
     const int64_t K                = k;
-    const int64_t blocks           = K / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3;
+    const int64_t blocks           = K / QK_IFAIRY;
+    const int64_t groups_per_block = QK_IFAIRY_GROUPS_PER_BLOCK;
     const int64_t groups           = blocks * groups_per_block;
 
     const struct ifairy_lut_wtile_16 * wtiles = (const struct ifairy_lut_wtile_16 *) packed_wtiles;
@@ -493,8 +493,8 @@ void ggml_ifairy_lut_mul_mat_scalar(int          m,
     }
 
     const int64_t K                = k;
-    const int64_t blocks           = K / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3;
+    const int64_t blocks           = K / QK_IFAIRY;
+    const int64_t groups_per_block = QK_IFAIRY_GROUPS_PER_BLOCK;
     const int64_t groups           = blocks * groups_per_block;
 
     const size_t index_bytes_raw = (size_t) m * (size_t) groups;

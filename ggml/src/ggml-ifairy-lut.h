@@ -1,5 +1,14 @@
 #pragma once
 
+#if !defined(QK_IFAIRY_GROUPS_PER_BLOCK)
+#    ifdef __cplusplus
+#        define GGML_COMMON_DECL_CPP
+#    else
+#        define GGML_COMMON_DECL_C
+#    endif
+#    include "ggml-common.h"
+#endif
+
 #include "ggml-backend.h"
 #include "ggml.h"
 
@@ -57,11 +66,11 @@ struct ifairy_lut_extra {
 };
 
 // Packed iFairy 3-weight codes for lut_c-style kernels:
-// - per ggml QK_K=256 block has 86 groups ((256+2)/3)
+// - per ggml QK_IFAIRY block has QK_IFAIRY_GROUPS_PER_BLOCK groups
 // - each group stores 16 lanes (16 output rows) of 1-byte codes (idx16 + flags)
 // - d_real/d_imag are per-row/per-block weight scales, stored as float for fast use in kernels
 struct ifairy_lut_wtile_16 {
-    uint8_t qs[86][16];
+    uint8_t qs[QK_IFAIRY_GROUPS_PER_BLOCK][16];
     float   d_real[16];
     float   d_imag[16];
 } __attribute__((aligned(128)));

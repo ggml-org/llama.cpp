@@ -140,8 +140,8 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 }
 
 void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
-    const int nb = k / QK_K;
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
 
     block_ifairy_q16 * GGML_RESTRICT y = vy;
 
@@ -149,7 +149,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
     const float32x4_t vmin_init = vdupq_n_f32(1e-5f);
 
     for (int ib = 0; ib < nb; ++ib) {
-        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_K);
+        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_IFAIRY);
 
         float32x4_t max_real = vmin_init;
         float32x4_t max_imag = vmin_init;
@@ -157,7 +157,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
         // pass 1: find max |real| / |imag|
         {
             const uint16_t * GGML_RESTRICT src = src_base;
-            int                            cnt = QK_K * 2;  // number of bf16 halves to process
+            int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
 
             __asm__ volatile(
                 "1:\n"
@@ -195,7 +195,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
             int8_t * GGML_RESTRICT         yi   = (int8_t *) y[ib].x_imag;
             float32x4_t                    vs_r = vdupq_n_f32(iscale_r);
             float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
-            int                            cnt  = QK_K;  // number of complex values
+            int                            cnt  = QK_IFAIRY;  // number of complex values
 
             __asm__ volatile(
                 "1:\n"
@@ -230,8 +230,8 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
 }
 
 void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
-    const int nb = k / QK_K;
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
 
     block_ifairy_q16 * GGML_RESTRICT y = vy;
 
@@ -240,7 +240,7 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
     const float       k_scale_q8 = 42.6f;
 
     for (int ib = 0; ib < nb; ++ib) {
-        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_K);
+        const uint16_t * GGML_RESTRICT src_base = (const uint16_t *) (x + ib * QK_IFAIRY);
 
         float32x4_t max_real = vmin_init;
         float32x4_t max_imag = vmin_init;
@@ -248,7 +248,7 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
         // pass 1: find max |real| / |imag|
         {
             const uint16_t * GGML_RESTRICT src = src_base;
-            int                            cnt = QK_K * 2;  // number of bf16 halves to process
+            int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
 
             __asm__ volatile(
                 "1:\n"
@@ -286,7 +286,7 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
             int8_t * GGML_RESTRICT         yi   = (int8_t *) y[ib].x_imag;
             float32x4_t                    vs_r = vdupq_n_f32(iscale_r);
             float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
-            int                            cnt  = QK_K;  // number of complex values
+            int                            cnt  = QK_IFAIRY;  // number of complex values
 
             __asm__ volatile(
                 "movi           v7.4s, #42\n"
@@ -327,8 +327,8 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
         float max_real = 1e-5f;
         float max_imag = 1e-5f;
 
-        for (int j = 0; j < QK_K; ++j) {
-            const float * x_com = x + (int64_t) ib * QK_K + j;
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const float * x_com = x + (int64_t) ib * QK_IFAIRY + j;
 
             const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (x_com))[0];
             const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (x_com))[1];
@@ -352,8 +352,8 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
         int8_t * xr_out = (int8_t *) y[ib].x_real;
         int8_t * xi_out = (int8_t *) y[ib].x_imag;
 
-        for (int j = 0; j < QK_K; ++j) {
-            const float * x_com = x + (int64_t) ib * QK_K + j;
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const float * x_com = x + (int64_t) ib * QK_IFAIRY + j;
 
             const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (x_com))[0];
             const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (x_com))[1];
@@ -375,8 +375,8 @@ void quantize_row_ifairy_q16_lut_c(const float * GGML_RESTRICT x, void * GGML_RE
 }
 
 void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
-    const int nb = k / QK_K;
+    assert(k % QK_IFAIRY == 0);
+    const int nb = k / QK_IFAIRY;
 
     block_ifairy_q16 * GGML_RESTRICT y = vy;
 
@@ -388,8 +388,8 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
 
     // pass 1: global max |real| / |imag| over entire tensor (k elements)
     for (int ib = 0; ib < nb; ++ib) {
-        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
-        int                            cnt = QK_K * 2;  // number of bf16 halves to process
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_IFAIRY);
+        int                            cnt = QK_IFAIRY * 2;  // number of bf16 halves to process
 
         __asm__ volatile(
             "1:\n"
@@ -425,10 +425,10 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
     const float32x4_t vs_i = vdupq_n_f32(iscale_i);
 
     for (int ib = 0; ib < nb; ++ib) {
-        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_IFAIRY);
         int8_t * GGML_RESTRICT         yr  = (int8_t *) y[ib].x_real;
         int8_t * GGML_RESTRICT         yi  = (int8_t *) y[ib].x_imag;
-        int                            cnt = QK_K;  // number of complex values
+        int                            cnt = QK_IFAIRY;  // number of complex values
 
         y[ib].d_real = d_real;
         y[ib].d_imag = d_imag;
@@ -1771,7 +1771,7 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
 #if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     const block_ifairy * GGML_RESTRICT     w  = vx;
     const block_ifairy_q16 * GGML_RESTRICT x  = vy;
-    const int                              nb = n / QK_K;
+    const int                              nb = n / QK_IFAIRY;
 
     // 最终累加的 Scalar 结果
     float sum_real_total = 0.0f;
@@ -1835,8 +1835,8 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
             const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
             const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
 
-            // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
-            for (int j = 0; j < QK_K; j += 128) {
+            // QK_IFAIRY=256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_IFAIRY; j += 128) {
                 const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
                 const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
                 const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
@@ -1995,8 +1995,8 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
             const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
             const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
 
-            // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
-            for (int j = 0; j < QK_K; j += 128) {
+            // QK_IFAIRY=256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
+            for (int j = 0; j < QK_IFAIRY; j += 128) {
                 const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
                 const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
                 const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;

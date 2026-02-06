@@ -18,7 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
-static_assert(QK_K == 256, "lut_c packing assumes QK_K=256");
+static_assert(QK_IFAIRY == 256, "lut_c packing assumes QK_IFAIRY=256");
 
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex                      g_ifairy_lut_mutex;
@@ -106,10 +106,10 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     const int64_t k    = tensor->ne[0];
     const int64_t rows = tensor->ne[1];
-    if (k % QK_K != 0 || rows <= 0) {
+    if (k % QK_IFAIRY != 0 || rows <= 0) {
         if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: transform_tensor: invalid shape k=%lld rows=%lld QK_K=%d\n", (long long) k,
-                          (long long) rows, QK_K);
+            GGML_LOG_WARN("ifairy_lut: transform_tensor: invalid shape k=%lld rows=%lld QK_IFAIRY=%d\n", (long long) k,
+                          (long long) rows, QK_IFAIRY);
         }
         return false;
     }
@@ -131,7 +131,7 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         /* .rows   = */ rows,
     };
 
-    const int64_t blocks_per_row = k / QK_K;
+    const int64_t blocks_per_row = k / QK_IFAIRY;
     const int64_t tiles          = (rows + 15) / 16;
     const size_t  packed_bytes   = (size_t) tiles * (size_t) blocks_per_row * sizeof(struct ifairy_lut_wtile_16);
 
@@ -228,7 +228,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         const int64_t tile = row >> 4;
         const int64_t lane = row & 15;
 
-        const uint8_t * row_indexes = indexes + (size_t) row * (size_t) blocks_per_row * (size_t) ((QK_K + 2) / 3);
+        const uint8_t * row_indexes =
+            indexes + (size_t) row * (size_t) blocks_per_row * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
 
         for (int64_t blk = 0; blk < blocks_per_row; ++blk) {
             struct ifairy_lut_wtile_16 * t = packed_w + (size_t) tile * (size_t) blocks_per_row + (size_t) blk;
@@ -237,8 +238,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
             t->d_real[lane]         = GGML_FP16_TO_FP32(wb->d_real);
             t->d_imag[lane]         = GGML_FP16_TO_FP32(wb->d_imag);
 
-            const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) ((QK_K + 2) / 3);
-            for (int gi = 0; gi < (QK_K + 2) / 3; ++gi) {
+            const uint8_t * blk_idx = row_indexes + (size_t) blk * (size_t) QK_IFAIRY_GROUPS_PER_BLOCK;
+            for (int gi = 0; gi < QK_IFAIRY_GROUPS_PER_BLOCK; ++gi) {
                 const uint8_t pat = blk_idx[gi] & 0x3fu;
                 t->qs[gi][lane]   = k_ifairy_pat_to_code_u8[pat];
             }

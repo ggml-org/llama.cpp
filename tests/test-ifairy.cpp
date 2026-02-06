@@ -293,7 +293,7 @@ static float pack_bf16_pair(float real, float imag) {
 // ============================================================================
 
 static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
-    assert(idx >= 0 && idx < QK_K);
+    assert(idx >= 0 && idx < QK_IFAIRY);
     const int chunk = idx / 64;
     const int part  = (idx >> 4) & 0x3;
     const int lane  = idx & 0x0f;
@@ -306,9 +306,9 @@ static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
 static bool test_ifairy_lut_index() {
     printf("\n=== Test 2: iFairy 3-weight index encoding ===\n");
 
-    const int64_t k              = QK_K;  // 256
+    const int64_t k              = QK_IFAIRY;
     const int64_t rows           = 1;
-    const int64_t blocks_per_row = k / QK_K;
+    const int64_t blocks_per_row = k / QK_IFAIRY;
 
     std::vector<block_ifairy> weights((size_t) rows * (size_t) blocks_per_row);
     block_ifairy              blk{};
@@ -344,7 +344,7 @@ static bool test_ifairy_lut_index() {
     const size_t groups = (size_t) info.groups_per_row;
 
     bool pass = true;
-    pass &= groups == 86;  // 256 -> 85 triplets + 1 tail group (no drop)
+    pass &= groups == QK_IFAIRY_GROUPS_PER_BLOCK;  // triplets + tail group per ifairy block
     pass &= index.size() == required;
     pass &= index[0] == 0x24;
     pass &= index[1] == 0x3f;
@@ -379,7 +379,7 @@ static bool test_ifairy_lut_transform_cache() {
         return false;
     }
 
-    const int64_t k         = QK_K;
+    const int64_t k         = QK_IFAIRY;
     const int64_t rows      = 4;
     const int     n_tensors = 4;
 
@@ -469,7 +469,7 @@ static bool test_ifairy_lut_transform_invalid_shape() {
         return false;
     }
 
-    const int64_t k_bad = QK_K - 1;
+    const int64_t k_bad = QK_IFAIRY - 1;
     const int64_t rows  = 1;
     ggml_tensor * w     = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, k_bad, rows);
     if (!w || !w->data) {
@@ -499,9 +499,9 @@ static bool test_ifairy_lut_transform_invalid_shape() {
 static bool test_ifairy_lut_index_alignment() {
     printf("\n=== Test 2.4: iFairy LUT index alignment ===\n");
 
-    const int64_t k              = QK_K;
+    const int64_t k              = QK_IFAIRY;
     const int64_t rows           = 1;
-    const int64_t blocks_per_row = k / QK_K;
+    const int64_t blocks_per_row = k / QK_IFAIRY;
 
     std::vector<block_ifairy> weights((size_t) rows * (size_t) blocks_per_row);
     memset(weights.data(), 0, weights.size() * sizeof(block_ifairy));
@@ -534,9 +534,9 @@ static bool test_ifairy_lut_index_alignment() {
 static bool test_ifairy_lut_index_encode_failure() {
     printf("\n=== Test 2.5: iFairy LUT index encode failure ===\n");
 
-    const int64_t k              = QK_K;
+    const int64_t k              = QK_IFAIRY;
     const int64_t rows           = 1;
-    const int64_t blocks_per_row = k / QK_K;
+    const int64_t blocks_per_row = k / QK_IFAIRY;
 
     std::vector<block_ifairy> weights((size_t) rows * (size_t) blocks_per_row);
     memset(weights.data(), 0, weights.size() * sizeof(block_ifairy));
@@ -585,7 +585,7 @@ static bool test_ifairy_lut_env_semantics() {
 
     const int64_t M   = 2;
     const int64_t N   = 2;
-    const int64_t K   = QK_K;
+    const int64_t K   = QK_IFAIRY;
     ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
     ggml_tensor * a   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
     ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, M, N);
@@ -643,9 +643,9 @@ static bool test_quantization() {
 
     printf("Testing quantization with %zu elements\n", quantized_real.size());
 
-    // 分配量化块（256 个元素对应 1 个块）
+    // 分配量化块（每 QK_IFAIRY 个元素对应 1 个块）
     const size_t n_elements = quantized_real.size();
-    const size_t n_blocks   = (n_elements + QK_K - 1) / QK_K;
+    const size_t n_blocks   = (n_elements + QK_IFAIRY - 1) / QK_IFAIRY;
 
     std::vector<block_ifairy> quantized(n_blocks);
     std::vector<float>        dequantized_real(n_elements);
@@ -675,7 +675,7 @@ static bool test_ifairy_q16_tensor_quantization() {
     printf("\n=== Test 1.1: iFairy Q16 Tensor-Scale Quantization ===\n");
 
     const int k  = 1536;
-    const int nb = k / QK_K;
+    const int nb = k / QK_IFAIRY;
 
     std::mt19937                          rng(1);
     std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
@@ -726,8 +726,8 @@ static bool test_ifairy_q16_tensor_quantization() {
         const float d_r = GGML_FP16_TO_FP32(q[ib].d_real);
         const float d_i = GGML_FP16_TO_FP32(q[ib].d_imag);
 
-        for (int j = 0; j < QK_K; ++j) {
-            const int idx = ib * QK_K + j;
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            const int idx = ib * QK_IFAIRY + j;
 
             const ggml_bf16_t xr_ref{ (uint16_t) (x_words[idx] & 0xFFFFu) };
             const ggml_bf16_t xi_ref{ (uint16_t) (x_words[idx] >> 16) };
@@ -841,8 +841,8 @@ static bool test_rope() {
 // ============================================================================
 
 static uint8_t get_ifairy_code(const block_ifairy * row_blocks, int idx) {
-    const int     block_idx    = idx / QK_K;
-    const int     idx_in_block = idx - block_idx * QK_K;
+    const int     block_idx    = idx / QK_IFAIRY;
+    const int     idx_in_block = idx - block_idx * QK_IFAIRY;
     const int     chunk        = idx_in_block >> 6;
     const int     lane         = idx_in_block & 0x0f;
     const int     part         = (idx_in_block >> 4) & 0x3;
@@ -861,14 +861,14 @@ static void decode_ifairy_weight(uint8_t code, float d_real, float d_imag, float
 }
 
 static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
-    if (M <= 0 || N <= 0 || K <= 0 || (K % QK_K) != 0) {
+    if (M <= 0 || N <= 0 || K <= 0 || (K % QK_IFAIRY) != 0) {
         fprintf(stderr, "Invalid scalar test shape: M=%lld N=%lld K=%lld\n", (long long) M, (long long) N,
                 (long long) K);
         return false;
     }
 
-    const int64_t blocks_per_row = K / QK_K;
-    const int64_t blocks_per_col = K / QK_K;
+    const int64_t blocks_per_row = K / QK_IFAIRY;
+    const int64_t blocks_per_col = K / QK_IFAIRY;
 
     const float w_scale = 1.0f / 8.0f;
     const float a_scale = 1.0f / 16.0f;
@@ -879,8 +879,8 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
             block_ifairy blk{};
             blk.d_real = GGML_FP32_TO_FP16(w_scale);
             blk.d_imag = GGML_FP32_TO_FP16(w_scale);
-            for (int j = 0; j < QK_K; ++j) {
-                const int     k_idx = (int) (b * QK_K + j);
+            for (int j = 0; j < QK_IFAIRY; ++j) {
+                const int     k_idx = (int) (b * QK_IFAIRY + j);
                 const uint8_t code  = (uint8_t) ((k_idx + (int) r) & 0x3);
                 set_ifairy_code(blk, j, code);
             }
@@ -894,8 +894,8 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
             block_ifairy_q16 blk{};
             blk.d_real = GGML_FP32_TO_FP16(a_scale);
             blk.d_imag = GGML_FP32_TO_FP16(a_scale);
-            for (int j = 0; j < QK_K; ++j) {
-                const int k_idx = (int) (b * QK_K + j);
+            for (int j = 0; j < QK_IFAIRY; ++j) {
+                const int k_idx = (int) (b * QK_IFAIRY + j);
                 blk.x_real[j]   = (int8_t) (((k_idx + 3 * (int) c) % 13) - 6);
                 blk.x_imag[j]   = (int8_t) (((k_idx * 2 + (int) c) % 11) - 5);
             }
@@ -923,8 +923,8 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
             for (int64_t b = 0; b < blocks_per_col; ++b) {
                 const float act_sr = GGML_FP16_TO_FP32(act_blk[b].d_real);
                 const float act_si = GGML_FP16_TO_FP32(act_blk[b].d_imag);
-                for (int j = 0; j < QK_K; ++j) {
-                    const int     k_idx = (int) (b * QK_K + j);
+                for (int j = 0; j < QK_IFAIRY; ++j) {
+                    const int     k_idx = (int) (b * QK_IFAIRY + j);
                     const uint8_t code  = get_ifairy_code(w_row, k_idx);
                     float         wr    = 0.0f;
                     float         wi    = 0.0f;
@@ -952,7 +952,7 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
 static bool test_ifairy_lut_scalar_matmul() {
     printf("\n=== Test 4: iFairy LUT scalar matmul ===\n");
 
-    const bool ok = run_ifairy_lut_scalar_case(2, 2, QK_K);
+    const bool ok = run_ifairy_lut_scalar_case(2, 2, QK_IFAIRY);
     if (!ok) {
         fprintf(stderr, "Scalar LUT matmul mismatch\n");
     }
@@ -962,7 +962,7 @@ static bool test_ifairy_lut_scalar_matmul() {
 static bool test_ifairy_lut_scalar_small_dims() {
     printf("\n=== Test 4.1: iFairy LUT scalar small dims ===\n");
 
-    const bool ok = run_ifairy_lut_scalar_case(1, 1, QK_K);
+    const bool ok = run_ifairy_lut_scalar_case(1, 1, QK_IFAIRY);
     if (!ok) {
         fprintf(stderr, "Scalar LUT small dims mismatch\n");
     }
@@ -988,13 +988,13 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
         env_lut.unset();
     }
 
-    if (M <= 0 || N <= 0 || K <= 0 || (K % QK_K) != 0) {
+    if (M <= 0 || N <= 0 || K <= 0 || (K % QK_IFAIRY) != 0) {
         fprintf(stderr, "Invalid backend test shape: M=%lld N=%lld K=%lld\n", (long long) M, (long long) N,
                 (long long) K);
         return false;
     }
 
-    const int64_t blocks_per_row = K / QK_K;
+    const int64_t blocks_per_row = K / QK_IFAIRY;
 
     // Build deterministic weights and activations.
     const float w_scale = 1.0f / 8.0f;
@@ -1005,8 +1005,8 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
             block_ifairy blk{};
             blk.d_real = GGML_FP32_TO_FP16(w_scale);
             blk.d_imag = GGML_FP32_TO_FP16(w_scale);
-            for (int j = 0; j < QK_K; ++j) {
-                const int     k_idx = (int) (b * QK_K + j);
+            for (int j = 0; j < QK_IFAIRY; ++j) {
+                const int     k_idx = (int) (b * QK_IFAIRY + j);
                 const uint8_t code  = (uint8_t) ((k_idx + 3 * (int) r + 1) & 0x3);
                 set_ifairy_code(blk, j, code);
             }
@@ -1093,7 +1093,7 @@ static void quantize_ifairy_backend_act_q16(std::vector<block_ifairy_q16> & act_
                                             const std::vector<float> &      act_f32,
                                             int64_t                         N,
                                             int64_t                         K) {
-    const int64_t blocks = K / QK_K;
+    const int64_t blocks = K / QK_IFAIRY;
     act_q16.assign((size_t) N * (size_t) blocks, block_ifairy_q16{});
     for (int64_t c = 0; c < N; ++c) {
         quantize_row_ifairy_q16_tensor(act_f32.data() + (size_t) c * (size_t) K,
@@ -1105,7 +1105,7 @@ static void quantize_ifairy_backend_act_q16_lut_c(std::vector<block_ifairy_q16> 
                                                   const std::vector<float> &      act_f32,
                                                   int64_t                         N,
                                                   int64_t                         K) {
-    const int64_t blocks     = K / QK_K;
+    const int64_t blocks     = K / QK_IFAIRY;
     const float   k_scale_q8 = 42.6f;
 
     act_q16.assign((size_t) N * (size_t) blocks, block_ifairy_q16{});
@@ -1114,11 +1114,11 @@ static void quantize_ifairy_backend_act_q16_lut_c(std::vector<block_ifairy_q16> 
         const float * col = act_f32.data() + (size_t) c * (size_t) K;
 
         for (int64_t b = 0; b < blocks; ++b) {
-            const float * blk = col + (size_t) b * (size_t) QK_K;
+            const float * blk = col + (size_t) b * (size_t) QK_IFAIRY;
 
             float max_real = 1e-5f;
             float max_imag = 1e-5f;
-            for (int j = 0; j < QK_K; ++j) {
+            for (int j = 0; j < QK_IFAIRY; ++j) {
                 const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (blk + j))[0];
                 const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (blk + j))[1];
 
@@ -1141,7 +1141,7 @@ static void quantize_ifairy_backend_act_q16_lut_c(std::vector<block_ifairy_q16> 
             int8_t * xr_out = (int8_t *) out.x_real;
             int8_t * xi_out = (int8_t *) out.x_imag;
 
-            for (int j = 0; j < QK_K; ++j) {
+            for (int j = 0; j < QK_IFAIRY; ++j) {
                 const ggml_bf16_t xr_bf16 = ((const ggml_bf16_t *) (blk + j))[0];
                 const ggml_bf16_t xi_bf16 = ((const ggml_bf16_t *) (blk + j))[1];
 
@@ -1179,7 +1179,7 @@ static bool test_ifairy_lut_backend_smoke() {
 
     const int64_t M = 8;
     const int64_t N = 2;
-    const int64_t K = 2 * QK_K;
+    const int64_t K = 2 * QK_IFAIRY;
 
     std::vector<float>            act_f32;
     std::vector<block_ifairy_q16> act_q16;
@@ -1211,7 +1211,7 @@ static bool test_ifairy_lut_backend_f32_vs_q16() {
 
     const int64_t M = 8;
     const int64_t N = 2;
-    const int64_t K = 2 * QK_K;
+    const int64_t K = 2 * QK_IFAIRY;
 
     std::vector<float>            act_f32;
     std::vector<block_ifairy_q16> act_q16;
@@ -1250,7 +1250,7 @@ static bool test_ifairy_lut_backend_lut_c_f32_vs_q16() {
 
     const int64_t M = 8;
     const int64_t N = 2;
-    const int64_t K = 2 * QK_K;
+    const int64_t K = 2 * QK_IFAIRY;
 
     std::vector<float>            act_f32;
     std::vector<block_ifairy_q16> act_q16;

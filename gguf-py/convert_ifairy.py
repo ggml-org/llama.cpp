@@ -14,7 +14,7 @@ import torch
 #import tensorflow as tf
 from safetensors import safe_open
 import numpy as np
-from gguf.constants import GGML_QUANT_SIZES, QK_K
+from gguf.constants import GGML_QUANT_SIZES, QK_IFAIRY
 
 
 #bf16 = tf.bfloat16.as_numpy_dtype
@@ -182,7 +182,8 @@ def repack_ifairy_blocks(data: np.ndarray) -> np.ndarray:
         return data
 
     type_size = GGML_QUANT_SIZES[gguf.GGMLQuantizationType.F16_I2][1]
-    q_bytes = QK_K // 4  # 64 bytes of packed 2-bit weights
+    assert QK_IFAIRY == 256, "ifairy repacking expects QK_IFAIRY=256"
+    q_bytes = QK_IFAIRY // 4  # packed 2-bit weights bytes per ifairy block
 
     if data.size % type_size != 0:
         return data
@@ -192,7 +193,7 @@ def repack_ifairy_blocks(data: np.ndarray) -> np.ndarray:
 
     for idx in range(blocks.shape[0]):
         qs = blocks[idx, :q_bytes]
-        codes = ((qs.reshape(-1, 1) >> shifts) & 0x3).reshape(-1)  # 256 codes
+        codes = ((qs.reshape(-1, 1) >> shifts) & 0x3).reshape(-1)  # QK_IFAIRY codes
 
         repacked = np.empty_like(qs)
         for chunk in range(4):  # 4 groups of 64 weights

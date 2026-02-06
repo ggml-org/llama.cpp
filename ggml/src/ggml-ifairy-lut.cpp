@@ -60,10 +60,10 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
         return false;
     }
     // require logical K aligned to block
-    if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
+    if (src0->ne[0] % QK_IFAIRY != 0 || src1->ne[0] != src0->ne[0]) {
         if (dbg) {
-            GGML_LOG_WARN("ifairy_lut: K misaligned K0=%lld K1=%lld QK_K=%d\n", (long long) src0->ne[0],
-                          (long long) src1->ne[0], QK_K);
+            GGML_LOG_WARN("ifairy_lut: K misaligned K0=%lld K1=%lld QK_IFAIRY=%d\n", (long long) src0->ne[0],
+                          (long long) src1->ne[0], QK_IFAIRY);
         }
         return false;
     }
@@ -84,8 +84,8 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
 
     const int64_t K              = src0->ne[0];
     const int64_t N              = src1->ne[1];
-    const int64_t blocks_per_col = K / QK_K;
-    const int64_t groups         = blocks_per_col * ((QK_K + 2) / 3);
+    const int64_t blocks_per_col = K / QK_IFAIRY;
+    const int64_t groups         = blocks_per_col * QK_IFAIRY_GROUPS_PER_BLOCK;
 
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {

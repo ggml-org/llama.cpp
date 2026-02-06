@@ -106,10 +106,10 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
 
 // ====================== Fairy±i complex 2-bit quantization
 void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
+    assert(k % QK_IFAIRY == 0);
     block_ifairy * GGML_RESTRICT y = vy;
 
-    const int64_t nb = k / QK_K;
+    const int64_t nb = k / QK_IFAIRY;
 
     float d_real = 0.0f;
     float d_imag = 0.0f;
@@ -137,7 +137,7 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
             for (int part = 0; part < 4; ++part) {
                 for (int lane = 0; lane < 16; ++lane) {
                     const int     idx   = chunk * 64 + part * 16 + lane;
-                    const float * x_com = x + ib * QK_K + idx;
+                    const float * x_com = x + ib * QK_IFAIRY + idx;
 
                     const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];
                     const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) x_com)[1];
@@ -493,7 +493,7 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
     const block_ifairy * GGML_RESTRICT     w = (const block_ifairy *) vx;
     const block_ifairy_q16 * GGML_RESTRICT x = (const block_ifairy_q16 *) vy;
 
-    const int nb = n / QK_K;
+    const int nb = n / QK_IFAIRY;
 
     const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
     const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
@@ -517,8 +517,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
         int32_t sum_bc = 0;  // Σ xr * wi
         int32_t sum_bd = 0;  // Σ xi * wi
 
-        // QK_K 个元素，每 4 个权重 packed 在一个 byte 里
-        for (int j = 0; j < QK_K; ++j) {
+        // QK_IFAIRY 个元素，每 4 个权重 packed 在一个 byte 里
+        for (int j = 0; j < QK_IFAIRY; ++j) {
             const int chunk    = j >> 6;          // 0..3 blocks of 64
             const int lane     = j & 0xF;         // 0..15 within each 16-lane stripe
             const int part     = (j >> 4) & 0x3;  // which 16-lane group inside the chunk

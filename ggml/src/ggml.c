@@ -907,7 +907,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_IFAIRY] = {
         .type_name                = "ifairy",
-        .blck_size                = QK_K,
+        .blck_size                = QK_IFAIRY,
         .type_size                = sizeof(block_ifairy),
         .is_quantized             = true,
         // complex weights are handled by dedicated kernels; there is no generic
@@ -917,7 +917,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
     },
     [GGML_TYPE_IFAIRY_Q16] = {
         .type_name                = "ifairy_q16",
-        .blck_size                = QK_K,
+        .blck_size                = QK_IFAIRY,
         .type_size                = sizeof(block_ifairy_q16),
         .is_quantized             = true,
     },

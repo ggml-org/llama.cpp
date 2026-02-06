@@ -1226,7 +1226,7 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
     const block_ifairy * GGML_RESTRICT x = vx;
     const block_q8_K * GGML_RESTRICT   y = vy;
 
-    const int nb = n / QK_K;
+    const int nb = n / QK_IFAIRY;
 
 //#if 0 // ARM NEON implementation disabled - TODO: fix to match block_ifairy structure
 #if defined(__ARM_NEON)
@@ -4096,4 +4096,3 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
     ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
-

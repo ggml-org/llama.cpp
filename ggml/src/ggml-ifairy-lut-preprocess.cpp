@@ -55,8 +55,8 @@ static void ggml_ifairy_lut_preprocess_lut16(int          m,
     }
 
     const int64_t K                = k;
-    const int64_t blocks           = K / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3;
+    const int64_t blocks           = K / QK_IFAIRY;
+    const int64_t groups_per_block = QK_IFAIRY_GROUPS_PER_BLOCK;
     const int64_t groups           = blocks * groups_per_block;
 
     const bool shard_by_col = n >= nth;
@@ -89,8 +89,8 @@ static void ggml_ifairy_lut_preprocess_lut16(int          m,
             const int64_t intra = g - blk * groups_per_block;
 
             const bool    tail     = intra == groups_per_block - 1;
-            const int64_t base_off = tail ? (QK_K - 1) : intra * 3;
-            const int64_t idx0     = blk * QK_K + base_off + 0;
+            const int64_t base_off = tail ? (QK_IFAIRY - 1) : intra * 3;
+            const int64_t idx0     = blk * QK_IFAIRY + base_off + 0;
 
             const int blk0 = (int) blk;
             const int off0 = (int) base_off;
