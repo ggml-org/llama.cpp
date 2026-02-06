@@ -102,27 +102,30 @@ protected:
     explicit ggml_openvino_extra_base(Type t) : type(t) {}
 };
 
-// Extra data for F16/F32/BF16 weight tensors - stores the pre-built ov::Constant node
+// Extra data for F16/F32/BF16 weight tensors - stores the pre-built weight node
 struct ggml_openvino_weight_extra : public ggml_openvino_extra_base {
-    std::shared_ptr<ov::Node> constant;  // Pre-built OpenVINO Constant node
+    ov::Tensor weights;                     // The underlying weight data tensor
+    std::shared_ptr<ov::Node> weight_node;  // Pre-built OpenVINO weight node
 
-    explicit ggml_openvino_weight_extra(std::shared_ptr<ov::Node> c)
-        : ggml_openvino_extra_base(Type::WEIGHT), constant(std::move(c)) {}
+    ggml_openvino_weight_extra(ov::Tensor w, std::shared_ptr<ov::Node> n) :
+        ggml_openvino_extra_base(Type::WEIGHT),
+        weights(std::move(w)),
+        weight_node(std::move(n)) {}
 };
 
-// Extra data for quantized weight tensors - stores extracted weights/scales/zp and ov::Constant
+// Extra data for quantized weight tensors - stores extracted weights/scales/zp and weight node
 struct ggml_openvino_quantized_weight_extra : public ggml_openvino_extra_base {
     ov::Tensor weights;   // U4 or U8 extracted weights
     ov::Tensor scales;    // F16 scales
     ov::Tensor zp;        // U4 or U8 zero points (same type as weights)
-    std::shared_ptr<ov::Node> constant;  // Pre-built OpenVINO weight subgraph
+    std::shared_ptr<ov::Node> weight_node;  // Pre-built OpenVINO weight subgraph
 
-    ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor z, std::shared_ptr<ov::Node> c) :
+    ggml_openvino_quantized_weight_extra(ov::Tensor w, ov::Tensor s, ov::Tensor z, std::shared_ptr<ov::Node> n) :
         ggml_openvino_extra_base(Type::QUANTIZED_WEIGHT),
         weights(std::move(w)),
         scales(std::move(s)),
         zp(std::move(z)),
-        constant(std::move(c)) {}
+        weight_node(std::move(n)) {}
 };
 
 // Extra data for KV cache / compute tensors - stores ov::Tensor for infer_request
@@ -140,19 +143,19 @@ struct ggml_openvino_tensor_extra : public ggml_openvino_extra_base {
 // Returns the total size needed in the buffer for extracted data.
 
 struct ggml_openvino_extracted_layout {
-    size_t total_size;        // Total bytes needed
-    size_t weights_offset;    // Offset to weights in buffer
-    size_t weights_size;      // Size of weights in bytes
-    size_t scales_offset;     // Offset to scales in buffer
-    size_t scales_size;       // Size of scales in bytes
-    size_t zp_offset;         // Offset to zero points in buffer
-    size_t zp_size;           // Size of zero points in bytes (U4 or U8)
-    bool is_u4;               // true for U4 weights, false for U8
+    size_t total_size = 0;      // Total bytes needed
+    size_t weights_offset = 0;  // Offset to weights in buffer
+    size_t weights_size = 0;    // Size of weights in bytes
+    size_t scales_offset = 0;   // Offset to scales in buffer
+    size_t scales_size = 0;     // Size of scales in bytes
+    size_t zp_offset = 0;       // Offset to zero points in buffer
+    size_t zp_size = 0;         // Size of zero points in bytes (U4 or U8)
+    bool is_u4;                 // true for U4 weights, false for U8
     int64_t weights_per_block;  // weights per scale/zp block
     bool is_symmetric;        // true for symmetric quantization
 
     // Requantization info
-    bool is_requant;                              // true if this tensor needs requantization
+    bool is_requant = false;                      // true if this tensor needs requantization
     std::optional<ExtraQuantType> requant_type;   // target requant type if is_requant
 };
 
@@ -160,3 +163,7 @@ struct ggml_openvino_extracted_layout {
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor);
 
 ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
+
+// Register an extra with the tensor's OpenVINO buffer context for proper lifetime management.
+// This sets tensor->extra and tracks the extra in the buffer context for cleanup.
+void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra);

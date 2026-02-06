@@ -576,9 +576,11 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     return result;
 }
 
-std::shared_ptr<ov::Node> process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr) {
+OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(data != nullptr);
+
+    OvWeight result;
 
     // Get 2D shape for weights [rows, cols]
     ov::Shape node_shape = {static_cast<size_t>(tensor->ne[1]), static_cast<size_t>(tensor->ne[0])};
@@ -600,18 +602,16 @@ std::shared_ptr<ov::Node> process_weight_tensor(const ggml_tensor * tensor, cons
             OPENVINO_THROW("Unexpected tensor type in F16/F32/BF16 path");
         }
 
-        if (output_base_ptr) {
+        if (output_base_ptr && output_base_ptr != data) {
             // Using external buffer - copy data and create shared-memory constant
             size_t tensor_bytes = ggml_nbytes(tensor);
             memcpy(output_base_ptr, data, tensor_bytes);
-            ov::Tensor ov_tensor(element_type, node_shape, output_base_ptr);
-            return std::make_shared<ov::op::v0::Constant>(ov_tensor);
+            result.weights = ov::Tensor(element_type, node_shape, output_base_ptr);
         } else {
-            // Allocate internal buffer
-            ov::Tensor weights(element_type, node_shape);
-            memcpy(weights.data(), data, ggml_nelements(tensor) * element_type.size());
-            return std::make_shared<ov::op::v0::Constant>(weights);
+            result.weights = ov::Tensor(element_type, node_shape, data);
         }
+        result.weight_node = std::make_shared<ov::op::v0::Constant>(result.weights);
+        return result;
     }
 
     // Handle quantized weights
@@ -619,70 +619,48 @@ std::shared_ptr<ov::Node> process_weight_tensor(const ggml_tensor * tensor, cons
         OPENVINO_THROW("Unsupported weight tensor type: ", ggml_type_name(tensor->type));
     }
 
-    auto layout = ggml_openvino_get_extracted_layout(tensor);
+    result.layout = ggml_openvino_get_extracted_layout(tensor);
+    const auto & layout = result.layout;
     if (layout.total_size == 0) {
         OPENVINO_THROW("Unsupported quantized type: ", ggml_type_name(tensor->type));
     }
 
-    std::shared_ptr<ov::Node> result;
+    // F16 requant path - no separate scales/zp needed in result
+    if (layout.is_requant && layout.requant_type.has_value() && layout.requant_type.value() == ExtraQuantType::F16) {
+        if (output_base_ptr) {
+            result.weights = ov::Tensor(ov::element::f16, node_shape,
+                                        static_cast<uint8_t *>(output_base_ptr) + layout.weights_offset);
+        } else {
+            result.weights = ov::Tensor(ov::element::f16, node_shape);
+        }
+        ov::Tensor dummy_scales, dummy_zp;  // Not used for F16
+        result.weight_node =
+            requantize_to_buffers(tensor, data, ExtraQuantType::F16, 0, result.weights, dummy_scales, dummy_zp);
+        return result;
+    }
+
+    // Quantized path (normal extraction or quantized requant)
+    // Create weight/scale/zp tensors - shared between both paths
+    ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
+    ov::Shape scale_shape = {node_shape[0], node_shape[1] / layout.weights_per_block};
+    ov::Shape zp_shape = layout.is_symmetric ? ov::Shape{} : scale_shape;
+
+    if (output_base_ptr) {
+        uint8_t * buf_base = static_cast<uint8_t *>(output_base_ptr);
+        result.weights = ov::Tensor(weight_type, node_shape, buf_base + layout.weights_offset);
+        result.scales = ov::Tensor(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
+        result.zp = ov::Tensor(weight_type, zp_shape, buf_base + layout.zp_offset);
+    } else {
+        result.weights = ov::Tensor(weight_type, node_shape);
+        result.scales = ov::Tensor(ov::element::f16, scale_shape);
+        result.zp = ov::Tensor(weight_type, zp_shape);
+    }
 
     if (layout.is_requant && layout.requant_type.has_value()) {
-        // Requantization path
-        if (layout.requant_type.value() == ExtraQuantType::F16) {
-            // Requant to F16
-            ov::Tensor weights;
-            if (output_base_ptr) {
-                weights = ov::Tensor(ov::element::f16, node_shape,
-                                     static_cast<uint8_t *>(output_base_ptr) + layout.weights_offset);
-            } else {
-                weights = ov::Tensor(ov::element::f16, node_shape);
-            }
-            ov::Tensor dummy_scales, dummy_zp;  // Not used for F16
-            result = requantize_to_buffers(tensor, data, ExtraQuantType::F16, 0, weights, dummy_scales, dummy_zp);
-        } else {
-            // Requant to quantized format (Q4_0_128, Q8_0_32, etc.)
-            ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
-            ov::Shape scale_shape = {node_shape[0], node_shape[1] / layout.weights_per_block};
-            // For symmetric quantization, zp is a scalar value instead of per-block
-            // zp uses the same element type as weights (U4 or U8)
-            ov::Shape zp_shape = layout.is_symmetric ? ov::Shape{} : scale_shape;
-
-            ov::Tensor weights, scales, zp;
-            if (output_base_ptr) {
-                uint8_t * buf_base = static_cast<uint8_t *>(output_base_ptr);
-                weights = ov::Tensor(weight_type, node_shape, buf_base + layout.weights_offset);
-                scales = ov::Tensor(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
-                zp = ov::Tensor(weight_type, zp_shape, buf_base + layout.zp_offset);
-            } else {
-                weights = ov::Tensor(weight_type, node_shape);
-                scales = ov::Tensor(ov::element::f16, scale_shape);
-                zp = ov::Tensor(weight_type, zp_shape);
-            }
-
-            result = requantize_to_buffers(tensor, data, layout.requant_type.value(), layout.weights_per_block, weights,
-                                           scales, zp);
-        }
+        result.weight_node = requantize_to_buffers(tensor, data, layout.requant_type.value(), layout.weights_per_block,
+                                                   result.weights, result.scales, result.zp);
     } else {
-        // Normal extraction path (no requant)
-        ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
-        ov::Shape scale_shape = {node_shape[0], node_shape[1] / layout.weights_per_block};
-        // For symmetric quantization, zp is a scalar value instead of per-block
-        // zp uses the same element type as weights (U4 or U8)
-        ov::Shape zp_shape = layout.is_symmetric ? ov::Shape{} : scale_shape;
-
-        ov::Tensor weights, scales, zp;
-        if (output_base_ptr) {
-            uint8_t * buf_base = static_cast<uint8_t *>(output_base_ptr);
-            weights = ov::Tensor(weight_type, node_shape, buf_base + layout.weights_offset);
-            scales = ov::Tensor(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
-            zp = ov::Tensor(weight_type, zp_shape, buf_base + layout.zp_offset);
-        } else {
-            weights = ov::Tensor(weight_type, node_shape);
-            scales = ov::Tensor(ov::element::f16, scale_shape);
-            zp = ov::Tensor(weight_type, zp_shape);
-        }
-
-        result = extract_quantized_weights(tensor, data, weights, scales, zp);
+        result.weight_node = extract_quantized_weights(tensor, data, result.weights, result.scales, result.zp);
     }
 
     return result;
