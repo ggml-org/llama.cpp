@@ -7917,10 +7917,8 @@ class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
 
     def set_gguf_parameters(self):
-        rope_theta_per_layer = None
         rope_theta = self.hparams.get("rope_theta")
         if isinstance(rope_theta, list):
-            rope_theta_per_layer = rope_theta
             self.hparams["rope_theta"] = float(rope_theta[0])
             self.hparams["local_rope_theta"] = float(rope_theta[1])
             self.rope_parameters["rope_theta"] = self.hparams["rope_theta"]
@@ -7996,7 +7994,7 @@ class Step35Model(TextModel):
         # Map router bias (expert selection bias) to a GGUF bias tensor
         if name.endswith(".moe.router_bias"):
             name += ".bias"
-            
+
         if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
             data_torch = data_torch.squeeze().contiguous()
 
@@ -8041,6 +8039,7 @@ class Step35Model(TextModel):
                 rope_factors.append(1.0 / ((1.0 - smooth) / factor + smooth))
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
 
 @ModelBase.register("PanguEmbeddedForCausalLM")
 class PanguEmbeddedModel(TextModel):
