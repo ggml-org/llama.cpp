@@ -2226,13 +2226,9 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #endif  // USE_ACL_GRAPH
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
-    static bool opt_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
-
-    // Check if multi-stream execution is enabled
-    static bool multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
 
     if (!use_cann_graph || cann_graph_capture_required) {
-        if (multi_stream_enabled) {
+        if (cann_ctx->multi_stream_enabled) {
             // Multi-stream execution mode using memory-based dependency tracking
             // Note: multi_stream_enabled implies !use_cann_graph (set in graph_compute)
             // Track data pointers that have pending writes on each stream
@@ -2247,23 +2243,6 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
                 }
             }
 
-            // Helper lambda to synchronize all active streams to the target stream
-            auto sync_all_to_stream = [&](int target_stream) {
-                if (active_streams.empty()) return;
-
-                // Record events on all active streams
-                for (int s : active_streams) {
-                    ACL_CHECK(aclrtRecordEvent(cann_ctx->stream_events[s], cann_ctx->stream(s)));
-                }
-                // Wait for all events on the target stream
-                for (int s : active_streams) {
-                    ACL_CHECK(aclrtStreamWaitEvent(cann_ctx->stream(target_stream), cann_ctx->stream_events[s]));
-                }
-                // Clear tracking
-                pending_writes.clear();
-                active_streams.clear();
-            };
-
             // Helper lambda to wait for a specific stream on the target stream
             auto wait_for_stream = [&](int src_stream, int target_stream) {
                 if (src_stream == target_stream) return;
@@ -2273,25 +2252,6 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-                if (opt_fusion) {
-                    if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
-                        // Fusion ops need synchronization - execute on stream 0
-                        sync_all_to_stream(0);
-
-                        // Execute fused op on stream 0
-                        ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
-
-                        // Track the output
-                        void * out_ptr = get_data_ptr(cgraph->nodes[i + 1]);
-                        if (out_ptr) {
-                            pending_writes[out_ptr] = 0;
-                            active_streams.insert(0);
-                        }
-                        i++;
-                        current_stream = 1;  // Next node goes to stream 1
-                        continue;
-                    }
-                }
 
                 if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
                     node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
@@ -2373,7 +2333,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
             // Single-stream execution mode (original behavior)
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
-                if (opt_fusion) {
+                if (cann_ctx->operator_fusion_enabled) {
                     if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
                         ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
                         i++;
@@ -2437,14 +2397,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
     bool graph_capture_required = false;
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
-
-    // Check if multi-stream execution is enabled (must check before using use_cann_graph)
-    static bool multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
-
-    // Multi-stream mode is incompatible with ACL graph capture/execution
-    if (multi_stream_enabled) {
-        use_cann_graph = false;
-    }
 
     if (use_cann_graph) {
         static bool prefill_use_graph = parse_bool(get_env_as_lowercase("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
@@ -2839,11 +2791,7 @@ static void ggml_backend_cann_event_wait(ggml_backend_t backend, ggml_backend_ev
  */
 static void ggml_backend_cann_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * graph) {
     // Check if graph optimization is disabled via environment variable
-    static bool disable_graph_optimize = [] {
-        const char * env = getenv("GGML_CANN_DISABLE_GRAPH_OPTIMIZE");
-        return env != nullptr;
-    }();
-
+    static bool disable_graph_optimize = parse_bool(get_env_as_lowercase("GGML_CANN_DISABLE_GRAPH_OPTIMIZE").value_or(""));
     if (disable_graph_optimize) {
         return;
     }

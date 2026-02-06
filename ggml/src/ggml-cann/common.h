@@ -571,6 +571,9 @@ struct ggml_backend_cann_context {
     aclrtEvent stream_events[GGML_CANN_NUM_COMPUTE_STREAMS] = { nullptr }; /**< Events for stream synchronization. */
     std::vector<const ggml_tensor *> unsynced_nodes; /**< Nodes that have been executed but not synced. */
 
+    // Operator fusion support
+    bool operator_fusion_enabled = false; /**< Whether operator fusion is enabled. */
+
     /**
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
@@ -584,6 +587,38 @@ struct ggml_backend_cann_context {
         GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
                       acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
 #endif
+
+        // Read environment variables for multi-stream and operator fusion
+        bool env_multi_stream = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
+        bool env_operator_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
+
+        // Handle conflicts and set final values
+#ifdef USE_ACL_GRAPH
+        if (acl_graph_mode && env_multi_stream) {
+            // ACL graph has higher performance, disable multi-stream
+            multi_stream_enabled = false;
+            operator_fusion_enabled = env_operator_fusion;
+            GGML_LOG_INFO("%s: device %d multi-stream disabled (ACL graph mode has higher performance)\n", 
+                          __func__, device);
+        } else
+#endif
+        if (env_multi_stream) {
+            // Multi-stream enabled, disable operator fusion (fusion has low benefit with multi-stream)
+            multi_stream_enabled = true;
+            operator_fusion_enabled = false;
+            if (env_operator_fusion) {
+                GGML_LOG_INFO("%s: device %d operator fusion disabled (low benefit with multi-stream enabled)\n", 
+                              __func__, device);
+            }
+            GGML_LOG_INFO("%s: device %d multi-stream execution enabled\n", __func__, device);
+        } else {
+            // Default single-stream mode
+            multi_stream_enabled = false;
+            operator_fusion_enabled = env_operator_fusion;
+            if (env_operator_fusion) {
+                GGML_LOG_INFO("%s: device %d operator fusion enabled\n", __func__, device);
+            }
+        }
     }
 
     /**
