@@ -831,10 +831,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
                 ggml_tensor * node_red_1 = ggml_add_inplace(bcj1.ctx, node1, node_tmp_1);
                 ggml_tensor * node_red_2 = ggml_add_inplace(bcj2.ctx, node2, node_tmp_2);
-                node_red_1->buffer = bcj1.bufs[i_buf];
-                node_red_2->buffer = bcj2.bufs[i_buf];
                 node_red_1->flags |= GGML_TENSOR_FLAG_COMPUTE;
                 node_red_2->flags |= GGML_TENSOR_FLAG_COMPUTE;
+                ggml_backend_view_init(node_red_1);
+                ggml_backend_view_init(node_red_2);
                 bcj1.cgraphs[i].nodes_aux.push_back(node_red_1);
                 bcj2.cgraphs[i].nodes_aux.push_back(node_red_2);
 
