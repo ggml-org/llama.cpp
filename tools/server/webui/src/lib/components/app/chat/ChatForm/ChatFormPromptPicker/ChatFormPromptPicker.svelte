@@ -41,6 +41,7 @@
 	let selectedIndex = $state(0);
 	let internalSearchQuery = $state('');
 	let promptError = $state<string | null>(null);
+	let selectedIndexBeforeArgumentForm = $state<number | null>(null);
 
 	let suggestions = $state<Record<string, string[]>>({});
 	let loadingSuggestions = $state<Record<string, boolean>>({});
@@ -99,12 +100,20 @@
 	}
 
 	function handlePromptClick(prompt: MCPPromptInfo) {
-		const requiredArgs = prompt.arguments?.filter((arg) => arg.required) ?? [];
+		const args = prompt.arguments ?? [];
 
-		if (requiredArgs.length > 0) {
+		if (args.length > 0) {
+			selectedIndexBeforeArgumentForm = selectedIndex;
 			selectedPrompt = prompt;
 			promptArgs = {};
 			promptError = null;
+
+			requestAnimationFrame(() => {
+				const firstInput = document.querySelector(`#arg-${args[0].name}`) as HTMLInputElement;
+				if (firstInput) {
+					firstInput.focus();
+				}
+			});
 		} else {
 			executePrompt(prompt, {});
 		}
@@ -212,6 +221,14 @@
 	function handleArgKeydown(event: KeyboardEvent, argName: string) {
 		const argSuggestions = suggestions[argName] ?? [];
 
+		// Handle Escape - return to prompt selection list
+		if (event.key === KeyboardKey.ESCAPE) {
+			event.preventDefault();
+			event.stopPropagation();
+			handleCancelArgumentForm();
+			return;
+		}
+
 		if (argSuggestions.length === 0 || activeAutocomplete !== argName) return;
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
@@ -224,10 +241,6 @@
 			event.preventDefault();
 			event.stopPropagation();
 			selectSuggestion(argName, argSuggestions[autocompleteIndex]);
-		} else if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			suggestions[argName] = [];
-			activeAutocomplete = null;
 		}
 	}
 
@@ -248,6 +261,11 @@
 	}
 
 	function handleCancelArgumentForm() {
+		// Restore the previously selected prompt index
+		if (selectedIndexBeforeArgumentForm !== null) {
+			selectedIndex = selectedIndexBeforeArgumentForm;
+			selectedIndexBeforeArgumentForm = null;
+		}
 		selectedPrompt = null;
 		promptArgs = {};
 		promptError = null;
@@ -259,8 +277,8 @@
 		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
 			if (selectedPrompt) {
-				selectedPrompt = null;
-				promptArgs = {};
+				// Return to prompt selection list, keeping the selected prompt active
+				handleCancelArgumentForm();
 			} else {
 				onClose?.();
 			}
