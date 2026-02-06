@@ -7929,6 +7929,7 @@ class Step35Model(TextModel):
         super().set_gguf_parameters()
 
         layer_types = self.hparams.get("layer_types") or []
+        partial_rotary_factors = self.hparams.get("partial_rotary_factors") or []
         attn_other = self.hparams.get("attention_other_setting") or {}
 
         n_head_base = self.hparams["num_attention_heads"]
@@ -7938,6 +7939,8 @@ class Step35Model(TextModel):
         n_kv_swa = attn_other.get("num_attention_groups", n_kv_base)
 
         layer_types = layer_types[: self.block_count]
+        partial_rotary_factors = partial_rotary_factors[: self.block_count]
+        assert [1.0 if lt == "sliding_attention" else 0.5 for lt in layer_types] == partial_rotary_factors
         head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
         kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
         swa_pat = [lt == "sliding_attention" for lt in layer_types]
