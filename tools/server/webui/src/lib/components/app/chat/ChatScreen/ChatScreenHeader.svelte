@@ -19,7 +19,12 @@
 		: ''}"
 >
 	<div class="pointer-events-auto flex items-center space-x-2">
-		<Button variant="ghost" size="sm" onclick={toggleSettings}>
+		<Button
+			variant="ghost"
+			size="icon"
+			onclick={toggleSettings}
+			class="rounded-full backdrop-blur-lg"
+		>
 			<Settings class="h-4 w-4" />
 		</Button>
 	</div>
