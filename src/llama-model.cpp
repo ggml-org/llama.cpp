@@ -4593,6 +4593,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         throw std::runtime_error("FAIRY2I requires either output.{U,W}.s{0,1} or dense output tensor");
                     }
 
+                    const char * force_dense_output_env = getenv("LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT");
+                    const bool   force_dense_output =
+                        force_dense_output_env != nullptr && strcmp(force_dense_output_env, "0") != 0;
+                    if (force_dense_output && !output && has_output_fairy2i) {
+                        LLAMA_LOG_WARN(
+                            "%s: LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT is set, but dense output tensor is missing; "
+                            "falling back to output.{U,W}.s{0,1}\n",
+                            __func__);
+                    }
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
@@ -14055,14 +14065,15 @@ struct llm_build_fairy2i : public llm_graph_context {
         const char * force_dense_output_env = getenv("LLAMA_FAIRY2I_FORCE_DENSE_OUTPUT");
         const bool   force_dense_output = force_dense_output_env != nullptr && strcmp(force_dense_output_env, "0") != 0;
 
-        if (has_output_fairy2i && !force_dense_output) {
+        if (has_output_fairy2i && (!force_dense_output || !model.output)) {
             ggml_tensor * cur_conj = build_ifairy_conj(cur, -1, "result_norm_conj");
             cur                    = build_wide_linear(model.output_fairy2i, cur, cur_conj, -1, "result_output_wide");
             cur                    = ggml_ifairy_split(ctx0, cur);
-        } else {
-            GGML_ASSERT(model.output);
+        } else if (model.output) {
             cur = ggml_ifairy_split(ctx0, cur);
             cur = build_lora_mm(model.output, cur);
+        } else {
+            throw std::runtime_error("FAIRY2I output layer requires dense output tensor or output.{U,W}.s{0,1}");
         }
 
         cb(cur, "result_output", -1);
