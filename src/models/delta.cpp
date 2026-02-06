@@ -118,7 +118,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_graph_context_delta::build_delta_net
     q = ggml_cont_4d(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
     k = ggml_cont_4d(ctx0, ggml_permute(ctx0, k, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
     v = ggml_cont_4d(ctx0, ggml_permute(ctx0, v, 0, 2, 1, 3), S_v, n_tokens, H_v, n_seqs);
-    g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 0, 2, 1, 3), is_kda ? S_k : 1, n_tokens, H_k, n_seqs);
+    if (is_kda) {
+        g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 0, 2, 1, 3), S_k, n_tokens, H_k, n_seqs);
+    } else {
+        g = ggml_cont_4d(ctx0, ggml_permute(ctx0, g, 2, 0, 3, 1), n_tokens, 1, H_k, n_seqs);
+    }
     beta = ggml_cont(ctx0, ggml_permute(ctx0, beta, 2, 0, 1, 3));
 
     cb(q, "q_perm", il);
@@ -136,7 +140,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_graph_context_delta::build_delta_net
     k = ggml_pad(ctx0, k, 0, pad, 0, 0);
     v = ggml_pad(ctx0, v, 0, pad, 0, 0);
     beta = ggml_pad(ctx0, beta, 0, pad, 0, 0);
-    g = ggml_pad(ctx0, g, 0, pad, 0, 0);
+    g = ggml_pad(ctx0, g, pad, 0, 0, 0);
 
 
     cb(q, "q_pad", il);
