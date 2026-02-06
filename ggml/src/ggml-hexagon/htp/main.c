@@ -1078,6 +1078,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
             case HTP_OP_GLU_SWIGLU:
             case HTP_OP_GLU_SWIGLU_OAI:
             case HTP_OP_SOFTMAX:
+            case HTP_OP_GLU_GEGLU:
                 if ((n_bufs != 2) && (n_bufs != 3)) {
                     FARF(ERROR, "Bad act-req buffer list");
                     continue;

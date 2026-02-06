@@ -2450,6 +2450,9 @@ static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * buf
             } else if (ggml_get_glu_op(t) == GGML_GLU_OP_SWIGLU_OAI) {
                 req->op   = HTP_OP_GLU_SWIGLU_OAI;
                 supported = true;
+            } else if (ggml_get_glu_op(t) == GGML_GLU_OP_GEGLU) {
+                req->op   = HTP_OP_GLU_GEGLU;
+                supported = true;
             }
             break;
 
@@ -2618,7 +2621,8 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
-                        (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
+                        (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI) ||
+                        (ggml_get_glu_op(node) == GGML_GLU_OP_GEGLU)) {
                     ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 }
                 break;
@@ -3039,7 +3043,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_GLU:
             {
                 const auto glu_op = ggml_get_glu_op(op);
-                if ((glu_op == GGML_GLU_OP_SWIGLU) || (glu_op == GGML_GLU_OP_SWIGLU_OAI)) {
+                if ((glu_op == GGML_GLU_OP_SWIGLU) || (glu_op == GGML_GLU_OP_SWIGLU_OAI) || (glu_op == GGML_GLU_OP_GEGLU)) {
                     supp = ggml_hexagon_supported_activations(sess, op);
                 }
                 break;
