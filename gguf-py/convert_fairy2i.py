@@ -93,28 +93,20 @@ def undo_llama_permute(weight: torch.Tensor, n_head: int) -> torch.Tensor:
     )
 
 
-def phase_quant_v1(w_real: np.ndarray, w_imag: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def phase_quant_v1(w_real: np.ndarray, w_imag: np.ndarray) -> tuple[np.ndarray, np.ndarray, float, float]:
     abs_real = np.abs(w_real)
     abs_imag = np.abs(w_imag)
 
     choose_real = abs_real > abs_imag
-    choose_imag = abs_imag > abs_real
-
-    ties = ~(choose_real | choose_imag)
-    if np.any(ties):
-        both_zero = ties & (abs_real == 0.0)
-        same_sign = (w_real * w_imag) >= 0.0
-        choose_imag |= ties & (~both_zero) & same_sign
-        choose_real |= ties & (~both_zero) & (~same_sign)
-        choose_real |= both_zero
+    choose_imag = ~choose_real
 
     mask_real = choose_real
     mask_imag = choose_imag
 
     s_real = np.mean(abs_real[mask_real], dtype=np.float64) if np.any(mask_real) else 0.0
     s_imag = np.mean(abs_imag[mask_imag], dtype=np.float64) if np.any(mask_imag) else 0.0
-    s_real = max(float(s_real), 1e-6)
-    s_imag = max(float(s_imag), 1e-6)
+    s_real = max(float(s_real), 1e-6) if np.isfinite(s_real) else 1e-6
+    s_imag = max(float(s_imag), 1e-6) if np.isfinite(s_imag) else 1e-6
 
     q_real = np.zeros_like(w_real, dtype=np.float32)
     q_imag = np.zeros_like(w_imag, dtype=np.float32)
@@ -122,15 +114,17 @@ def phase_quant_v1(w_real: np.ndarray, w_imag: np.ndarray) -> tuple[np.ndarray, 
     q_real[mask_real] = np.where(w_real[mask_real] >= 0.0, s_real, -s_real)
     q_imag[mask_imag] = np.where(w_imag[mask_imag] >= 0.0, s_imag, -s_imag)
 
-    return q_real, q_imag
+    return q_real, q_imag, s_real, s_imag
 
 
-def phase_quant_v2(w_real: np.ndarray, w_imag: np.ndarray) -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
-    q0_real, q0_imag = phase_quant_v1(w_real, w_imag)
+def phase_quant_v2(
+    w_real: np.ndarray, w_imag: np.ndarray
+) -> tuple[tuple[np.ndarray, np.ndarray, float, float], tuple[np.ndarray, np.ndarray, float, float]]:
+    q0_real, q0_imag, s0_real, s0_imag = phase_quant_v1(w_real, w_imag)
     e_real = w_real - q0_real
     e_imag = w_imag - q0_imag
-    q1_real, q1_imag = phase_quant_v1(e_real, e_imag)
-    return (q0_real, q0_imag), (q1_real, q1_imag)
+    q1_real, q1_imag, s1_real, s1_imag = phase_quant_v1(e_real, e_imag)
+    return (q0_real, q0_imag, s0_real, s0_imag), (q1_real, q1_imag, s1_real, s1_imag)
 
 
 def pad_complex_matrix(mat: np.ndarray, out_dim: int, in_dim: int) -> np.ndarray:
@@ -145,7 +139,7 @@ def pad_complex_matrix(mat: np.ndarray, out_dim: int, in_dim: int) -> np.ndarray
     return out
 
 
-def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray) -> np.ndarray:
+def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray, d_real: float, d_imag: float) -> np.ndarray:
     stage_real = np.ascontiguousarray(stage_real, dtype=np.float32)
     stage_imag = np.ascontiguousarray(stage_imag, dtype=np.float32)
 
@@ -164,20 +158,14 @@ def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray) -> np.ndar
         mask_real = (mask_real & ~both) | (both & choose_real)
         mask_imag = (mask_imag & ~both) | (both & ~choose_real)
 
-    abs_real = np.abs(stage_real)
-    abs_imag = np.abs(stage_imag)
+    d_real = 1e-6 if not np.isfinite(d_real) else max(float(d_real), 1e-6)
+    d_imag = 1e-6 if not np.isfinite(d_imag) else max(float(d_imag), 1e-6)
+    row_all_zero = ~np.any(mask_real | mask_imag, axis=1)
 
-    cnt_real = np.sum(mask_real, axis=1)
-    cnt_imag = np.sum(mask_imag, axis=1)
-
-    sum_real = np.sum(abs_real * mask_real, axis=1, dtype=np.float64)
-    sum_imag = np.sum(abs_imag * mask_imag, axis=1, dtype=np.float64)
-
-    d_real = np.divide(sum_real, cnt_real, out=np.zeros_like(sum_real), where=cnt_real > 0).astype(np.float32)
-    d_imag = np.divide(sum_imag, cnt_imag, out=np.zeros_like(sum_imag), where=cnt_imag > 0).astype(np.float32)
-
-    d_real = np.nan_to_num(d_real, nan=0.0, posinf=0.0, neginf=0.0)
-    d_imag = np.nan_to_num(d_imag, nan=0.0, posinf=0.0, neginf=0.0)
+    d_real_arr = np.full(rows, d_real, dtype=np.float32)
+    d_imag_arr = np.full(rows, d_imag, dtype=np.float32)
+    d_real_arr[row_all_zero] = 0.0
+    d_imag_arr[row_all_zero] = 0.0
 
     codes = np.zeros((rows, cols), dtype=np.uint8)
 
@@ -192,7 +180,7 @@ def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray) -> np.ndar
     codes[imag_pos] = 3
 
     zero_mask = ~(mask_real | mask_imag)
-    prefer_real = d_real <= d_imag
+    prefer_real = d_real_arr <= d_imag_arr
     codes[zero_mask & prefer_real[:, None]] = 1
     codes[zero_mask & (~prefer_real)[:, None]] = 3
 
@@ -206,8 +194,8 @@ def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray) -> np.ndar
     ).astype(np.uint8)
     packed = packed.reshape(rows, n_blocks, 64)
 
-    d_real_bytes = d_real.astype(np.float16).view(np.uint8).reshape(rows, 2)
-    d_imag_bytes = d_imag.astype(np.float16).view(np.uint8).reshape(rows, 2)
+    d_real_bytes = d_real_arr.astype(np.float16).view(np.uint8).reshape(rows, 2)
+    d_imag_bytes = d_imag_arr.astype(np.float16).view(np.uint8).reshape(rows, 2)
 
     out = np.empty((rows, n_blocks, 68), dtype=np.uint8)
     out[:, :, :64] = packed
@@ -236,8 +224,12 @@ def quantize_linear_to_ifairy_stages(weight: torch.Tensor, out_target: int, in_t
     w_real = 0.5 * (a11 - a22)
     w_imag = 0.5 * (a12 + a21)
 
-    (u0_real, u0_imag), (u1_real, u1_imag) = phase_quant_v2(u_real, u_imag)
-    (w0_real, w0_imag), (w1_real, w1_imag) = phase_quant_v2(w_real, w_imag)
+    (u0_real, u0_imag, u0_s_real, u0_s_imag), (u1_real, u1_imag, u1_s_real, u1_s_imag) = phase_quant_v2(
+        u_real, u_imag
+    )
+    (w0_real, w0_imag, w0_s_real, w0_s_imag), (w1_real, w1_imag, w1_s_real, w1_s_imag) = phase_quant_v2(
+        w_real, w_imag
+    )
 
     u0_real = pad_complex_matrix(u0_real, out_target, in_target)
     u0_imag = pad_complex_matrix(u0_imag, out_target, in_target)
@@ -249,10 +241,10 @@ def quantize_linear_to_ifairy_stages(weight: torch.Tensor, out_target: int, in_t
     w1_imag = pad_complex_matrix(w1_imag, out_target, in_target)
 
     out = {
-        "U.s0": pack_ifairy_stage(u0_real, u0_imag),
-        "U.s1": pack_ifairy_stage(u1_real, u1_imag),
-        "W.s0": pack_ifairy_stage(w0_real, w0_imag),
-        "W.s1": pack_ifairy_stage(w1_real, w1_imag),
+        "U.s0": pack_ifairy_stage(u0_real, u0_imag, u0_s_real, u0_s_imag),
+        "U.s1": pack_ifairy_stage(u1_real, u1_imag, u1_s_real, u1_s_imag),
+        "W.s0": pack_ifairy_stage(w0_real, w0_imag, w0_s_real, w0_s_imag),
+        "W.s1": pack_ifairy_stage(w1_real, w1_imag, w1_s_real, w1_s_imag),
     }
 
     del a
@@ -336,10 +328,22 @@ def main() -> None:
         print("adding output layers")
     output_norm = reader.get("model.norm.weight").to(torch.float32).cpu().numpy().astype(np.float32, copy=False)
     writer.add_tensor("output_norm", output_norm, raw_dtype=gguf.GGMLQuantizationType.F32)
+    del output_norm
+    gc.collect()
 
-    output = reader.get("lm_head.weight").to(torch.float16).cpu().numpy()
-    writer.add_tensor("output", output, raw_dtype=gguf.GGMLQuantizationType.F16)
-    del output_norm, output
+    if verbose:
+        print("adding output projection (wide-linear ifairy)")
+    output_w = reader.get("lm_head.weight")
+    output_out_c = output_w.shape[0] // 2
+    output_in_c = output_w.shape[1] // 2
+    output_packed = quantize_linear_to_ifairy_stages(output_w, output_out_c, output_in_c)
+    for stage_name, stage_data in output_packed.items():
+        writer.add_tensor(
+            f"output.{stage_name}",
+            stage_data,
+            raw_dtype=gguf.GGMLQuantizationType.F16_I2,
+        )
+    del output_w, output_packed
     gc.collect()
 
     linear_specs = [

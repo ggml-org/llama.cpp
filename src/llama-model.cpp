@@ -15,6 +15,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -1610,6 +1611,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_FAIRY2I:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                const char * ifairy_act_tensor_env = getenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
+                if (ifairy_act_tensor_env == nullptr) {
+                    if (setenv("GGML_IFAIRY_VEC_DOT_ACT_TENSOR", "1", 0) == 0) {
+                        LLAMA_LOG_INFO("%s: GGML_IFAIRY_VEC_DOT_ACT_TENSOR is unset, defaulting to 1 for FAIRY2I\n",
+                                       __func__);
+                    } else {
+                        LLAMA_LOG_WARN(
+                            "%s: failed to set GGML_IFAIRY_VEC_DOT_ACT_TENSOR=1 for FAIRY2I, using backend default\n",
+                            __func__);
+                    }
+                }
 
                 switch (hparams.n_layer) {
                     case 32:
@@ -4564,7 +4577,34 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD), { n_embd, n_vocab }, 0);
 
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM), { n_embd * 2 }, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, 0);
+
+                    if (n_vocab % 2 != 0) {
+                        throw std::runtime_error(
+                            format("invalid FAIRY2I vocab size: %lld, expected even", (long long) n_vocab));
+                    }
+
+                    output_fairy2i.U[0] =
+                        create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
+                    output_fairy2i.U[1] =
+                        create_tensor(tn(LLM_TENSOR_OUTPUT, "U.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
+                    output_fairy2i.W[0] =
+                        create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s0"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
+                    output_fairy2i.W[1] =
+                        create_tensor(tn(LLM_TENSOR_OUTPUT, "W.s1"), { n_embd, n_vocab / 2 }, TENSOR_NOT_REQUIRED);
+
+                    const bool has_output_fairy2i =
+                        output_fairy2i.U[0] && output_fairy2i.U[1] && output_fairy2i.W[0] && output_fairy2i.W[1];
+                    const bool has_output_fairy2i_any =
+                        output_fairy2i.U[0] || output_fairy2i.U[1] || output_fairy2i.W[0] || output_fairy2i.W[1];
+                    if (!has_output_fairy2i) {
+                        if (has_output_fairy2i_any) {
+                            throw std::runtime_error(
+                                "incomplete FAIRY2I output tensor set: expected output.{U,W}.s{0,1}");
+                        }
+
+                        // Backward compatibility with earlier FAIRY2I GGUFs.
+                        output = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, 0);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -13955,30 +13995,21 @@ struct llm_build_fairy2i : public llm_graph_context {
 
             ggml_tensor * cur_conj = build_ifairy_conj(cur, il, "attn_norm_conj");
 
-            // Rope is defined on the real head layout. Split packed ifairy first, then apply
-            // standard rope on [head_dim_real, n_head, n_tokens].
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
             ggml_tensor * Qcur = build_wide_linear(model.layers[il].wq_fairy2i, cur, cur_conj, il, "Qcur");
             ggml_tensor * Kcur = build_wide_linear(model.layers[il].wk_fairy2i, cur, cur_conj, il, "Kcur");
             ggml_tensor * Vcur = build_wide_linear(model.layers[il].wv_fairy2i, cur, cur_conj, il, "Vcur");
 
-            Qcur = ggml_ifairy_split(ctx0, Qcur);
-            Kcur = ggml_ifairy_split(ctx0, Kcur);
-            Vcur = ggml_ifairy_split(ctx0, Vcur);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
             cb(Qcur, "Qcur_rope", il);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = ggml_ifairy_rope(ctx0, Kcur, inp_pos, n_rot, 0);
             cb(Kcur, "Kcur_rope", il);
 
+            Vcur = ggml_ifairy_split(ctx0, Vcur);
             cb(Vcur, "Vcur_split", il);
 
             cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
@@ -14025,9 +14056,17 @@ struct llm_build_fairy2i : public llm_graph_context {
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
 
-        GGML_ASSERT(model.output);
-        cur = ggml_ifairy_split(ctx0, cur);
-        cur = build_lora_mm(model.output, cur);
+        const bool has_output_fairy2i = model.output_fairy2i.U[0] && model.output_fairy2i.U[1] &&
+                                        model.output_fairy2i.W[0] && model.output_fairy2i.W[1];
+        if (has_output_fairy2i) {
+            ggml_tensor * cur_conj = build_ifairy_conj(cur, -1, "result_norm_conj");
+            cur                    = build_wide_linear(model.output_fairy2i, cur, cur_conj, -1, "result_output_wide");
+            cur                    = ggml_ifairy_split(ctx0, cur);
+        } else {
+            GGML_ASSERT(model.output);
+            cur = ggml_ifairy_split(ctx0, cur);
+            cur = build_lora_mm(model.output, cur);
+        }
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;

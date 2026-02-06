@@ -1,16 +1,39 @@
 #include "llama-context.h"
 
-#include "llama-impl.h"
 #include "llama-batch.h"
+#include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 
 #include <cinttypes>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+
+static bool llama_check_logits_finite_enabled() {
+    static const bool enabled = []() {
+        const char * env = getenv("LLAMA_CHECK_LOGITS_FINITE");
+        return env != nullptr && strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
+static void llama_check_logits_finite(const float * logits, int64_t n, const char * where) {
+    if (logits == nullptr || n <= 0 || !llama_check_logits_finite_enabled()) {
+        return;
+    }
+
+    for (int64_t i = 0; i < n; ++i) {
+        if (!std::isfinite(logits[i])) {
+            LLAMA_LOG_ERROR("%s: non-finite logit at index %" PRId64 " value=%f\n", where, i, logits[i]);
+            GGML_ABORT("non-finite logits detected");
+        }
+    }
+}
 
 //
 // llama_context
@@ -537,6 +560,10 @@ enum llama_pooling_type llama_context::pooling_type() const {
 float * llama_context::get_logits() {
     output_reorder();
 
+    if (logits != nullptr) {
+        llama_check_logits_finite(logits, (int64_t) n_outputs * model.vocab.n_tokens(), __func__);
+    }
+
     return logits;
 }
 
@@ -569,7 +596,9 @@ float * llama_context::get_logits_ith(int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
-        return logits + j*model.vocab.n_tokens();
+        float * row_logits = logits + j * model.vocab.n_tokens();
+        llama_check_logits_finite(row_logits, model.vocab.n_tokens(), __func__);
+        return row_logits;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
