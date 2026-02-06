@@ -2203,9 +2203,15 @@ static inline uint8_t map_int8_to_uint2_idx(int32_t v0) {
     switch(v0) {
         case -3:
         return 0;
+        case -2:
+        return 1;
         case -1:
         return 1;
+        case 0:
+        return 1;
         case 1:
+        return 2;
+        case 2:
         return 2;
         case 3:
         return 3;
@@ -2300,7 +2306,6 @@ void quantize_row_q2_0c_ref(const float * GGML_RESTRICT x, block_q2_0c * GGML_RE
                 if (qi3 < qmin) qi3 = qmin;
                 if (qi3 > qmax) qi3 = qmax;
 
-                // TODO: What if we have -2 or +2?
                 const uint8_t v0_u8 = map_int8_to_uint2_idx(qi0);
                 const uint8_t v1_u8 = map_int8_to_uint2_idx(qi1);
                 const uint8_t v2_u8 = map_int8_to_uint2_idx(qi2);
