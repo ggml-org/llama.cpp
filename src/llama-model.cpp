@@ -130,6 +130,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
         case LLM_TYPE_102B_A12B:     return "102B.A12B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
+        case LLM_TYPE_196B_A11B:     return "196B.A11B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
         case LLM_TYPE_300B_A47B:     return "300B.A47B";
@@ -2507,7 +2508,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,   hparams.swiglu_clamp_exp,   hparams.n_layer, false);
                 ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer, false);
 
-                type = LLM_TYPE_UNKNOWN;
+                switch (hparams.n_layer) {
+                    case 45: type = LLM_TYPE_196B_A11B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
             } break;
         default: throw std::runtime_error("unsupported model architecture");
     }

@@ -7939,8 +7939,8 @@ class Step35Model(TextModel):
 
         layer_types = layer_types[: self.block_count]
         head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
-        kv_arr   = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
-        swa_pat  = [lt == "sliding_attention" for lt in layer_types]
+        kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
+        swa_pat = [lt == "sliding_attention" for lt in layer_types]
 
         self.gguf_writer.add_head_count(head_arr)
         self.gguf_writer.add_head_count_kv(kv_arr)

@@ -131,7 +131,7 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
                     n_expert, n_expert_used,
                     LLM_FFN_SILU,
                     norm_w, scale_w, w_scale,
-                    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
+                    (llama_expert_gating_func_type) hparams.expert_gating_func,
                     il);
             cb(moe_out, "ffn_moe_out", il);
 
@@ -166,5 +166,3 @@ llm_build_step35_iswa::llm_build_step35_iswa(const llama_model & model, const ll
 
     ggml_build_forward_expand(gf, cur);
 }
-
-
