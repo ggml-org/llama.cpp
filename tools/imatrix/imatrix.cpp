@@ -47,21 +47,22 @@ struct Stats {
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
-    float sum_values    = 0.0f;
-    float mean_values   = 0.0f;
-    float max_values    = 0.0f;
-    float min_values    = 0.0f;
-    int   elements      = 0;
+    float sum_values = 0.0f;
+    float mean_values = 0.0f;
+    float max_values = 0.0f;
+    float min_values = 0.0f;
+    int   elements = 0;
     float std_deviation = 0.0f;
-    float entropy       = 0.0f;
-    float zd_score      = 0.0f;
-    float cossim        = 0.0f;
-    float pearson       = 0.0f;
-    float l2_dist       = 0.0f;
-    double dot_prod     = 0.0;
-    double norm1_sq     = 0.0;
-    double norm2_sq     = 0.0;
-    double l2_dist_sq   = 0.0;
+    float entropy = 0.0f;
+    float zd_score = 0.0f;
+    float cossim = 0.0f;
+    float pearson = 0.0f;
+    float cov = 0.0f;
+    float l2_dist = 0.0f;
+    double dot_prod = 0.0;
+    double norm1_sq = 0.0;
+    double norm2_sq = 0.0;
+    double l2_dist_sq = 0.0;
 };
 
 class IMatrixCollector {
@@ -262,6 +263,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.zd_score = (float)(zd_count / (double)valid_n);
     ts.cossim = std::numeric_limits<float>::quiet_NaN();
     ts.pearson = std::numeric_limits<float>::quiet_NaN();
+    ts.cov = std::numeric_limits<float>::quiet_NaN();
     ts.l2_dist = std::numeric_limits<float>::quiet_NaN();
 
     return true;
@@ -345,6 +347,10 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         ts.l2_dist_sq = l2_dist_sq;
         ts.l2_dist = (float)std::sqrt(l2_dist_sq);
 
+        if (n > 1) {
+            ts.cov = (float)(cov_sum / (double)(n - 1));
+        }
+
         if (norm1_sq > 0.0 && norm2_sq > 0.0) {
             ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
             ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
@@ -364,13 +370,15 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
 static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
                                               std::map<int, float> & layer_cossim,
                                               std::map<int, float> & layer_l2_dist,
-                                              std::map<int, float> & layer_pearson) {
+                                              std::map<int, float> & layer_pearson,
+                                              std::map<int, float> & layer_cov) {
     struct layer_aggregation {
         double sum_dot_prod = 0.0;
         double sum_norm1_sq = 0.0;
         double sum_norm2_sq = 0.0;
         double sum_l2_dist_sq = 0.0;
         double sum_pearson = 0.0;
+        double sum_cov = 0.0;
         int n_tensors = 0;
     };
 
@@ -392,6 +400,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         entry.sum_norm2_sq += ts.norm2_sq;
         entry.sum_l2_dist_sq += ts.l2_dist_sq;
         entry.sum_pearson += ts.pearson;
+        entry.sum_cov += ts.cov;
         entry.n_tensors++;
     }
 
@@ -409,6 +418,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         layer_cossim[layer] = cossim;
         layer_l2_dist[layer] = (float)std::sqrt(agg.sum_l2_dist_sq);
         layer_pearson[layer] = (float)(agg.sum_pearson / agg.n_tensors);
+        layer_cov[layer] = (float)(agg.sum_cov / agg.n_tensors);
     }
 }
 
@@ -843,21 +853,23 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             float l2_dist = 0.0f;
             float cossim = 0.0f;
             float pcc = 0.0f;
+            float xcov = 0.0f;
             auto it_ts = tstat_index.find(name);
             if (it_ts != tstat_index.end() && it_ts->second != nullptr) {
                 sum_sq = it_ts->second->sum_values;
                 h_norm = it_ts->second->elements > 0 ? 100.0f * (it_ts->second->entropy / std::log2f((float)it_ts->second->elements)) : nan;
                 zd_score = it_ts->second->zd_score;
-                l2_dist  = it_ts->second->l2_dist;
-                cossim   = it_ts->second->cossim;
-                pcc      = it_ts->second->pearson;
+                l2_dist = it_ts->second->l2_dist;
+                cossim = it_ts->second->cossim;
+                pcc = it_ts->second->pearson;
+                xcov = it_ts->second->cov;
                 min = it_ts->second->min_values;
                 max = it_ts->second->max_values;
                 mean = it_ts->second->mean_values;
                 stddev = it_ts->second->std_deviation;
             }
 
-            struct ggml_tensor * stats_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10);
+            struct ggml_tensor * stats_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 11);
             ggml_format_name(stats_t, "%s.stats", name.c_str());
             ((float *)stats_t->data)[0] = sum_sq;
             ((float *)stats_t->data)[1] = h_norm;
@@ -865,10 +877,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             ((float *)stats_t->data)[3] = l2_dist;
             ((float *)stats_t->data)[4] = cossim;
             ((float *)stats_t->data)[5] = pcc;
-            ((float *)stats_t->data)[6] = min;
-            ((float *)stats_t->data)[7] = max;
-            ((float *)stats_t->data)[8] = mean;
-            ((float *)stats_t->data)[9] = stddev;
+            ((float *)stats_t->data)[6] = xcov;
+            ((float *)stats_t->data)[7] = min;
+            ((float *)stats_t->data)[8] = max;
+            ((float *)stats_t->data)[9] = mean;
+            ((float *)stats_t->data)[10] = stddev;
             gguf_add_tensor(ctx_gguf, stats_t);
         }
     }
@@ -1443,7 +1456,7 @@ static bool show_statistics(const common_params & params) {
             w_nam, "Tensor", sep,
             "Min", "Max", "Mean", "StdDev", sep,
             "H Norm", "ZD", sep,
-            "∑ E[A²]", "CosSim", "PCC");
+            "∑ E[A²]", "PCC", "Cov");
         LOG_INF("%s\n", std::string(154, '-').c_str());
     } else {
         LOG_INF("\n%*s%s%-*s%s%10s %12s %10s %10s%s %8s  %8s%s%17s %12s %8s %8s\n",
@@ -1451,7 +1464,7 @@ static bool show_statistics(const common_params & params) {
             w_nam, "Tensor", sep,
             "Min", "Max", "Mean", "StdDev", sep,
             "H Norm", "ZD", sep,
-            "∑ E[A²]", "L2 Dist", "CosSim", "PCC");
+            "∑ E[A²]", "L2 Dist", "PCC", "Cov");
         LOG_INF("%s\n", std::string(167, '-').c_str());
     }
 
@@ -1472,7 +1485,7 @@ static bool show_statistics(const common_params & params) {
                 w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
                 tstat.min_values, tstat.max_values, tstat.mean_values, tstat.std_deviation, sep,
                 h_norm, 100.0f * tstat.zd_score, sep,
-                tstat.sum_values, tstat.cossim, tstat.pearson
+                tstat.sum_values, tstat.pearson, tstat.cov
             );
         } else {
             LOG_INF("%*s%s%-*s%s%10.4f %12.4f %10.4f %10.4f%s%8.2f%% %8.2f%%%s%14.4f %12.4f %8.4f %8.4f\n",
@@ -1480,7 +1493,7 @@ static bool show_statistics(const common_params & params) {
                 w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
                 tstat.min_values, tstat.max_values, tstat.mean_values, tstat.std_deviation, sep,
                 h_norm, 100.0f * tstat.zd_score, sep,
-                tstat.sum_values, tstat.l2_dist, tstat.cossim, tstat.pearson
+                tstat.sum_values, tstat.l2_dist, tstat.pearson, tstat.cov
             );
         }
 
@@ -1496,7 +1509,8 @@ static bool show_statistics(const common_params & params) {
     std::map<int, float> layer_cossim;
     std::map<int, float> layer_l2_dist;
     std::map<int, float> layer_pearson;
-    compute_layer_statistics(ts, layer_cossim, layer_l2_dist, layer_pearson);
+    std::map<int, float> layer_cov;
+    compute_layer_statistics(ts, layer_cossim, layer_l2_dist, layer_pearson, layer_cov);
 
     size_t layers = 0;
     int min = std::numeric_limits<int>::max();
@@ -1522,17 +1536,17 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\n\nComputing layer statistics for %s (%zu layers)\n\n", params.in_files[0].c_str(), layers);
 
     if (legacy) {
-        LOG_INF("%*s%s%9s%s%17s %10s %10s\n",
+        LOG_INF("%*s%s%9s%s%17s %10s %10s %10s\n",
             w_lay, "Layer", sep,
             "ZD", sep,
-            "∑ E[A²]", "CosSim", "PCC");
-        LOG_INF("%s\n", std::string(57, '-').c_str());
+            "∑ E[A²]", "CosSim", "PCC", "Cov");
+        LOG_INF("%s\n", std::string(68, '-').c_str());
     } else {
-        LOG_INF("%*s%s%9s%s%17s %14s %10s %10s\n",
+        LOG_INF("%*s%s%9s%s%17s %14s %10s %10s %10s\n",
             w_lay, "Layer", sep,
             "ZD", sep,
-            "∑ E[A²]", "L2 Dist", "CosSim", "PCC");
-        LOG_INF("%s\n", std::string(72, '-').c_str());
+            "∑ E[A²]", "L2 Dist", "CosSim", "PCC", "Cov");
+        LOG_INF("%s\n", std::string(83, '-').c_str());
     }
 
     for (const auto & [layer, stats] : ls) {
@@ -1541,17 +1555,18 @@ static bool show_statistics(const common_params & params) {
         float lcs = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_cossim[layer];
         float ll2 = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_l2_dist[layer];
         float lpc = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_pearson[layer];
+        float lcv = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_cov[layer];
 
         if (legacy) {
-            LOG_INF("%*d%s%8.2f%%%s%14.4f %10.4f %10.4f\n",
+            LOG_INF("%*d%s%8.2f%%%s%14.4f %10.4f %10.4f %10.4f\n",
                 w_lay, layer, sep,
                 100.0f * stats.layer_zd / stats.n, sep,
-                stats.layer_sum, lcs, lpc);
+                stats.layer_sum, lcs, lpc, lcv);
         } else {
-            LOG_INF("%*d%s%8.2f%%%s%14.4f %14.4f %10.4f %10.4f\n",
+            LOG_INF("%*d%s%8.2f%%%s%14.4f %14.4f %10.4f %10.4f %10.4f\n",
                 w_lay, layer, sep,
                 100.0f * stats.layer_zd / stats.n, sep,
-                stats.layer_sum, ll2, lcs, lpc);
+                stats.layer_sum, ll2, lcs, lpc, lcv);
         }
     }
     LOG_INF("\n");
