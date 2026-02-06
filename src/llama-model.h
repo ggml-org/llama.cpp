@@ -1,12 +1,13 @@
 #pragma once
 
-#include "llama.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-hparams.h"
 #include "llama-memory.h"
 #include "llama-vocab.h"
+#include "llama.h"
 
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -174,6 +175,11 @@ struct llama_layer_shortconv {
     struct ggml_tensor * out_proj = nullptr;
 };
 
+struct llama_widely_linear_ifairy {
+    std::array<ggml_tensor *, 2> U = { nullptr, nullptr };  // stage0, stage1
+    std::array<ggml_tensor *, 2> W = { nullptr, nullptr };  // stage0, stage1
+};
+
 struct llama_layer_nextn {
     struct ggml_tensor * eh_proj          = nullptr;
     struct ggml_tensor * embed_tokens     = nullptr;
@@ -223,6 +229,10 @@ struct llama_layer {
     struct ggml_tensor * wk_cross  = nullptr;
     struct ggml_tensor * wv_cross  = nullptr;
     struct ggml_tensor * wo_cross  = nullptr;
+    llama_widely_linear_ifairy wq_fairy2i;
+    llama_widely_linear_ifairy wk_fairy2i;
+    llama_widely_linear_ifairy wv_fairy2i;
+    llama_widely_linear_ifairy wo_fairy2i;
     struct ggml_tensor * wq_enc    = nullptr;
     struct ggml_tensor * wk_enc    = nullptr;
     struct ggml_tensor * wv_enc    = nullptr;
@@ -253,6 +263,9 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate     = nullptr; // w1
     struct ggml_tensor * ffn_down     = nullptr; // w2
     struct ggml_tensor * ffn_up       = nullptr; // w3
+    llama_widely_linear_ifairy ffn_gate_fairy2i;
+    llama_widely_linear_ifairy ffn_down_fairy2i;
+    llama_widely_linear_ifairy ffn_up_fairy2i;
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
