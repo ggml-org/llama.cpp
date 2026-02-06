@@ -87,6 +87,23 @@ namespace console {
     void init(bool use_simple_io, bool use_advanced_display) {
         advanced_display = use_advanced_display;
         simple_io = use_simple_io;
+
+        // If stdout is redirected (not a TTY), disable advanced display to allow output redirection
+#if !defined(_WIN32)
+        if (advanced_display && !isatty(STDOUT_FILENO)) {
+            advanced_display = false;
+            simple_io = true;
+        }
+#else
+        if (advanced_display) {
+            DWORD dwMode = 0;
+            HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+            if (hStdOut == INVALID_HANDLE_VALUE || !GetConsoleMode(hStdOut, &dwMode)) {
+                advanced_display = false;
+                simple_io = true;
+            }
+        }
+#endif
 #if defined(_WIN32)
         // Windows-specific console initialization
         DWORD dwMode = 0;
