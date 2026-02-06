@@ -13970,6 +13970,16 @@ struct llm_build_fairy2i : public llm_graph_context {
             return x_conj;
         };
 
+        auto build_fairy2i_rms_norm = [&](ggml_tensor * x, ggml_tensor * norm_w, int il,
+                                          const char * name) -> ggml_tensor * {
+            // Fairy2i keeps Llama2 RMSNorm semantics on the real-expanded hidden size.
+            ggml_tensor * x_split = ggml_ifairy_split(ctx0, x);
+            ggml_tensor * x_norm  = build_norm(x_split, norm_w, nullptr, LLM_NORM_RMS, il);
+            ggml_tensor * x_merge = ggml_ifairy_merge(ctx0, x_norm);
+            cb(x_merge, name, il);
+            return x_merge;
+        };
+
         auto build_wide_linear = [&](const llama_widely_linear_ifairy & linear, ggml_tensor * x, ggml_tensor * x_conj,
                                      int il, const char * name) -> ggml_tensor * {
             GGML_ASSERT(linear.U[0] && linear.U[1] && linear.W[0] && linear.W[1]);
@@ -13990,8 +14000,7 @@ struct llm_build_fairy2i : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
-            ggml_tensor * cur = ifairy_build_norm(inpL, model.layers[il].attn_norm, il);
-            cb(cur, "attn_norm", il);
+            ggml_tensor * cur = build_fairy2i_rms_norm(inpL, model.layers[il].attn_norm, il, "attn_norm");
 
             ggml_tensor * cur_conj = build_ifairy_conj(cur, il, "attn_norm_conj");
 
@@ -14028,8 +14037,7 @@ struct llm_build_fairy2i : public llm_graph_context {
 
             ggml_tensor * ffn_inp = cur;
 
-            cur = ifairy_build_norm(ffn_inp, model.layers[il].ffn_norm, il);
-            cb(cur, "ffn_norm", il);
+            cur = build_fairy2i_rms_norm(ffn_inp, model.layers[il].ffn_norm, il, "ffn_norm");
 
             ggml_tensor * cur_ffn_conj = build_ifairy_conj(cur, il, "ffn_norm_conj");
             ggml_tensor * gate =
@@ -14052,9 +14060,8 @@ struct llm_build_fairy2i : public llm_graph_context {
             inpL = cur;
         }
 
-        ggml_tensor * cur = ifairy_build_norm(inpL, model.output_norm, -1);
-        cb(cur, "result_norm", -1);
-        res->t_embd = cur;
+        ggml_tensor * cur = build_fairy2i_rms_norm(inpL, model.output_norm, -1, "result_norm");
+        res->t_embd       = cur;
 
         const bool has_output_fairy2i = model.output_fairy2i.U[0] && model.output_fairy2i.U[1] &&
                                         model.output_fairy2i.W[0] && model.output_fairy2i.W[1];

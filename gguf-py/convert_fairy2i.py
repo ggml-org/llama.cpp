@@ -98,7 +98,17 @@ def phase_quant_v1(w_real: np.ndarray, w_imag: np.ndarray) -> tuple[np.ndarray, 
     abs_imag = np.abs(w_imag)
 
     choose_real = abs_real > abs_imag
-    choose_imag = ~choose_real
+    choose_imag = abs_imag > abs_real
+
+    # Match Fairy2i quantization.py phase-bin boundaries:
+    # ties at +/-45, +/-135 choose axis by sign relation.
+    ties = ~(choose_real | choose_imag)
+    if np.any(ties):
+        both_zero = ties & (abs_real == 0.0)
+        same_sign = (w_real * w_imag) >= 0.0
+        choose_imag |= ties & (~both_zero) & same_sign
+        choose_real |= ties & (~both_zero) & (~same_sign)
+        choose_real |= both_zero
 
     mask_real = choose_real
     mask_imag = choose_imag
@@ -154,7 +164,15 @@ def pack_ifairy_stage(stage_real: np.ndarray, stage_imag: np.ndarray, d_real: fl
     mask_imag = stage_imag != 0.0
     both = mask_real & mask_imag
     if np.any(both):
-        choose_real = np.abs(stage_real) >= np.abs(stage_imag)
+        abs_real = np.abs(stage_real)
+        abs_imag = np.abs(stage_imag)
+        choose_real = abs_real > abs_imag
+        choose_imag = abs_imag > abs_real
+        ties = ~(choose_real | choose_imag)
+        if np.any(ties):
+            same_sign = (stage_real * stage_imag) >= 0.0
+            choose_imag |= ties & same_sign
+            choose_real |= ties & (~same_sign)
         mask_real = (mask_real & ~both) | (both & choose_real)
         mask_imag = (mask_imag & ~both) | (both & ~choose_real)
 
