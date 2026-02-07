@@ -72,9 +72,10 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          J=$(( (${env:NUMBER_OF_PROCESSORS} + 1) / 2 ))
+          J=$(( ($(nproc) + 1) / 2 ))
           if [ $J -lt 1 ]; then J=1; fi
           echo "Using -j $J"
+
           cmake -B build \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_SCHED_NO_REALLOC=ON \
@@ -120,7 +121,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -DLLAMA_BUILD_BORINGSSL=ON -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake --build build --config Release -j $(nproc) --target llama-server
 
       - name: Python setup
         id: setup_python
