@@ -3914,15 +3914,36 @@ struct alignas(64) DeviceOperation {
     const void * input;
     void *       output;
     void *       aux;
+    const void * mask;
+    int64_t      q_nb0;
+    int64_t      q_nb1;
+    int64_t      q_nb2;
+    int64_t      q_nb3;
+    int64_t      k_nb0;
+    int64_t      k_nb1;
+    int64_t      k_nb2;
+    int64_t      k_nb3;
+    int64_t      v_nb0;
+    int64_t      v_nb1;
+    int64_t      v_nb2;
+    int64_t      v_nb3;
     int          M, N, K;
+    int64_t      output_bytes;
     int          hidden_dim;
     int          intermediate_dim;
     float        eps;
     float        scale;
     int          quant_type;
+    int          weight_layout;
     int          n_tiles;        // Number of tiles for this operation
     int          n_kv_heads;     // Number of KV heads for GQA (0 = same as n_heads)
-    int          pad[1];         // Padding to 64-byte alignment
+    int          mask_type;      // 0=f32, 1=f16, -1=none
+    int64_t      mask_nb0;
+    int64_t      mask_nb1;
+    int64_t      mask_nb2;
+    int64_t      mask_nb3;
+    int          mask_ne2;
+    int          mask_ne3;
 };
 
 // Arguments passed to the persistent kernel
@@ -4060,6 +4081,15 @@ private:
             case OperationType::RMS_NORM:
                 compute_rms_norm_tile(op, tile_idx);
                 break;
+            case OperationType::ADD:
+                compute_add_tile(op, tile_idx);
+                break;
+            case OperationType::MUL:
+                compute_mul_tile(op, tile_idx);
+                break;
+            case OperationType::GET_ROWS:
+                compute_get_rows_tile(op, tile_idx);
+                break;
             case OperationType::SILU_MUL:
                 compute_silu_mul_tile(op, tile_idx);
                 break;
@@ -4072,13 +4102,21 @@ private:
             case OperationType::MATMUL_DOWN:
                 compute_matmul_tile(op, tile_idx);
                 break;
-            case OperationType::ATTENTION:
+            case OperationType::ATTENTION_F16:
+            case OperationType::ATTENTION_F32:
                 compute_attention_tile(op, tile_idx);
                 break;
             case OperationType::ROPE:
                 compute_rope_tile(op, tile_idx);
                 break;
+            case OperationType::SET_ROWS:
+                compute_set_rows_tile(op, tile_idx);
+                break;
+            case OperationType::STRIDED_COPY:
+                compute_strided_copy_tile(op, tile_idx);
+                break;
             case OperationType::SOFTMAX:
+                compute_softmax_tile(op, tile_idx);
                 break;
         }
     }
@@ -4149,6 +4187,251 @@ private:
             const float g         = gate[idx];
             const float sigmoid_g = 1.0f / (1.0f + sycl::exp(-g));
             output[idx] = g * sigmoid_g * up[idx];
+        }
+    }
+
+    static inline float load_f32_or_f16(const char * ptr, int type) {
+        if (type == 1) {
+            return static_cast<float>(*reinterpret_cast<const sycl::half *>(ptr));
+        }
+        return *reinterpret_cast<const float *>(ptr);
+    }
+
+    static inline void store_f32_or_f16(char * ptr, int type, float v) {
+        if (type == 1) {
+            *reinterpret_cast<sycl::half *>(ptr) = sycl::half(v);
+            return;
+        }
+        *reinterpret_cast<float *>(ptr) = v;
+    }
+
+    static inline int64_t load_idx(const char * ptr, int idx_type) {
+        if (idx_type == 1) {
+            return *reinterpret_cast<const int64_t *>(ptr);
+        }
+        return static_cast<int64_t>(*reinterpret_cast<const int32_t *>(ptr));
+    }
+
+    inline float load_softmax_mask(const DeviceOperation & op, int64_t i01, int64_t i02, int64_t i03, int col) const {
+        if (!op.mask || op.mask_type < 0) {
+            return 0.0f;
+        }
+        const int64_t m_ne2 = op.mask_ne2 > 0 ? op.mask_ne2 : 1;
+        const int64_t m_ne3 = op.mask_ne3 > 0 ? op.mask_ne3 : 1;
+        const int64_t m02   = m_ne2 > 0 ? (i02 % m_ne2) : 0;
+        const int64_t m03   = m_ne3 > 0 ? (i03 % m_ne3) : 0;
+        const int64_t off   = i01 * op.mask_nb1 + m02 * op.mask_nb2 + m03 * op.mask_nb3 + (int64_t) col * op.mask_nb0;
+        const char * mask_b = static_cast<const char *>(op.mask);
+        if (op.mask_type == 1) {
+            return static_cast<float>(*reinterpret_cast<const sycl::half *>(mask_b + off));
+        }
+        return *reinterpret_cast<const float *>(mask_b + off);
+    }
+
+    void compute_add_tile(const DeviceOperation & op, int tile_idx) {
+        const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
+        if (idx >= op.M) {
+            return;
+        }
+        const float * a = static_cast<const float *>(op.input);
+        const float * b = static_cast<const float *>(op.aux);
+        float *       y = static_cast<float *>(op.output);
+        y[idx] = a[idx] + b[idx];
+    }
+
+    void compute_mul_tile(const DeviceOperation & op, int tile_idx) {
+        const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
+        if (idx >= op.M) {
+            return;
+        }
+        const float * a = static_cast<const float *>(op.input);
+        const float * b = static_cast<const float *>(op.aux);
+        float *       y = static_cast<float *>(op.output);
+        y[idx] = a[idx] * b[idx];
+    }
+
+    void compute_get_rows_tile(const DeviceOperation & op, int tile_idx) {
+        const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
+        if (idx >= op.M) {
+            return;
+        }
+
+        const int64_t ne00 = op.q_nb0;
+        const int64_t ne10 = op.q_nb1;
+        const int64_t ne11 = op.q_nb2;
+        const int64_t ne12 = op.q_nb3;
+        if (ne00 <= 0 || ne10 <= 0 || ne11 <= 0 || ne12 <= 0) {
+            return;
+        }
+
+        const int64_t i03 = idx / (ne00 * ne10 * ne11);
+        const int64_t r1  = idx - i03 * ne00 * ne10 * ne11;
+        const int64_t i02 = r1 / (ne00 * ne10);
+        const int64_t r2  = r1 - i02 * ne00 * ne10;
+        const int64_t i01 = r2 / ne00;
+        const int64_t i00 = r2 - i01 * ne00;
+
+        const int64_t nb01 = op.k_nb0;
+        const int64_t nb02 = op.k_nb1;
+        const int64_t nb03 = op.k_nb2;
+        const int64_t s10  = op.v_nb0;
+        const int64_t s11  = op.v_nb1;
+        const int64_t s12  = op.v_nb2;
+        const int64_t s1   = op.v_nb3;
+        const int64_t s2   = op.mask_nb0;
+        const int64_t s3   = op.mask_nb1;
+        const int     src0_type = op.quant_type;  // 0=f32, 1=f16
+
+        const char * src0 = static_cast<const char *>(op.input);
+        const char * src1 = static_cast<const char *>(op.aux);
+        float *      dst  = static_cast<float *>(op.output);
+        if (!src0 || !src1 || !dst) {
+            return;
+        }
+
+        const int64_t idx_pos = i01 * s10 + i02 * s11 + i03 * s12;
+        const int32_t src_row = *reinterpret_cast<const int32_t *>(src1 + idx_pos * (int64_t) sizeof(int32_t));
+        if (src_row < 0) {
+            return;
+        }
+
+        const int src_elem_size = (src0_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int64_t src_off = (int64_t) src_row * nb01 + i02 * nb02 + i03 * nb03 + i00 * src_elem_size;
+        const float v = load_f32_or_f16(src0 + src_off, src0_type);
+
+        const int64_t dst_off = i00 + i01 * s1 + i02 * s2 + i03 * s3;
+        dst[dst_off] = v;
+    }
+
+    void compute_set_rows_tile(const DeviceOperation & op, int tile_idx) {
+        const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
+        if (idx >= op.M) {
+            return;
+        }
+        const SetRowsMeta * meta = static_cast<const SetRowsMeta *>(op.weights);
+        if (!meta || !op.input || !op.aux || !op.output) {
+            return;
+        }
+
+        const int64_t ne00 = meta->nc;
+        const int64_t ne01 = meta->nr;
+        const int64_t ne02 = meta->ne02;
+        const int64_t ne03 = meta->ne03;
+        if (ne00 <= 0 || ne01 <= 0 || ne02 <= 0 || ne03 <= 0) {
+            return;
+        }
+
+        const int64_t i03 = idx / (ne00 * ne01 * ne02);
+        const int64_t r1  = idx - i03 * ne00 * ne01 * ne02;
+        const int64_t i02 = r1 / (ne00 * ne01);
+        const int64_t r2  = r1 - i02 * ne00 * ne01;
+        const int64_t i01 = r2 / ne00;
+        const int64_t i00 = r2 - i01 * ne00;
+
+        const int64_t i10 = i01;
+        const int64_t i11 = meta->ne11 > 0 ? (i02 % meta->ne11) : 0;
+        const int64_t i12 = meta->ne12 > 0 ? (i03 % meta->ne12) : 0;
+
+        const char * src0 = static_cast<const char *>(op.input);
+        const char * src1 = static_cast<const char *>(op.aux);
+        char *       dst  = static_cast<char *>(op.output);
+
+        const int64_t idx_off = i10 * meta->nb10 + i11 * meta->nb11 + i12 * meta->nb12;
+        const int64_t dst_row = load_idx(src1 + idx_off, meta->idx_type);
+        if (dst_row < 0 || dst_row >= meta->ne1) {
+            return;
+        }
+
+        const int src_elem_size = (meta->src_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int dst_elem_size = (meta->dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+        const int64_t src_off = i01 * meta->nb01 + i02 * meta->nb02 + i03 * meta->nb03 + i00 * src_elem_size;
+        const int64_t dst_off = dst_row * meta->nb1 + i02 * meta->nb2 + i03 * meta->nb3 + i00 * dst_elem_size;
+        const float v = load_f32_or_f16(src0 + src_off, meta->src_type);
+        store_f32_or_f16(dst + dst_off, meta->dst_type, v);
+    }
+
+    void compute_strided_copy_tile(const DeviceOperation & op, int tile_idx) {
+        const int idx = tile_idx * BLOCK_SIZE + item_.get_local_id(0);
+        if (idx >= op.M) {
+            return;
+        }
+        const StridedCopyMeta * meta = static_cast<const StridedCopyMeta *>(op.weights);
+        if (!meta || !op.input || !op.output || meta->type_size <= 0) {
+            return;
+        }
+
+        const int64_t ne0 = meta->ne[0];
+        const int64_t ne1 = meta->ne[1] > 0 ? meta->ne[1] : 1;
+        const int64_t ne2 = meta->ne[2] > 0 ? meta->ne[2] : 1;
+        const int64_t ne3 = meta->ne[3] > 0 ? meta->ne[3] : 1;
+
+        const int64_t i3 = idx / (ne0 * ne1 * ne2);
+        const int64_t r1 = idx - i3 * ne0 * ne1 * ne2;
+        const int64_t i2 = r1 / (ne0 * ne1);
+        const int64_t r2 = r1 - i2 * ne0 * ne1;
+        const int64_t i1 = r2 / ne0;
+        const int64_t i0 = r2 - i1 * ne0;
+        if (i3 >= ne3) {
+            return;
+        }
+
+        const int64_t src_off = i0 * meta->nb[0] + i1 * meta->nb[1] + i2 * meta->nb[2] + i3 * meta->nb[3];
+        const int64_t dst_off = (int64_t) idx * meta->type_size;
+        const char * src = static_cast<const char *>(op.input);
+        char *       dst = static_cast<char *>(op.output);
+
+        if (meta->type_size == 4) {
+            *reinterpret_cast<uint32_t *>(dst + dst_off) = *reinterpret_cast<const uint32_t *>(src + src_off);
+        } else if (meta->type_size == 2) {
+            *reinterpret_cast<uint16_t *>(dst + dst_off) = *reinterpret_cast<const uint16_t *>(src + src_off);
+        } else if (meta->type_size == 1) {
+            dst[dst_off] = src[src_off];
+        } else {
+            for (int b = 0; b < meta->type_size; ++b) {
+                dst[dst_off + b] = src[src_off + b];
+            }
+        }
+    }
+
+    void compute_softmax_tile(const DeviceOperation & op, int tile_idx) {
+        const int row = tile_idx;
+        if (row >= op.M || op.N <= 0 || !op.input || !op.output) {
+            return;
+        }
+
+        const int tid = item_.get_local_id(0);
+        const int n_cols = op.N;
+        const float * x = static_cast<const float *>(op.input);
+        float *       y = static_cast<float *>(op.output);
+        const float   scale = op.scale;
+
+        const int64_t ne01 = op.q_nb0 > 0 ? op.q_nb0 : 1;
+        const int64_t ne02 = op.q_nb1 > 0 ? op.q_nb1 : 1;
+        const int64_t i03  = row / (ne01 * ne02);
+        const int64_t r1   = row - i03 * ne01 * ne02;
+        const int64_t i02  = r1 / ne01;
+        const int64_t i01  = r1 - i02 * ne01;
+
+        const int64_t row_off = (int64_t) row * n_cols;
+
+        float local_max = -INFINITY;
+        for (int col = tid; col < n_cols; col += BLOCK_SIZE) {
+            float v = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
+            local_max = sycl::fmax(local_max, v);
+        }
+        const float row_max = sycl::reduce_over_group(item_.get_group(), local_max, sycl::maximum<float>());
+
+        float local_sum = 0.0f;
+        for (int col = tid; col < n_cols; col += BLOCK_SIZE) {
+            float v = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
+            local_sum += sycl::exp(v - row_max);
+        }
+        const float row_sum = sycl::reduce_over_group(item_.get_group(), local_sum, sycl::plus<float>());
+        const float inv_sum = row_sum > 0.0f ? (1.0f / row_sum) : 0.0f;
+
+        for (int col = tid; col < n_cols; col += BLOCK_SIZE) {
+            float v = x[row_off + col] * scale + load_softmax_mask(op, i01, i02, i03, col);
+            y[row_off + col] = sycl::exp(v - row_max) * inv_sum;
         }
     }
 
@@ -4619,7 +4902,8 @@ void UnifiedKernel::begin_persistent(int n_layers, int batch_size, int hidden_di
 }
 
 void UnifiedKernel::add_rms_norm(int layer, const void * weights,
-                                  const void * input, void * output) {
+                                 const void * input, void * output,
+                                 float eps, int hidden_dim) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_rms_norm called without begin_persistent\n");
         return;
@@ -4631,14 +4915,20 @@ void UnifiedKernel::add_rms_norm(int layer, const void * weights,
     op.weights = weights;
     op.input = input;
     op.output = output;
-    op.hidden_dim = current_plan_->hidden_dim;
-    op.eps = 1e-5f;
+    op.hidden_dim = hidden_dim > 0 ? hidden_dim : current_plan_->hidden_dim;
+    op.eps = eps;
 
     current_plan_->operations.push_back(op);
 }
 
 void UnifiedKernel::add_matmul(int layer, const void * weights, const void * input,
-                                void * output, MatmulType type, int M, int N, int K) {
+                               void * output, MatmulType type, int M, int N, int K,
+                               int quant_type, int weight_layout,
+                               const int64_t * weight_nb,
+                               const int64_t * input_nb,
+                               const int64_t * output_nb,
+                               int weight_ne2, int weight_ne3,
+                               int input_ne2, int input_ne3) {
     if (!current_plan_) {
         GGML_LOG_ERROR("UnifiedKernel: add_matmul called without begin_persistent\n");
         return;
@@ -4664,7 +4954,31 @@ void UnifiedKernel::add_matmul(int layer, const void * weights, const void * inp
     op.M = M;
     op.N = N;
     op.K = K;
-    op.quant_type = current_plan_->quant_type;
+    op.quant_type = quant_type;
+    op.weight_layout = weight_layout;
+    if (weight_nb) {
+        op.q_nb0 = weight_nb[0];
+        op.q_nb1 = weight_nb[1];
+        op.q_nb2 = weight_nb[2];
+        op.q_nb3 = weight_nb[3];
+    }
+    if (input_nb) {
+        op.k_nb0 = input_nb[0];
+        op.k_nb1 = input_nb[1];
+        op.k_nb2 = input_nb[2];
+        op.k_nb3 = input_nb[3];
+    }
+    if (output_nb) {
+        op.v_nb0 = output_nb[0];
+        op.v_nb1 = output_nb[1];
+        op.v_nb2 = output_nb[2];
+        op.v_nb3 = output_nb[3];
+    }
+    // Reuse mask dims to carry batched matmul extent metadata for persistent tiles.
+    op.mask_ne2 = input_ne2;
+    op.mask_ne3 = input_ne3;
+    (void) weight_ne2;
+    (void) weight_ne3;
 
     current_plan_->operations.push_back(op);
 }
@@ -4676,17 +4990,39 @@ void UnifiedKernel::add_attention(int layer, const AttentionDescriptor & desc) {
     }
 
     OperationDescriptor op = {};
-    op.type = OperationType::ATTENTION;
+    op.type = (desc.kv_type == KvCacheType::F16)
+                  ? OperationType::ATTENTION_F16
+                  : OperationType::ATTENTION_F32;
     op.layer = layer;
     op.input = desc.q;
     op.weights = desc.k_cache;
     op.aux = const_cast<void *>(static_cast<const void *>(desc.v_cache));
+    op.mask = desc.mask;
     op.output = desc.output;
     op.M = desc.seq_len;
     op.N = desc.n_heads;
     op.K = desc.head_dim;
     op.scale = desc.scale;
     op.n_kv_heads = desc.n_kv_heads;  // GQA: propagate KV head count
+    op.q_nb0 = desc.q_nb0;
+    op.q_nb1 = desc.q_nb1;
+    op.q_nb2 = desc.q_nb2;
+    op.q_nb3 = desc.q_nb3;
+    op.k_nb0 = desc.k_nb0;
+    op.k_nb1 = desc.k_nb1;
+    op.k_nb2 = desc.k_nb2;
+    op.k_nb3 = desc.k_nb3;
+    op.v_nb0 = desc.v_nb0;
+    op.v_nb1 = desc.v_nb1;
+    op.v_nb2 = desc.v_nb2;
+    op.v_nb3 = desc.v_nb3;
+    op.mask_type = desc.mask_type;
+    op.mask_nb0  = desc.mask_nb0;
+    op.mask_nb1  = desc.mask_nb1;
+    op.mask_nb2  = desc.mask_nb2;
+    op.mask_nb3  = desc.mask_nb3;
+    op.mask_ne2  = desc.mask_ne2;
+    op.mask_ne3  = desc.mask_ne3;
 
     current_plan_->operations.push_back(op);
 }
@@ -4706,6 +5042,185 @@ void UnifiedKernel::add_silu_mul(int layer, const void * gate, const void * up, 
     op.intermediate_dim = current_plan_->intermediate_dim;
 
     current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_add(int layer, const void * src0, const void * src1, void * output, int n_elements) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_add called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type   = OperationType::ADD;
+    op.layer  = layer;
+    op.input  = src0;
+    op.aux    = const_cast<void *>(src1);
+    op.output = output;
+    op.M      = n_elements;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_mul called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type   = OperationType::MUL;
+    op.layer  = layer;
+    op.input  = src0;
+    op.aux    = const_cast<void *>(src1);
+    op.output = output;
+    op.M      = n_elements;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_get_rows(int layer, const void * src0, const void * indices, void * output,
+                                 int n_elements, int64_t ne00, int64_t ne10, int64_t ne11, int64_t ne12,
+                                 int64_t nb01, int64_t nb02, int64_t nb03,
+                                 int64_t s10, int64_t s11, int64_t s12,
+                                 int64_t s1, int64_t s2, int64_t s3, int src0_type) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_get_rows called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type       = OperationType::GET_ROWS;
+    op.layer      = layer;
+    op.input      = src0;
+    op.aux        = const_cast<void *>(indices);
+    op.output     = output;
+    op.M          = n_elements;
+    op.q_nb0      = ne00;
+    op.q_nb1      = ne10;
+    op.q_nb2      = ne11;
+    op.q_nb3      = ne12;
+    op.k_nb0      = nb01;
+    op.k_nb1      = nb02;
+    op.k_nb2      = nb03;
+    op.v_nb0      = s10;
+    op.v_nb1      = s11;
+    op.v_nb2      = s12;
+    op.v_nb3      = s1;
+    op.mask_nb0   = s2;
+    op.mask_nb1   = s3;
+    op.quant_type = src0_type;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_set_rows(int layer, const void * src0, const void * indices,
+                                 void * dst, const SetRowsMeta * meta, int n_elements,
+                                 const void * debug_ptr, int64_t output_bytes) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_set_rows called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type         = OperationType::SET_ROWS;
+    op.layer        = layer;
+    op.input        = src0;
+    op.aux          = const_cast<void *>(indices);
+    op.output       = dst;
+    op.weights      = meta;
+    op.mask         = debug_ptr;
+    op.M            = n_elements;
+    op.output_bytes = output_bytes;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_strided_copy(int layer, const void * src, void * dst,
+                                     const StridedCopyMeta * meta, int n_elements,
+                                     int64_t output_bytes) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_strided_copy called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type         = OperationType::STRIDED_COPY;
+    op.layer        = layer;
+    op.input        = src;
+    op.output       = dst;
+    op.weights      = meta;
+    op.M            = n_elements;
+    op.output_bytes = output_bytes;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::add_softmax(int layer, const void * input, const void * mask,
+                                const void * sinks, void * output, int n_rows, int n_cols,
+                                int ne01, int ne02, int ne03, float scale, float max_bias,
+                                int mask_type, int64_t mask_nb0, int64_t mask_nb1,
+                                int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3) {
+    if (!current_plan_) {
+        GGML_LOG_ERROR("UnifiedKernel: add_softmax called without begin_persistent\n");
+        return;
+    }
+
+    OperationDescriptor op = {};
+    op.type      = OperationType::SOFTMAX;
+    op.layer     = layer;
+    op.input     = input;
+    op.mask      = mask;
+    op.aux       = const_cast<void *>(sinks);
+    op.output    = output;
+    op.M         = n_rows;
+    op.N         = n_cols;
+    op.K         = ne01;
+    op.q_nb0     = ne01;
+    op.q_nb1     = ne02;
+    op.q_nb2     = ne03;
+    op.scale     = scale;
+    op.eps       = max_bias;
+    op.mask_type = mask_type;
+    op.mask_nb0  = mask_nb0;
+    op.mask_nb1  = mask_nb1;
+    op.mask_nb2  = mask_nb2;
+    op.mask_nb3  = mask_nb3;
+    op.mask_ne2  = mask_ne2;
+    op.mask_ne3  = mask_ne3;
+    current_plan_->operations.push_back(op);
+}
+
+void UnifiedKernel::set_persistent_debug_attn(float * debug_ptr, int layer, int debug_floats) {
+    if (!current_plan_) {
+        return;
+    }
+    current_plan_->debug_attn_ptr    = debug_ptr;
+    current_plan_->debug_attn_layer  = layer;
+    current_plan_->debug_attn_floats = debug_floats;
+}
+
+void UnifiedKernel::set_persistent_debug_rms(float * debug_ptr, int layer, int hidden_dim, int * flag) {
+    if (!current_plan_) {
+        return;
+    }
+    current_plan_->debug_rms_ptr   = debug_ptr;
+    current_plan_->debug_rms_layer = layer;
+    current_plan_->debug_rms_dim   = hidden_dim;
+    current_plan_->debug_rms_flag  = flag;
+}
+
+void UnifiedKernel::set_persistent_debug_matmul(float * debug_ptr, int layer, MatmulType type, int out_dim, int * flag) {
+    if (!current_plan_) {
+        return;
+    }
+    current_plan_->debug_matmul_ptr  = debug_ptr;
+    current_plan_->debug_matmul_layer = layer;
+    current_plan_->debug_matmul_type  = static_cast<int>(type);
+    current_plan_->debug_matmul_dim   = out_dim;
+    current_plan_->debug_matmul_flag  = flag;
+}
+
+void UnifiedKernel::set_persistent_debug_hash(uint64_t * debug_ptr, int debug_bytes) {
+    if (!current_plan_) {
+        return;
+    }
+    current_plan_->debug_hash_ptr   = debug_ptr;
+    current_plan_->debug_hash_bytes = debug_bytes;
 }
 
 void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
@@ -4807,21 +5322,49 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.input            = src.input;
         dst.output           = src.output;
         dst.aux              = src.aux;
+        dst.mask             = src.mask;
+        dst.q_nb0            = src.q_nb0;
+        dst.q_nb1            = src.q_nb1;
+        dst.q_nb2            = src.q_nb2;
+        dst.q_nb3            = src.q_nb3;
+        dst.k_nb0            = src.k_nb0;
+        dst.k_nb1            = src.k_nb1;
+        dst.k_nb2            = src.k_nb2;
+        dst.k_nb3            = src.k_nb3;
+        dst.v_nb0            = src.v_nb0;
+        dst.v_nb1            = src.v_nb1;
+        dst.v_nb2            = src.v_nb2;
+        dst.v_nb3            = src.v_nb3;
         dst.M                = src.M;
         dst.N                = src.N;
         dst.K                = src.K;
+        dst.output_bytes     = src.output_bytes;
         dst.hidden_dim       = src.hidden_dim;
         dst.intermediate_dim = src.intermediate_dim;
         dst.eps              = src.eps;
         dst.scale            = src.scale;
         dst.quant_type       = src.quant_type;
+        dst.weight_layout    = src.weight_layout;
         dst.n_kv_heads       = src.n_kv_heads;
-        memset(dst.pad, 0, sizeof(dst.pad));
+        dst.mask_type        = src.mask_type;
+        dst.mask_nb0         = src.mask_nb0;
+        dst.mask_nb1         = src.mask_nb1;
+        dst.mask_nb2         = src.mask_nb2;
+        dst.mask_nb3         = src.mask_nb3;
+        dst.mask_ne2         = src.mask_ne2;
+        dst.mask_ne3         = src.mask_ne3;
 
         // Calculate tiles for this operation
         switch (src.type) {
             case OperationType::RMS_NORM:
                 dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
+                break;
+            case OperationType::ADD:
+            case OperationType::MUL:
+            case OperationType::GET_ROWS:
+            case OperationType::SET_ROWS:
+            case OperationType::STRIDED_COPY:
+                dst.n_tiles = (src.M + 255) / 256;
                 break;
             case OperationType::SILU_MUL:
                 dst.n_tiles = (src.intermediate_dim + 255) / 256;
@@ -4835,11 +5378,15 @@ void UnifiedKernel::launch_persistent_kernel() {
             case OperationType::MATMUL_DOWN:
                 dst.n_tiles = (src.N + 63) / 64;  // 64 output columns per tile
                 break;
-            case OperationType::ATTENTION:
+            case OperationType::ATTENTION_F16:
+            case OperationType::ATTENTION_F32:
                 dst.n_tiles = src.N;  // One tile per head
                 break;
             case OperationType::ROPE:
                 dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
+                break;
+            case OperationType::SOFTMAX:
+                dst.n_tiles = std::max(1, src.M);  // One row per tile
                 break;
             default:
                 dst.n_tiles = 1;
