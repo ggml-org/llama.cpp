@@ -25633,7 +25633,6 @@ static bool persistent_tg_prefer_soa_layout() {
 // One-time initialization of persistent TG debug configuration.
 // Env vars are read-once; mutable per-call state is separate.
 struct PersistentTGDebugConfig {
-    bool trace_hash;
     bool set_rows_check;
     bool attn_validate;
     bool rms_validate;
@@ -25654,7 +25653,6 @@ struct PersistentTGDebugConfig {
 private:
     static PersistentTGDebugConfig init() {
         PersistentTGDebugConfig c = {};
-        c.trace_hash     = false;  // Set by init_sycl_tg_trace() separately
         c.set_rows_check = (std::getenv("GGML_SYCL_PERSISTENT_TG_CHECK_SET_ROWS") != nullptr) ||
                            (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS") != nullptr);
         c.attn_validate  = (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN") != nullptr);
@@ -25726,7 +25724,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     if (!logged_attn_env) {
         logged_attn_env = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN validate env=%s\n",
-                        dbg_cfg.attn_validate ? "enabled" : "(null)");
+                        dbg_cfg.attn_validate ? "enabled" : "disabled");
     }
 
     g_persistent_rms_dbg.enabled  = dbg_cfg.rms_validate;
