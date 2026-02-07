@@ -292,8 +292,13 @@ add_subdirectory(src)
 # tests and examples
 #
 
-if (GGML_BUILD_TESTS)
+# Enable CTest when ggml tests are requested or when SYCL XMX tests are enabled.
+# This allows SYCL add_test() entries to be discoverable without requiring ggml/tests.
+if (GGML_BUILD_TESTS OR GGML_SYCL_BUILD_XMX_TESTS)
     enable_testing()
+endif ()
+
+if (GGML_BUILD_TESTS)
     add_subdirectory(tests)
 endif ()
 

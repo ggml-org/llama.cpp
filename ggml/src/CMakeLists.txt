@@ -3,6 +3,11 @@ include("../cmake/common.cmake")
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
 
+# Allow SYCL backend unit tests to be discoverable by CTest without ggml/tests.
+if (GGML_SYCL_BUILD_XMX_TESTS)
+    enable_testing()
+endif()
+
 # enable libstdc++ assertions for debug builds
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)

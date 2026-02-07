@@ -102,12 +102,12 @@ static void dequantize_q4_0_block_test(const block_q4_0_test & block, float * ou
     }
 }
 
-// CPU reference matmul: C[M,N] = A_q4_0[M,K] * B_f32[K,N]
-// A: Q4_0 weights [M, K/32 blocks]
-// B: float activations [K, N] (row-major, each row is N floats)
+// CPU reference matmul: C[M,N] = A_q4_0[N,K] * X_f32[M,K]^T
+// A: Q4_0 weights [N, K/32 blocks] (indexed by output column n)
+// X: float activations [M, K] (row-major, each row is one input token)
 // C: float output [M, N]
 static void matmul_q4_0_f32_cpu_reference(const block_q4_0_test * A,
-                                          const float *           B,
+                                          const float *           X,
                                           float *                 C,
                                           int                     M,
                                           int                     N,
@@ -117,17 +117,17 @@ static void matmul_q4_0_f32_cpu_reference(const block_q4_0_test * A,
     // Temporary storage for dequantized row
     std::vector<float> a_row(K);
 
-    for (int m = 0; m < M; m++) {
-        // Dequantize entire row of A
+    for (int n = 0; n < N; n++) {
+        // Dequantize weight row for output column n
         for (int kb = 0; kb < k_blocks; kb++) {
-            dequantize_q4_0_block_test(A[m * k_blocks + kb], a_row.data() + kb * QK4_0);
+            dequantize_q4_0_block_test(A[n * k_blocks + kb], a_row.data() + kb * QK4_0);
         }
 
-        for (int n = 0; n < N; n++) {
+        for (int m = 0; m < M; m++) {
             float acc = 0.0f;
             for (int k = 0; k < K; k++) {
-                // B is row-major: B[k,n] = B[k*N + n]
-                acc += a_row[k] * B[k * N + n];
+                // X is row-major: X[m,k] = X[m*K + k]
+                acc += a_row[k] * X[m * K + k];
             }
             C[m * N + n] = acc;
         }
@@ -148,8 +148,8 @@ static bool test_unified_kernel_q4_0_small(sycl::queue & q) {
     const int K        = 32;
     const int k_blocks = K / QK4_0;  // = 1
 
-    // Allocate and initialize Q4_0 weights
-    std::vector<block_q4_0_test> A(M * k_blocks);
+    // Allocate and initialize Q4_0 weights [N, K]
+    std::vector<block_q4_0_test> A(N * k_blocks);
     std::mt19937                 rng(42);
     for (auto & block : A) {
         block.d = sycl::half(0.1f);
@@ -159,28 +159,28 @@ static bool test_unified_kernel_q4_0_small(sycl::queue & q) {
         }
     }
 
-    // Allocate and initialize F32 activations [K, N]
-    std::vector<float> B(K * N);
-    for (int k = 0; k < K; k++) {
-        for (int n = 0; n < N; n++) {
-            B[k * N + n] = 0.1f * (k + n);
+    // Allocate and initialize F32 activations [M, K]
+    std::vector<float> X(M * K);
+    for (int m = 0; m < M; m++) {
+        for (int k = 0; k < K; k++) {
+            X[m * K + k] = 0.1f * (m + k);
         }
     }
 
     // Compute CPU reference
     std::vector<float> C_ref(M * N);
-    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+    matmul_q4_0_f32_cpu_reference(A.data(), X.data(), C_ref.data(), M, N, K);
 
     // Allocate device memory
-    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
-    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(N * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(M * K, q);
     auto * C_dev = sycl::malloc_device<float>(M * N, q);
 
     TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
 
     // Copy to device
-    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
-    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memcpy(A_dev, A.data(), N * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, X.data(), M * K * sizeof(float)).wait();
     q.memset(C_dev, 0, M * N * sizeof(float)).wait();
 
     // Setup kernel args
@@ -237,8 +237,8 @@ static bool test_unified_kernel_boundary(sycl::queue & q) {
     const int K        = 64;  // 2 Q4_0 blocks
     const int k_blocks = K / QK4_0;
 
-    // Allocate and initialize Q4_0 weights
-    std::vector<block_q4_0_test> A(M * k_blocks);
+    // Allocate and initialize Q4_0 weights [N, K]
+    std::vector<block_q4_0_test> A(N * k_blocks);
     std::mt19937                 rng(123);
     for (auto & block : A) {
         block.d = sycl::half(0.05f * (rng() % 10 + 1));
@@ -247,26 +247,26 @@ static bool test_unified_kernel_boundary(sycl::queue & q) {
         }
     }
 
-    // Allocate F32 activations
-    std::vector<float> B(K * N);
-    for (int i = 0; i < K * N; i++) {
-        B[i] = 0.01f * (rng() % 100);
+    // Allocate F32 activations [M, K]
+    std::vector<float> X(M * K);
+    for (int i = 0; i < M * K; i++) {
+        X[i] = 0.01f * (rng() % 100);
     }
 
     // Compute CPU reference
     std::vector<float> C_ref(M * N);
-    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+    matmul_q4_0_f32_cpu_reference(A.data(), X.data(), C_ref.data(), M, N, K);
 
     // Allocate device memory
-    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
-    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(N * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(M * K, q);
     auto * C_dev = sycl::malloc_device<float>(M * N, q);
 
     TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
 
     // Copy to device
-    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
-    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memcpy(A_dev, A.data(), N * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, X.data(), M * K * sizeof(float)).wait();
     q.memset(C_dev, 0, M * N * sizeof(float)).wait();
 
     // Setup kernel args with tile sizes that don't evenly divide dimensions
@@ -325,8 +325,8 @@ static bool test_unified_kernel_scalar(sycl::queue & q) {
     const int K        = 128;  // 4 Q4_0 blocks
     const int k_blocks = K / QK4_0;
 
-    // Allocate and initialize Q4_0 weights with random values
-    std::vector<block_q4_0_test> A(M * k_blocks);
+    // Allocate and initialize Q4_0 weights with random values [N, K]
+    std::vector<block_q4_0_test> A(N * k_blocks);
     std::mt19937                 rng(456);
     for (auto & block : A) {
         block.d = sycl::half(0.1f * (rng() % 10 + 1));
@@ -335,27 +335,27 @@ static bool test_unified_kernel_scalar(sycl::queue & q) {
         }
     }
 
-    // Allocate F32 activations with random values
-    std::vector<float> B(K * N);
+    // Allocate F32 activations with random values [M, K]
+    std::vector<float> X(M * K);
     std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-    for (int i = 0; i < K * N; i++) {
-        B[i] = dist(rng);
+    for (int i = 0; i < M * K; i++) {
+        X[i] = dist(rng);
     }
 
     // Compute CPU reference
     std::vector<float> C_ref(M * N);
-    matmul_q4_0_f32_cpu_reference(A.data(), B.data(), C_ref.data(), M, N, K);
+    matmul_q4_0_f32_cpu_reference(A.data(), X.data(), C_ref.data(), M, N, K);
 
     // Allocate device memory
-    auto * A_dev = sycl::malloc_device<block_q4_0_test>(M * k_blocks, q);
-    auto * B_dev = sycl::malloc_device<float>(K * N, q);
+    auto * A_dev = sycl::malloc_device<block_q4_0_test>(N * k_blocks, q);
+    auto * B_dev = sycl::malloc_device<float>(M * K, q);
     auto * C_dev = sycl::malloc_device<float>(M * N, q);
 
     TEST_ASSERT(A_dev && B_dev && C_dev, "Device memory allocation failed");
 
     // Copy to device
-    q.memcpy(A_dev, A.data(), M * k_blocks * sizeof(block_q4_0_test)).wait();
-    q.memcpy(B_dev, B.data(), K * N * sizeof(float)).wait();
+    q.memcpy(A_dev, A.data(), N * k_blocks * sizeof(block_q4_0_test)).wait();
+    q.memcpy(B_dev, X.data(), M * K * sizeof(float)).wait();
     q.memset(C_dev, 0, M * N * sizeof(float)).wait();
 
     // Setup kernel args - explicitly request scalar path
