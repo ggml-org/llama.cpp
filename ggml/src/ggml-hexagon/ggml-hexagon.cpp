@@ -3018,7 +3018,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_SCALE:
             supp = ggml_hexagon_supported_unary(sess, op);
             break;
-        
+
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
             supp = ggml_hexagon_supported_unary(sess, op);
@@ -3027,7 +3027,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_SUM_ROWS:
             supp = ggml_hexagon_supported_sum_rows(sess, op);
             break;
-        
+
         case GGML_OP_SOFT_MAX:
             supp = ggml_hexagon_supported_softmax(sess, op);
             break;

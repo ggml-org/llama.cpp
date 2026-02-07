@@ -5,8 +5,8 @@
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 
-#include <math.h>
 #include <string.h>
+#include <math.h>
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
@@ -112,3 +112,4 @@ int op_sum_rows(struct htp_ops_context * octx) {
 
     return HTP_STATUS_OK;
 }
+
