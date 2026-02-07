@@ -5350,7 +5350,8 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_sycl_readback_via_shared_kernel(sycl::queue & q, const void * src_ptr, void * dst_host, size_t size, const char * tag);
 static std::atomic<int> g_sycl_force_kernel_readback[GGML_SYCL_MAX_DEVICES] = {};
 static std::atomic<int> g_sycl_lowmem_kernel_readback_notified[GGML_SYCL_MAX_DEVICES] = {};
-static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why);
+static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why,
+                                                           bool disable_graphs = true);
 
 static inline bool ggml_sycl_device_kernel_readback_enabled(int device) {
     return device >= 0 && device < GGML_SYCL_MAX_DEVICES &&
@@ -5396,12 +5397,14 @@ static inline bool ggml_sycl_should_prefer_kernel_readback(int device, const ggm
             "[SYCL] low-free-memory logits readback guard enabled on device %d: free=%zu MB threshold=%d MB\n",
             device, free_mb, threshold_mb);
         ggml_sycl_enable_device_kernel_readback(
-            device, "low free memory guard", "proactive guard for high-context logits readback");
+            device, "low free memory guard", "proactive guard for high-context logits readback",
+            /*disable_graphs=*/false);
     }
     return true;
 }
 
-static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why) {
+static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why,
+                                                           bool disable_graphs) {
     if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
         return;
     }
@@ -5411,7 +5414,7 @@ static inline void ggml_sycl_enable_device_kernel_readback(int device, const cha
         GGML_LOG_WARN(
             "[SYCL] enabling kernel readback fallback for device %d after %s failure: %s\n",
             device, where ? where : "(unknown)", why ? why : "(unknown)");
-        if (!g_ggml_sycl_disable_graph) {
+        if (disable_graphs && !g_ggml_sycl_disable_graph) {
             g_ggml_sycl_disable_graph = 1;
             GGML_LOG_WARN("[SYCL] disabling SYCL graphs after readback failure to avoid poisoned graph state\n");
         }
