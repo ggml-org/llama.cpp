@@ -520,7 +520,7 @@ static void vec_dot_q4x4x2_q8x4x2_rx2x2(const int n,
         // Load src1 columns (reused across both src0 rows)
         HVX_Vector_x8 vy0_q = hvx_vec_load_q8x4x8(y0_q + i * y_qblk_size);
         HVX_Vector_x8 vy1_q = hvx_vec_load_q8x4x8(y1_q + i * y_qblk_size);
-        
+
         // Load src0 rows (reused across both src1 columns)
         HVX_Vector_x8 r0_q = hvx_vec_load_q4x4x8(r0_x_q + i * x_qblk_size);
         HVX_Vector_x8 r1_q = hvx_vec_load_q4x4x8(r1_x_q + i * x_qblk_size);
