@@ -146,6 +146,7 @@ void main() {
                 bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
 		float max_mask = NEG_FLT_MAX_OVER_2;
+                barrier();
                 [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
                     uint32_t c = (idx + tid) % Bc;
                     uint32_t r = (idx + tid) / Bc;
