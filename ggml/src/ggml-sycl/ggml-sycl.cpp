@@ -26048,8 +26048,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
 
         // Host-pointer staging is expensive (alloc + copy + sync per pointer).
         // Keep passthrough by default and allow opt-in staging for diagnostics.
-        static const bool stage_host_ptrs =
-            (std::getenv("GGML_SYCL_PERSISTENT_TG_STAGE_HOST_PTRS") != nullptr);
+        const bool stage_host_ptrs = PersistentTGDebugConfig::get().stage_host_ptrs;
         if (!stage_host_ptrs) {
             return ptr;
         }
