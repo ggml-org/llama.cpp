@@ -260,3 +260,13 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+# CPUOPTI: runtime optimization layer tests
+llama_build_and_test(test-opt-context-hash.cpp)
+target_include_directories(test-opt-context-hash PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
+llama_build_and_test(test-opt-kv-dedup.cpp)
+target_include_directories(test-opt-kv-dedup PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
+llama_build_and_test(test-opt-kv-diff.cpp)
+target_include_directories(test-opt-kv-diff PRIVATE ${PROJECT_SOURCE_DIR}/src)

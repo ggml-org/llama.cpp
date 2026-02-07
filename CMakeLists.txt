@@ -110,6 +110,11 @@ option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 option(LLAMA_TOOLS_INSTALL  "llama: install tools"        ${LLAMA_TOOLS_INSTALL_DEFAULT})
 
+# CPUOPTI: runtime optimization feature flags (Phase 1 — Tier 1, Exact)
+option(LLAMA_OPT_DEDUP       "llama: context block deduplication (Tier 1)"       ON)
+option(LLAMA_OPT_KV_DIFF     "llama: structural KV cache diffing (Tier 1)"      ON)
+option(LLAMA_OPT_SCHEMA_SKIP "llama: schema-aware token skipping (Tier 1)"      ON)
+
 # 3rd party libs
 option(LLAMA_HTTPLIB    "llama: httplib for downloading functionality" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)

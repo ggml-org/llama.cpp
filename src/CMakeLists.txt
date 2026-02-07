@@ -142,6 +142,12 @@ add_library(llama
             models/xverse.cpp
             models/mistral3.cpp
             models/graph-context-mamba.cpp
+            # CPUOPTI: runtime optimization layer (Phase 1)
+            llama-opt.cpp
+            llama-context-hash.cpp
+            llama-kv-cache-dedup.cpp
+            llama-kv-cache-diff.cpp
+            llama-schema-skip.cpp
             )
 
 set_target_properties(llama PROPERTIES
@@ -155,6 +161,17 @@ target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
+
+# CPUOPTI: feature flags for runtime optimizations
+if (LLAMA_OPT_DEDUP)
+    target_compile_definitions(llama PRIVATE LLAMA_OPT_DEDUP)
+endif()
+if (LLAMA_OPT_KV_DIFF)
+    target_compile_definitions(llama PRIVATE LLAMA_OPT_KV_DIFF)
+endif()
+if (LLAMA_OPT_SCHEMA_SKIP)
+    target_compile_definitions(llama PRIVATE LLAMA_OPT_SCHEMA_SKIP)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
