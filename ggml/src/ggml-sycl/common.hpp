@@ -621,6 +621,7 @@ struct layout_policy {
         // However, GGML_SYCL_UNIFIED_SOA=1 allows pre-reordering for DMMV SoA path.
         static int unified_dispatch_enabled = -1;
         static int unified_soa_enabled = -1;
+        static int persistent_tg_soa_enabled = -1;
         if (unified_dispatch_enabled < 0) {
             const char * env = std::getenv("GGML_SYCL_UNIFIED_DISPATCH");
             // Default unified dispatch to ON unless explicitly disabled.
@@ -630,9 +631,18 @@ struct layout_policy {
             const char * env = std::getenv("GGML_SYCL_UNIFIED_SOA");
             unified_soa_enabled = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
         }
+        if (persistent_tg_soa_enabled < 0) {
+            const char * persistent_tg = std::getenv("GGML_SYCL_PERSISTENT_TG");
+            const bool persistent_on = (persistent_tg != nullptr && std::atoi(persistent_tg) != 0);
+            const char * prefer_soa = std::getenv("GGML_SYCL_PERSISTENT_TG_PREFER_SOA");
+            const bool prefer_on = (prefer_soa == nullptr || std::atoi(prefer_soa) != 0);
+            persistent_tg_soa_enabled = (persistent_on && prefer_on) ? 1 : 0;
+        }
         // When GGML_SYCL_UNIFIED_SOA=1, allow SoA layout for Q4_0 to enable
         // the DMMV SoA kernel path which has better memory bandwidth.
-        if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0 && !unified_soa_enabled) {
+        // Persistent TG can also opt into SoA without requiring global UNIFIED_SOA.
+        if (unified_dispatch_enabled != 0 && qtype == GGML_TYPE_Q4_0 &&
+            !unified_soa_enabled && !persistent_tg_soa_enabled) {
             return GGML_LAYOUT_AOS;
         }
         return get_optimal(qtype, usage, device_id);

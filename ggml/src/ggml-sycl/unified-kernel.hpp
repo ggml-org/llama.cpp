@@ -206,6 +206,7 @@ enum class OperationType {
     MATMUL_GATE,
     MATMUL_UP,
     MATMUL_DOWN,
+    MATMUL_GATE_UP_SILU,
     ROPE,
     ATTENTION_F16,
     ATTENTION_F32,
@@ -2610,6 +2611,9 @@ private:
 
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);
     void free_persistent_buffers();
+    bool persistent_use_split_barrier() const;
+    int persistent_matmul_tile_cols(OperationType type, int N, int K) const;
+    int persistent_num_workgroups(int total_tiles, bool has_attention, bool has_ffn, bool use_split_barrier) const;
     void launch_persistent_kernel();
 };
 

@@ -21,6 +21,7 @@
 
 #include "unified-kernel.hpp"
 
+#include <array>
 #include <chrono>
 
 // =============================================================================
@@ -3902,6 +3903,60 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
 
 namespace ggml_sycl {
 
+static const char * persistent_op_type_name(OperationType type) {
+    switch (type) {
+        case OperationType::RMS_NORM:       return "RMS_NORM";
+        case OperationType::ADD:            return "ADD";
+        case OperationType::MUL:            return "MUL";
+        case OperationType::GET_ROWS:       return "GET_ROWS";
+        case OperationType::MATMUL_Q_PROJ:  return "MATMUL_Q_PROJ";
+        case OperationType::MATMUL_K_PROJ:  return "MATMUL_K_PROJ";
+        case OperationType::MATMUL_V_PROJ:  return "MATMUL_V_PROJ";
+        case OperationType::MATMUL_OUT_PROJ:return "MATMUL_OUT_PROJ";
+        case OperationType::MATMUL_GATE:    return "MATMUL_GATE";
+        case OperationType::MATMUL_UP:      return "MATMUL_UP";
+        case OperationType::MATMUL_DOWN:    return "MATMUL_DOWN";
+        case OperationType::MATMUL_GATE_UP_SILU: return "MATMUL_GATE_UP_SILU";
+        case OperationType::ROPE:           return "ROPE";
+        case OperationType::ATTENTION_F16:  return "ATTENTION_F16";
+        case OperationType::ATTENTION_F32:  return "ATTENTION_F32";
+        case OperationType::SILU_MUL:       return "SILU_MUL";
+        case OperationType::SET_ROWS:       return "SET_ROWS";
+        case OperationType::STRIDED_COPY:   return "STRIDED_COPY";
+        case OperationType::SOFTMAX:        return "SOFTMAX";
+    }
+    return "UNKNOWN";
+}
+
+static int persistent_parse_tile_cols_env(const char * env_name, int fallback) {
+    if (const char * env = std::getenv(env_name)) {
+        char * end = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end && end != env && parsed >= 16 && parsed <= 256 && (parsed % 16) == 0) {
+            return static_cast<int>(parsed);
+        }
+    }
+    return fallback;
+}
+
+static bool persistent_attention_subgroup_dot_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_ATTN_SUBGROUP_DOT");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+static bool persistent_aggressive_wg_policy_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_AGGRESSIVE_WG");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
 // =============================================================================
 // Device-Side Persistent Kernel Structures
 // =============================================================================
@@ -3928,6 +3983,7 @@ struct alignas(64) DeviceOperation {
     int64_t      v_nb2;
     int64_t      v_nb3;
     int          M, N, K;
+    int          tile_cols;      // Matmul N columns per tile (0 = default)
     int64_t      output_bytes;
     int          hidden_dim;
     int          intermediate_dim;
@@ -3950,9 +4006,11 @@ struct alignas(64) DeviceOperation {
 struct PersistentKernelArgs {
     const DeviceOperation * operations;
     int                     n_operations;
+    int                     use_split_barrier;
+    int                     use_attn_subgroup_dot;
     int *                   tile_counter;
-    int *                   barrier_counter;  // Atomic counter for device-scope barrier
-    int *                   barrier_sense;    // Sense flag for sense-reversing barrier
+    int *                   barrier_counter;  // Atomic fallback counter (optional)
+    int *                   barrier_sense;    // Atomic fallback sense flag (optional)
     void *                  scratch_buffers[4];
     int                     hidden_dim;
     int                     intermediate_dim;
@@ -3963,8 +4021,8 @@ struct PersistentKernelArgs {
 // =============================================================================
 // This class encapsulates the persistent kernel's work-stealing loop.
 // Each work-group processes all operations sequentially, work-stealing tiles
-// within each operation. An atomic sense-reversing barrier synchronizes
-// between operations (replacing unreliable device-scope split barriers).
+// within each operation. Inter-op synchronization uses device-scope split
+// barriers by default, with an atomic sense-reversing fallback for debugging.
 //
 // SLM layout per operation type:
 //   RMS_NORM:     [0..n_warps-1] for cross-warp reduction
@@ -3985,6 +4043,7 @@ public:
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
         const int n_wgs    = item_.get_group_range(0);
+        const bool use_split_barrier = (args_.use_split_barrier != 0);
 
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
             const DeviceOperation & op = args_.operations[op_idx];
@@ -4011,24 +4070,14 @@ public:
                 dispatch_operation(op, tile_idx);
             }
 
-            // Synchronize all work-groups between operations using atomic barrier.
-            // The device-scope split barrier (SPV_INTEL_split_barrier) is unreliable
-            // on some Intel GPU driver versions, so we use a sense-reversing atomic
-            // barrier instead. This guarantees all work-groups complete the current
-            // operation before any proceeds to reset the tile counter.
-            device_barrier(local_id, wg_id, n_wgs);
-
-            // Reset tile counter for next operation (one thread globally)
-            if (local_id == 0 && wg_id == 0) {
-                sycl::atomic_ref<int, sycl::memory_order::relaxed,
-                                 sycl::memory_scope::device,
-                                 sycl::access::address_space::global_space>
-                    counter(*args_.tile_counter);
-                counter.store(0);
+            // Synchronize all work-groups between operations.
+            // Split barrier mode is the default. Use
+            // GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER=1 to force atomic fallback.
+            if (use_split_barrier) {
+                device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
+            } else {
+                device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
             }
-
-            // Ensure counter reset is visible to all work-groups before proceeding
-            device_barrier(local_id, wg_id, n_wgs);
         }
     }
 
@@ -4037,12 +4086,39 @@ private:
     sycl::local_accessor<float, 1> slm_;
     sycl::nd_item<1>               item_;
 
+    // Device-scope split barrier synchronization (default path).
+    // Optional tile-counter reset is done by one global thread before barrier.
+    void device_split_barrier(int local_id, int wg_id, bool reset_tile_counter = false) {
+        sycl::group_barrier(item_.get_group());
+
+        // Device-scope split barrier on Arc is significantly faster when only
+        // work-group leaders participate in the global synchronization.
+        if (local_id == 0) {
+            if (reset_tile_counter && wg_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    tile_counter(*args_.tile_counter);
+                tile_counter.store(0);
+            }
+
+            constexpr int kDeviceSemantics =
+                SemanticsGlobalMem | static_cast<int>(SPIRVMemorySemantics::AcquireRelease);
+            split_barrier_arrive(ScopeDevice, kDeviceSemantics);
+            split_barrier_wait(ScopeDevice, kDeviceSemantics);
+        }
+
+        sycl::group_barrier(item_.get_group());
+    }
+
     // Atomic sense-reversing barrier for device-scope synchronization.
     // All work-groups must call this; it blocks until all n_wgs have arrived.
     // Uses a counter + sense flag to allow reuse across multiple barrier calls.
     // Only thread 0 from each WG participates in the global coordination;
     // all other threads wait via a workgroup barrier.
-    void device_barrier(int local_id, int wg_id, int n_wgs) {
+    // Optional tile-counter reset is done by the last arriving WG before
+    // releasing the barrier so next operation can start immediately.
+    void device_barrier_atomic(int local_id, int n_wgs, bool reset_tile_counter = false) {
         // First synchronize within the work-group
         sycl::group_barrier(item_.get_group());
 
@@ -4063,6 +4139,13 @@ private:
             // Last WG to arrive flips the sense and resets the counter
             if (cnt.fetch_add(1) == n_wgs - 1) {
                 cnt.store(0);
+                if (reset_tile_counter) {
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        tile_counter(*args_.tile_counter);
+                    tile_counter.store(0);
+                }
                 sense.store(1 - cur_sense);
             } else {
                 // Spin until the sense flips (meaning last WG arrived)
@@ -4101,6 +4184,9 @@ private:
             case OperationType::MATMUL_UP:
             case OperationType::MATMUL_DOWN:
                 compute_matmul_tile(op, tile_idx);
+                break;
+            case OperationType::MATMUL_GATE_UP_SILU:
+                compute_matmul_gate_up_silu_tile(op, tile_idx);
                 break;
             case OperationType::ATTENTION_F16:
             case OperationType::ATTENTION_F32:
@@ -4168,7 +4254,8 @@ private:
         const float scale = 1.0f / rms;
 
         for (int i = tid; i < hidden_dim; i += BLOCK_SIZE) {
-            output[i] = input[i] * scale * weights[i];
+            const float w = weights ? weights[i] : 1.0f;
+            output[i] = input[i] * scale * w;
         }
     }
 
@@ -4437,79 +4524,241 @@ private:
 
     void compute_matmul_tile(const DeviceOperation & op, int tile_idx) {
         // DMMV (Dequantizing Matrix-Vector Multiply) for M=1 TG workloads.
-        // Each tile covers 64 output columns. With 256 threads and 16-thread
-        // sub-groups (matching reqd_sub_group_size(16)), we have 16 sub-groups
-        // per work-group, each computing one output column per iteration.
-        // 64 columns / 16 sub-groups = 4 iterations per tile.
+        // This path is subgroup-local and barrier-free: each lane owns a strided
+        // subset of K blocks, keeps activation chunks in registers, and reuses
+        // them across multiple output columns in the current tile.
 
-        constexpr int TILE_N_MATMUL  = 64;   // Output columns per tile
-        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16) used by the
-                                              // persistent kernel. The standalone DMMV uses SG=32,
-                                              // but the persistent kernel requires SG=16 for
-                                              // unified sub-group size across all operation types
-                                              // (RMS norm reduction needs 16-wide sub-groups).
-                                              // This means 2x more work per thread in dot products.
+        constexpr int SG_SIZE        = 16;   // Must match reqd_sub_group_size(16)
         constexpr int DMMV_QK4_0     = 32;   // Q4_0 block size
         constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+        constexpr int MAX_ITERS      = 16;   // Supports tile_cols up to 256
+        constexpr int QK4_0_PACKED   = DMMV_QK4_0 / 2;        // 16 bytes
 
-        // Guard against unsupported quantization types
         if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
 
         const int local_id = item_.get_local_id(0);
-        const int sg_id    = local_id / SG_SIZE;   // Which sub-group (0-15)
-        const int lane_id  = local_id % SG_SIZE;   // Thread within sub-group (0-15)
+        const int sg_id    = local_id / SG_SIZE;  // Which sub-group (0-15)
+        const int lane_id  = local_id % SG_SIZE;  // Thread within sub-group (0-15)
 
-        const int tile_start = tile_idx * TILE_N_MATMUL;
+        const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
+        const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        const int tile_start = tile_idx * tile_cols;
 
-        const float *                  activations = static_cast<const float *>(op.input);
-        float *                        out         = static_cast<float *>(op.output);
-        const int                      K           = op.K;
-        const int                      N           = op.N;
-        const int                      k_blocks    = K / DMMV_QK4_0;
+        const float * activations = static_cast<const float *>(op.input);
+        float *       out         = static_cast<float *>(op.output);
+        const int     K           = op.K;
+        const int     N           = op.N;
+        const int     k_blocks    = K / DMMV_QK4_0;
+        if (k_blocks <= 0) return;
 
-        // Only Q4_0 AoS layout is supported for now
+        const bool use_soa =
+            (static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout) == ggml_sycl_unified::LayoutMode::SOA);
         const ggml_sycl_unified::block_q4_0_unified * weights =
             static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
+        const uint8_t * qs_base = static_cast<const uint8_t *>(op.weights);
+        const int row_qs_bytes = k_blocks * QK4_0_PACKED;
+        const int64_t total_blocks = static_cast<int64_t>(N) * k_blocks;
+        const int64_t d_offset = total_blocks * QK4_0_PACKED;  // Byte offset to scale values
+        const sycl::half * d_base = reinterpret_cast<const sycl::half *>(
+            static_cast<const char *>(op.weights) + d_offset);
 
-        // Process 16 columns per iteration (one per sub-group), iterate 4 times
-        for (int iter = 0; iter < TILE_N_MATMUL / N_SGS; iter++) {
-            const int n = tile_start + iter * N_SGS + sg_id;
+        float partial_sums[MAX_ITERS];
+        #pragma unroll
+        for (int it = 0; it < MAX_ITERS; ++it) {
+            partial_sums[it] = 0.0f;
+        }
 
-            if (n >= N) continue;
+        // Lane-strided K-block loop.
+        for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
+            const int k_offset = block_idx * DMMV_QK4_0;
+            float act_lo[QK4_0_PACKED];
+            float act_hi[QK4_0_PACKED];
+            #pragma unroll
+            for (int i = 0; i < QK4_0_PACKED; ++i) {
+                act_lo[i] = activations[k_offset + i];
+                act_hi[i] = activations[k_offset + i + QK4_0_PACKED];
+            }
 
-            // Each thread accumulates partial dot product
-            float partial_sum = 0.0f;
+            #pragma unroll
+            for (int iter = 0; iter < MAX_ITERS; ++iter) {
+                if (iter >= iter_count) break;
+                const int n = tile_start + iter * N_SGS + sg_id;
+                if (n >= N) continue;
 
-            // Thread lane_id processes blocks: lane_id, lane_id+16, lane_id+32, ...
-            for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
-                const int global_block = n * k_blocks + block_idx;
-                const ggml_sycl_unified::block_q4_0_unified * blk = &weights[global_block];
-                const float d = static_cast<float>(blk->d);
-                const int k_offset = block_idx * DMMV_QK4_0;
+                const uint8_t * qs = nullptr;
+                float d = 0.0f;
+                if (use_soa) {
+                    const uint8_t * qs_row = qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const sycl::half * d_row = d_base + static_cast<int64_t>(n) * k_blocks;
+                    qs = qs_row + block_idx * QK4_0_PACKED;
+                    d = static_cast<float>(d_row[block_idx]);
+                } else {
+                    const int64_t global_block = static_cast<int64_t>(n) * k_blocks + block_idx;
+                    const ggml_sycl_unified::block_q4_0_unified * blk = &weights[global_block];
+                    qs = blk->qs;
+                    d = static_cast<float>(blk->d);
+                }
 
-                // Process 32 values from this Q4_0 block (16 bytes, 2 nibbles each)
                 float block_sum = 0.0f;
                 #pragma unroll
-                for (int i = 0; i < DMMV_QK4_0 / 2; i++) {
-                    const uint8_t qs_byte = blk->qs[i];
-                    const float w0 = static_cast<float>((qs_byte & 0x0F) - 8) * d;
-                    const float w1 = static_cast<float>((qs_byte >> 4) - 8) * d;
-                    block_sum += w0 * activations[k_offset + i] +
-                                 w1 * activations[k_offset + i + 16];
+                for (int i = 0; i < QK4_0_PACKED; ++i) {
+                    const uint8_t qs_byte = qs[i];
+                    const float q0 = static_cast<float>((qs_byte & 0x0F) - 8);
+                    const float q1 = static_cast<float>((qs_byte >> 4) - 8);
+                    block_sum += q0 * act_lo[i] + q1 * act_hi[i];
                 }
-                partial_sum += block_sum;
+                partial_sums[iter] += block_sum * d;
             }
+        }
 
-            // Sub-group shuffle reduction (16-wide sub-groups)
-            auto sg = item_.get_sub_group();
-            #pragma unroll
-            for (int mask = SG_SIZE >> 1; mask > 0; mask >>= 1) {
-                partial_sum += sycl::shift_group_left(sg, partial_sum, mask);
-            }
-
-            // Lane 0 writes the result
-            if (lane_id == 0) {
+        // Final subgroup reduction + output write per N-iteration.
+        auto sg = item_.get_sub_group();
+        #pragma unroll
+        for (int iter = 0; iter < MAX_ITERS; ++iter) {
+            if (iter >= iter_count) break;
+            const int n = tile_start + iter * N_SGS + sg_id;
+            float partial_sum = sycl::reduce_over_group(sg, partial_sums[iter], sycl::plus<float>());
+            if (lane_id == 0 && n < N) {
                 out[n] = partial_sum;
+            }
+        }
+    }
+
+    void compute_matmul_gate_up_silu_tile(const DeviceOperation & op, int tile_idx) {
+        // Fused FFN first stage for TG:
+        //   gate = W_gate * x
+        //   up   = W_up   * x
+        //   y    = silu(gate) * up
+        //
+        // This reuses the same activation loads for both matmuls and avoids
+        // writing/reading intermediate gate/up tensors before SiLU.
+
+        constexpr int SG_SIZE        = 16;
+        constexpr int DMMV_QK4_0     = 32;
+        constexpr int N_SGS          = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
+        constexpr int MAX_ITERS      = 16;   // Supports tile_cols up to 256
+        constexpr int QK4_0_PACKED   = DMMV_QK4_0 / 2;        // 16 bytes
+
+        if (op.quant_type != ggml_sycl_unified::QUANT_TYPE_Q4_0) return;
+
+        const int local_id = item_.get_local_id(0);
+        const int sg_id    = local_id / SG_SIZE;
+        const int lane_id  = local_id % SG_SIZE;
+
+        const int tile_cols  = op.tile_cols > 0 ? op.tile_cols : 64;
+        const int iter_count = (tile_cols + N_SGS - 1) / N_SGS;
+        if (iter_count <= 0 || iter_count > MAX_ITERS) return;
+        const int tile_start = tile_idx * tile_cols;
+
+        const float * activations = static_cast<const float *>(op.input);
+        float *       out         = static_cast<float *>(op.output);
+        const int     K           = op.K;
+        const int     N           = op.N;
+        const int     k_blocks    = K / DMMV_QK4_0;
+        if (k_blocks <= 0) return;
+
+        const bool use_soa =
+            (static_cast<ggml_sycl_unified::LayoutMode>(op.weight_layout) == ggml_sycl_unified::LayoutMode::SOA);
+        const ggml_sycl_unified::block_q4_0_unified * gate_weights =
+            static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.weights);
+        const ggml_sycl_unified::block_q4_0_unified * up_weights =
+            static_cast<const ggml_sycl_unified::block_q4_0_unified *>(op.aux);
+        if (!gate_weights || !up_weights || !activations || !out) return;
+
+        const uint8_t * gate_qs_base = static_cast<const uint8_t *>(op.weights);
+        const uint8_t * up_qs_base   = static_cast<const uint8_t *>(op.aux);
+        const int row_qs_bytes       = k_blocks * QK4_0_PACKED;
+        const int64_t total_blocks   = static_cast<int64_t>(N) * k_blocks;
+        const int64_t d_offset       = total_blocks * QK4_0_PACKED;
+        const sycl::half * gate_d_base = reinterpret_cast<const sycl::half *>(
+            static_cast<const char *>(op.weights) + d_offset);
+        const sycl::half * up_d_base = reinterpret_cast<const sycl::half *>(
+            static_cast<const char *>(op.aux) + d_offset);
+
+        float partial_gate[MAX_ITERS];
+        float partial_up[MAX_ITERS];
+        #pragma unroll
+        for (int it = 0; it < MAX_ITERS; ++it) {
+            partial_gate[it] = 0.0f;
+            partial_up[it]   = 0.0f;
+        }
+
+        for (int block_idx = lane_id; block_idx < k_blocks; block_idx += SG_SIZE) {
+            const int k_offset = block_idx * DMMV_QK4_0;
+            float act_lo[QK4_0_PACKED];
+            float act_hi[QK4_0_PACKED];
+            #pragma unroll
+            for (int i = 0; i < QK4_0_PACKED; ++i) {
+                act_lo[i] = activations[k_offset + i];
+                act_hi[i] = activations[k_offset + i + QK4_0_PACKED];
+            }
+
+            #pragma unroll
+            for (int iter = 0; iter < MAX_ITERS; ++iter) {
+                if (iter >= iter_count) break;
+                const int n = tile_start + iter * N_SGS + sg_id;
+                if (n >= N) continue;
+
+                const uint8_t * gate_qs = nullptr;
+                const uint8_t * up_qs   = nullptr;
+                float gate_d            = 0.0f;
+                float up_d              = 0.0f;
+
+                if (use_soa) {
+                    const uint8_t * gate_qs_row = gate_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const uint8_t * up_qs_row   = up_qs_base + static_cast<int64_t>(n) * row_qs_bytes;
+                    const sycl::half * gate_d_row = gate_d_base + static_cast<int64_t>(n) * k_blocks;
+                    const sycl::half * up_d_row   = up_d_base + static_cast<int64_t>(n) * k_blocks;
+                    gate_qs = gate_qs_row + block_idx * QK4_0_PACKED;
+                    up_qs   = up_qs_row + block_idx * QK4_0_PACKED;
+                    gate_d  = static_cast<float>(gate_d_row[block_idx]);
+                    up_d    = static_cast<float>(up_d_row[block_idx]);
+                } else {
+                    const int64_t global_block = static_cast<int64_t>(n) * k_blocks + block_idx;
+                    const ggml_sycl_unified::block_q4_0_unified * gate_blk = &gate_weights[global_block];
+                    const ggml_sycl_unified::block_q4_0_unified * up_blk   = &up_weights[global_block];
+                    gate_qs = gate_blk->qs;
+                    up_qs   = up_blk->qs;
+                    gate_d  = static_cast<float>(gate_blk->d);
+                    up_d    = static_cast<float>(up_blk->d);
+                }
+
+                float gate_sum = 0.0f;
+                float up_sum   = 0.0f;
+                #pragma unroll
+                for (int i = 0; i < QK4_0_PACKED; ++i) {
+                    const float a0 = act_lo[i];
+                    const float a1 = act_hi[i];
+
+                    const uint8_t gate_byte = gate_qs[i];
+                    const float gate_q0 = static_cast<float>((gate_byte & 0x0F) - 8);
+                    const float gate_q1 = static_cast<float>((gate_byte >> 4) - 8);
+                    gate_sum += gate_q0 * a0 + gate_q1 * a1;
+
+                    const uint8_t up_byte = up_qs[i];
+                    const float up_q0 = static_cast<float>((up_byte & 0x0F) - 8);
+                    const float up_q1 = static_cast<float>((up_byte >> 4) - 8);
+                    up_sum += up_q0 * a0 + up_q1 * a1;
+                }
+
+                partial_gate[iter] += gate_sum * gate_d;
+                partial_up[iter]   += up_sum * up_d;
+            }
+        }
+
+        auto sg = item_.get_sub_group();
+        #pragma unroll
+        for (int iter = 0; iter < MAX_ITERS; ++iter) {
+            if (iter >= iter_count) break;
+            const int n = tile_start + iter * N_SGS + sg_id;
+
+            const float gate = sycl::reduce_over_group(sg, partial_gate[iter], sycl::plus<float>());
+            const float up   = sycl::reduce_over_group(sg, partial_up[iter], sycl::plus<float>());
+
+            if (lane_id == 0 && n < N) {
+                const float sigmoid_gate = 1.0f / (1.0f + sycl::exp(-gate));
+                out[n] = gate * sigmoid_gate * up;
             }
         }
     }
@@ -4518,31 +4767,25 @@ private:
         // Self-attention for M=1 (single query token) in token generation.
         // tile_idx = head index. Each work-group processes one attention head.
         //
-        // Memory layout:
-        //   q:       [n_heads * head_dim] — interleaved by head
-        //   k_cache: [n_heads * seq_len * head_dim] — k[h][p][d]
-        //   v_cache: [n_heads * seq_len * head_dim] — v[h][p][d]
-        //   output:  [n_heads * head_dim]
-        //
-        // Algorithm: Two-pass attention
-        //   Pass 1: Compute scores, find global max and softmax denominator
-        //   Pass 2: Accumulate weighted V values using softmax probabilities
-        //
+        // Fast path: cache attention scores/probabilities in SLM so pass 2 does
+        // not recompute Q·K per output dimension.
         constexpr int SG_SIZE = 16;
         constexpr int N_SGS   = BLOCK_SIZE / SG_SIZE;  // 16 sub-groups
 
         const int tid        = item_.get_local_id(0);
-        const int head       = tile_idx;  // One tile per head
-        const int seq_len    = op.M;      // Number of tokens in KV cache
+        auto      sg         = item_.get_sub_group();
+        const int sg_id      = sg.get_group_linear_id();
+        const int lane_id    = sg.get_local_linear_id();
+        const int head       = tile_idx;
+        const int seq_len    = op.M;
         const int n_heads    = op.N;
         const int head_dim   = op.K;
         const int n_kv_heads = op.n_kv_heads;
-        const float scale    = op.scale;  // 1/sqrt(head_dim)
+        const float scale    = op.scale;
+        const bool use_sg_dot = (args_.use_attn_subgroup_dot != 0);
 
-        if (head >= n_heads) return;
+        if (head >= n_heads || seq_len <= 0) return;
 
-        // GQA: multiple query heads share the same KV head
-        // For n_heads=32, n_kv_heads=8: heads 0-3 share kv_head 0, heads 4-7 share kv_head 1, etc.
         const int kv_head = (n_kv_heads > 0 && n_kv_heads < n_heads)
                             ? head / (n_heads / n_kv_heads)
                             : head;
@@ -4552,134 +4795,162 @@ private:
         const float * v_cache = static_cast<const float *>(op.aux);
         float *       output  = static_cast<float *>(op.output);
 
-        // Query and output use query head index; KV cache uses kv_head for GQA
         const float * q_head = q + head * head_dim;
         const float * k_head = k_cache + kv_head * seq_len * head_dim;
         const float * v_head = v_cache + kv_head * seq_len * head_dim;
         float *       o_head = output + head * head_dim;
+        auto wg = item_.get_group();
 
-        auto sg = item_.get_sub_group();
-        const int warp_id = sg.get_group_linear_id();
-        const int lane_id = sg.get_local_linear_id();
+        // SLM layout:
+        //   [0 .. head_dim-1]                  = query vector
+        //   [head_dim .. head_dim+2*N_SGS-1]   = reserved reduction scratch
+        //   [scores_base ..]                    = score / exp(score-max) cache
+        const int slm_reduce_base = head_dim;
+        const int slm_scores_base = slm_reduce_base + 2 * N_SGS;
+        const int slm_scores_cap  = args_.hidden_dim - slm_scores_base;
 
-        // ====================================================================
-        // Load query vector into SLM for fast repeated access
-        // SLM layout: [0..head_dim-1] = query vector
-        // ====================================================================
         for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
             slm_[d] = q_head[d];
         }
-        sycl::group_barrier(item_.get_group());
+        sycl::group_barrier(wg);
 
-        // ====================================================================
-        // Pass 1: Compute attention scores with online softmax
-        // Each thread handles positions: tid, tid+BLOCK_SIZE, tid+2*BLOCK_SIZE, ...
-        // For each position, compute full dot product over head_dim dimensions.
-        // Track per-thread running max and sum_exp for numerically stable softmax.
-        // ====================================================================
-        float thread_max     = -1e30f;
-        float thread_sum_exp = 0.0f;
-
-        for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
-            // Dot product: score = sum_d(q[d] * k[p][d]) * scale
-            float score = 0.0f;
-            const float * k_pos = k_head + p * head_dim;
-            for (int d = 0; d < head_dim; d++) {
-                score += slm_[d] * k_pos[d];
-            }
-            score *= scale;
-
-            // Online softmax update
-            if (score > thread_max) {
-                // Rescale existing sum_exp when max increases
-                thread_sum_exp = thread_sum_exp * sycl::exp(thread_max - score);
-                thread_max = score;
-            }
-            thread_sum_exp += sycl::exp(score - thread_max);
-        }
-
-        // ====================================================================
-        // Cross-thread reduction of (max, sum_exp) for global softmax
-        // Two-level: sub-group shuffle, then SLM-based cross-sub-group
-        // ====================================================================
-
-        // Sub-group reduction of max
-        float sg_max = thread_max;
-        for (int offset = SG_SIZE >> 1; offset > 0; offset >>= 1) {
-            float other = sycl::shift_group_left(sg, sg_max, offset);
-            sg_max = sycl::fmax(sg_max, other);
-        }
-
-        // Rescale sum_exp to sub-group max
-        float sg_sum_exp = thread_sum_exp * sycl::exp(thread_max - sg_max);
-        sg_sum_exp = sycl::reduce_over_group(sg, sg_sum_exp, sycl::plus<float>());
-
-        // Cross-sub-group reduction via SLM
-        // Use SLM[head_dim .. head_dim + 2*N_SGS - 1] for (max, sum_exp) pairs
-        const int slm_reduce_base = head_dim;  // After query storage
-        if (lane_id == 0) {
-            slm_[slm_reduce_base + warp_id]         = sg_max;
-            slm_[slm_reduce_base + N_SGS + warp_id] = sg_sum_exp;
-        }
-        sycl::group_barrier(item_.get_group());
-
-        // Sub-group 0 does the final reduction across all sub-groups
-        float global_max     = -1e30f;
-        float global_sum_exp = 0.0f;
-        if (warp_id == 0) {
-            float local_max     = (lane_id < N_SGS) ? slm_[slm_reduce_base + lane_id] : -1e30f;
-            float local_sum_exp = (lane_id < N_SGS) ? slm_[slm_reduce_base + N_SGS + lane_id] : 0.0f;
-
-            // Reduce max across sub-groups
-            float reduced_max = local_max;
-            for (int offset = SG_SIZE >> 1; offset > 0; offset >>= 1) {
-                float other = sycl::shift_group_left(sg, reduced_max, offset);
-                reduced_max = sycl::fmax(reduced_max, other);
+        // Fast path: cache score/probabilities in SLM to avoid pass-2 score recompute.
+        if (slm_scores_cap >= seq_len) {
+            float local_max = -1e30f;
+            if (use_sg_dot) {
+                for (int p = sg_id; p < seq_len; p += N_SGS) {
+                    const float * k_pos = k_head + p * head_dim;
+                    float partial = 0.0f;
+                    for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                        partial += slm_[d] * k_pos[d];
+                    }
+                    float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                    if (lane_id == 0) {
+                        score *= scale;
+                        slm_[slm_scores_base + p] = score;
+                        local_max = sycl::fmax(local_max, score);
+                    }
+                }
+            } else {
+                for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
+                    float score = 0.0f;
+                    const float * k_pos = k_head + p * head_dim;
+                    for (int d = 0; d < head_dim; d++) {
+                        score += slm_[d] * k_pos[d];
+                    }
+                    score *= scale;
+                    slm_[slm_scores_base + p] = score;
+                    local_max = sycl::fmax(local_max, score);
+                }
             }
 
-            // Rescale sum_exp to global max and reduce
-            float rescaled_sum = local_sum_exp * sycl::exp(local_max - reduced_max);
-            rescaled_sum = sycl::reduce_over_group(sg, rescaled_sum, sycl::plus<float>());
+            const float max_contrib = use_sg_dot ? ((lane_id == 0) ? local_max : -1e30f) : local_max;
+            const float global_max  = sycl::reduce_over_group(wg, max_contrib, sycl::maximum<float>());
 
-            if (lane_id == 0) {
-                slm_[slm_reduce_base]     = reduced_max;
-                slm_[slm_reduce_base + 1] = rescaled_sum;
+            float local_sum = 0.0f;
+            if (use_sg_dot) {
+                for (int p = sg_id; p < seq_len; p += N_SGS) {
+                    if (lane_id == 0) {
+                        const float e = sycl::exp(slm_[slm_scores_base + p] - global_max);
+                        slm_[slm_scores_base + p] = e;
+                        local_sum += e;
+                    }
+                }
+            } else {
+                for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
+                    const float e = sycl::exp(slm_[slm_scores_base + p] - global_max);
+                    slm_[slm_scores_base + p] = e;
+                    local_sum += e;
+                }
+            }
+
+            const float sum_contrib = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
+            const float global_sum  = sycl::reduce_over_group(wg, sum_contrib, sycl::plus<float>());
+            const float inv_sum    = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
+
+            sycl::group_barrier(wg);
+
+            for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
+                float acc = 0.0f;
+                for (int p = 0; p < seq_len; ++p) {
+                    const float prob = slm_[slm_scores_base + p] * inv_sum;
+                    acc += prob * v_head[p * head_dim + d];
+                }
+                o_head[d] = acc;
+            }
+            return;
+        }
+
+        // Fallback when score cache does not fit in SLM.
+        float local_max = -1e30f;
+        if (use_sg_dot) {
+            for (int p = sg_id; p < seq_len; p += N_SGS) {
+                const float * k_pos = k_head + p * head_dim;
+                float partial = 0.0f;
+                for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                    partial += slm_[d] * k_pos[d];
+                }
+                float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                if (lane_id == 0) {
+                    score *= scale;
+                    local_max = sycl::fmax(local_max, score);
+                }
+            }
+        } else {
+            for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
+                float score = 0.0f;
+                const float * k_pos = k_head + p * head_dim;
+                for (int d = 0; d < head_dim; ++d) {
+                    score += slm_[d] * k_pos[d];
+                }
+                score *= scale;
+                local_max = sycl::fmax(local_max, score);
             }
         }
-        sycl::group_barrier(item_.get_group());
+        const float max_contrib = use_sg_dot ? ((lane_id == 0) ? local_max : -1e30f) : local_max;
+        const float global_max  = sycl::reduce_over_group(wg, max_contrib, sycl::maximum<float>());
 
-        global_max     = slm_[slm_reduce_base];
-        global_sum_exp = slm_[slm_reduce_base + 1];
+        float local_sum = 0.0f;
+        if (use_sg_dot) {
+            for (int p = sg_id; p < seq_len; p += N_SGS) {
+                const float * k_pos = k_head + p * head_dim;
+                float partial = 0.0f;
+                for (int d = lane_id; d < head_dim; d += SG_SIZE) {
+                    partial += slm_[d] * k_pos[d];
+                }
+                float score = sycl::reduce_over_group(sg, partial, sycl::plus<float>());
+                if (lane_id == 0) {
+                    score *= scale;
+                    local_sum += sycl::exp(score - global_max);
+                }
+            }
+        } else {
+            for (int p = tid; p < seq_len; p += BLOCK_SIZE) {
+                float score = 0.0f;
+                const float * k_pos = k_head + p * head_dim;
+                for (int d = 0; d < head_dim; ++d) {
+                    score += slm_[d] * k_pos[d];
+                }
+                score *= scale;
+                local_sum += sycl::exp(score - global_max);
+            }
+        }
+        const float sum_contrib = use_sg_dot ? ((lane_id == 0) ? local_sum : 0.0f) : local_sum;
+        const float global_sum  = sycl::reduce_over_group(wg, sum_contrib, sycl::plus<float>());
+        const float inv_sum    = (global_sum > 0.0f) ? (1.0f / global_sum) : 0.0f;
 
-        // Avoid division by zero for empty sequences
-        const float inv_sum = (global_sum_exp > 0.0f) ? (1.0f / global_sum_exp) : 0.0f;
-
-        // ====================================================================
-        // Pass 2: Value aggregation
-        // Each thread handles output dimensions: tid, tid+BLOCK_SIZE, ...
-        // For each dimension, loop over all sequence positions and accumulate
-        // softmax(score) * v[pos][d].
-        // Scores are recomputed to avoid storing seq_len floats.
-        // ====================================================================
         for (int d = tid; d < head_dim; d += BLOCK_SIZE) {
             float acc = 0.0f;
-
-            for (int p = 0; p < seq_len; p++) {
-                // Recompute score for position p
-                const float * k_pos = k_head + p * head_dim;
+            for (int p = 0; p < seq_len; ++p) {
                 float score = 0.0f;
-                for (int dd = 0; dd < head_dim; dd++) {
+                const float * k_pos = k_head + p * head_dim;
+                for (int dd = 0; dd < head_dim; ++dd) {
                     score += slm_[dd] * k_pos[dd];
                 }
                 score *= scale;
-
-                // Softmax probability
-                float prob = sycl::exp(score - global_max) * inv_sum;
-
-                // Weighted V accumulation
+                const float prob = sycl::exp(score - global_max) * inv_sum;
                 acc += prob * v_head[p * head_dim + d];
             }
-
             o_head[d] = acc;
         }
     }
@@ -4828,6 +5099,98 @@ bool UnifiedKernel::is_building_plan() const {
 
 PersistentStats UnifiedKernel::get_last_stats() const {
     return last_stats_;
+}
+
+bool UnifiedKernel::persistent_use_split_barrier() const {
+    // Default to split barriers. Keep atomic fallback for driver/runtime
+    // triage via GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER=1.
+    if (const char * force_atomic = std::getenv("GGML_SYCL_PERSISTENT_TG_ATOMIC_BARRIER")) {
+        if (std::atoi(force_atomic) != 0) {
+            return false;
+        }
+    }
+    if (const char * force_split = std::getenv("GGML_SYCL_PERSISTENT_TG_SPLIT_BARRIER")) {
+        return std::atoi(force_split) != 0;
+    }
+    return true;
+}
+
+int UnifiedKernel::persistent_matmul_tile_cols(OperationType type, int N, int K) const {
+    (void) N;
+    (void) K;
+    static const int tile_cols_attn =
+        persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_ATTN", 32);
+    static const int tile_cols_ffn =
+        persistent_parse_tile_cols_env("GGML_SYCL_PERSISTENT_TG_MATMUL_TILE_N_FFN", 128);
+
+    switch (type) {
+        case OperationType::MATMUL_GATE:
+        case OperationType::MATMUL_UP:
+        case OperationType::MATMUL_DOWN:
+        case OperationType::MATMUL_GATE_UP_SILU:
+            return tile_cols_ffn;
+        case OperationType::MATMUL_Q_PROJ:
+        case OperationType::MATMUL_K_PROJ:
+        case OperationType::MATMUL_V_PROJ:
+        case OperationType::MATMUL_OUT_PROJ:
+        default:
+            return tile_cols_attn;
+    }
+}
+
+int UnifiedKernel::persistent_num_workgroups(int total_tiles, bool has_attention, bool has_ffn, bool use_split_barrier) const {
+    int n_workgroups = 16;
+    if (use_split_barrier) {
+        // Split barrier overhead scales poorly with many participating work-groups.
+        // Favor a low default here; callers can still override via env vars.
+        n_workgroups = 4;
+        if (const char * env_split_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_SPLIT_N_WGS")) {
+            char * end = nullptr;
+            const long parsed = std::strtol(env_split_wgs, &end, 10);
+            if (end && end != env_split_wgs && parsed > 0 && parsed <= 64) {
+                n_workgroups = static_cast<int>(parsed);
+            }
+        }
+    } else {
+        try {
+            const int max_compute_units =
+                (int) queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+            if (max_compute_units > 0) {
+                if (persistent_aggressive_wg_policy_enabled()) {
+                    // Aggressive occupancy policy for experimentation/profiling.
+                    n_workgroups = max_compute_units * 2;
+                    if (has_attention) {
+                        n_workgroups += max_compute_units / 2;
+                    }
+                    if (has_ffn) {
+                        n_workgroups += max_compute_units / 2;
+                    }
+                    n_workgroups = std::clamp(n_workgroups, 8, 128);
+                    if (total_tiles > 0) {
+                        n_workgroups = std::min(n_workgroups, std::max(1, total_tiles));
+                    }
+                } else {
+                    // Conservative default: ~1 persistent work-group per 4 CUs.
+                    n_workgroups = std::clamp(max_compute_units / 4, 8, 32);
+                }
+            }
+        } catch (...) {
+            // Keep default when device query is unavailable.
+        }
+    }
+
+    if (total_tiles > 0) {
+        n_workgroups = std::min(n_workgroups, std::max(1, total_tiles));
+    }
+    if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
+        char * end = nullptr;
+        const long parsed = std::strtol(env_wgs, &end, 10);
+        if (end && end != env_wgs && parsed > 0 && parsed <= 64) {
+            n_workgroups = static_cast<int>(parsed);
+        }
+    }
+
+    return n_workgroups;
 }
 
 // -----------------------------------------------------------------------------
@@ -5309,12 +5672,15 @@ void UnifiedKernel::launch_persistent_kernel() {
 
     // Build device-side operation table
     const size_t n_ops = current_plan_->operations.size();
-    std::vector<DeviceOperation> host_ops(n_ops);
+    std::vector<DeviceOperation> host_ops;
+    host_ops.reserve(n_ops);
 
     int total_tiles = 0;
+    bool has_attention = false;
+    bool has_ffn_matmul = false;
     for (size_t i = 0; i < n_ops; i++) {
         const auto & src = current_plan_->operations[i];
-        auto &       dst = host_ops[i];
+        DeviceOperation dst = {};
 
         dst.type             = static_cast<int>(src.type);
         dst.layer            = src.layer;
@@ -5338,6 +5704,7 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.M                = src.M;
         dst.N                = src.N;
         dst.K                = src.K;
+        dst.tile_cols        = 0;
         dst.output_bytes     = src.output_bytes;
         dst.hidden_dim       = src.hidden_dim;
         dst.intermediate_dim = src.intermediate_dim;
@@ -5354,8 +5721,40 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.mask_ne2         = src.mask_ne2;
         dst.mask_ne3         = src.mask_ne3;
 
+        // Fuse MATMUL_GATE + MATMUL_UP + SILU_MUL into a single op when the
+        // dependency chain is explicit and contiguous in the persistent plan.
+        if (src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+            const auto & up   = current_plan_->operations[i + 1];
+            const auto & silu = current_plan_->operations[i + 2];
+            const bool contiguous_chain =
+                (up.type == OperationType::MATMUL_UP) &&
+                (silu.type == OperationType::SILU_MUL) &&
+                (src.layer == up.layer) &&
+                (up.layer == silu.layer) &&
+                (src.input == up.input) &&
+                (src.M == up.M) &&
+                (src.N == up.N) &&
+                (src.K == up.K) &&
+                (src.quant_type == up.quant_type) &&
+                (src.weight_layout == up.weight_layout) &&
+                (silu.input == src.output) &&
+                (silu.aux == up.output) &&
+                (src.weights != nullptr) &&
+                (up.weights != nullptr) &&
+                (silu.output != nullptr);
+
+            if (contiguous_chain) {
+                dst.type   = static_cast<int>(OperationType::MATMUL_GATE_UP_SILU);
+                dst.aux    = const_cast<void *>(up.weights);  // second weight tensor
+                dst.output = silu.output;                     // fused SiLU output
+                i += 2;
+            }
+        }
+
+        const OperationType op_type = static_cast<OperationType>(dst.type);
+
         // Calculate tiles for this operation
-        switch (src.type) {
+        switch (op_type) {
             case OperationType::RMS_NORM:
                 dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
                 break;
@@ -5364,10 +5763,10 @@ void UnifiedKernel::launch_persistent_kernel() {
             case OperationType::GET_ROWS:
             case OperationType::SET_ROWS:
             case OperationType::STRIDED_COPY:
-                dst.n_tiles = (src.M + 255) / 256;
+                dst.n_tiles = (dst.M + 255) / 256;
                 break;
             case OperationType::SILU_MUL:
-                dst.n_tiles = (src.intermediate_dim + 255) / 256;
+                dst.n_tiles = (dst.intermediate_dim + 255) / 256;
                 break;
             case OperationType::MATMUL_Q_PROJ:
             case OperationType::MATMUL_K_PROJ:
@@ -5376,80 +5775,160 @@ void UnifiedKernel::launch_persistent_kernel() {
             case OperationType::MATMUL_GATE:
             case OperationType::MATMUL_UP:
             case OperationType::MATMUL_DOWN:
-                dst.n_tiles = (src.N + 63) / 64;  // 64 output columns per tile
+            case OperationType::MATMUL_GATE_UP_SILU: {
+                dst.tile_cols = persistent_matmul_tile_cols(op_type, dst.N, dst.K);
+                dst.n_tiles = (dst.N + dst.tile_cols - 1) / dst.tile_cols;
+                if (op_type == OperationType::MATMUL_GATE ||
+                    op_type == OperationType::MATMUL_UP ||
+                    op_type == OperationType::MATMUL_DOWN ||
+                    op_type == OperationType::MATMUL_GATE_UP_SILU) {
+                    has_ffn_matmul = true;
+                }
                 break;
+            }
             case OperationType::ATTENTION_F16:
             case OperationType::ATTENTION_F32:
-                dst.n_tiles = src.N;  // One tile per head
+                dst.n_tiles = dst.N;  // One tile per head
+                has_attention = true;
                 break;
             case OperationType::ROPE:
                 dst.n_tiles = 1;  // Single cooperative tile -- one work-group processes this
                 break;
             case OperationType::SOFTMAX:
-                dst.n_tiles = std::max(1, src.M);  // One row per tile
+                dst.n_tiles = std::max(1, dst.M);  // One row per tile
                 break;
             default:
                 dst.n_tiles = 1;
         }
         total_tiles += dst.n_tiles;
+        host_ops.push_back(dst);
     }
 
     // Copy operation table to device
-    DeviceOperation * d_ops = sycl::malloc_device<DeviceOperation>(n_ops, queue_);
-    queue_.memcpy(d_ops, host_ops.data(), n_ops * sizeof(DeviceOperation)).wait();
-
-    // Reset tile counter
-    queue_.memset(tile_counter_, 0, sizeof(int)).wait();
-
-    // Reset barrier state (counter=0, sense=0)
-    queue_.memset(barrier_counter_, 0, sizeof(int)).wait();
-    queue_.memset(barrier_sense_, 0, sizeof(int)).wait();
-
-    // Build kernel args
-    PersistentKernelArgs args = {};
-    args.operations           = d_ops;
-    args.n_operations         = static_cast<int>(n_ops);
-    args.tile_counter         = tile_counter_;
-    args.barrier_counter      = barrier_counter_;
-    args.barrier_sense        = barrier_sense_;
-    for (int i = 0; i < 4; i++) {
-        args.scratch_buffers[i] = persistent_buffers_[i];
-    }
-    args.hidden_dim       = current_plan_->hidden_dim;
-    args.intermediate_dim = current_plan_->intermediate_dim;
+    const int n_ops_device = static_cast<int>(host_ops.size());
+    DeviceOperation * d_ops = sycl::malloc_device<DeviceOperation>(n_ops_device, queue_);
+    queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
 
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
-    // Start with a reasonable number of work-groups
-    // For the atomic barrier, all work-groups must participate
-    const int n_workgroups = 16;
+    const bool use_split_barrier = persistent_use_split_barrier();
+    const int n_workgroups = persistent_num_workgroups(total_tiles, has_attention, has_ffn_matmul, use_split_barrier);
     const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
+    const int matmul_slm    = (BLOCK_SIZE / 16) * 32;      // SG lanes x Q4_0 block cache
     const int slm_floats   = std::max({BLOCK_SIZE / 16,               // At least n_warps for reduction
                                        current_plan_->hidden_dim,      // For RMS norm
-                                       attention_slm});                // For attention tile
+                                       attention_slm,                  // For attention tile
+                                       matmul_slm});                   // For matmul activation staging
+    const bool use_attn_subgroup_dot = persistent_attention_subgroup_dot_enabled();
+    if (const char * log_policy = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_POLICY")) {
+        if (std::atoi(log_policy) != 0) {
+            GGML_LOG_INFO("[PERSISTENT-TG] policy: split=%d n_wgs=%d tiles=%d has_attn=%d has_ffn=%d attn_sg_dot=%d wg_aggr=%d\n",
+                          use_split_barrier ? 1 : 0, n_workgroups, total_tiles,
+                          has_attention ? 1 : 0, has_ffn_matmul ? 1 : 0,
+                          use_attn_subgroup_dot ? 1 : 0,
+                          persistent_aggressive_wg_policy_enabled() ? 1 : 0);
+        }
+    }
+
+    auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
+        // Reset tile counter
+        queue_.memset(tile_counter_, 0, sizeof(int)).wait();
+        // Reset barrier state (counter=0, sense=0)
+        queue_.memset(barrier_counter_, 0, sizeof(int)).wait();
+        queue_.memset(barrier_sense_, 0, sizeof(int)).wait();
+
+        PersistentKernelArgs args = {};
+        args.operations           = operations;
+        args.n_operations         = operation_count;
+        args.use_split_barrier    = use_split_barrier ? 1 : 0;
+        args.use_attn_subgroup_dot = use_attn_subgroup_dot ? 1 : 0;
+        args.tile_counter         = tile_counter_;
+        args.barrier_counter      = barrier_counter_;
+        args.barrier_sense        = barrier_sense_;
+        for (int i = 0; i < 4; i++) {
+            args.scratch_buffers[i] = persistent_buffers_[i];
+        }
+        args.hidden_dim       = current_plan_->hidden_dim;
+        args.intermediate_dim = current_plan_->intermediate_dim;
+
+        const auto start = std::chrono::high_resolution_clock::now();
+        queue_.submit([&](sycl::handler & cgh) {
+            sycl::local_accessor<float, 1> slm(slm_floats, cgh);
+            const auto args_copy = args;
+            cgh.parallel_for(
+                sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
+                [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
+                    PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
+                    kernel.run();
+                });
+        });
+        queue_.wait();
+        const auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration<double, std::milli>(end - start).count();
+    };
+
+    const bool profile_exec_by_op =
+        (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_EXEC_BY_OP") != nullptr);
+    int profile_exec_iters = 1;
+    if (const char * env_iters = std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_EXEC_ITERS")) {
+        char * end = nullptr;
+        const long parsed = std::strtol(env_iters, &end, 10);
+        if (end && end != env_iters && parsed > 0 && parsed <= 16) {
+            profile_exec_iters = static_cast<int>(parsed);
+        }
+    }
+    if (profile_exec_by_op) {
+        constexpr int kTypeCount = static_cast<int>(OperationType::SOFTMAX) + 1;
+        std::array<std::vector<DeviceOperation>, kTypeCount> ops_by_type;
+        std::array<int, kTypeCount> tiles_by_type = {};
+
+        for (const auto & op : host_ops) {
+            const int idx = op.type;
+            if (idx < 0 || idx >= kTypeCount) {
+                continue;
+            }
+            ops_by_type[idx].push_back(op);
+            tiles_by_type[idx] += op.n_tiles;
+        }
+
+        GGML_LOG_INFO("[PERSISTENT-TG] execute profile by-op: iters=%d n_wgs=%d\n",
+                      profile_exec_iters, n_workgroups);
+        for (int idx = 0; idx < kTypeCount; ++idx) {
+            if (ops_by_type[idx].empty()) {
+                continue;
+            }
+
+            DeviceOperation * d_ops_subset =
+                sycl::malloc_device<DeviceOperation>(ops_by_type[idx].size(), queue_);
+            if (!d_ops_subset) {
+                GGML_LOG_WARN("[PERSISTENT-TG] execute profile: alloc failed for op=%s\n",
+                              persistent_op_type_name(static_cast<OperationType>(idx)));
+                continue;
+            }
+            queue_.memcpy(d_ops_subset, ops_by_type[idx].data(),
+                          ops_by_type[idx].size() * sizeof(DeviceOperation)).wait();
+
+            double total_ms = 0.0;
+            for (int it = 0; it < profile_exec_iters; ++it) {
+                total_ms += run_persistent_kernel(d_ops_subset, static_cast<int>(ops_by_type[idx].size()));
+            }
+            const double avg_ms = total_ms / (double) profile_exec_iters;
+            GGML_LOG_INFO("[PERSISTENT-TG] execute profile op=%s ops=%zu tiles=%d "
+                          "avg_ms=%.3f total_ms=%.3f\n",
+                          persistent_op_type_name(static_cast<OperationType>(idx)),
+                          ops_by_type[idx].size(),
+                          tiles_by_type[idx],
+                          avg_ms, total_ms);
+
+            sycl::free(d_ops_subset, queue_);
+        }
+    }
 
     // Launch persistent kernel - single kernel for all operations
-    auto start = std::chrono::high_resolution_clock::now();
-
-    queue_.submit([&](sycl::handler & cgh) {
-        sycl::local_accessor<float, 1> slm(slm_floats, cgh);
-        auto args_copy = args;
-
-        cgh.parallel_for(
-            sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
-            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-                PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                kernel.run();
-            });
-    });
-
-    queue_.wait();
-
-    auto end        = std::chrono::high_resolution_clock::now();
-    double elapsed_ms = std::chrono::duration<double, std::milli>(end - start).count();
+    double elapsed_ms = run_persistent_kernel(d_ops, n_ops_device);
 
     // Record stats
-    last_stats_.n_operations         = static_cast<int>(n_ops);
+    last_stats_.n_operations         = n_ops_device;
     last_stats_.n_layers             = current_plan_->n_layers;
     last_stats_.total_tiles          = total_tiles;
     last_stats_.kernel_time_ms       = elapsed_ms;

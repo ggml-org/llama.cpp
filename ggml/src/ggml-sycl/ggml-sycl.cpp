@@ -329,6 +329,19 @@ static bool ggml_sycl_unified_soa_enabled() {
     return enabled != 0;
 }
 
+// Persistent TG can request SoA independently of global UNIFIED_SOA.
+static bool ggml_sycl_persistent_tg_soa_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * persistent_tg = std::getenv("GGML_SYCL_PERSISTENT_TG");
+        const bool persistent_on = (persistent_tg && std::atoi(persistent_tg) != 0);
+        const char * prefer_soa = std::getenv("GGML_SYCL_PERSISTENT_TG_PREFER_SOA");
+        const bool prefer_on = (prefer_soa == nullptr || std::atoi(prefer_soa) != 0);
+        enabled = (persistent_on && prefer_on) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
 // Unified kernel previously required AoS inputs. Now it supports both layouts.
 // Returns true if we should force AoS (for backward compatibility), false to allow SoA.
 static bool ggml_sycl_unified_kernel_requires_aos(ggml_type type) {
@@ -338,8 +351,8 @@ static bool ggml_sycl_unified_kernel_requires_aos(ggml_type type) {
         !ggml_sycl::should_use_unified(type)) {
         return false;
     }
-    // If SoA is explicitly enabled, allow it
-    if (ggml_sycl_unified_soa_enabled()) {
+    // If SoA is explicitly enabled, allow it.
+    if (ggml_sycl_unified_soa_enabled() || ggml_sycl_persistent_tg_soa_enabled()) {
         return false;
     }
     // Default: require AoS for backward compatibility
@@ -18156,6 +18169,15 @@ static bool graph_fa_ptrs_match(ggml_backend_sycl_context & ctx, ggml_cgraph * c
     return true;
 }
 
+static bool ggml_sycl_validate_fa_graph_ptrs() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_VALIDATE_FA_GRAPH_PTRS");
+        enabled = env ? std::atoi(env) : 0;
+    }
+    return enabled != 0;
+}
+
 static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0,
                                            const ggml_tensor * src1,
                                            ggml_tensor *       dst,
@@ -23116,8 +23138,7 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
         graph_lock.lock();
 
     }
-    sycl::event sync_evt = ggml_sycl_submit_queue_sync_event(*stream);
-    sync_evt.wait_and_throw();
+    stream->wait_and_throw();
     GGML_UNUSED(backend);
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -25595,6 +25616,17 @@ struct persistent_mul_debug_state {
 };
 static persistent_mul_debug_state g_persistent_mul_dbg;
 
+static bool persistent_tg_prefer_soa_layout() {
+    static int prefer = -1;
+    if (prefer < 0) {
+        // Default on for persistent TG: SoA consistently improves Q4_0 matmul throughput.
+        // Set GGML_SYCL_PERSISTENT_TG_PREFER_SOA=0 to force legacy AoS behavior.
+        const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_PREFER_SOA");
+        prefer = (env == nullptr || std::atoi(env) != 0) ? 1 : 0;
+    }
+    return prefer != 0;
+}
+
 /**
  * Build a persistent execution plan from the compute graph using UnifiedKernel API.
  *
@@ -25674,6 +25706,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     int executed_cpy      = 0;
     int64_t decode_kv_pos_hint = -1;
     int ops_added = 0;
+    const bool profile_build = (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_BUILD") != nullptr);
+    using clock_t = std::chrono::high_resolution_clock;
+    const auto build_start = profile_build ? clock_t::now() : clock_t::time_point{};
+    std::array<double, GGML_OP_COUNT> build_ms_by_op{};
     int max_ops_limit = -1;
     const bool log_ops = (std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_OPS") != nullptr);
     if (const char * max_ops_env = std::getenv("GGML_SYCL_PERSISTENT_TG_MAX_OPS")) {
@@ -25738,6 +25774,49 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     sycl::queue * q = ctx.stream();
     std::unordered_map<const ggml_tensor *, void *> materialized_ptrs;
     std::vector<int> rms_seen_per_layer(n_layers, 0);
+    std::unordered_map<uint64_t, std::pair<float *, float *>> rope_cache_by_pos;
+    int32_t rope_position_cached = -1;
+
+    auto get_tensor_ptr_fast = [&](const ggml_tensor * tensor) -> void * {
+        if (!tensor) {
+            return nullptr;
+        }
+
+        if (tensor->extra) {
+            auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            if (extra->data_device[ctx.device] != nullptr) {
+                return extra->data_device[ctx.device];
+            }
+        }
+
+        if (tensor->data != nullptr) {
+            return tensor->data;
+        }
+
+        return ggml_sycl_get_data_ptr(tensor, ctx.device);
+    };
+
+    auto get_tensor_ptr_view_fast = [&](const ggml_tensor * tensor) -> void * {
+        if (!tensor) {
+            return nullptr;
+        }
+
+        size_t view_offs = 0;
+        const ggml_tensor * root = ggml_sycl_get_view_root(tensor, view_offs);
+        if (!root) {
+            root = tensor;
+        }
+
+        void * base_ptr = get_tensor_ptr_fast(root);
+        if (!base_ptr) {
+            base_ptr = ggml_sycl_get_data_ptr(root, ctx.device);
+        }
+        if (!base_ptr) {
+            return nullptr;
+        }
+
+        return static_cast<void *>(static_cast<char *>(base_ptr) + view_offs);
+    };
 
     auto compute_contiguous_nb = [](const ggml_tensor * tensor, int64_t nb[4]) {
         const int64_t ts = (int64_t) ggml_type_size(tensor->type);
@@ -25797,7 +25876,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         }
 
         if (ggml_is_contiguous(tensor) && !ggml_is_permuted(tensor)) {
-            void * ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+            void * ptr = get_tensor_ptr_view_fast(tensor);
             materialized_ptrs.emplace(tensor, ptr);
             return ptr;
         }
@@ -25838,7 +25917,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                           tensor->name[0] != '\0' ? tensor->name : "(unnamed)",
                           bytes);
         }
-        const void * src_ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+        const void * src_ptr = get_tensor_ptr_view_fast(tensor);
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: src_ptr=%p\n", src_ptr);
         }
@@ -25873,7 +25952,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                           ggml_is_permuted(tensor) ? 1 : 0);
         }
         if (allow_strided) {
-            void * ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+            void * ptr = get_tensor_ptr_view_fast(tensor);
             if (!ptr) {
                 return nullptr;
             }
@@ -25896,6 +25975,60 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         return ptr;
     };
 
+    auto get_usm_alloc_type = [&](const void * ptr) -> sycl::usm::alloc {
+        if (!ptr) {
+            return sycl::usm::alloc::unknown;
+        }
+        try {
+            return sycl::get_pointer_type(ptr, q->get_context());
+        } catch (...) {
+            return sycl::usm::alloc::unknown;
+        }
+    };
+
+    auto ensure_device_access_ptr = [&](const ggml_tensor * tensor,
+                                        const void *        ptr,
+                                        const char *        tag,
+                                        size_t              bytes_override = 0) -> const void * {
+        if (!ptr) {
+            return nullptr;
+        }
+
+        const sycl::usm::alloc alloc_type = get_usm_alloc_type(ptr);
+        if (alloc_type == sycl::usm::alloc::device || alloc_type == sycl::usm::alloc::shared) {
+            return ptr;
+        }
+
+        // Host-pointer staging is expensive (alloc + copy + sync per pointer).
+        // Keep passthrough by default and allow opt-in staging for diagnostics.
+        static const bool stage_host_ptrs =
+            (std::getenv("GGML_SYCL_PERSISTENT_TG_STAGE_HOST_PTRS") != nullptr);
+        if (!stage_host_ptrs) {
+            return ptr;
+        }
+
+        if (!tensor || !ggml_is_contiguous(tensor) || ggml_is_permuted(tensor)) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] %s requires contiguous tensor for host->device staging\n", tag);
+            return nullptr;
+        }
+
+        const size_t bytes = bytes_override > 0 ? bytes_override : ggml_nbytes(tensor);
+        if (bytes == 0) {
+            return ptr;
+        }
+
+        void * dev_ptr = sycl::malloc_device(bytes, *q);
+        if (!dev_ptr) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] %s device alloc failed (%zu bytes)\n", tag, bytes);
+            return nullptr;
+        }
+
+        kernel.add_temp_device_alloc(dev_ptr);
+        ggml_sycl_safe_memcpy(*q, dev_ptr, ptr, bytes, {});
+        q->wait_and_throw();
+        return dev_ptr;
+    };
+
     auto record_trace = [&](ggml_op op, const ggml_tensor * tensor, const void * output_ptr, int op_index) {
         if (!g_sycl_tg_trace_hash || !tensor || !output_ptr) {
             return;
@@ -25914,6 +26047,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     int max_layer_seen = -1;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        const auto node_start = profile_build ? clock_t::now() : clock_t::time_point{};
         if (max_ops_limit > 0 && ops_added >= max_ops_limit) {
             if (g_ggml_sycl_debug) {
                 GGML_SYCL_DEBUG("[PERSISTENT-TG] Max ops limit reached (%d), truncating plan\n", max_ops_limit);
@@ -25967,91 +26101,35 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                    node->src[1]->type, node->type);
                     return false;
                 }
-                const bool can_persist_get_rows =
-                    (node->src[0]->type == GGML_TYPE_F32 || node->src[0]->type == GGML_TYPE_F16) &&
-                    ggml_is_contiguous(node->src[0]) && !ggml_is_permuted(node->src[0]);
-
-                if (can_persist_get_rows) {
-                    const void * src0 = resolve_input_ptr(node->src[0], layer);
-                    const void * idx_ptr = resolve_input_ptr(node->src[1], layer);
-                    void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
-                    if (!src0 || !idx_ptr || !out_ptr) {
-                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS pointer resolution failed\n");
-                        return false;
-                    }
-
-                    // Indices can live in host memory. Materialize to device memory to keep
-                    // GET_ROWS inside the persistent execution order.
-                    const size_t idx_bytes = ggml_nbytes(node->src[1]);
-                    const sycl::usm::alloc idx_alloc = sycl::get_pointer_type(idx_ptr, q->get_context());
-                    if (idx_alloc != sycl::usm::alloc::device) {
-                        void * idx_dev = sycl::malloc_device(idx_bytes, *q);
-                        if (!idx_dev) {
-                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS index device alloc failed (%zu bytes)\n", idx_bytes);
-                            return false;
-                        }
-                        kernel.add_temp_device_alloc(idx_dev);
-                        ggml_sycl_safe_memcpy(*q, idx_dev, idx_ptr, idx_bytes, {});
-                        q->wait_and_throw();
-                        idx_ptr = idx_dev;
-                    }
-
-                    const int64_t ne00 = node->ne[0];
-                    const int64_t ne10 = std::max<int64_t>(1, node->src[1]->ne[0]);
-                    const int64_t ne11 = std::max<int64_t>(1, node->src[1]->ne[1]);
-                    const int64_t ne12 = std::max<int64_t>(1, node->src[1]->ne[2]);
-                    const int64_t n_elements = ne00 * ne10 * ne11 * ne12;
-                    if (n_elements > std::numeric_limits<int>::max()) {
-                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS tensor too large: %lld elements\n",
-                                       (long long) n_elements);
-                        return false;
-                    }
-
-                    const int64_t nb01 = node->src[0]->nb[1];
-                    const int64_t nb02 = node->src[0]->nb[2];
-                    const int64_t nb03 = node->src[0]->nb[3];
-                    const int64_t s10 = node->src[1]->nb[0] / (int64_t) sizeof(int32_t);
-                    const int64_t s11 = node->src[1]->nb[1] / (int64_t) sizeof(int32_t);
-                    const int64_t s12 = node->src[1]->nb[2] / (int64_t) sizeof(int32_t);
-                    const int64_t s1  = node->nb[1] / (int64_t) sizeof(float);
-                    const int64_t s2  = node->nb[2] / (int64_t) sizeof(float);
-                    const int64_t s3  = node->nb[3] / (int64_t) sizeof(float);
-                    const int src0_type = (node->src[0]->type == GGML_TYPE_F16) ? 1 : 0;
-
-                    kernel.add_get_rows(layer, src0, idx_ptr, out_ptr, (int) n_elements,
-                                        ne00, ne10, ne11, ne12,
-                                        nb01, nb02, nb03,
-                                        s10, s11, s12, s1, s2, s3, src0_type);
-                    log_op("GET_ROWS", layer, node, out_ptr);
-                    ops_added++;
-                    record_trace(node->op, node, out_ptr, ops_added - 1);
-                } else {
-                    ggml_sycl_op_get_rows(ctx, node);
-                    // GET_ROWS dispatch is async; ensure the output buffer is ready before
-                    // hashing/copying to a stable pointer for later persistent ops.
-                    q->wait_and_throw();
-                    if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
-                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
-                    }
-                    if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
-                        const size_t bytes = ggml_nbytes(node);
-                        void * stable_ptr = sycl::malloc_device(bytes, *q);
-                        if (!stable_ptr) {
-                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (%zu bytes)\n", bytes);
-                            return false;
-                        }
-                        kernel.add_temp_device_alloc(stable_ptr);
-                        const void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
-                        if (!out_ptr) {
-                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS output ptr missing\n");
-                            return false;
-                        }
-                        q->memcpy(stable_ptr, out_ptr, bytes).wait();
-                        materialized_ptrs[node] = stable_ptr;
-                    }
-                    executed_get_rows++;
+                // Keep GET_ROWS outside persistent execution for now.
+                // The in-kernel GET_ROWS path is unstable on B-series Xe and can trigger
+                // UR_RESULT_ERROR_DEVICE_LOST; pre-executing keeps decode robust while the
+                // persistent GET_ROWS kernel is debugged separately.
+                ggml_sycl_op_get_rows(ctx, node);
+                // GET_ROWS dispatch is async; ensure the output buffer is ready before
+                // hashing/copying to a stable pointer for later persistent ops.
+                q->wait_and_throw();
+                if (g_sycl_tg_trace_hash) {
+                    void * out_ptr = get_tensor_ptr_view_fast(node);
+                    ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                 }
+                if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+                    const size_t bytes = ggml_nbytes(node);
+                    void * stable_ptr = sycl::malloc_device(bytes, *q);
+                    if (!stable_ptr) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (%zu bytes)\n", bytes);
+                        return false;
+                    }
+                    kernel.add_temp_device_alloc(stable_ptr);
+                    const void * out_ptr = get_tensor_ptr_view_fast(node);
+                    if (!out_ptr) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS output ptr missing\n");
+                        return false;
+                    }
+                    q->memcpy(stable_ptr, out_ptr, bytes).wait();
+                    materialized_ptrs[node] = stable_ptr;
+                }
+                executed_get_rows++;
                 break;
             }
             case GGML_OP_RMS_NORM: {
@@ -26059,7 +26137,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_op_rms_norm(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26069,9 +26147,17 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 // We pass weights=nullptr; the weight scaling MUL will be
                 // skipped (not added as silu_mul) since we handle it here.
                 const void * input  = resolve_input_ptr(node->src[0], layer);
-                void *       output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void *       output = get_tensor_ptr_view_fast(node);
                 if (!input || !ggml_is_contiguous(node)) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] RMS_NORM input/output not contiguous\n");
+                    return false;
+                }
+                input = ensure_device_access_ptr(node->src[0], input, "RMS_NORM input");
+                if (!input) {
+                    return false;
+                }
+                output = const_cast<void *>(ensure_device_access_ptr(node, output, "RMS_NORM output", ggml_nbytes(node)));
+                if (!output) {
                     return false;
                 }
                 float eps = 1e-5f;
@@ -26173,7 +26259,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_mul_mat(ctx, node->src[0], node->src[1], node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26189,6 +26275,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 const bool is_quantized_weight = (weight_type == GGML_TYPE_Q4_0 || weight_type == GGML_TYPE_Q6_K);
                 const bool is_f16_weight = (weight_type == GGML_TYPE_F16);
                 layout_mode weight_layout = GGML_LAYOUT_AOS;
+                const void * preferred_layout_ptr = nullptr;
 
                 if (is_quantized_weight) {
                     if (ggml_sycl_tensor_is_weight(weight_tensor)) {
@@ -26204,6 +26291,44 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     }
                 }
 
+                // Persistent Q4_0 path is materially faster with SoA than AoS.
+                // Try to promote AoS -> SoA for this path only, with safe rollback
+                // if SoA is unavailable for the tensor.
+                if (is_quantized_weight &&
+                    weight_type == GGML_TYPE_Q4_0 &&
+                    weight_layout == GGML_LAYOUT_AOS &&
+                    persistent_tg_prefer_soa_layout()) {
+                    const layout_mode soa_layout =
+                        ggml_sycl_adjust_layout_for_tensor(weight_tensor, GGML_LAYOUT_SOA, ctx.device);
+                    if (soa_layout == GGML_LAYOUT_SOA) {
+                        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(weight_tensor, ctx.device);
+                        if (cache_key.valid) {
+                            ggml_sycl_register_layout_choice(cache_key, ctx.device, GGML_LAYOUT_SOA,
+                                                             weight_tensor->type, weight_tensor->name);
+                        }
+
+                        // Prefer a concrete SoA pointer for persistent DMMV. If it is not
+                        // materialized yet, request it from the unified cache.
+                        preferred_layout_ptr =
+                            ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
+                        if (!preferred_layout_ptr) {
+                            preferred_layout_ptr =
+                                ggml_sycl_get_weight_layout_ptr(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
+                        }
+                        if (!preferred_layout_ptr) {
+                            preferred_layout_ptr =
+                                ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, GGML_LAYOUT_SOA);
+                        }
+
+                        if (preferred_layout_ptr != nullptr) {
+                            weight_layout = GGML_LAYOUT_SOA;
+                        } else if (cache_key.valid) {
+                            ggml_sycl_register_layout_choice(cache_key, ctx.device, GGML_LAYOUT_AOS,
+                                                             weight_tensor->type, weight_tensor->name);
+                        }
+                    }
+                }
+
                 const void * weight = nullptr;
                 int64_t weight_nb[4] = {0, 0, 0, 0};
                 int64_t input_nb[4]  = {0, 0, 0, 0};
@@ -26213,7 +26338,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 };
                 if (is_quantized_weight) {
                     if (weight_layout != GGML_LAYOUT_AOS) {
-                        weight = ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout);
+                        weight = preferred_layout_ptr ? preferred_layout_ptr :
+                                 ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout);
                         if (!weight) {
                             GGML_SYCL_DEBUG("[PERSISTENT-TG] Weight layout %d unavailable for %s, falling back to AoS\n",
                                             (int) weight_layout, weight_tensor->name ? weight_tensor->name : "(null)");
@@ -26221,7 +26347,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                         }
                     }
                     if (!weight) {
-                        weight = ggml_sycl_get_data_ptr_view(weight_tensor, ctx.device);
+                        weight = get_tensor_ptr_view_fast(weight_tensor);
                     }
                 } else if (is_f16_weight) {
                     weight = resolve_input_ptr_with_nb(weight_tensor, layer, weight_nb, true);
@@ -26238,10 +26364,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                   ggml_sycl_layout_mode_name(weight_layout),
                                   ggml_sycl_layout_mode_name(tensor_layout),
                                   ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout),
-                                  ggml_sycl_get_data_ptr_view(weight_tensor, ctx.device));
+                                  get_tensor_ptr_view_fast(weight_tensor));
                 }
                 const void * input  = nullptr;
-                void *       output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void *       output = get_tensor_ptr_view_fast(node);
                 if (is_quantized_weight) {
                     input = resolve_input_ptr(node->src[1], layer);
                 } else {
@@ -26361,7 +26487,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_mul(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26395,7 +26521,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 }
                 if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
                     GGML_LOG_INFO("[PERSISTENT-TG] MUL ptrs: src0=%p src1=%p dst=%p\n",
-                                  src0, src1, ggml_sycl_get_data_ptr_view(node, ctx.device));
+                                  src0, src1, get_tensor_ptr_view_fast(node));
                 }
                 const int64_t n_elements = ggml_nelements(node);
                 if (n_elements > std::numeric_limits<int>::max()) {
@@ -26403,7 +26529,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                    (long long) n_elements);
                     return false;
                 }
-                void * mul_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * mul_out = get_tensor_ptr_view_fast(node);
                 if (g_persistent_mul_dbg.enabled && !g_persistent_mul_dbg.captured &&
                     node->type == GGML_TYPE_F32 && node->ne[1] >= 1) {
                     const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_MUL_NAME");
@@ -26442,7 +26568,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_add(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26472,7 +26598,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                    (long long) n_elements);
                     return false;
                 }
-                void * add_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * add_out = get_tensor_ptr_view_fast(node);
                 if (g_persistent_add_dbg.enabled && !g_persistent_add_dbg.captured &&
                     node->type == GGML_TYPE_F32 && node->ne[1] >= 1) {
                     const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_ADD_NAME");
@@ -26511,7 +26637,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_swiglu(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26549,7 +26675,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                    (long long) n_elements);
                     return false;
                 }
-                void * glu_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * glu_out = get_tensor_ptr_view_fast(node);
                 kernel.add_silu_mul(layer, gate, up, glu_out);
                 log_op("GLU", layer, node, glu_out);
                 ops_added++;
@@ -26565,7 +26691,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_rope(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26633,36 +26759,62 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
 
                 // Read position from device (src[1] is position tensor)
                 // For TG mode (M=1), there's only one position value
-                const int32_t * pos_device =
-                    (const int32_t *) ggml_sycl_get_data_ptr_view(node->src[1], ctx.device);
-                int32_t position = 0;
-                sycl::queue * q = ctx.stream();
-                q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
-
-                // Pre-compute cos/sin caches on host
-                // theta_i = position * freq_base^(-2i/n_dims) for neox-style RoPE
-                std::vector<float> cos_cache(half_dim);
-                std::vector<float> sin_cache(half_dim);
-                for (int j = 0; j < half_dim; j++) {
-                    float theta = (float) position * powf(freq_base, -2.0f * (float) j / (float) n_dims);
-                    cos_cache[j] = cosf(theta);
-                    sin_cache[j] = sinf(theta);
+                int32_t position = rope_position_cached;
+                if (position < 0) {
+                    const int32_t * pos_device =
+                        (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                    if (!pos_device) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] ROPE position tensor missing\n");
+                        return false;
+                    }
+                    q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                    rope_position_cached = position;
                 }
 
-                // Upload cos/sin caches to device
-                float * d_cos = sycl::malloc_device<float>(half_dim, *q);
-                float * d_sin = sycl::malloc_device<float>(half_dim, *q);
-                q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
-                q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+                const uint64_t rope_cache_key =
+                    (static_cast<uint64_t>(static_cast<uint32_t>(position)) << 32) |
+                    static_cast<uint64_t>(static_cast<uint32_t>(n_dims));
 
-                // Track device allocations for cleanup after execution
-                kernel.add_temp_device_alloc(d_cos);
-                kernel.add_temp_device_alloc(d_sin);
+                float * d_cos = nullptr;
+                float * d_sin = nullptr;
+                auto rope_it = rope_cache_by_pos.find(rope_cache_key);
+                if (rope_it != rope_cache_by_pos.end()) {
+                    d_cos = rope_it->second.first;
+                    d_sin = rope_it->second.second;
+                } else {
+                    // Build and upload RoPE cos/sin once per (position, n_dims).
+                    std::vector<float> cos_cache(half_dim);
+                    std::vector<float> sin_cache(half_dim);
+                    for (int j = 0; j < half_dim; j++) {
+                        const float theta = (float) position * powf(freq_base, -2.0f * (float) j / (float) n_dims);
+                        cos_cache[j] = cosf(theta);
+                        sin_cache[j] = sinf(theta);
+                    }
+
+                    d_cos = sycl::malloc_device<float>(half_dim, *q);
+                    d_sin = sycl::malloc_device<float>(half_dim, *q);
+                    if (!d_cos || !d_sin) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] ROPE cache alloc failed (half_dim=%d)\n", half_dim);
+                        if (d_cos) {
+                            sycl::free(d_cos, *q);
+                        }
+                        if (d_sin) {
+                            sycl::free(d_sin, *q);
+                        }
+                        return false;
+                    }
+                    q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
+                    q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+
+                    kernel.add_temp_device_alloc(d_cos);
+                    kernel.add_temp_device_alloc(d_sin);
+                    rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
+                }
 
                 // Each graph ROPE op processes a single tensor (Q or K)
                 // src[0] is the input tensor, dst is the output tensor
                 void * input_rope  = const_cast<void *>(resolve_input_ptr(node->src[0], layer));
-                void * output_rope = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * output_rope = get_tensor_ptr_view_fast(node);
                 if (!input_rope || !ggml_is_contiguous(node)) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] ROPE input/output not contiguous\n");
                     return false;
@@ -26720,7 +26872,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 }
 
                 const void * input = resolve_input_ptr(src0, layer);
-                void * output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * output = get_tensor_ptr_view_fast(node);
                 if (!input || !output || !ggml_is_contiguous(node)) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX input/output not available or output not contiguous\n");
                     return false;
@@ -26741,6 +26893,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     }
                     int64_t mask_nb[GGML_MAX_DIMS] = {};
                     mask_ptr = resolve_input_ptr_with_nb(mask, layer, mask_nb, true);
+                    if (!mask_ptr) {
+                        return false;
+                    }
+                    mask_ptr = ensure_device_access_ptr(mask, mask_ptr, "SOFT_MAX mask");
                     if (!mask_ptr) {
                         return false;
                     }
@@ -26805,7 +26961,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     ggml_sycl_flash_attn_ext(ctx, node);
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -26855,7 +27011,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 const void * q_ptr = resolve_input_ptr_with_nb(Q_fa, layer, q_nb, true);
                 const void * k_ptr = resolve_input_ptr_with_nb(K_fa, layer, k_nb, true);
                 const void * v_ptr = resolve_input_ptr_with_nb(V_fa, layer, v_nb, true);
-                void * out_ptr     = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * out_ptr     = get_tensor_ptr_view_fast(node);
                 if (!q_ptr || !k_ptr || !v_ptr || !ggml_is_contiguous(node)) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN input/output not contiguous\n");
                     return false;
@@ -27045,6 +27201,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     if (!mask_ptr) {
                         return false;
                     }
+                    mask_ptr = ensure_device_access_ptr(mask, mask_ptr, "FLASH_ATTN mask");
+                    if (!mask_ptr) {
+                        return false;
+                    }
                     mask_nb0 = mask_nb[0];
                     mask_nb1 = mask_nb[1];
                     mask_nb2 = mask_nb[2];
@@ -27188,7 +27348,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     // Keep ordering deterministic for subsequent persistent ops.
                     q->wait_and_throw();
                     if (g_sycl_tg_trace_hash) {
-                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
                         ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
                     }
                     break;
@@ -27222,31 +27382,38 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 }
                 // Use the original tensor layout for SET_ROWS. It relies on src0 strides,
                 // so materializing to a contiguous buffer would corrupt indexing.
-                const void * src_ptr = ggml_sycl_get_data_ptr_view(src0, ctx.device);
-                const void * idx_ptr = ggml_sycl_get_data_ptr_view(src1, ctx.device);
+                const void * src_ptr = get_tensor_ptr_view_fast(src0);
+                const void * idx_ptr = get_tensor_ptr_view_fast(src1);
                 // GGML_OP_SET_ROWS writes through the op output view (dst/node), not the
                 // src[2] root tensor base. Using src[2] here can drop view offsets.
-                void * dst_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                void * dst_ptr = get_tensor_ptr_view_fast(node);
                 if (!dst_ptr && node->src[2]) {
-                    dst_ptr = ggml_sycl_get_data_ptr_view(node->src[2], ctx.device);
+                    dst_ptr = get_tensor_ptr_view_fast(node->src[2]);
                 }
                 if (!src_ptr || !idx_ptr || !dst_ptr) {
                     return false;
                 }
 
+                idx_ptr = ensure_device_access_ptr(src1, idx_ptr, "SET_ROWS indices");
+                if (!idx_ptr) {
+                    return false;
+                }
+
                 // Decode-phase hint: SET_ROWS indices encode which KV row is written.
                 // Later FLASH_ATTN uses this to clamp seq_len to the live KV extent.
-                if (idx_type == 1) {
-                    int64_t idx0 = -1;
-                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
-                    if (idx0 >= 0) {
-                        decode_kv_pos_hint = idx0;
-                    }
-                } else if (idx_type == 0) {
-                    int32_t idx0 = -1;
-                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
-                    if (idx0 >= 0) {
-                        decode_kv_pos_hint = idx0;
+                if (decode_kv_pos_hint < 0) {
+                    if (idx_type == 1) {
+                        int64_t idx0 = -1;
+                        q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                        if (idx0 >= 0) {
+                            decode_kv_pos_hint = idx0;
+                        }
+                    } else if (idx_type == 0) {
+                        int32_t idx0 = -1;
+                        q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                        if (idx0 >= 0) {
+                            decode_kv_pos_hint = idx0;
+                        }
                     }
                 }
 
@@ -27355,8 +27522,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     GGML_LOG_ERROR("[PERSISTENT-TG] CONT output not contiguous\n");
                     return false;
                 }
-                const void * src_ptr = ggml_sycl_get_data_ptr_view(node->src[0], ctx.device);
-                void * dst_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                const void * src_ptr = get_tensor_ptr_view_fast(node->src[0]);
+                void * dst_ptr = get_tensor_ptr_view_fast(node);
                 if (!src_ptr || !dst_ptr) {
                     return false;
                 }
@@ -27407,6 +27574,10 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                ggml_op_name(node->op), node->name ? node->name : "(null)");
                 return false;
         }
+        if (profile_build && node) {
+            build_ms_by_op[node->op] +=
+                std::chrono::duration<double, std::milli>(clock_t::now() - node_start).count();
+        }
     }
 
     if (max_layer_seen >= n_layers) {
@@ -27429,6 +27600,22 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Layer range: min=%d max=%d expected=%d\n",
                         min_layer_seen == std::numeric_limits<int>::max() ? -1 : min_layer_seen,
                         max_layer_seen, n_layers);
+    }
+    if (profile_build) {
+        const double build_ms =
+            std::chrono::duration<double, std::milli>(clock_t::now() - build_start).count();
+        GGML_LOG_INFO("[PERSISTENT-TG] build profile: total=%.3f ms nodes=%d ops=%d\n",
+                      build_ms, cgraph->n_nodes, ops_added);
+        GGML_LOG_INFO("[PERSISTENT-TG] build profile ops ms: MUL_MAT=%.3f RMS_NORM=%.3f MUL=%.3f "
+                      "ADD=%.3f SET_ROWS=%.3f FLASH_ATTN=%.3f SOFT_MAX=%.3f GET_ROWS=%.3f\n",
+                      build_ms_by_op[GGML_OP_MUL_MAT],
+                      build_ms_by_op[GGML_OP_RMS_NORM],
+                      build_ms_by_op[GGML_OP_MUL],
+                      build_ms_by_op[GGML_OP_ADD],
+                      build_ms_by_op[GGML_OP_SET_ROWS],
+                      build_ms_by_op[GGML_OP_FLASH_ATTN_EXT],
+                      build_ms_by_op[GGML_OP_SOFT_MAX],
+                      build_ms_by_op[GGML_OP_GET_ROWS]);
     }
 
     GGML_SYCL_DEBUG("[PERSISTENT-TG] Built persistent plan: %d ops from %d graph nodes\n",
@@ -28596,7 +28783,7 @@ normal_dispatch:
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
-        if (sycl_ctx->exec_graph && sycl_ctx->fa_graph_ptrs_valid) {
+        if (ggml_sycl_validate_fa_graph_ptrs() && sycl_ctx->exec_graph && sycl_ctx->fa_graph_ptrs_valid) {
             if (!graph_fa_ptrs_match(*sycl_ctx, cgraph)) {
                 sycl_ctx->exec_graph.reset();
                 sycl_ctx->exec_graph_n_nodes  = 0;
