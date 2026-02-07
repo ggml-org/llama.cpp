@@ -65,15 +65,23 @@ struct ifairy_lut_extra {
     ggml_backend_buffer_t index_buffer;
 };
 
+#if defined(_MSC_VER)
+#    define GGML_IFAIRY_LUT_ALIGN(n) __declspec(align(n))
+#else
+#    define GGML_IFAIRY_LUT_ALIGN(n) __attribute__((aligned(n)))
+#endif
+
+#define GGML_IFAIRY_LUT_WTILE_ALIGNMENT 64
+
 // Packed iFairy 3-weight codes for lut_c-style kernels:
 // - per ggml QK_IFAIRY block has QK_IFAIRY_GROUPS_PER_BLOCK groups
 // - each group stores 16 lanes (16 output rows) of 1-byte codes (idx16 + flags)
 // - d_real/d_imag are per-row/per-block weight scales, stored as float for fast use in kernels
-struct ifairy_lut_wtile_16 {
+struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy_lut_wtile_16 {
     uint8_t qs[QK_IFAIRY_GROUPS_PER_BLOCK][16];
     float   d_real[16];
     float   d_imag[16];
-} __attribute__((aligned(128)));
+};
 
 // iFairy 3-weight LUT API
 //

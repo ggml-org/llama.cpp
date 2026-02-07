@@ -72,7 +72,7 @@ void ggml_ifairy_lut_free(void) {
     for (auto * e : g_ifairy_lut_extras) {
         if (e) {
             if (e->indexes && e->index_tensor == NULL && e->index_buffer == NULL) {
-                const size_t index_bytes_aligned = GGML_PAD(e->size, 128);
+                const size_t index_bytes_aligned = GGML_PAD(e->size, GGML_IFAIRY_LUT_WTILE_ALIGNMENT);
                 const size_t total_bytes         = index_bytes_aligned + e->packed_w_size;
                 ggml_aligned_free(e->indexes, total_bytes);
             }
@@ -136,8 +136,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
     const size_t  packed_bytes   = (size_t) tiles * (size_t) blocks_per_row * sizeof(struct ifairy_lut_wtile_16);
 
     // Layout within a single cached buffer:
-    //   [indexes (padded to 128)] [packed_wtiles]
-    const size_t index_bytes_aligned = GGML_PAD(index_bytes, 128);
+    //   [indexes (padded to tile alignment)] [packed_wtiles]
+    const size_t index_bytes_aligned = GGML_PAD(index_bytes, GGML_IFAIRY_LUT_WTILE_ALIGNMENT);
     const size_t total_bytes         = index_bytes_aligned + packed_bytes;
 
     // pat (6-bit) -> packed code byte (idx16 + flags for lut_c-style decode).

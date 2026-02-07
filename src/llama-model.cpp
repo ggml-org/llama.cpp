@@ -13947,7 +13947,7 @@ struct llm_build_fairy2i : public llm_graph_context {
         auto *        inp_attn = build_attn_inp_kv();
 
         const float kq_scale =
-            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head) / 2) : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
