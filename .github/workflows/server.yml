@@ -72,10 +72,6 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          J=$(( ($(nproc) + 1) / 2 ))
-          if [ $J -lt 1 ]; then J=1; fi
-          echo "Using -j $J"
-
           cmake -B build \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_SCHED_NO_REALLOC=ON \
@@ -85,7 +81,7 @@ jobs:
             -DLLAMA_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
             -DLLAMA_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
             -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
-          cmake --build build --config ${{ matrix.build_type }} -j $J --target llama-server
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
       - name: Python setup
         id: setup_python

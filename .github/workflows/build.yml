@@ -296,11 +296,7 @@ jobs:
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
-          J=$(( ($(nproc) + 1) / 2 ))
-          if [ $J -lt 1 ]; then J=1; fi
-          echo "Using -j $J"
-
-          cmake --build build --config ${{ matrix.build_type }} -j $J
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp
@@ -313,11 +309,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
 
-          J=$(( ($(nproc) + 1) / 2 ))
-          if [ $J -lt 1 ]; then J=1; fi
-          echo "Using -j $J"
-
-          cmake --build build --config ${{ matrix.build_type }} -j $J
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Test
         id: cmake_test
