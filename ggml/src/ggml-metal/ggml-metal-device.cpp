@@ -1457,8 +1457,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_bin_one(ggml_met
     if (!res.pipeline) {
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
-        ggml_metal_cv_set_int32(cv, op_num, FC_BIN + 0);
-        ggml_metal_cv_set_int32(cv, 1,      FC_BIN + 1);
+        ggml_metal_cv_set_int16(cv, op_num, FC_BIN + 0);
+        ggml_metal_cv_set_int16(cv, 1,      FC_BIN + 1);
+        ggml_metal_cv_set_bool (cv, false,  FC_BIN + 2);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
