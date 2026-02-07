@@ -66,6 +66,12 @@ export { default as ChatAttachmentMcpPrompt } from './ChatAttachments/ChatAttach
 export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAttachmentMcpResource.svelte';
 
 /**
+ * Displays a stored MCP Resource attachment (from database extras) with icon,
+ * name, and server info tooltip. Compact chip style matching live resource display.
+ */
+export { default as ChatAttachmentMcpResourceStored } from './ChatAttachments/ChatAttachmentMcpResourceStored.svelte';
+
+/**
  * Full-size attachment preview component for dialog display. Handles different file types:
  * images (full-size display), text files (syntax highlighted), PDFs (text extraction or image preview),
  * audio (placeholder with download), and generic files (download option).

@@ -2,7 +2,8 @@ import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import {
 	ATTACHMENT_LABEL_PDF_FILE,
-	ATTACHMENT_LABEL_MCP_PROMPT
+	ATTACHMENT_LABEL_MCP_PROMPT,
+	ATTACHMENT_LABEL_MCP_RESOURCE
 } from '$lib/constants/attachment-labels';
 import {
 	AttachmentType,
@@ -12,7 +13,7 @@ import {
 	UrlPrefix
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
-import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
 export class ChatService {
@@ -769,6 +770,23 @@ export class ChatService {
 					mcpPrompt.name,
 					mcpPrompt.content,
 					mcpPrompt.serverName
+				)
+			});
+		}
+
+		const mcpResources = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
+				extra.type === AttachmentType.MCP_RESOURCE
+		);
+
+		for (const mcpResource of mcpResources) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText(
+					ATTACHMENT_LABEL_MCP_RESOURCE,
+					mcpResource.name,
+					mcpResource.content,
+					mcpResource.serverName
 				)
 			});
 		}

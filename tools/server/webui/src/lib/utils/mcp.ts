@@ -1,6 +1,6 @@
 import type { MCPServerSettingsEntry } from '$lib/types';
 import { MCPTransportType, MCPLogLevel, UrlPrefix, MimeTypePrefix } from '$lib/enums';
-import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
@@ -51,12 +51,13 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 		const id =
 			typeof (entry as { id?: unknown })?.id === 'string' && (entry as { id?: string }).id?.trim()
 				? (entry as { id: string }).id.trim()
-				: `server-${index + 1}`;
+				: `${MCP_SERVER_ID_PREFIX}${index + 1}`;
 
 		return {
 			id,
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
+			name: (entry as { name?: string })?.name,
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)

@@ -11,6 +11,7 @@
  */
 
 import { SvelteMap } from 'svelte/reactivity';
+import { AttachmentType } from '$lib/enums';
 import type {
 	MCPResource,
 	MCPResourceTemplate,
@@ -523,6 +524,43 @@ class MCPResourceStore {
 		}
 
 		return parts.join('');
+	}
+
+	/**
+	 * Convert current resource attachments to DatabaseMessageExtra[] for persisting with a message.
+	 * Each attachment becomes a DatabaseMessageExtraMcpResource stored on the user message.
+	 */
+	toMessageExtras(): import('$lib/types').DatabaseMessageExtraMcpResource[] {
+		const extras: import('$lib/types').DatabaseMessageExtraMcpResource[] = [];
+
+		for (const attachment of this._attachments) {
+			if (attachment.error) continue;
+			if (!attachment.content || attachment.content.length === 0) continue;
+
+			const resourceName = attachment.resource.title || attachment.resource.name;
+			const contentParts: string[] = [];
+
+			for (const content of attachment.content) {
+				if ('text' in content && content.text) {
+					contentParts.push(content.text);
+				} else if ('blob' in content && content.blob) {
+					contentParts.push(`[Binary content: ${content.mimeType || 'unknown type'}]`);
+				}
+			}
+
+			if (contentParts.length > 0) {
+				extras.push({
+					type: AttachmentType.MCP_RESOURCE,
+					name: resourceName,
+					uri: attachment.resource.uri,
+					serverName: attachment.resource.serverName,
+					content: contentParts.join('\n'),
+					mimeType: attachment.resource.mimeType
+				});
+			}
+		}
+
+		return extras;
 	}
 }
 

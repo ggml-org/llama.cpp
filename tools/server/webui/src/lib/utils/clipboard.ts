@@ -5,6 +5,7 @@ import type {
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtraLegacyContext,
 	DatabaseMessageExtraMcpPrompt,
+	DatabaseMessageExtraMcpResource,
 	ClipboardTextAttachment,
 	ClipboardMcpPromptAttachment,
 	ClipboardAttachment,
@@ -104,7 +105,7 @@ export function formatMessageForClipboard(
 	extras?: DatabaseMessageExtra[],
 	asPlainText: boolean = false
 ): string {
-	// Filter text-like attachments (TEXT, LEGACY_CONTEXT, and MCP_PROMPT types)
+	// Filter text-like attachments (TEXT, LEGACY_CONTEXT, MCP_PROMPT, and MCP_RESOURCE types)
 	const textAttachments =
 		extras?.filter(
 			(
@@ -112,10 +113,12 @@ export function formatMessageForClipboard(
 			): extra is
 				| DatabaseMessageExtraTextFile
 				| DatabaseMessageExtraLegacyContext
-				| DatabaseMessageExtraMcpPrompt =>
+				| DatabaseMessageExtraMcpPrompt
+				| DatabaseMessageExtraMcpResource =>
 				extra.type === AttachmentType.TEXT ||
 				extra.type === AttachmentType.LEGACY_CONTEXT ||
-				extra.type === AttachmentType.MCP_PROMPT
+				extra.type === AttachmentType.MCP_PROMPT ||
+				extra.type === AttachmentType.MCP_RESOURCE
 		) ?? [];
 
 	if (textAttachments.length === 0) {
