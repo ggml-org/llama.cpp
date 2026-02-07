@@ -371,7 +371,7 @@ struct blue_noise_rng {
         seed      = hash(s);
 
         const int n = (1 << bit_depth) - 1;
-        states.resize(n);
+        states.resize(n); // at 16-bit depth, this uses 128KB of state
 
         reset();
     }
