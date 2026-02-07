@@ -740,6 +740,11 @@ private:
 
         slots.clear();
 
+        const bool can_spec = common_speculative_is_compat(ctx);
+        if (!can_spec) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;
@@ -752,7 +757,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            {
+            if (can_spec) {
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {

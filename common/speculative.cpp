@@ -805,6 +805,42 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
     return it->second;
 }
 
+bool common_speculative_is_compat(llama_context * ctx_tgt) {
+    auto * mem = llama_get_memory(ctx_tgt);
+    if (mem == nullptr) {
+        return false;
+    }
+
+    bool res = true;
+
+    llama_memory_clear(mem, true);
+
+    // eval 2 tokens to check if the context is compatible
+    std::vector<llama_token> tmp;
+    tmp.push_back(0);
+    tmp.push_back(0);
+
+    int ret = llama_decode(ctx_tgt, llama_batch_get_one(tmp.data(), tmp.size()));
+    if (ret != 0) {
+        LOG_ERR("%s: llama_decode() failed: %d\n", __func__, ret);
+        res = false;
+        goto done;
+    }
+
+    // try to remove the last tokens
+    if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
+        LOG_WRN("%s: the target context does not support partial sequence removal\n", __func__);
+        res = false;
+        goto done;
+    }
+
+done:
+    llama_memory_clear(mem, true);
+    llama_synchronize(ctx_tgt);
+
+    return res;
+}
+
 // initialization of the speculative decoding system
 //
 common_speculative * common_speculative_init(
