@@ -369,6 +369,28 @@ static common_chat_tool amount_tool{
     })",
 };
 
+static common_chat_tool imaginary_number_tool{
+    /* .name = */ "imaginary_number",
+    /* .description = */ "Imaginary number converter",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "number": {
+                "type": "object",
+                "properties": {
+                    "real": {
+                        "type": "number"
+                    },
+                    "imaginary": {
+                        "type": "number"
+                    }
+                },
+                "required": ["real", "imaginary"]
+            }
+        },
+        "required": ["number"]
+    })",
+};
 
 static common_chat_tool string_param_tool{
     /* .name = */ "string_param",
@@ -394,7 +416,7 @@ static common_chat_tool quoted_unquoted_tool{
             "quoted": {
                 "type": "string",
                 "description": "Quoted value"
-            }, 
+            },
             "unquoted": {
                 "type": "string",
                 "description": "Unquoted value"
@@ -2320,6 +2342,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Test decimal number")
             .expect_tool_calls({
                 { "amount", R"({ "orig" : 3.14 })", {} }
+            })
+            .run();
+
+            tst.test(
+               "Test imaginary number\n"
+               "</think>\n"
+               "<tool_call>\n"
+               "<function=imaginary_number>\n"
+               "<parameter=number>\n"
+               "{ \"real\": 3.14, \"imaginary\": 2.71 }\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ imaginary_number_tool })
+            .expect_reasoning("Test imaginary number")
+            .expect_tool_calls({
+                { "imaginary_number", R"({ "number" : {"real":3.14,"imaginary":2.71 } })", {} }
             })
             .run();
 

@@ -51,4 +51,20 @@ class universal_peg_generator {
                                                const diff_analysis_result &      analysis,
                                                const templates_params &           inputs,
                                                const common_peg_parser &          reasoning);
+
+    // Per-format tool parser builders
+    static common_peg_parser build_tool_parser_json_native(common_chat_peg_unified_builder & p,
+                                                            const diff_analysis_result &      analysis,
+                                                            const templates_params &           inputs,
+                                                            const common_peg_parser &          reasoning);
+
+    static common_peg_parser build_tool_parser_tag_json(common_chat_peg_unified_builder & p,
+                                                         const diff_analysis_result &      analysis,
+                                                         const templates_params &           inputs,
+                                                         const common_peg_parser &          reasoning);
+
+    static common_peg_parser build_tool_parser_tag_tagged(common_chat_peg_unified_builder & p,
+                                                           const diff_analysis_result &      analysis,
+                                                           const templates_params &           inputs,
+                                                           const common_peg_parser &          reasoning);
 };

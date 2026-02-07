@@ -35,6 +35,45 @@ static std::string_view trim(std::string_view sv) {
     return trim_trailing_space(trim_leading_space(sv, 1));
 }
 
+// Count the number of unclosed '{' braces in a JSON-like string,
+// properly skipping braces inside quoted strings.
+static int json_brace_depth(const std::string & s) {
+    int  depth     = 0;
+    bool in_string = false;
+    bool escaped   = false;
+    for (char c : s) {
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c == '\\' && in_string) {
+            escaped = true;
+            continue;
+        }
+        if (c == '"') {
+            in_string = !in_string;
+            continue;
+        }
+        if (!in_string) {
+            if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+            }
+        }
+    }
+    return depth;
+}
+
+// JSON-escape a string and return the inner content (without surrounding quotes).
+static std::string escape_json_string_inner(const std::string & s) {
+    std::string escaped = json(s).dump();
+    if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
+        return escaped.substr(1, escaped.size() - 2);
+    }
+    return escaped;
+}
+
 // Convert Python-style single-quoted strings to JSON double-quoted strings
 // Only converts outer string delimiters, properly handling escape sequences:
 // - {'key': 'value'} -> {"key": "value"}
@@ -148,6 +187,10 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     return zero_or_more(choice({ p, content_chunk }));
 }
 
+std::string & common_chat_peg_unified_mapper::args_target() {
+    return (current_tool && !current_tool->name.empty()) ? current_tool->arguments : args_buffer;
+}
+
 void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    arena,
                                               const common_peg_parse_result & parse_result_arg) {
     // Call base class to visit all nodes
@@ -156,15 +199,12 @@ void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    ar
     // Flush any pending tool call that was started but never got a name
     // This happens during partial parsing when the tool call is incomplete
     if (pending_tool_call.has_value() && !pending_tool_call->name.empty()) {
-        // Transfer any buffered arguments
         if (!args_buffer.empty()) {
             pending_tool_call->arguments = args_buffer;
         }
-        // Close any open quotes in buffered args
-        if (buffer_needs_closing_quote && !pending_tool_call->arguments.empty()) {
+        if (closing_quote_pending && !pending_tool_call->arguments.empty()) {
             pending_tool_call->arguments += "\"";
         }
-        // Add the incomplete tool call to results
         result.tool_calls.push_back(pending_tool_call.value());
         pending_tool_call.reset();
     }
@@ -187,15 +227,11 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     bool is_arg_string_value = node.tag == common_chat_peg_unified_builder::TOOL_ARG_STRING_VALUE;
 
     if (is_tool_open) {
-        // Don't create tool call yet - wait for name to be known
-        // This prevents sending incomplete tool calls in streaming mode
-        pending_tool_call = common_chat_tool_call();
-        current_tool      = &pending_tool_call.value();
-        arg_count         = 0;
-        // Clear the arguments buffer for the new tool
+        pending_tool_call     = common_chat_tool_call();
+        current_tool          = &pending_tool_call.value();
+        arg_count             = 0;
         args_buffer.clear();
-        needs_closing_quote        = false;
-        buffer_needs_closing_quote = false;
+        closing_quote_pending = false;
     }
 
     if (is_tool_id && current_tool) {
@@ -208,15 +244,14 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
 
     if (is_tool_name && current_tool) {
         current_tool->name = std::string(trim_trailing_space(node.text));
-        // Now that we have the name, we can populate the arguments from the buffer
+        // Now that we have the name, populate the arguments from the buffer
         if (!args_buffer.empty()) {
             current_tool->arguments = args_buffer;
             args_buffer.clear();
         } else if (current_tool->arguments.empty()) {
-            // Initialize arguments if we're using tagged format and no buffered args
             current_tool->arguments = "{";
         }
-        // Now that we have the name, add the tool call to the result
+        // Add the tool call to results so streaming can see it
         if (pending_tool_call.has_value()) {
             result.tool_calls.push_back(pending_tool_call.value());
             pending_tool_call.reset();
@@ -225,28 +260,16 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_args && current_tool) {
-        // For JSON format, the arguments come as a complete JSON object
-        // For tagged format, we build up arguments from individual arg_name/arg_value nodes
-        // Check if this looks like JSON (starts with {) vs tagged format (starts with <)
+        // For JSON format: arguments come as a complete JSON object
+        // For tagged format: built up from individual arg_name/arg_value nodes
         auto text = trim_trailing_space(node.text);
         if (!text.empty() && text.front() == '{') {
-            // If we have the tool name, populate directly; otherwise buffer
-            if (!current_tool->name.empty()) {
-                current_tool->arguments = std::string(text);
-            } else {
-                args_buffer = std::string(text);
-            }
+            args_target() = std::string(text);
         }
-        // If it's tagged format, we ignore this and let arg_name/arg_value build up the JSON
     }
 
     if (is_arg_open) {
-        // Reset for new argument
-        if (!current_tool->name.empty()) {
-            needs_closing_quote = false;
-        } else {
-            buffer_needs_closing_quote = false;
-        }
+        closing_quote_pending = false;
     }
 
     if (is_arg_name && current_tool) {
@@ -257,15 +280,11 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
         arg_entry += json(trim(node.text)).dump() + ":";
         ++arg_count;
 
-        // If we have the tool name, add directly; otherwise buffer
-        if (!current_tool->name.empty()) {
-            current_tool->arguments += arg_entry;
-        } else {
-            if (args_buffer.empty()) {
-                args_buffer = "{";
-            }
-            args_buffer += arg_entry;
+        auto & target = args_target();
+        if (target.empty()) {
+            target = "{";
         }
+        target += arg_entry;
     }
 
     if ((is_arg_value || is_arg_string_value) && current_tool) {
@@ -273,160 +292,83 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
 
         std::string value_to_add;
         if (value_content.empty() && is_arg_string_value) {
-            // Empty string value - start with opening quote
-            // arg_close will add the closing quote
-            if (!current_tool->name.empty()) {
-                value_to_add        = "\"";
-                needs_closing_quote = true;
-            } else {
-                value_to_add               = "\"";
-                buffer_needs_closing_quote = true;
-            }
+            // Empty string value - arg_close will add the closing quote
+            value_to_add          = "\"";
+            closing_quote_pending = true;
         } else if (!value_content.empty() && is_arg_string_value) {
             // Schema declares this as string type - always treat as literal string value
-            // Never try to parse as JSON (this ensures consistent handling of quoted strings
-            // like "foo" which would otherwise be parsed as JSON string 'foo')
-            if (!current_tool->name.empty()) {
-                if (!needs_closing_quote) {
-                    value_to_add        = "\"";
-                    needs_closing_quote = true;
-                }
-            } else {
-                if (!buffer_needs_closing_quote) {
-                    value_to_add               = "\"";
-                    buffer_needs_closing_quote = true;
-                }
+            if (!closing_quote_pending) {
+                value_to_add          = "\"";
+                closing_quote_pending = true;
             }
-            // Escape special characters in the string content
-            std::string escaped = json(value_content).dump();
-            // Remove the surrounding quotes from the escaped string
-            if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
-                escaped = escaped.substr(1, escaped.size() - 2);
-            }
-            value_to_add += escaped;
+            value_to_add += escape_json_string_inner(value_content);
         } else if (!value_content.empty()) {
-            // For potential containers, normalize Python-style single quotes to JSON double quotes first
-            // This ensures consistent output during both partial and final parsing
+            // For potential containers, normalize Python-style single quotes to JSON double quotes
             bool is_potential_container = value_content[0] == '[' || value_content[0] == '{';
             if (is_potential_container) {
                 value_content = normalize_quotes_to_json(value_content);
             }
 
             // Try to parse as JSON value (number, bool, null, object, array)
-            // For strings, we need special handling to support incremental parsing
             try {
                 json parsed = json::parse(value_content);
                 if (parsed.is_string()) {
-                    // For string values, don't add closing quote yet (added by arg_close)
-                    // This ensures incremental parsing produces monotonic arguments
+                    // Don't add closing quote yet (added by arg_close) for monotonic streaming
                     std::string escaped = parsed.dump();
-                    // Remove the trailing quote
                     if (!escaped.empty() && escaped.back() == '"') {
                         escaped.pop_back();
                     }
-                    value_to_add = escaped;
-                    if (!current_tool->name.empty()) {
-                        needs_closing_quote = true;
-                    } else {
-                        buffer_needs_closing_quote = true;
-                    }
+                    value_to_add          = escaped;
+                    closing_quote_pending = true;
                 } else {
-                    // For non-string values (number, bool, null, object, array), add raw value content
-                    // Using raw content instead of dump() ensures monotonicity for streaming
-                    // (prevents issues with spaces being removed by dump())
+                    // Non-string values: use raw content to preserve whitespace for monotonicity
                     value_to_add = value_content;
                 }
             } catch (...) {
-                // JSON parsing failed - content is either incomplete (partial) or not valid JSON
-                // Note: potential containers were already normalized above, so value_content
-                // already has double quotes if it started with [ or {
-
                 if (node.is_partial && is_potential_container) {
-                    // During incremental parsing, if it looks like a JSON container, don't wrap in quotes yet
-                    // and don't escape. Just pass through the (already normalized) content.
+                    // Partial container: pass through the already-normalized content
                     value_to_add = value_content;
                 } else {
-                    // Not valid JSON and NOT a potential partial container - treat as string value
-                    // Add opening quote if not already in a string
-                    if (!current_tool->name.empty()) {
-                        if (!needs_closing_quote) {
-                            value_to_add        = "\"";
-                            needs_closing_quote = true;
-                        }
-                    } else {
-                        if (!buffer_needs_closing_quote) {
-                            value_to_add               = "\"";
-                            buffer_needs_closing_quote = true;
-                        }
+                    // Not valid JSON - treat as string value
+                    if (!closing_quote_pending) {
+                        value_to_add          = "\"";
+                        closing_quote_pending = true;
                     }
-                    // Escape special characters in the string content
-                    std::string escaped = json(value_content).dump();
-                    // Remove the surrounding quotes from the escaped string
-                    if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
-                        escaped = escaped.substr(1, escaped.size() - 2);
-                    }
-                    value_to_add += escaped;
+                    value_to_add += escape_json_string_inner(value_content);
                 }
             }
         }
 
-        // If we have the tool name, add directly; otherwise buffer
-        if (!current_tool->name.empty()) {
-            current_tool->arguments += value_to_add;
-        } else {
-            if (args_buffer.empty()) {
-                args_buffer = "{";
-            }
-            args_buffer += value_to_add;
-        }
+        args_target() += value_to_add;
     }
 
     if (is_arg_close && current_tool) {
-        if (!current_tool->name.empty()) {
-            if (needs_closing_quote) {
-                current_tool->arguments += "\"";
-                needs_closing_quote = false;
-            }
-        } else {
-            if (buffer_needs_closing_quote) {
-                if (args_buffer.empty()) {
-                    args_buffer = "{";
-                }
-                args_buffer += "\"";
-                buffer_needs_closing_quote = false;
-            }
+        if (closing_quote_pending) {
+            args_target() += "\"";
+            closing_quote_pending = false;
         }
     }
 
     if (is_tool_close && current_tool) {
-        if (!current_tool->name.empty()) {
-            if (needs_closing_quote) {
-                current_tool->arguments += "\"";
-                needs_closing_quote = false;
-            }
-            if (!current_tool->arguments.empty() && current_tool->arguments.back() != '}') {
-                current_tool->arguments += "}";
-            }
-            // If we have a pending tool call that wasn't added yet, add it now
-            if (pending_tool_call.has_value()) {
+        // Flush buffer to arguments if tool name was never seen
+        if (current_tool->name.empty() && !args_buffer.empty()) {
+            current_tool->arguments = args_buffer;
+            args_buffer.clear();
+        }
+        // Close any pending string quote
+        if (closing_quote_pending) {
+            current_tool->arguments += "\"";
+            closing_quote_pending = false;
+        }
+        // Close any unclosed braces (accounts for nested objects)
+        for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
+            current_tool->arguments += "}";
+        }
+        // Add tool call to results if named; otherwise discard
+        if (pending_tool_call.has_value()) {
+            if (!current_tool->name.empty()) {
                 result.tool_calls.push_back(pending_tool_call.value());
-                pending_tool_call.reset();
             }
-        } else {
-            // We're closing a tool without a name - flush the buffer
-            if (!args_buffer.empty()) {
-                current_tool->arguments = args_buffer;
-                args_buffer.clear();
-            }
-            if (buffer_needs_closing_quote) {
-                current_tool->arguments += "\"";
-                buffer_needs_closing_quote = false;
-            }
-            // Close the arguments object if using tagged format
-            if (!current_tool->arguments.empty() && current_tool->arguments.back() != '}') {
-                current_tool->arguments += "}";
-            }
-            // Don't add to result if no name - this prevents incomplete tool calls
             pending_tool_call.reset();
         }
     }
@@ -511,6 +453,241 @@ static std::pair<std::string, std::string> parse_key_spec(const std::string & ke
     return {key.substr(0, dot_pos), key.substr(dot_pos + 1)};
 }
 
+// Mode 1: function_is_key — parse {"function_name": {...}}
+common_peg_parser common_chat_peg_unified_builder::build_json_tools_function_is_key(
+    const nlohmann::json & tools,
+    const std::string &    args_key,
+    const std::string &    effective_args_key,
+    const std::string &    call_id_key,
+    const std::string &    gen_call_id_key) {
+
+    auto tool_choices = choice();
+
+    for (const auto & tool_def : tools) {
+        if (!tool_def.contains("function")) {
+            continue;
+        }
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
+        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+
+        // Build inner object fields
+        std::vector<common_peg_parser> inner_fields;
+
+        if (!call_id_key.empty()) {
+            auto id_parser = atomic(
+                literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
+                literal("\"") + tool_id(json_string_content()) + literal("\"")
+            );
+            inner_fields.push_back(optional(id_parser + space() + optional(literal(",") + space())));
+        }
+
+        if (!gen_call_id_key.empty()) {
+            auto gen_id_parser = atomic(
+                literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
+                choice({
+                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    tool_id(json_number())
+                })
+            );
+            inner_fields.push_back(optional(gen_id_parser + space() + optional(literal(",") + space())));
+        }
+
+        // Arguments — either wrapped in args_key or parsed directly
+        common_peg_parser args_parser = eps();
+        if (args_key.empty()) {
+            args_parser = tool_args(schema(json(), "tool-" + name + "-schema", params));
+        } else {
+            args_parser = literal("\"" + effective_args_key + "\"") + space() + literal(":") + space() +
+                          tool_args(schema(json(), "tool-" + name + "-schema", params));
+        }
+        inner_fields.push_back(args_parser);
+
+        // Build inner object parser
+        common_peg_parser inner_object = eps();
+        if (args_key.empty() && inner_fields.size() == 1) {
+            inner_object = inner_fields[0];
+        } else {
+            inner_object = literal("{") + space();
+            for (size_t i = 0; i < inner_fields.size(); i++) {
+                inner_object = inner_object + inner_fields[i];
+                if (i < inner_fields.size() - 1) {
+                    inner_object = inner_object + space();
+                }
+            }
+            inner_object = inner_object + space() + literal("}");
+        }
+
+        auto tool_parser = tool(
+            tool_open(literal("{")) + space() +
+            literal("\"") + tool_name(literal(name)) + literal("\"") +
+            space() + literal(":") + space() +
+            inner_object +
+            space() + tool_close(literal("}"))
+        );
+
+        tool_choices |= rule("tool-" + name, tool_parser);
+    }
+
+    return tool_choices;
+}
+
+// Mode 2: Nested keys (dot notation like "function.name")
+common_peg_parser common_chat_peg_unified_builder::build_json_tools_nested_keys(
+    const nlohmann::json & tools,
+    const std::string &    effective_name_key,
+    const std::string &    effective_args_key,
+    const std::string &    call_id_key,
+    const std::string &    gen_call_id_key) {
+
+    auto tool_choices = choice();
+
+    auto name_spec = parse_key_spec(effective_name_key);
+    auto args_spec = parse_key_spec(effective_args_key);
+
+    std::string nested_prefix     = !name_spec.first.empty() ? name_spec.first  : args_spec.first;
+    std::string nested_name_field = !name_spec.first.empty() ? name_spec.second  : effective_name_key;
+    std::string nested_args_field = !args_spec.first.empty() ? args_spec.second  : effective_args_key;
+
+    for (const auto & tool_def : tools) {
+        if (!tool_def.contains("function")) {
+            continue;
+        }
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
+        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+
+        auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
+                          literal("\"") + tool_name(literal(name)) + literal("\"");
+        auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
+                          tool_args(schema(json(), "tool-" + name + "-schema", params));
+
+        auto nested_object = literal("{") + space() +
+                            nested_name + space() + literal(",") + space() +
+                            nested_args +
+                            space() + literal("}");
+
+        // Format: { id?, "function": {...} }
+        auto tool_parser_body = tool_open(literal("{")) + space();
+
+        if (!call_id_key.empty()) {
+            auto id_spec = parse_key_spec(call_id_key);
+            if (id_spec.first.empty()) {
+                auto id_parser = atomic(
+                    literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
+                    literal("\"") + tool_id(json_string_content()) + literal("\"")
+                );
+                tool_parser_body = tool_parser_body + optional(id_parser + space() + literal(",") + space());
+            }
+        }
+
+        if (!gen_call_id_key.empty()) {
+            auto gen_id_spec = parse_key_spec(gen_call_id_key);
+            if (gen_id_spec.first.empty()) {
+                auto gen_id_parser = atomic(
+                    literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
+                    choice({
+                        literal("\"") + tool_id(json_string_content()) + literal("\""),
+                        tool_id(json_number())
+                    })
+                );
+                tool_parser_body = tool_parser_body + optional(gen_id_parser + space() + literal(",") + space());
+            }
+        }
+
+        auto nested_field = literal("\"" + nested_prefix + "\"") + space() + literal(":") + space() + nested_object;
+        tool_parser_body = tool_parser_body + nested_field + space() + tool_close(literal("}"));
+
+        tool_choices |= rule("tool-" + name, tool(tool_parser_body));
+    }
+
+    return tool_choices;
+}
+
+// Mode 3: Flat keys with optional ID fields and parameter ordering
+common_peg_parser common_chat_peg_unified_builder::build_json_tools_flat_keys(
+    const nlohmann::json &           tools,
+    const std::string &              effective_name_key,
+    const std::string &              effective_args_key,
+    const std::string &              call_id_key,
+    const std::string &              gen_call_id_key,
+    const std::vector<std::string> & parameters_order) {
+
+    auto tool_choices    = choice();
+    auto name_key_parser = literal("\"" + effective_name_key + "\"");
+    auto args_key_parser = literal("\"" + effective_args_key + "\"");
+
+    for (const auto & tool_def : tools) {
+        if (!tool_def.contains("function")) {
+            continue;
+        }
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
+        nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+
+        auto tool_name_ = name_key_parser + space() + literal(":") + space() +
+                         literal("\"") + tool_name(literal(name)) + literal("\"");
+        auto tool_args_ = args_key_parser + space() + literal(":") + space() +
+                         tool_args(schema(json(), "tool-" + name + "-schema", params));
+
+        // Build ID parsers if keys are provided
+        common_peg_parser id_parser = eps();
+        if (!call_id_key.empty()) {
+            id_parser = atomic(
+                literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
+                choice({
+                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    tool_id(json_number())
+                })
+            );
+        }
+
+        common_peg_parser gen_id_parser = eps();
+        if (!gen_call_id_key.empty()) {
+            gen_id_parser = atomic(
+                literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
+                choice({
+                    literal("\"") + tool_id(json_string_content()) + literal("\""),
+                    tool_id(json_number())
+                })
+            );
+        }
+
+        // Create (parser, key) pairs for all fields, then sort by parameters_order
+        std::vector<std::pair<common_peg_parser, std::string>> parser_pairs;
+        parser_pairs.emplace_back(tool_name_, effective_name_key);
+        parser_pairs.emplace_back(tool_args_, effective_args_key);
+        if (!call_id_key.empty()) {
+            parser_pairs.emplace_back(optional(id_parser), call_id_key);
+        }
+        if (!gen_call_id_key.empty()) {
+            parser_pairs.emplace_back(optional(gen_id_parser), gen_call_id_key);
+        }
+
+        std::sort(parser_pairs.begin(), parser_pairs.end(),
+            [&parameters_order](const auto & a, const auto & b) {
+                auto pos_a = std::find(parameters_order.begin(), parameters_order.end(), a.second);
+                auto pos_b = std::find(parameters_order.begin(), parameters_order.end(), b.second);
+                size_t idx_a = (pos_a == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_a);
+                size_t idx_b = (pos_b == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_b);
+                return idx_a < idx_b;
+            });
+
+        auto ordered_body = tool_open(literal("{")) + space();
+        for (size_t i = 0; i < parser_pairs.size(); i++) {
+            ordered_body = ordered_body + parser_pairs[i].first;
+            if (i < parser_pairs.size() - 1) {
+                ordered_body = ordered_body + space() + literal(",") + space();
+            }
+        }
+        ordered_body = ordered_body + space() + tool_close(literal("}"));
+
+        tool_choices |= rule("tool-" + name, tool(ordered_body));
+    }
+
+    return tool_choices;
+}
+
 common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
                                                        const std::string &              section_start,
                                                        const std::string &              section_end,
@@ -528,239 +705,20 @@ common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
         return eps();
     }
 
-    // Build tool choices for JSON format
-    auto tool_choices = choice();
-    // auto other_member = json_string() + space() + literal(":") + space() + json();
-
-    // Determine effective field names
     std::string effective_name_key = name_key.empty() ? "name" : name_key;
     std::string effective_args_key = args_key.empty() ? "arguments" : args_key;
 
-    // Check if we have nested keys (dot notation)
-    auto name_spec = parse_key_spec(effective_name_key);
-    auto args_spec = parse_key_spec(effective_args_key);
-    bool has_nested_keys = !name_spec.first.empty() || !args_spec.first.empty();
-
-    // Mode 1: function_is_key - parse {"function_name": {...}}
+    // Dispatch to the appropriate builder based on the JSON layout mode
+    common_peg_parser tool_choices = eps();
     if (function_is_key) {
-        for (const auto & tool_def : tools) {
-            if (!tool_def.contains("function")) {
-                continue;
-            }
-            const auto &   function = tool_def.at("function");
-            std::string    name     = function.at("name");
-            nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
-
-            // Build inner object fields
-            std::vector<common_peg_parser> inner_fields;
-
-            // Add optional string ID field
-            if (!call_id_key.empty()) {
-                auto id_parser = atomic(
-                    literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                    literal("\"") + tool_id(json_string_content()) + literal("\"")
-                );
-                inner_fields.push_back(optional(id_parser + space() + optional(literal(",") + space())));
-            }
-
-            // Add optional generated integer ID field
-            if (!gen_call_id_key.empty()) {
-                auto gen_id_parser = atomic(
-                    literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
-                    choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
-                        tool_id(json_number())
-                    })
-                );
-                inner_fields.push_back(optional(gen_id_parser + space() + optional(literal(",") + space())));
-            }
-
-            // Add arguments - either wrapped in args_key or parsed directly
-            common_peg_parser args_parser = eps();
-            if (args_key.empty()) {
-                // Arguments are directly the inner object value: {"func_name": {"arg1": "val"}}
-                args_parser = tool_args(schema(json(), "tool-" + name + "-schema", params));
-            } else {
-                // Arguments are wrapped in a key: {"func_name": {"arguments": {"arg1": "val"}}}
-                args_parser = literal("\"" + effective_args_key + "\"") + space() + literal(":") + space() +
-                              tool_args(schema(json(), "tool-" + name + "-schema", params));
-            }
-            inner_fields.push_back(args_parser);
-
-            // Build inner object parser - no greedy other_member skipping to avoid consuming ID
-            common_peg_parser inner_object = eps();
-            if (args_key.empty() && inner_fields.size() == 1) {
-                // Direct arguments: {"func_name": {"arg1": "val"}}
-                // The args_parser is already the full object schema
-                inner_object = inner_fields[0];
-            } else {
-                // Wrapped arguments: {"func_name": {"arguments": {"arg1": "val"}}}
-                inner_object = literal("{") + space();
-                for (size_t i = 0; i < inner_fields.size(); i++) {
-                    inner_object = inner_object + inner_fields[i];
-                    if (i < inner_fields.size() - 1) {
-                        inner_object = inner_object + space();
-                    }
-                }
-                inner_object = inner_object + space() + literal("}");
-            }
-
-            // Tool call format: { "function_name": { inner_object } }
-            auto tool_parser = tool(
-                tool_open(literal("{")) + space() +
-                literal("\"") + tool_name(literal(name)) + literal("\"") +
-                space() + literal(":") + space() +
-                inner_object +
-                space() + tool_close(literal("}"))
-            );
-
-            tool_choices |= rule("tool-" + name, tool_parser);
-        }
-    }
-    // Mode 2: Nested keys (dot notation like "function.name")
-    else if (has_nested_keys) {
-        // Group fields by prefix
-        std::string nested_prefix = !name_spec.first.empty() ? name_spec.first : args_spec.first;
-        std::string nested_name_field = !name_spec.first.empty() ? name_spec.second : effective_name_key;
-        std::string nested_args_field = !args_spec.first.empty() ? args_spec.second : effective_args_key;
-
-        for (const auto & tool_def : tools) {
-            if (!tool_def.contains("function")) {
-                continue;
-            }
-            const auto &   function = tool_def.at("function");
-            std::string    name     = function.at("name");
-            nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
-
-            // Build nested object with name and arguments
-            auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
-                              literal("\"") + tool_name(literal(name)) + literal("\"");
-            auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
-                              tool_args(schema(json(), "tool-" + name + "-schema", params));
-
-            auto nested_object = literal("{") + space() +
-                                nested_name + space() + literal(",") + space() +
-                                nested_args +
-                                space() + literal("}");
-
-            // Build top-level parser - simpler structure without greedy other_member skipping
-            // Format: { id?, "function": {...} }
-            auto tool_parser_body = tool_open(literal("{")) + space();
-
-            // Add optional string ID field at top level
-            if (!call_id_key.empty()) {
-                auto id_spec = parse_key_spec(call_id_key);
-                if (id_spec.first.empty()) {  // Top-level ID field
-                    auto id_parser = atomic(
-                        literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                        literal("\"") + tool_id(json_string_content()) + literal("\"")
-                    );
-                    tool_parser_body = tool_parser_body + optional(id_parser + space() + literal(",") + space());
-                }
-            }
-
-            // Add optional generated integer ID field at top level
-            if (!gen_call_id_key.empty()) {
-                auto gen_id_spec = parse_key_spec(gen_call_id_key);
-                if (gen_id_spec.first.empty()) {  // Top-level gen ID field
-                    auto gen_id_parser = atomic(
-                        literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
-                        choice({
-                            literal("\"") + tool_id(json_string_content()) + literal("\""),
-                            tool_id(json_number())
-                        })
-                    );
-                    tool_parser_body = tool_parser_body + optional(gen_id_parser + space() + literal(",") + space());
-                }
-            }
-
-            // Add the nested object field
-            auto nested_field = literal("\"" + nested_prefix + "\"") + space() + literal(":") + space() + nested_object;
-            tool_parser_body = tool_parser_body + nested_field + space() + tool_close(literal("}"));
-
-            tool_choices |= rule("tool-" + name, tool(tool_parser_body));
-        }
-    }
-    // Mode 3: Flat keys (enhanced with ID fields and parameter ordering)
-    else {
-        auto name_key_parser = literal("\"" + effective_name_key + "\"");
-        auto args_key_parser = literal("\"" + effective_args_key + "\"");
-
-        for (const auto & tool_def : tools) {
-            if (!tool_def.contains("function")) {
-                continue;
-            }
-            const auto &   function = tool_def.at("function");
-            std::string    name     = function.at("name");
-            nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
-
-            auto tool_name_ = name_key_parser + space() + literal(":") + space() +
-                             literal("\"") + tool_name(literal(name)) + literal("\"");
-            auto tool_args_ = args_key_parser + space() + literal(":") + space() +
-                             tool_args(schema(json(), "tool-" + name + "-schema", params));
-
-            // Build ID parsers if keys are provided
-            common_peg_parser id_parser = eps();
-            if (!call_id_key.empty()) {
-                id_parser = atomic(
-                    literal("\"" + call_id_key + "\"") + space() + literal(":") + space() +
-                    choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
-                        tool_id(json_number())
-                    })
-                );
-            }
-
-            common_peg_parser gen_id_parser = eps();
-            if (!gen_call_id_key.empty()) {
-                gen_id_parser = atomic(
-                    literal("\"" + gen_call_id_key + "\"") + space() + literal(":") + space() +
-                    choice({
-                        literal("\"") + tool_id(json_string_content()) + literal("\""),
-                        tool_id(json_number())
-                    })
-                );
-            }
-
-            common_peg_parser tool_parser = eps();
-
-            // Use parameter ordering if provided - parse fields in specified order without greedy skipping
-            if (!parameters_order.empty()) {
-            }
-            // Build parser using parameter ordering (works with or without explicit parameters_order)
-            // Create list of (parser, key) pairs for all fields
-            std::vector<std::pair<common_peg_parser, std::string>> parser_pairs;
-            parser_pairs.emplace_back(tool_name_, effective_name_key);
-            parser_pairs.emplace_back(tool_args_, effective_args_key);
-            if (!call_id_key.empty()) {
-                parser_pairs.emplace_back(optional(id_parser), call_id_key);
-            }
-            if (!gen_call_id_key.empty()) {
-                parser_pairs.emplace_back(optional(gen_id_parser), gen_call_id_key);
-            }
-
-            // Sort by position in parameters_order (or at end if not present)
-            std::sort(parser_pairs.begin(), parser_pairs.end(),
-                [&parameters_order](const auto & a, const auto & b) {
-                    auto pos_a = std::find(parameters_order.begin(), parameters_order.end(), a.second);
-                    auto pos_b = std::find(parameters_order.begin(), parameters_order.end(), b.second);
-                    size_t idx_a = (pos_a == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_a);
-                    size_t idx_b = (pos_b == parameters_order.end()) ? parameters_order.size() : std::distance(parameters_order.begin(), pos_b);
-                    return idx_a < idx_b;
-                });
-
-            // Build ordered parser
-            auto ordered_body = tool_open(literal("{")) + space();
-            for (size_t i = 0; i < parser_pairs.size(); i++) {
-                ordered_body = ordered_body + parser_pairs[i].first;
-                if (i < parser_pairs.size() - 1) {
-                    ordered_body = ordered_body + space() + literal(",") + space();
-                }
-            }
-            ordered_body = ordered_body + space() + tool_close(literal("}"));
-            tool_parser = tool(ordered_body);
-
-            tool_choices |= rule("tool-" + name, tool_parser);
+        tool_choices = build_json_tools_function_is_key(tools, args_key, effective_args_key, call_id_key, gen_call_id_key);
+    } else {
+        auto name_spec = parse_key_spec(effective_name_key);
+        auto args_spec = parse_key_spec(effective_args_key);
+        if (!name_spec.first.empty() || !args_spec.first.empty()) {
+            tool_choices = build_json_tools_nested_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
+        } else {
+            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order);
         }
     }
 
@@ -770,7 +728,6 @@ common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
         tool_calls = tool_calls + zero_or_more(space() + literal(",") + space() + tool_choices);
     }
 
-    // Optionally wrap in array brackets
     if (array_wrapped) {
         tool_calls = literal("[") + space() + tool_calls + space() + literal("]");
     }

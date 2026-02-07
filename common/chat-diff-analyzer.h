@@ -169,11 +169,7 @@ enum class tool_format {
     NONE,              // No tool support detected
     JSON_NATIVE,       // Pure JSON: {"name": "X", "arguments": {...}}
     TAG_WITH_JSON,     // Tag-based with JSON args: <function=X>{...}</function>
-    BRACKET_TAG,       // Bracket-tag: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...}
-    PREFIXED_INDEXED,  // Prefixed-indexed: functions.X:0{...}
-    RECIPIENT_BASED,   // Recipient routing: >>>func_name\n{...}
     TAG_WITH_TAGGED,   // Tag-based with tagged args: <param=key>value</param>
-    MARKDOWN_BLOCK,    // Markdown code block: Action:\n```json\n[...]\n```
 };
 
 inline std::ostream & operator<<(std::ostream & os, const tool_format & format) {
@@ -184,16 +180,8 @@ inline std::ostream & operator<<(std::ostream & os, const tool_format & format) 
             return os << "JSON_NATIVE";
         case tool_format::TAG_WITH_JSON:
             return os << "TAG_WITH_JSON";
-        case tool_format::BRACKET_TAG:
-            return os << "BRACKET_TAG";
-        case tool_format::PREFIXED_INDEXED:
-            return os << "PREFIXED_INDEXED";
-        case tool_format::RECIPIENT_BASED:
-            return os << "RECIPIENT_BASED";
         case tool_format::TAG_WITH_TAGGED:
             return os << "TAG_WITH_TAGGED";
-        case tool_format::MARKDOWN_BLOCK:
-            return os << "MARKDOWN_BLOCK";
         default:
             return os << "UNKNOWN";
     }

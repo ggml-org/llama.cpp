@@ -108,6 +108,27 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
                                                  const nlohmann::json &                     tools,
                                                  bool                                       parallel_tool_calls,
                                                  bool                                       force_tool_calls);
+
+  private:
+    // Implementation helpers for standard_json_tools — one per JSON tool call layout mode
+    common_peg_parser build_json_tools_function_is_key(const nlohmann::json & tools,
+                                                       const std::string &    args_key,
+                                                       const std::string &    effective_args_key,
+                                                       const std::string &    call_id_key,
+                                                       const std::string &    gen_call_id_key);
+
+    common_peg_parser build_json_tools_nested_keys(const nlohmann::json & tools,
+                                                   const std::string &    effective_name_key,
+                                                   const std::string &    effective_args_key,
+                                                   const std::string &    call_id_key,
+                                                   const std::string &    gen_call_id_key);
+
+    common_peg_parser build_json_tools_flat_keys(const nlohmann::json &           tools,
+                                                 const std::string &              effective_name_key,
+                                                 const std::string &              effective_args_key,
+                                                 const std::string &              call_id_key,
+                                                 const std::string &              gen_call_id_key,
+                                                 const std::vector<std::string> & parameters_order);
 };
 
 inline common_peg_arena build_chat_peg_unified_parser(
@@ -119,11 +140,14 @@ inline common_peg_arena build_chat_peg_unified_parser(
 
 class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
     std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
-    common_chat_tool_call *              current_tool        = nullptr;
-    int                                  arg_count           = 0;
-    bool                                 needs_closing_quote = false;
+    common_chat_tool_call *              current_tool          = nullptr;
+    int                                  arg_count             = 0;
+    bool                                 closing_quote_pending = false;
     std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
-    bool                                 buffer_needs_closing_quote = false;  // Track quote state for buffered args
+
+    // Returns a reference to the active argument destination string.
+    // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
+    std::string & args_target();
 
   public:
     common_chat_peg_unified_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
