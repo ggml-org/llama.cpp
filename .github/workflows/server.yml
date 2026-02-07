@@ -81,7 +81,7 @@ jobs:
             -DLLAMA_SANITIZE_ADDRESS=${{ matrix.sanitizer == 'ADDRESS' }} \
             -DLLAMA_SANITIZE_THREAD=${{ matrix.sanitizer == 'THREAD' }} \
             -DLLAMA_SANITIZE_UNDEFINED=${{ matrix.sanitizer == 'UNDEFINED' }}
-          cmake --build build --config ${{ matrix.build_type }} -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
       - name: Python setup
         id: setup_python
