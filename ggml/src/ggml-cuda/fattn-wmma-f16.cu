@@ -17,6 +17,10 @@ namespace wmma = nvcuda::wmma;
 #elif defined(GGML_USE_HIP)
 #include <rocwmma/rocwmma.hpp>
 namespace wmma = rocwmma;
+
+namespace rocwmma {
+    typedef hfloat16_t frag_half;
+}
 #endif // !defined(GGML_USE_HIP)
 #endif // GGML_USE_WMMA_FATTN
 
