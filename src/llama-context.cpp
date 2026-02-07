@@ -1027,11 +1027,7 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         llama_sampler_chain_n(sampler) > 0;
 
     if (sampler && can_offload) {
-        ggml_backend_buffer_type_t buft = ggml_backend_dev_buffer_type(model.dev_output());
-        auto * host_buft = ggml_backend_dev_host_buffer_type(model.dev_output());
-        if (host_buft) {
-            buft = host_buft;
-        }
+        auto * buft = ggml_backend_dev_buffer_type(model.dev_output());
 
         sampler->iface->backend_init(sampler, buft);
 
@@ -2017,7 +2013,7 @@ void llama_context::output_reorder() {
 //
 
 uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
-    if (model.arch == LLM_ARCH_QWEN3NEXT) {
+    if (model.arch == LLM_ARCH_QWEN3NEXT || model.arch == LLM_ARCH_KIMI_LINEAR) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());

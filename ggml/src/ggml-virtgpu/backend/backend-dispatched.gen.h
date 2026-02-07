@@ -16,6 +16,7 @@ uint32_t backend_device_buffer_from_ptr(apir_encoder * enc, apir_decoder * dec, 
 uint32_t backend_buffer_type_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_buffer_type_get_alignment(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_buffer_type_get_max_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+/* APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST is deprecated. Keeping the handler for backward compatibility. */
 uint32_t backend_buffer_type_is_host(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_buffer_type_alloc_buffer(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_buffer_type_get_alloc_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
@@ -62,7 +63,7 @@ static inline const char * backend_dispatch_command_name(ApirBackendCommandType 
         case APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE:
             return "backend_buffer_type_get_max_size";
         case APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST:
-            return "backend_buffer_type_is_host";
+            return "backend_buffer_type_is_host (DEPRECATED)";
         case APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER:
             return "backend_buffer_type_alloc_buffer";
         case APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALLOC_SIZE:
@@ -110,7 +111,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
     /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME  = */ backend_buffer_type_get_name,
     /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT  = */ backend_buffer_type_get_alignment,
     /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE  = */ backend_buffer_type_get_max_size,
-    /* APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST  = */ backend_buffer_type_is_host,
+    /* APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST  = */ backend_buffer_type_is_host /* DEPRECATED */,
     /* APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER  = */ backend_buffer_type_alloc_buffer,
     /* APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALLOC_SIZE  = */ backend_buffer_type_get_alloc_size,
 
