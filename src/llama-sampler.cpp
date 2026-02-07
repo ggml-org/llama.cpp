@@ -355,6 +355,10 @@ struct blue_noise_rng {
         init(bit_depth, seed);
     }
 
+    // currently this uses lowbias32 as the white noise RNG source
+    // in practice, any white noise RNG source works
+    // this random noise is used to perturb the error diffusion weights (binary decision)
+    // as well as to fill in the low bits of the double precision output to eliminate aliasing
     static uint32_t hash(uint32_t x) { // lowbias32
         x ^= x >> 16; x *= 0x21f0aaad;
         x ^= x >> 15; x *= 0x735a2d97;
@@ -377,6 +381,7 @@ struct blue_noise_rng {
         position  = 0;
 
         // 5 reachable states with distribution 3:3:2:1:1
+        // established based on empirical testing
         static const int8_t tbl[10][2] = {
             { 0,  0}, { 0,  0}, { 0,  0},
             {-1,  0}, {-1,  0}, {-1,  0},
@@ -444,9 +449,13 @@ struct llama_dist_rng {
     virtual ~llama_dist_rng() = default;
 
     virtual bool                            requires_sorted()  = 0; // whether the RNG requires sorted input for proper properties
+    
+    // for compatilibility with std::discrete_distribution
+    // nly used in a disabled branch of llama_sampler_dist_apply
     virtual uint32_t                        rng_min()          = 0;
     virtual uint32_t                        rng_max()          = 0;
     virtual uint32_t                        next()             = 0; // uniform bits in [rng_min(), rng_max()]
+
     virtual double                          nextf()            = 0; // uniform double in [0, 1)
     virtual void                            reseed(uint32_t s) = 0;
     virtual std::unique_ptr<llama_dist_rng> clone() const      = 0;
@@ -454,6 +463,7 @@ struct llama_dist_rng {
 
 // adapter to satisfy UniformRandomBitGenerator for std::discrete_distribution
 // note: not guaranteed to preserve blue noise properties
+// this is only used in a disabled branch of llama_sampler_dist_apply, added for compatibility
 struct llama_dist_urbg {
     using result_type = uint32_t;
 
@@ -464,10 +474,10 @@ struct llama_dist_urbg {
     result_type operator()() { return rng.next(); }
 };
 
-struct llama_dist_rng_white : llama_dist_rng {
+struct llama_dist_rng_mt19937 : llama_dist_rng {
     std::mt19937 rng;
 
-    llama_dist_rng_white(uint32_t seed) : rng(seed) {}
+    llama_dist_rng_mt19937(uint32_t seed) : rng(seed) {}
 
     bool requires_sorted() override { return false; }
 
@@ -488,7 +498,7 @@ struct llama_dist_rng_white : llama_dist_rng {
     }
 
     std::unique_ptr<llama_dist_rng> clone() const override {
-        auto c = std::make_unique<llama_dist_rng_white>(0);
+        auto c = std::make_unique<llama_dist_rng_mt19937>(0);
         c->rng = rng;
         return c;
     }
@@ -1432,7 +1442,7 @@ struct llama_sampler * llama_sampler_init_dist(uint32_t seed) {
             {"dist"},
             /* .seed        = */ seed,
             /* .seed_cur    = */ seed_cur,
-            /* .rng         = */ std::make_unique<llama_dist_rng_white>(seed_cur),
+            /* .rng         = */ std::make_unique<llama_dist_rng_mt19937>(seed_cur),
             /* .inp_uniform = */ nullptr,
         }
     );
