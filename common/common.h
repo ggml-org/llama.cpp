@@ -457,7 +457,8 @@ struct common_params {
     bool   kl_divergence    = false; // compute KL divergence
 
     bool usage             = false; // print usage
-    bool completion        = false; // print source-able completion script
+    bool completion        = false; // print source-able bash completion script
+    bool completion_fish   = false; // print source-able fish completion script
     bool use_color         = false; // use color to distinguish generations and inputs
     bool special           = false; // enable special token output
     bool interactive       = false; // interactive mode
