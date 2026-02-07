@@ -2358,6 +2358,7 @@ static inline uint8_t map_int8_to_uint2_idx(int32_t v0) {
         return 3;
         default:
         GGML_ASSERT(false);
+        return 0;
     }
 }
 
@@ -2374,6 +2375,7 @@ static inline int32_t map_uint2_idx_to_int8(uint8_t v0) {
         return 3;
         default:
         GGML_ASSERT(false);
+        return 0;
     }
 }
 
