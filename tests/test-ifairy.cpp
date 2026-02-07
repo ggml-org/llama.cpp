@@ -711,8 +711,9 @@ static bool test_ifairy_q16_tensor_quantization() {
     const float d_real = GGML_FP16_TO_FP32(q[0].d_real);
     const float d_imag = GGML_FP16_TO_FP32(q[0].d_imag);
 
-    const float d_real_expected = max_real / 127.0f;
-    const float d_imag_expected = max_imag / 127.0f;
+    const float k_scale_q8      = 42.6f;
+    const float d_real_expected = max_real / k_scale_q8;
+    const float d_imag_expected = max_imag / k_scale_q8;
 
     const float d_real_diff = std::abs(d_real - d_real_expected);
     const float d_imag_diff = std::abs(d_imag - d_imag_expected);
@@ -722,6 +723,8 @@ static bool test_ifairy_q16_tensor_quantization() {
 
     float max_err_real = 0.0f;
     float max_err_imag = 0.0f;
+    int   max_abs_qr   = 0;
+    int   max_abs_qi   = 0;
     for (int ib = 0; ib < nb; ++ib) {
         const float d_r = GGML_FP16_TO_FP32(q[ib].d_real);
         const float d_i = GGML_FP16_TO_FP32(q[ib].d_imag);
@@ -738,6 +741,9 @@ static bool test_ifairy_q16_tensor_quantization() {
             const float xr_q = d_r * (float) (int8_t) q[ib].x_real[j];
             const float xi_q = d_i * (float) (int8_t) q[ib].x_imag[j];
 
+            max_abs_qr = std::max(max_abs_qr, std::abs((int) (int8_t) q[ib].x_real[j]));
+            max_abs_qi = std::max(max_abs_qi, std::abs((int) (int8_t) q[ib].x_imag[j]));
+
             max_err_real = std::max(max_err_real, std::abs(xr_q - xr_f));
             max_err_imag = std::max(max_err_imag, std::abs(xi_q - xi_f));
         }
@@ -745,8 +751,9 @@ static bool test_ifairy_q16_tensor_quantization() {
 
     printf("  max_abs_err_real=%.6f\n", max_err_real);
     printf("  max_abs_err_imag=%.6f\n", max_err_imag);
+    printf("  max_abs_q_real=%d max_abs_q_imag=%d\n", max_abs_qr, max_abs_qi);
 
-    const bool ok = (max_err_real < 0.10f) && (max_err_imag < 0.10f);
+    const bool ok = (max_err_real < 0.10f) && (max_err_imag < 0.10f) && (max_abs_qr <= 42) && (max_abs_qi <= 42);
     printf("  tensor-scale quantization - %s\n", ok ? "PASS" : "FAIL");
     return ok;
 }

@@ -601,6 +601,16 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 }
 
 #ifdef GGML_IFAIRY_ARM_LUT
+static bool ggml_ifairy_lut_is_fairy2i_weight(const struct ggml_tensor * src0) {
+    if (src0 == NULL || src0->name[0] == '\0') {
+        return false;
+    }
+
+    // Fairy2i GGUF names encode widely-linear branches as "*.U.s{0,1}" / "*.W.s{0,1}".
+    return strstr(src0->name, ".U.s0") != NULL || strstr(src0->name, ".U.s1") != NULL ||
+           strstr(src0->name, ".W.s0") != NULL || strstr(src0->name, ".W.s1") != NULL;
+}
+
 static void ggml_ifairy_lut_threadpool_config_update(struct ggml_threadpool * threadpool) {
     struct ggml_ifairy_lut_threadpool_config cfg;
 
@@ -1332,6 +1342,13 @@ void ggml_compute_forward_mul_mat(
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
         src0->ne[0] % QK_IFAIRY == 0 && src1->ne[0] == src0->ne[0]) {
         enum ggml_ifairy_lut_impl impl = cfg->impl;
+        if (src1->type == GGML_TYPE_F32 && ggml_ifairy_lut_is_fairy2i_weight(src0) &&
+            impl != GGML_IFAIRY_LUT_IMPL_LUT_C) {
+            if (cfg->dbg) {
+                GGML_LOG_WARN("ifairy_lut: forcing lut_c for fairy2i tensor %s (impl=%d)\n", src0->name, (int) impl);
+            }
+            impl = GGML_IFAIRY_LUT_IMPL_LUT_C;
+        }
         if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C && src1->type != GGML_TYPE_F32) {
             if (cfg->dbg) {
                 GGML_LOG_WARN("ifairy_lut: lut_c requires src1=F32, falling back to lut16\n");

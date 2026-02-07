@@ -381,7 +381,8 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
     block_ifairy_q16 * GGML_RESTRICT y = vy;
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
-    const float32x4_t vmin_init = vdupq_n_f32(1e-5f);
+    const float32x4_t vmin_init  = vdupq_n_f32(1e-5f);
+    const float       k_scale_q8 = 42.6f;
 
     float32x4_t max_real = vmin_init;
     float32x4_t max_imag = vmin_init;
@@ -414,13 +415,13 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
     const float max_r = vmaxvq_f32(max_real);
     const float max_i = vmaxvq_f32(max_imag);
 
-    const float iscale_r = 127.f / max_r;
-    const float iscale_i = 127.f / max_i;
+    const float iscale_r = k_scale_q8 / max_r;
+    const float iscale_i = k_scale_q8 / max_i;
 
     const ggml_half d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
     const ggml_half d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
 
-    // pass 2: quantize per block with shared scale
+    // pass 2: quantize per block with shared scale; clamp to [-42, 42] so 3-way sums fit int8 LUT entries.
     const float32x4_t vs_r = vdupq_n_f32(iscale_r);
     const float32x4_t vs_i = vdupq_n_f32(iscale_i);
 
@@ -434,6 +435,8 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
         y[ib].d_imag = d_imag;
 
         __asm__ volatile(
+            "movi           v7.4s, #42\n"
+            "neg            v8.4s, v7.4s\n"
             "1:\n"
             "ld1            {v0.8h}, [%[src]], #16\n"
             "ushll          v1.4s, v0.4h, #0\n"
@@ -446,6 +449,10 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
             "fmul           v4.4s, v4.4s, %[si].4s\n"
             "fcvtns         v3.4s, v3.4s\n"
             "fcvtns         v4.4s, v4.4s\n"
+            "smax           v3.4s, v3.4s, v8.4s\n"
+            "smin           v3.4s, v3.4s, v7.4s\n"
+            "smax           v4.4s, v4.4s, v8.4s\n"
+            "smin           v4.4s, v4.4s, v7.4s\n"
             "sqxtn          v5.4h, v3.4s\n"
             "sqxtn          v6.4h, v4.4s\n"
             "sqxtn          v5.8b, v5.8h\n"
@@ -456,7 +463,7 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
             "b.gt           1b\n"
             : [src] "+r"(src), [yr] "+r"(yr), [yi] "+r"(yi), [cnt] "+r"(cnt)
             : [sr] "w"(vs_r), [si] "w"(vs_i)
-            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "cc", "memory");
+            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "cc", "memory");
     }
 #else
     GGML_UNUSED(nb);

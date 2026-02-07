@@ -2855,8 +2855,9 @@ void quantize_row_ifairy_q16_tensor_ref(const float * GGML_RESTRICT x, block_ifa
         max_imag = MAX(max_imag, fabsf(x_imag));
     }
 
-    const float iscale_real = 127.f / max_real;
-    const float iscale_imag = 127.f / max_imag;
+    const float k_scale_q8  = 42.6f;
+    const float iscale_real = k_scale_q8 / max_real;
+    const float iscale_imag = k_scale_q8 / max_imag;
 
     const ggml_half d_real = GGML_FP32_TO_FP16(1.f / iscale_real);
     const ggml_half d_imag = GGML_FP32_TO_FP16(1.f / iscale_imag);
@@ -2875,10 +2876,10 @@ void quantize_row_ifairy_q16_tensor_ref(const float * GGML_RESTRICT x, block_ifa
             const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
 
             int v           = nearest_int(iscale_real * x_real);
-            y[ib].x_real[j] = (int8_t) MAX(-127, MIN(127, v));
+            y[ib].x_real[j] = (int8_t) MAX(-42, MIN(42, v));
 
             v               = nearest_int(iscale_imag * x_imag);
-            y[ib].x_imag[j] = (int8_t) MAX(-127, MIN(127, v));
+            y[ib].x_imag[j] = (int8_t) MAX(-42, MIN(42, v));
         }
 
         x += QK_IFAIRY;
