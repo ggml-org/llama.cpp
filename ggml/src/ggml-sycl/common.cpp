@@ -243,6 +243,22 @@ struct RuntimeStagedData {
 static std::unordered_map<const void *, RuntimeStagedData> g_runtime_staging_cache;
 static std::mutex                                          g_runtime_staging_mutex;
 
+static size_t runtime_staging_min_bytes() {
+    static size_t min_bytes = []() -> size_t {
+        const char * env = std::getenv("GGML_SYCL_RUNTIME_STAGING_MIN_BYTES");
+        if (!env || env[0] == '\0') {
+            return 256ull * 1024ull;
+        }
+        char * end = nullptr;
+        unsigned long long parsed = std::strtoull(env, &end, 10);
+        if (end == env) {
+            return 256ull * 1024ull;
+        }
+        return static_cast<size_t>(parsed);
+    }();
+    return min_bytes;
+}
+
 // Get or create a staged copy of mmap'd data for a specific device 
 // Works in both TP mode and single-GPU mode (via host cache pinned memory)
 void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device) {
@@ -253,6 +269,12 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
     // Single-GPU mode: Stage through host cache's pinned memory pool
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         if (ggml_sycl::unified_cache_enabled()) {
+            // Avoid creating large pinned chunks for tiny runtime buffers.
+            // Small payloads are copied directly and do not benefit from
+            // persistent pinned staging.
+            if (size < runtime_staging_min_bytes()) {
+                return nullptr;
+            }
             std::lock_guard<std::mutex> lock(g_runtime_staging_mutex);
             auto it = g_runtime_staging_cache.find(src);
             if (it != g_runtime_staging_cache.end() && it->second.size >= size) {

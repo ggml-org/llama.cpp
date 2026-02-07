@@ -39,6 +39,7 @@ static unified_cache_mode                                      g_cache_mode = un
 static std::atomic<bool> g_cache_mode_locked{ false };   // Locked after first cache access
 static std::atomic<bool> g_sycl_shutting_down{ false };  // Set during shutdown to skip sycl::free()
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_bytes{};
+static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_baseline{};
 static std::atomic<size_t>                                   g_runtime_reserved_host_bytes{};
 static std::atomic<bool> g_atexit_registered{ false };   // Ensure atexit handler registered once
 static std::atomic<int> g_host_cache_guard_errors{ 0 };
@@ -4253,6 +4254,15 @@ static size_t runtime_reserved_bytes_nolock(int device_id) {
     return g_runtime_reserved_bytes[device_id].load(std::memory_order_relaxed);
 }
 
+static size_t runtime_reserved_adjusted_nolock(int device_id) {
+    if (device_id < 0 || device_id >= GGML_SYCL_MAX_DEVICES) {
+        return 0;
+    }
+    const size_t total = g_runtime_reserved_bytes[device_id].load(std::memory_order_relaxed);
+    const size_t base  = g_runtime_reserved_baseline[device_id].load(std::memory_order_relaxed);
+    return total > base ? total - base : 0;
+}
+
 static size_t runtime_reserved_host_bytes_nolock() {
     return g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
 }
@@ -4297,6 +4307,7 @@ static unified_cache * create_cache_for_device(int device_id) {
 
     // Auto-calculate budget if not set
     size_t budget = g_unified_cache_budget;
+    bool   budget_capped_to_free = false;
     if (budget == 0) {
         size_t free_mem = 0, total_mem = 0;
         ggml_backend_sycl_get_device_memory(device_id, &free_mem, &total_mem);
@@ -4326,6 +4337,7 @@ static unified_cache * create_cache_for_device(int device_id) {
             GGML_LOG_INFO("[UNIFIED-CACHE] Capping budget from %.1f MB to %.1f MB (actual free VRAM)\n",
                           budget / (1024.0f * 1024.0f), free_mem / (1024.0f * 1024.0f));
             budget = free_mem;
+            budget_capped_to_free = true;
         }
 
         char desc[256] = { 0 };
@@ -4344,9 +4356,12 @@ static unified_cache * create_cache_for_device(int device_id) {
     const size_t staging_bytes = resolve_host_staging_bytes();
     try {
         g_device_caches[device_id] = std::make_unique<unified_cache>(queue, budget, staging_bytes, dma_reserve_bytes);
-        const size_t reserved = runtime_reserved_bytes_nolock(device_id);
-        if (reserved > 0) {
-            g_device_caches[device_id]->update_reserved_bytes(reserved);
+        const size_t reserved_total = runtime_reserved_bytes_nolock(device_id);
+        const size_t baseline       = budget_capped_to_free ? reserved_total : 0;
+        g_runtime_reserved_baseline[device_id].store(baseline, std::memory_order_relaxed);
+        const size_t reserved_adjusted = runtime_reserved_adjusted_nolock(device_id);
+        if (reserved_adjusted > 0) {
+            g_device_caches[device_id]->update_reserved_bytes(reserved_adjusted);
         }
         return g_device_caches[device_id].get();
     } catch (const sycl::exception & e) {
@@ -4519,10 +4534,13 @@ void unified_cache_add_runtime_bytes(int device, size_t bytes) {
     if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
         return;
     }
-    g_runtime_reserved_bytes[effective_device].fetch_add(bytes, std::memory_order_relaxed);
+    const size_t new_total =
+        g_runtime_reserved_bytes[effective_device].fetch_add(bytes, std::memory_order_relaxed) + bytes;
     auto it = g_device_caches.find(effective_device);
     if (it != g_device_caches.end()) {
-        it->second->update_reserved_bytes(g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed));
+        const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
+        const size_t adjusted = new_total > baseline ? new_total - baseline : 0;
+        it->second->update_reserved_bytes(adjusted);
     }
 }
 
@@ -4541,7 +4559,9 @@ void unified_cache_sub_runtime_bytes(int device, size_t bytes) {
     g_runtime_reserved_bytes[effective_device].store(next, std::memory_order_relaxed);
     auto it = g_device_caches.find(effective_device);
     if (it != g_device_caches.end()) {
-        it->second->update_reserved_bytes(next);
+        const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
+        const size_t adjusted = next > baseline ? next - baseline : 0;
+        it->second->update_reserved_bytes(adjusted);
     }
 }
 

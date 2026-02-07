@@ -1105,8 +1105,15 @@ namespace dpct
         }
         dev_mgr()
         {
-            sycl::device default_device =
-                sycl::device(sycl::default_selector_v);
+            // Prefer an explicit GPU selector to avoid default-selector failures
+            // on systems where GPU devices are available but not picked as "default".
+            sycl::device default_device = []() {
+                try {
+                    return sycl::device(sycl::gpu_selector_v);
+                } catch (const sycl::exception &) {
+                    return sycl::device(sycl::default_selector_v);
+                }
+            }();
             _devs.push_back(std::make_shared<device_ext>(default_device));
 
             std::vector<sycl::device> sycl_all_devs;
