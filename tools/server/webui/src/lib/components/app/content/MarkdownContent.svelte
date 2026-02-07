@@ -25,6 +25,7 @@
 		BOOL_TRUE_STRING
 	} from '$lib/constants/markdown';
 	import { UrlPrefix } from '$lib/enums';
+	import { FileTypeText } from '$lib/enums/files';
 	import {
 		highlightCode,
 		detectIncompleteCodeBlock,
@@ -94,7 +95,9 @@
 		}
 
 		return proc
-			.use(rehypeHighlight) // Add syntax highlighting
+			.use(rehypeHighlight, {
+				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] }
+			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
