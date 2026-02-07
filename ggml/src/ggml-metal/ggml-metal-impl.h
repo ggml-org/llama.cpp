@@ -80,6 +80,7 @@
 #define FC_SSM_CONV                    900
 #define FC_SOLVE_TRI                   1000
 #define FC_COUNT_EQUAL                 1100
+#define FC_BIN                         1200
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
