@@ -2605,7 +2605,7 @@ public:
                              int seq_len);
     void update_op_rope(int op_idx, void * q, void * k, void * rope_dst,
                         const float * cos_cache, const float * sin_cache, int position);
-    void finish_plan_update();
+    void finish_plan_update();    // API bookend; no-op currently, validates plan readiness in future
     void invalidate_plan_cache();
     void * get_rows_stable_ptr(size_t bytes);
 
@@ -2643,6 +2643,7 @@ private:
     int *   barrier_sense_         = nullptr;
     size_t  persistent_buffer_size_ = 0;
 
+    void copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst);
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);
     void free_persistent_buffers();
     bool persistent_use_split_barrier() const;

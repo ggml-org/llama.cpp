@@ -5644,6 +5644,17 @@ void UnifiedKernel::cancel_persistent() {
 // Plan Caching Methods
 // -----------------------------------------------------------------------------
 
+void UnifiedKernel::copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst) {
+    dst.n_layers         = src.n_layers;
+    dst.batch_size       = src.batch_size;
+    dst.hidden_dim       = src.hidden_dim;
+    dst.intermediate_dim = src.intermediate_dim;
+    dst.n_heads          = src.n_heads;
+    dst.n_kv_heads       = src.n_kv_heads;
+    dst.head_dim         = src.head_dim;
+    dst.quant_type       = src.quant_type;
+}
+
 bool UnifiedKernel::has_cached_plan() const {
     return plan_cache_valid_;
 }
@@ -5659,14 +5670,7 @@ void UnifiedKernel::begin_plan_update() {
 
     // Clone from cached template
     current_plan_ = std::make_unique<PersistentPlan>();
-    current_plan_->n_layers          = cached_plan_template_.n_layers;
-    current_plan_->batch_size        = cached_plan_template_.batch_size;
-    current_plan_->hidden_dim        = cached_plan_template_.hidden_dim;
-    current_plan_->intermediate_dim  = cached_plan_template_.intermediate_dim;
-    current_plan_->n_heads           = cached_plan_template_.n_heads;
-    current_plan_->n_kv_heads        = cached_plan_template_.n_kv_heads;
-    current_plan_->head_dim          = cached_plan_template_.head_dim;
-    current_plan_->quant_type        = cached_plan_template_.quant_type;
+    copy_plan_shape(cached_plan_template_, *current_plan_);
     current_plan_->operations        = cached_ops_;  // copy the vector
 }
 
@@ -5695,7 +5699,7 @@ void UnifiedKernel::update_op_attention(int op_idx, const void * q, const void *
     auto & op  = current_plan_->operations[op_idx];
     op.input   = q;
     op.weights = k_cache;
-    op.aux     = const_cast<void *>(static_cast<const void *>(v_cache));
+    op.aux     = const_cast<void *>(v_cache);
     op.mask    = mask;
     op.output  = output;
     op.q_nb0   = q_nb0;  op.q_nb1 = q_nb1;  op.q_nb2 = q_nb2;  op.q_nb3 = q_nb3;
@@ -5758,14 +5762,7 @@ void UnifiedKernel::execute_persistent() {
 
     // Cache plan template after first successful execution
     if (!plan_cache_valid_) {
-        cached_plan_template_.n_layers         = current_plan_->n_layers;
-        cached_plan_template_.batch_size       = current_plan_->batch_size;
-        cached_plan_template_.hidden_dim       = current_plan_->hidden_dim;
-        cached_plan_template_.intermediate_dim = current_plan_->intermediate_dim;
-        cached_plan_template_.n_heads          = current_plan_->n_heads;
-        cached_plan_template_.n_kv_heads       = current_plan_->n_kv_heads;
-        cached_plan_template_.head_dim         = current_plan_->head_dim;
-        cached_plan_template_.quant_type       = current_plan_->quant_type;
+        copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
         plan_cache_valid_ = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
