@@ -44,8 +44,8 @@
 
 	let options = $derived(
 		modelOptions().filter((option) => {
-			// Exclude models that are marked as not for webui use
 			const modelProps = modelsStore.getModelProps(option.model);
+
 			return modelProps?.webui !== false;
 		})
 	);
@@ -252,7 +252,6 @@
 		}
 
 		if (options.length === 1) {
-			// Only one option - show it
 			return options[0];
 		}
 		// No selection - return undefined to show "Select model"
