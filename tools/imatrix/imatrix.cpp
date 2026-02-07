@@ -1507,21 +1507,21 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\nComputing tensor statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
 
     if (legacy) {
-        LOG_INF("\n%*s%s%-*s%s%10s%10s%12s%12s%9s%s%17s%8s%s%9s%9s\n",
+        LOG_INF("\n%*s%s%-*s%s%10s%10s%12s%12s%9s%s%17s%8s%s%10s%10s\n",
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Mean", "StdDev", "Skew", "Kurt", "H Norm", sep,
             "∑ E[A²]", "Gain", sep,
             "PCC", "Cov");
-        LOG_INF("%s\n", std::string(151, '-').c_str());
+        LOG_INF("%s\n", std::string(153, '-').c_str());
     } else {
-        LOG_INF("\n%*s%s%-*s%s%10s%10s%12s%12s%9s%s%17s%8s%s%12s%9s%9s\n",
+        LOG_INF("\n%*s%s%-*s%s%10s%10s%12s%12s%9s%s%17s%8s%s%12s%10s%10s\n",
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Mean", "StdDev", "Skew", "Kurt", "H Norm", sep,
             "∑ E[A²]", "Gain", sep,
             "L2 Dist", "PCC", "Cov");
-        LOG_INF("%s\n", std::string(163, '-').c_str());
+        LOG_INF("%s\n", std::string(165, '-').c_str());
     }
 
     // Tensor Statistics
@@ -1541,7 +1541,7 @@ static bool show_statistics(const common_params & params) {
         }
 
         if (legacy) {
-            LOG_INF("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%9.4f%9.4f\n",
+            LOG_INF("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%10.4f%10.4f\n",
                 w_lay, layer.c_str(), sep,
                 w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
                 tstat.mean_val, tstat.std_deviation, tstat.skewness, tstat.kurtosis, h_norm, sep,
@@ -1549,7 +1549,7 @@ static bool show_statistics(const common_params & params) {
                 tstat.pearson, tstat.covariance
             );
         } else {
-            LOG_INF("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%12.4f%9.4f%9.4f\n",
+            LOG_INF("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%12.4f%10.4f%10.4f\n",
                 w_lay, layer.c_str(), sep,
                 w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
                 tstat.mean_val, tstat.std_deviation, tstat.skewness, tstat.kurtosis, h_norm, sep,
@@ -1596,13 +1596,13 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("\n\nComputing layer statistics for %s (%zu layers)\n\n", params.in_files[0].c_str(), layers);
 
     if (legacy) {
-        LOG_INF("%*s%s%17s%8s%s%9s%9s%9s\n",
+        LOG_INF("%*s%s%17s%8s%s%9s%9s%12s\n",
             w_lay, "Layer", sep,
             "∑ E[A²]", "Gain", sep,
             "CosSim", "PCC", "Cov");
         LOG_INF("%s\n", std::string(61, '-').c_str());
     } else {
-        LOG_INF("%*s%s%17s%8s%s%12s%9s%9s%9s\n",
+        LOG_INF("%*s%s%17s%8s%s%12s%9s%9s%12s\n",
             w_lay, "Layer", sep,
             "∑ E[A²]", "Gain", sep,
             "L2 Dist", "CosSim", "PCC", "Cov");
@@ -1621,12 +1621,12 @@ static bool show_statistics(const common_params & params) {
         const auto *lyr = layer == 10000 ? "-" : str.c_str();
 
         if (legacy) {
-            LOG_INF("%*s%s%14.4f%8.2f%s%9.4f%9.4f%9.4f\n",
+            LOG_INF("%*s%s%14.4f%8.2f%s%9.4f%9.4f%12.4f\n",
                 w_lay, lyr, sep,
                 stats.layer_sum, lgn, sep,
                 lcs, lpc, lcv);
         } else {
-            LOG_INF("%*s%s%14.4f%8.2f%s%12.4f%9.4f%9.4f%9.4f\n",
+            LOG_INF("%*s%s%14.4f%8.2f%s%12.4f%9.4f%9.4f%12.4f\n",
                 w_lay, lyr, sep,
                 stats.layer_sum, lgn, sep,
                 ll2, lcs, lpc, lcv);
