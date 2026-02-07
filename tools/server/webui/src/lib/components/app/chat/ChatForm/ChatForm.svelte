@@ -545,6 +545,9 @@
 <DialogMcpResources
 	bind:open={isResourcePickerOpen}
 	preSelectedUri={preSelectedResourceUri}
+	onAttach={(resource) => {
+		mcpStore.attachResource(resource.uri);
+	}}
 	onOpenChange={(newOpen: boolean) => {
 		if (!newOpen) {
 			preSelectedResourceUri = undefined;

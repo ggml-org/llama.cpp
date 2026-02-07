@@ -1,15 +1,17 @@
 <script lang="ts">
 	import {
 		ChatAttachmentMcpPrompt,
+		ChatAttachmentMcpResourceStored,
 		ChatAttachmentThumbnailImage,
 		ChatAttachmentThumbnailFile,
 		HorizontalScrollCarousel,
 		DialogChatAttachmentPreview,
-		DialogChatAttachmentsViewAll
+		DialogChatAttachmentsViewAll,
+		DialogMcpResourcePreview
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { AttachmentType } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 	import { getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
@@ -52,6 +54,8 @@
 	let isScrollable = $state(false);
 	let previewDialogOpen = $state(false);
 	let previewItem = $state<ChatAttachmentPreviewItem | null>(null);
+	let mcpResourcePreviewOpen = $state(false);
+	let mcpResourcePreviewExtra = $state<DatabaseMessageExtraMcpResource | null>(null);
 	let showViewAll = $derived(limitToSingleRow && displayItems.length > 0 && isScrollable);
 	let viewAllDialogOpen = $state(false);
 
@@ -68,6 +72,13 @@
 			textContent: item.textContent
 		};
 		previewDialogOpen = true;
+	}
+
+	function openMcpResourcePreview(extra: DatabaseMessageExtraMcpResource, event?: MouseEvent) {
+		event?.stopPropagation();
+		event?.preventDefault();
+		mcpResourcePreviewExtra = extra;
+		mcpResourcePreviewOpen = true;
 	}
 
 	$effect(() => {
@@ -111,6 +122,15 @@
 								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
 							/>
 						{/if}
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						<ChatAttachmentMcpResourceStored
+							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
+							extra={item.attachment as DatabaseMessageExtraMcpResource}
+							{readonly}
+							onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+							onClick={(event) =>
+								openMcpResourcePreview(item.attachment as DatabaseMessageExtraMcpResource, event)}
+						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
@@ -182,6 +202,14 @@
 								onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
 							/>
 						{/if}
+					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
+						<ChatAttachmentMcpResourceStored
+							extra={item.attachment as DatabaseMessageExtraMcpResource}
+							{readonly}
+							onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
+							onClick={(event) =>
+								openMcpResourcePreview(item.attachment as DatabaseMessageExtraMcpResource, event)}
+						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
 							class="cursor-pointer"
@@ -238,3 +266,7 @@
 	{imageClass}
 	{activeModelId}
 />
+
+{#if mcpResourcePreviewExtra}
+	<DialogMcpResourcePreview bind:open={mcpResourcePreviewOpen} extra={mcpResourcePreviewExtra} />
+{/if}

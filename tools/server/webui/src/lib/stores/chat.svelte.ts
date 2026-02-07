@@ -447,6 +447,11 @@ class ChatStore {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 		const activeConv = conversationsStore.activeConversation;
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
+
+		// Consume MCP resource attachments - converts them to extras and clears the live store
+		const resourceExtras = mcpStore.consumeResourceAttachmentsAsExtras();
+		const allExtras = resourceExtras.length > 0 ? [...(extras || []), ...resourceExtras] : extras;
+
 		let isNewConversation = false;
 		if (!activeConv) {
 			await conversationsStore.createConversation();
@@ -478,7 +483,7 @@ class ChatStore {
 				content,
 				MessageType.TEXT,
 				parentIdForUserMessage ?? '-1',
-				extras
+				allExtras
 			);
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(currentConv.id, content.trim());
@@ -686,6 +691,7 @@ class ChatStore {
 			}
 		};
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+
 		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
 			const agenticResult = await agenticStore.runAgenticFlow({
@@ -698,29 +704,16 @@ class ChatStore {
 			});
 			if (agenticResult.handled) return;
 		}
-		const resourceContext = mcpStore.getResourceContextForChat();
-		let messagesWithResources = allMessages;
 
-		if (resourceContext) {
-			messagesWithResources = allMessages.map((msg, idx) => {
-				if (idx === allMessages.length - 1 && msg.role === MessageRole.USER) {
-					return {
-						...msg,
-						content: resourceContext + '\n\n' + msg.content
-					};
-				}
-				return msg;
-			});
-			mcpStore.clearResourceAttachments();
-		}
+		const completionOptions = {
+			...this.getApiOptions(),
+			...(effectiveModel ? { model: effectiveModel } : {}),
+			...streamCallbacks
+		};
 
 		await ChatService.sendMessage(
-			messagesWithResources,
-			{
-				...this.getApiOptions(),
-				...(effectiveModel ? { model: effectiveModel } : {}),
-				...streamCallbacks
-			},
+			allMessages,
+			completionOptions,
 			assistantMessage.convId,
 			abortController.signal
 		);

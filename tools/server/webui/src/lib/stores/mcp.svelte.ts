@@ -23,7 +23,7 @@ import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
-import { parseMcpServerSettings, detectMcpTransportFromUrl } from '$lib/utils';
+import { parseMcpServerSettings, detectMcpTransportFromUrl, getFaviconUrl } from '$lib/utils';
 import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus, MCPRefType } from '$lib/enums';
 import {
 	DEFAULT_MCP_CONFIG,
@@ -298,17 +298,13 @@ class MCPStore {
 
 	/**
 	 * Get favicon URL for an MCP server by its ID.
+	 * Uses Google's favicon service for consistent display.
 	 * Returns null if server is not found.
 	 */
 	getServerFavicon(serverId: string): string | null {
 		const server = this.getServerById(serverId);
 		if (!server) return null;
-		try {
-			const url = new URL(server.url);
-			return `${url.origin}/favicon.ico`;
-		} catch {
-			return null;
-		}
+		return getFaviconUrl(server.url);
 	}
 
 	isAnyServerLoading(): boolean {
@@ -1424,6 +1420,18 @@ class MCPStore {
 	 */
 	getResourceContextForChat(): string {
 		return mcpResourceStore.formatAttachmentsForContext();
+	}
+
+	/**
+	 * Convert current resource attachments to DatabaseMessageExtra[] and clear them.
+	 * Called during message send to persist resources with the user message.
+	 */
+	consumeResourceAttachmentsAsExtras(): import('$lib/types').DatabaseMessageExtraMcpResource[] {
+		const extras = mcpResourceStore.toMessageExtras();
+		if (extras.length > 0) {
+			mcpResourceStore.clearAttachments();
+		}
+		return extras;
 	}
 }
 

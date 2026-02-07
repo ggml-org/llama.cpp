@@ -473,3 +473,27 @@ export { default as DialogModelInformation } from './DialogModelInformation.svel
  * ```
  */
 export { default as DialogMcpResources } from './DialogMcpResources.svelte';
+
+/**
+ * **DialogMcpResourcePreview** - MCP resource content preview
+ *
+ * Dialog for previewing the content of a stored MCP resource attachment.
+ * Displays the resource content with syntax highlighting for code,
+ * image rendering for images, and plain text for other content.
+ *
+ * **Features:**
+ * - Syntax highlighted code preview
+ * - Image rendering for image resources
+ * - Copy to clipboard and download actions
+ * - Server name and favicon display
+ * - MIME type badge
+ *
+ * @example
+ * ```svelte
+ * <DialogMcpResourcePreview
+ *   bind:open={previewOpen}
+ *   extra={mcpResourceExtra}
+ * />
+ * ```
+ */
+export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';

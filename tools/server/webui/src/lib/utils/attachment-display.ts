@@ -21,6 +21,13 @@ function isMcpPromptAttachment(attachment: DatabaseMessageExtra): boolean {
 }
 
 /**
+ * Check if an attachment is an MCP resource
+ */
+function isMcpResourceAttachment(attachment: DatabaseMessageExtra): boolean {
+	return attachment.type === AttachmentType.MCP_RESOURCE;
+}
+
+/**
  * Gets the file type category from an uploaded file, checking both MIME type and extension
  */
 function getUploadedFileCategory(file: ChatUploadedFile): FileTypeCategory | null {
@@ -63,6 +70,7 @@ export function getAttachmentDisplayItems(
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
 		const isMcpPrompt = isMcpPromptAttachment(attachment);
+		const isMcpResource = isMcpResourceAttachment(attachment);
 
 		items.push({
 			id: `attachment-${index}`,
@@ -70,6 +78,7 @@ export function getAttachmentDisplayItems(
 			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
 			isImage,
 			isMcpPrompt,
+			isMcpResource,
 			attachment,
 			attachmentIndex: index,
 			textContent: 'content' in attachment ? attachment.content : undefined

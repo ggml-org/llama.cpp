@@ -61,12 +61,22 @@ export interface DatabaseMessageExtraMcpPrompt {
 	arguments?: Record<string, string>;
 }
 
+export interface DatabaseMessageExtraMcpResource {
+	type: AttachmentType.MCP_RESOURCE;
+	name: string;
+	uri: string;
+	serverName: string;
+	content: string;
+	mimeType?: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
+	| DatabaseMessageExtraMcpResource
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
