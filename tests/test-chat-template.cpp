@@ -17,6 +17,10 @@
 #include "jinja/lexer.h"
 #include "jinja/caps.h"
 
+#ifdef WIN32
+#include <regex>
+#endif
+
 using json = nlohmann::ordered_json;
 
 static int main_automated_tests(void);
