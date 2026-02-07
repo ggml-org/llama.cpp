@@ -57,6 +57,7 @@
 #include "ggml-sycl/kernel-selection.hpp"
 #include "ggml-sycl/dispatch-tuning.hpp"
 #include "ggml-sycl/convert.hpp"
+#include "ggml-sycl/cpy.hpp"
 #include "ggml-sycl/element_wise.hpp"
 #include "ggml-sycl/fattn.hpp"
 #include "ggml-sycl/gemm.hpp"
@@ -4827,6 +4828,28 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
         }
 
     }
+    // Fast path: if the tensor is already device-resident in the requested layout,
+    // reuse that storage directly instead of creating a duplicate unified-cache entry.
+    // Duplicating pre-transformed weights can exhaust VRAM before warmup/decode.
+    if (!used_host_layout && src_is_device && !request_prefer_host) {
+        if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+            if (extra->layout.data_ptr != nullptr &&
+                extra->layout.mode == resolved &&
+                extra->layout.device_id == device &&
+                extra->layout.size >= dst_size) {
+                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, extra->layout.data_ptr,
+                                                   extra->layout.size, xmx_info, onednn_pack_m);
+                return extra->layout.data_ptr;
+            }
+        }
+        if (resolved == GGML_LAYOUT_AOS) {
+            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
+                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, const_cast<void *>(src_ptr), src_size,
+                                                   xmx_info, onednn_pack_m);
+            }
+            return const_cast<void *>(src_ptr);
+        }
+    }
     ggml_sycl::cache_layout_request req{};
     req.key              = cache_key;
     req.src_ptr          = req_src_ptr;
@@ -5229,12 +5252,27 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         GGML_SYCL_DEBUG("[XMX] Skipping SoA upload for %s, using tiled buffer created in this call\n", tensor->name);
         reorder_buf = nullptr;  // Already freed, nothing to upload
     } else {
-        // No reorder needed - use staging buffer for mmap workaround
-        char * host_buf = (char *) malloc(size);
-        memcpy(host_buf, data, size);
-        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
+        // No reorder needed - use bounded staging uploads for mmap-backed sources.
+        // A single malloc(size) + memcpy can fail for large tensors and crash.
+        constexpr size_t STAGING_CHUNK_SIZE = 64ull * 1024ull * 1024ull;  // 64 MB
+        const size_t     staging_size       = std::min(size, STAGING_CHUNK_SIZE);
+        char *           host_buf           = (char *) malloc(staging_size);
+        if (!host_buf) {
+            GGML_LOG_ERROR("[SYCL] host staging alloc failed for %s: chunk=%zu total=%zu\n",
+                           tensor->name ? tensor->name : "(unknown)", staging_size, size);
+            GGML_ABORT("host staging allocation failed");
+        }
+        size_t bytes_copied = 0;
+        while (bytes_copied < size) {
+            const size_t chunk_size = std::min(staging_size, size - bytes_copied);
+            memcpy(host_buf, (const char *) data + bytes_copied, chunk_size);
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                (*stream)
+                    .memcpy((char *) tensor->data + offset + bytes_copied, host_buf, chunk_size)
+                    .wait()));
+            bytes_copied += chunk_size;
+        }
         free(host_buf);
-
     }
 #else
     if (reorder_buf) {
@@ -5296,6 +5334,77 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
+static bool ggml_sycl_readback_via_shared_kernel(sycl::queue & q, const void * src_ptr, void * dst_host, size_t size, const char * tag);
+static std::atomic<int> g_sycl_force_kernel_readback[GGML_SYCL_MAX_DEVICES] = {};
+static std::atomic<int> g_sycl_lowmem_kernel_readback_notified[GGML_SYCL_MAX_DEVICES] = {};
+static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why);
+
+static inline bool ggml_sycl_device_kernel_readback_enabled(int device) {
+    return device >= 0 && device < GGML_SYCL_MAX_DEVICES &&
+           g_sycl_force_kernel_readback[device].load(std::memory_order_acquire) != 0;
+}
+
+static inline bool ggml_sycl_should_prefer_kernel_readback(int device, const ggml_tensor * tensor, size_t size) {
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES || !tensor || size == 0) {
+        return false;
+    }
+
+    // Target the known problematic logits readback path first.
+    if (std::strcmp(tensor->name, "result_output") != 0) {
+        return false;
+    }
+
+    static std::atomic<int> s_lowmem_threshold_mb{-1};
+    int threshold_mb = s_lowmem_threshold_mb.load(std::memory_order_acquire);
+    if (threshold_mb < 0) {
+        int parsed = 6144;  // default: 6 GB
+        if (const char * env = std::getenv("GGML_SYCL_KERNEL_READBACK_FREE_MB")) {
+            parsed = std::max(0, std::atoi(env));
+        }
+        s_lowmem_threshold_mb.store(parsed, std::memory_order_release);
+        threshold_mb = parsed;
+    }
+    if (threshold_mb <= 0) {
+        return false;
+    }
+
+    size_t free_mem = 0;
+    size_t total_mem = 0;
+    ggml_backend_sycl_get_device_memory(device, &free_mem, &total_mem);
+    const size_t free_mb = free_mem / (1024ULL * 1024ULL);
+    if ((int) free_mb > threshold_mb) {
+        return false;
+    }
+
+    int expected = 0;
+    if (g_sycl_lowmem_kernel_readback_notified[device].compare_exchange_strong(
+            expected, 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        GGML_LOG_WARN(
+            "[SYCL] low-free-memory logits readback guard enabled on device %d: free=%zu MB threshold=%d MB\n",
+            device, free_mb, threshold_mb);
+        ggml_sycl_enable_device_kernel_readback(
+            device, "low free memory guard", "proactive guard for high-context logits readback");
+    }
+    return true;
+}
+
+static inline void ggml_sycl_enable_device_kernel_readback(int device, const char * where, const char * why) {
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES) {
+        return;
+    }
+    int expected = 0;
+    if (g_sycl_force_kernel_readback[device].compare_exchange_strong(
+            expected, 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        GGML_LOG_WARN(
+            "[SYCL] enabling kernel readback fallback for device %d after %s failure: %s\n",
+            device, where ? where : "(unknown)", why ? why : "(unknown)");
+        if (!g_ggml_sycl_disable_graph) {
+            g_ggml_sycl_disable_graph = 1;
+            GGML_LOG_WARN("[SYCL] disabling SYCL graphs after readback failure to avoid poisoned graph state\n");
+        }
+    }
+}
+
 static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   tensor,
                                                 void *                data,
@@ -5311,10 +5420,207 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     // This fixes GPU speculative verification failures where tensor reads saw stale data
 
     auto & stream = ctx->stream ? *ctx->stream : ggml_sycl_get_device(ctx->device).default_queue();
-    SYCL_CHECK(CHECK_TRY_ERROR(stream.memcpy(data, (const char *) tensor->data + offset, size).wait()));
+    const void * src_ptr = (const char *) tensor->data + offset;
+    static int s_get_tensor_trace = -1;
+    if (s_get_tensor_trace < 0) {
+        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_TRACE");
+        s_get_tensor_trace = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    auto alloc_name = [](sycl::usm::alloc a) -> const char * {
+        switch (a) {
+            case sycl::usm::alloc::host:   return "host";
+            case sycl::usm::alloc::device: return "device";
+            case sycl::usm::alloc::shared: return "shared";
+            case sycl::usm::alloc::unknown:
+            default:                       return "unknown";
+        }
+    };
+    if (s_get_tensor_trace) {
+        const sycl::usm::alloc src_alloc_stream = sycl::get_pointer_type(src_ptr, stream.get_context());
+        const sycl::usm::alloc src_alloc_default =
+            sycl::get_pointer_type(src_ptr, dpct::get_in_order_queue().get_context());
+        const sycl::usm::alloc dst_alloc_stream = sycl::get_pointer_type(data, stream.get_context());
+        const sycl::usm::alloc dst_alloc_default =
+            sycl::get_pointer_type(data, dpct::get_in_order_queue().get_context());
+        size_t free_mem = 0;
+        size_t total_mem = 0;
+        ggml_backend_sycl_get_device_memory(ctx->device, &free_mem, &total_mem);
+        std::string stream_dev_name = stream.get_device().get_info<sycl::info::device::name>();
+        std::string src_dev_name    = "(unknown)";
+        try {
+            src_dev_name = sycl::get_pointer_device(src_ptr, stream.get_context()).get_info<sycl::info::device::name>();
+        } catch (const sycl::exception &) {
+        }
+        const auto * bctx = (const ggml_backend_sycl_buffer_context *) tensor->buffer->context;
+        const uintptr_t base = bctx ? (uintptr_t) bctx->dev_ptr : 0;
+        const uintptr_t end  = bctx ? (base + bctx->size_bytes) : 0;
+        const uintptr_t src_u = (uintptr_t) src_ptr;
+        const bool in_range = bctx ? (src_u >= base && (src_u + size) <= end) : false;
+        GGML_LOG_INFO(
+            "[SYCL] buffer_get_tensor ptr types: tensor='%s' nbytes=%zu offset=%zu req_size=%zu src(stream=%s,default=%s) dst(stream=%s,default=%s) src=%p dst=%p mem_free=%.1fMB mem_total=%.1fMB stream_dev='%s' src_dev='%s' stream=%p buf_base=%p buf_size=%zu in_range=%d\n",
+            tensor && tensor->name[0] ? tensor->name : "(unnamed)", ggml_nbytes(tensor), offset, size,
+            alloc_name(src_alloc_stream), alloc_name(src_alloc_default), alloc_name(dst_alloc_stream),
+            alloc_name(dst_alloc_default), src_ptr, data,
+            free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), stream_dev_name.c_str(),
+            src_dev_name.c_str(), (void *) &stream, bctx ? bctx->dev_ptr : nullptr, bctx ? bctx->size_bytes : 0, in_range ? 1 : 0);
+    }
+    static int s_force_shared_fallback = -1;
+    if (s_force_shared_fallback < 0) {
+        const char * env = std::getenv("GGML_SYCL_FORCE_SHARED_READBACK");
+        s_force_shared_fallback = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    const bool force_shared_readback =
+        (s_force_shared_fallback != 0) ||
+        ggml_sycl_device_kernel_readback_enabled(ctx->device) ||
+        ggml_sycl_should_prefer_kernel_readback(ctx->device, tensor, size);
+    if (force_shared_readback) {
+        try {
+            stream.wait_and_throw();
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[SYCL] buffer_get_tensor force-shared pre-wait failed (%zu bytes): %s\n", size, e.what());
+        }
+        sycl::queue & readback_q = stream;
+        if (ggml_sycl_readback_via_shared_kernel(readback_q, src_ptr, data, size, "buffer_get_tensor_force_shared")) {
+            GGML_LOG_INFO("[SYCL] buffer_get_tensor force-shared readback succeeded (%zu bytes)\n", size);
+            return;
+        }
+        GGML_LOG_ERROR("[SYCL] buffer_get_tensor force-shared readback failed (%zu bytes)\n", size);
+    }
+    try {
+        stream.wait_and_throw();
+        stream.memcpy(data, src_ptr, size).wait();
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[SYCL] buffer_get_tensor memcpy failed (%zu bytes): %s\n", size, e.what());
+        ggml_sycl_enable_device_kernel_readback(ctx->device, "buffer_get_tensor memcpy", e.what());
+        const bool is_oom_submit = std::strstr(e.what(), "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY") != nullptr;
+        if (!is_oom_submit) {
+            // Probe alternate queue to distinguish queue-state vs pointer/context issues.
+            try {
+                sycl::queue & readback_q = stream;
+                void * fallback_staging =
+                    ggml_sycl_malloc_host_tracked_bytes(size, readback_q, "buffer_get_tensor_staging_fallback");
+                if (fallback_staging) {
+                    sycl::event ev = readback_q.memcpy(fallback_staging, src_ptr, size);
+                    ev.wait();
+                    std::memcpy(data, fallback_staging, size);
+                    ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
+                    GGML_LOG_INFO("[SYCL] buffer_get_tensor fallback readback succeeded on in-order queue (%zu bytes)\n",
+                                  size);
+                    return;
+                }
+            } catch (const sycl::exception & fb_e) {
+                GGML_LOG_ERROR("[SYCL] buffer_get_tensor fallback readback failed (%zu bytes): %s\n", size, fb_e.what());
+            }
+        } else {
+            GGML_LOG_INFO("[SYCL] buffer_get_tensor skipping retry memcpy after OOM submit failure\n");
+        }
+        try {
+            sycl::queue & readback_q = stream;
+            if (ggml_sycl_readback_via_shared_kernel(readback_q, src_ptr, data, size, "buffer_get_tensor_shared_fallback")) {
+                GGML_LOG_INFO("[SYCL] buffer_get_tensor shared-kernel fallback succeeded (%zu bytes)\n", size);
+                return;
+            }
+            GGML_LOG_ERROR("[SYCL] buffer_get_tensor shared-kernel fallback failed (%zu bytes)\n", size);
+        } catch (const sycl::exception & sk_e) {
+            GGML_LOG_ERROR("[SYCL] buffer_get_tensor shared-kernel fallback exception (%zu bytes): %s\n", size, sk_e.what());
+        }
+        throw;
+    }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
+}
+
+static bool ggml_sycl_readback_via_shared_kernel(sycl::queue & q, const void * src_ptr, void * dst_host, size_t size, const char * tag) {
+    if (size == 0) {
+        return true;
+    }
+
+    static int s_shared_fallback_trace = -1;
+    if (s_shared_fallback_trace < 0) {
+        const char * env = std::getenv("GGML_SYCL_READBACK_FALLBACK_TRACE");
+        s_shared_fallback_trace = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+
+    sycl::queue exec_q = q;
+    bool using_fresh_queue = false;
+    try {
+        exec_q = sycl::queue(q.get_context(), q.get_device(), sycl::property_list{ sycl::property::queue::in_order() });
+        using_fresh_queue = true;
+    } catch (const sycl::exception & e) {
+        if (s_shared_fallback_trace) {
+            GGML_LOG_ERROR("[SYCL] %s: shared-fallback fresh queue creation failed, using caller queue: %s\n", tag, e.what());
+        }
+    }
+
+    const sycl::usm::alloc src_alloc = sycl::get_pointer_type(src_ptr, exec_q.get_context());
+    if (src_alloc == sycl::usm::alloc::unknown) {
+        if (s_shared_fallback_trace) {
+            GGML_LOG_ERROR("[SYCL] %s: shared-fallback source pointer is unknown in exec queue context\n", tag);
+        }
+        return false;
+    }
+
+    if (s_shared_fallback_trace) {
+        GGML_LOG_INFO("[SYCL] %s: shared-fallback start (%zu bytes), queue=%s\n",
+                      tag, size, using_fresh_queue ? "fresh-in-order" : "caller");
+    }
+
+    void * host_stage = ggml_sycl_malloc_host_tracked_bytes(size, exec_q, tag);
+    if (!host_stage) {
+        if (s_shared_fallback_trace) {
+            GGML_LOG_ERROR("[SYCL] %s: shared-fallback host-stage allocation failed (%zu bytes)\n", tag, size);
+        }
+        return false;
+    }
+    if (s_shared_fallback_trace) {
+        GGML_LOG_INFO("[SYCL] %s: shared-fallback host-stage allocated (%zu bytes)\n", tag, size);
+    }
+
+    try {
+        const uint8_t * src = static_cast<const uint8_t *>(src_ptr);
+        uint8_t *       dst = static_cast<uint8_t *>(host_stage);
+        const size_t    n   = size;
+        constexpr size_t k_vec = 16;
+        const size_t groups = (n + k_vec - 1) / k_vec;
+        if (s_shared_fallback_trace) {
+            GGML_LOG_INFO("[SYCL] %s: shared-fallback submitting kernel (%zu groups)\n", tag, groups);
+        }
+        sycl::event ev = exec_q.parallel_for(sycl::range<1>(groups), [=](sycl::id<1> idx) {
+            const size_t base = idx[0] * k_vec;
+            for (size_t i = 0; i < k_vec; ++i) {
+                const size_t pos = base + i;
+                if (pos < n) {
+                    dst[pos] = src[pos];
+                }
+            }
+        });
+        if (s_shared_fallback_trace) {
+            GGML_LOG_INFO("[SYCL] %s: shared-fallback waiting for kernel\n", tag);
+        }
+        ev.wait();
+        if (s_shared_fallback_trace) {
+            GGML_LOG_INFO("[SYCL] %s: shared-fallback kernel completed\n", tag);
+        }
+        std::memcpy(dst_host, host_stage, size);
+        ggml_sycl_free_host_tracked_bytes(host_stage, size, exec_q);
+        if (s_shared_fallback_trace) {
+            GGML_LOG_INFO("[SYCL] %s: shared-fallback succeeded (%zu bytes)\n", tag, size);
+        }
+        return true;
+    } catch (const sycl::exception & e) {
+        if (s_shared_fallback_trace) {
+            GGML_LOG_ERROR("[SYCL] %s: shared-fallback sycl exception: %s\n", tag, e.what());
+        }
+        ggml_sycl_free_host_tracked_bytes(host_stage, size, exec_q);
+        return false;
+    } catch (...) {
+        if (s_shared_fallback_trace) {
+            GGML_LOG_ERROR("[SYCL] %s: shared-fallback unknown exception\n", tag);
+        }
+        ggml_sycl_free_host_tracked_bytes(host_stage, size, exec_q);
+        return false;
+    }
 }
 // Check if double-buffering is enabled (cached)
 // Use atomic with -1 = not initialized, 0 = disabled, 1 = enabled
@@ -5484,13 +5790,73 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_sycl_set_device(ctx->device);
 
     queue_ptr stream = ctx->stream;
-    sycl::event sync_evt = ggml_sycl_submit_queue_sync_event(*stream);
-    sync_evt.wait_and_throw();
-    sycl::event clear_evt = stream->submit([&](sycl::handler & cgh) {
-        cgh.depends_on(sync_evt);
-        cgh.memset(ctx->dev_ptr, value, buffer->size);
-    });
-    clear_evt.wait_and_throw();
+    // Keep clear path simple: wait prior work, then submit direct memset.
+    // Submitting a dependent event after waiting it can still create extra queue
+    // pressure in low-memory scenarios and has triggered UR OOM on some drivers.
+    stream->wait_and_throw();
+    static int s_clear_trace = -1;
+    if (s_clear_trace < 0) {
+        const char * env = std::getenv("GGML_SYCL_BUFFER_CLEAR_TRACE");
+        s_clear_trace = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    if (s_clear_trace) {
+        const sycl::usm::alloc alloc = sycl::get_pointer_type(ctx->dev_ptr, stream->get_context());
+        const char * alloc_name = "unknown";
+        switch (alloc) {
+            case sycl::usm::alloc::host:   alloc_name = "host"; break;
+            case sycl::usm::alloc::device: alloc_name = "device"; break;
+            case sycl::usm::alloc::shared: alloc_name = "shared"; break;
+            case sycl::usm::alloc::unknown:
+            default: break;
+        }
+        std::string ptr_dev = "(unknown)";
+        try {
+            ptr_dev = sycl::get_pointer_device(ctx->dev_ptr, stream->get_context())
+                          .get_info<sycl::info::device::name>();
+        } catch (const sycl::exception &) {
+        }
+        GGML_LOG_INFO("[SYCL] buffer_clear trace: dev=%d ptr=%p size=%zu alloc=%s stream_dev='%s' ptr_dev='%s'\n",
+                      ctx->device, ctx->dev_ptr, buffer->size, alloc_name,
+                      stream->get_device().get_info<sycl::info::device::name>().c_str(), ptr_dev.c_str());
+    }
+    static std::atomic<int> s_clear_chunk_mb{-1};
+    int clear_chunk_mb = s_clear_chunk_mb.load(std::memory_order_acquire);
+    if (clear_chunk_mb < 0) {
+        int parsed = 64;  // default: avoid single giant memset submits on large KV buffers
+        if (const char * env = std::getenv("GGML_SYCL_BUFFER_CLEAR_CHUNK_MB")) {
+            parsed = std::max(1, std::atoi(env));
+        }
+        s_clear_chunk_mb.store(parsed, std::memory_order_release);
+        clear_chunk_mb = parsed;
+    }
+
+    const size_t base_chunk = (size_t) clear_chunk_mb * 1024ULL * 1024ULL;
+    if (base_chunk == 0 || buffer->size <= base_chunk) {
+        stream->memset(ctx->dev_ptr, value, buffer->size).wait();
+        return;
+    }
+
+    size_t offset = 0;
+    size_t chunk  = base_chunk;
+    char * base_ptr = static_cast<char *>(ctx->dev_ptr);
+    while (offset < buffer->size) {
+        const size_t this_chunk = std::min(chunk, buffer->size - offset);
+        try {
+            stream->memset(base_ptr + offset, value, this_chunk).wait();
+            offset += this_chunk;
+            chunk = base_chunk;
+        } catch (const sycl::exception & e) {
+            const bool is_oom_submit =
+                std::strstr(e.what(), "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY") != nullptr;
+            if (is_oom_submit && chunk > (1ULL << 20)) {
+                chunk = std::max<size_t>(1ULL << 20, chunk / 2);
+                GGML_LOG_WARN("[SYCL] buffer_clear OOM on chunk=%zu bytes, retrying with chunk=%zu bytes\n",
+                              this_chunk, chunk);
+                continue;
+            }
+            throw;
+        }
+    }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
 
@@ -22449,8 +22815,17 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
                  buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)) &&
 
                 "unsupported buffer type");
-    // Use backend's stream for the async memcpy
-    const queue_ptr          stream = sycl_ctx->stream(sycl_ctx->device, 0);
+    // Default readback queue is backend stream; optionally force buffer-owner queue for diagnostics.
+    const queue_ptr backend_stream = sycl_ctx->stream(sycl_ctx->device, 0);
+    const auto *    buf_ctx        = (const ggml_backend_sycl_buffer_context *) buf->context;
+    const queue_ptr owner_stream   = buf_ctx ? buf_ctx->stream : nullptr;
+    static int      s_use_owner_queue = -1;
+    if (s_use_owner_queue < 0) {
+        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_USE_OWNER_QUEUE");
+        s_use_owner_queue = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    const bool      use_owner_queue = (s_use_owner_queue != 0) && owner_stream != nullptr;
+    const queue_ptr stream          = use_owner_queue ? owner_stream : backend_stream;
     std::vector<sycl::event> deps;
     if (sycl_ctx->last_graph_event.has_value()) {
 
@@ -22468,43 +22843,230 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
                         (sycl_ctx && sycl_ctx->has_pending_barrier && sycl_ctx->barrier_event.has_value()) ? 1 : 0);
 
     }
-    if (deps.empty() && !stream->has_property<sycl::property::queue::in_order>()) {
+    if (stream != backend_stream) {
+        // If we switched readback queue, wait backend stream directly and avoid cross-queue deps.
+        try {
+            backend_stream->wait_and_throw();
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[SYCL] get_tensor_async backend pre-wait failed (%zu bytes): %s\n", size, e.what());
+            throw;
+        }
+        deps.clear();
+    } else if (deps.empty() && !stream->has_property<sycl::property::queue::in_order>()) {
         // Out-of-order queues need an explicit barrier to serialize prior work before memcpy.
         deps.push_back(stream->ext_oneapi_submit_barrier());
         if (g_ggml_sycl_debug) {
             GGML_SYCL_DEBUG("[SYCL] get_tensor_async: inserted barrier for out-of-order queue\n");
         }
     }
-    if (!deps.empty()) {
-        const sycl::usm::alloc dst_alloc = sycl::get_pointer_type(data, stream->get_context());
-        if (dst_alloc == sycl::usm::alloc::unknown) {
-            void * staging = ggml_sycl_malloc_host_tracked_bytes(size, *stream, "get_tensor_async_staging");
-            if (!staging) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async staging alloc failed (%zu bytes)\n", size);
+    const void *           src_ptr          = (const char *) tensor->data + offset;
+    const sycl::usm::alloc src_alloc_stream = sycl::get_pointer_type(src_ptr, stream->get_context());
+    const sycl::usm::alloc dst_alloc        = sycl::get_pointer_type(data, stream->get_context());
+    const bool             dst_is_device_usm = dst_alloc == sycl::usm::alloc::device;
+    const bool             dst_is_unknown_usm = dst_alloc == sycl::usm::alloc::unknown;
+    const sycl::usm::alloc src_alloc_default =
+        sycl::get_pointer_type(src_ptr, dpct::get_in_order_queue().get_context());
+    const sycl::usm::alloc dst_alloc_default =
+        sycl::get_pointer_type(data, dpct::get_in_order_queue().get_context());
+    static int s_get_tensor_trace = -1;
+    if (s_get_tensor_trace < 0) {
+        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_TRACE");
+        s_get_tensor_trace = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    auto alloc_name = [](sycl::usm::alloc a) -> const char * {
+        switch (a) {
+            case sycl::usm::alloc::host:   return "host";
+            case sycl::usm::alloc::device: return "device";
+            case sycl::usm::alloc::shared: return "shared";
+            case sycl::usm::alloc::unknown:
+            default:                       return "unknown";
+        }
+    };
+    if (s_get_tensor_trace) {
+        const size_t tensor_nbytes = ggml_nbytes(tensor);
+        const char * buf_name      = (buf && buf->buft && buf->buft->iface.get_name)
+                                     ? buf->buft->iface.get_name(buf->buft)
+                                     : "(null)";
+        const bool stream_owner_match = owner_stream && backend_stream ? owner_stream == backend_stream : false;
+        const bool stream_ctx_match =
+            owner_stream && backend_stream ? (owner_stream->get_context() == backend_stream->get_context()) : false;
+        const bool stream_dev_match =
+            owner_stream && backend_stream ? (owner_stream->get_device() == backend_stream->get_device()) : false;
+        size_t free_mem = 0;
+        size_t total_mem = 0;
+        ggml_backend_sycl_get_device_memory(sycl_ctx->device, &free_mem, &total_mem);
+        std::string stream_dev_name = stream->get_device().get_info<sycl::info::device::name>();
+        std::string src_dev_name    = "(unknown)";
+        try {
+            src_dev_name = sycl::get_pointer_device(src_ptr, stream->get_context()).get_info<sycl::info::device::name>();
+        } catch (const sycl::exception &) {
+        }
+        const uintptr_t base = buf_ctx ? (uintptr_t) buf_ctx->dev_ptr : 0;
+        const uintptr_t end  = buf_ctx ? (base + buf_ctx->size_bytes) : 0;
+        const uintptr_t src_u = (uintptr_t) src_ptr;
+        const bool src_in_range = buf_ctx ? (src_u >= base && (src_u + size) <= end) : false;
+        GGML_LOG_INFO(
+            "[SYCL] get_tensor_async ptr types: tensor='%s' buffer='%s' nbytes=%zu offset=%zu req_size=%zu src(stream=%s,default=%s) dst(stream=%s,default=%s) src=%p dst=%p mem_free=%.1fMB mem_total=%.1fMB stream_dev='%s' src_dev='%s' qsel=%s owner_stream=%p backend_stream=%p owner==backend=%d ctx_match=%d dev_match=%d buf_base=%p buf_size=%zu src_in_range=%d\n",
+            tensor && tensor->name[0] ? tensor->name : "(unnamed)", buf_name, tensor_nbytes, offset, size,
+            alloc_name(src_alloc_stream), alloc_name(src_alloc_default), alloc_name(dst_alloc),
+            alloc_name(dst_alloc_default), src_ptr, data,
+            free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), stream_dev_name.c_str(),
+            src_dev_name.c_str(),
+            use_owner_queue ? "owner" : "backend",
+            (void *) owner_stream, (void *) backend_stream,
+            stream_owner_match ? 1 : 0, stream_ctx_match ? 1 : 0, stream_dev_match ? 1 : 0,
+            buf_ctx ? buf_ctx->dev_ptr : nullptr, buf_ctx ? buf_ctx->size_bytes : 0, src_in_range ? 1 : 0);
+    }
+
+    static int s_get_tensor_probe = -1;
+    if (s_get_tensor_probe < 0) {
+        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_PROBE");
+        s_get_tensor_probe = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    static int s_force_shared_fallback = -1;
+    if (s_force_shared_fallback < 0) {
+        const char * env = std::getenv("GGML_SYCL_FORCE_SHARED_READBACK");
+        s_force_shared_fallback = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    const bool force_shared_readback =
+        (s_force_shared_fallback != 0) ||
+        ggml_sycl_device_kernel_readback_enabled(sycl_ctx->device) ||
+        ggml_sycl_should_prefer_kernel_readback(sycl_ctx->device, tensor, size);
+
+    if (!dst_is_device_usm) {
+        if (force_shared_readback) {
+            if (!deps.empty()) {
+                try {
+                    sycl::event::wait(deps);
+                } catch (const sycl::exception & e) {
+                    GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared deps wait failed (%zu bytes): %s\n",
+                                   size, e.what());
+                }
+            }
+            try {
+                stream->wait_and_throw();
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared pre-wait failed (%zu bytes): %s\n",
+                               size, e.what());
+            }
+            sycl::queue & readback_q = *stream;
+            if (ggml_sycl_readback_via_shared_kernel(readback_q, (const char *) tensor->data + offset, data, size,
+                                                     "get_tensor_async_force_shared")) {
+                GGML_LOG_INFO("[SYCL] get_tensor_async force-shared readback succeeded (%zu bytes)\n", size);
                 return;
             }
-            sycl::event ev = stream->memcpy(staging, (const char *) tensor->data + offset, size, deps);
-            ev.wait();
+            GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared readback failed (%zu bytes)\n", size);
+        }
+        // Stage to USM host, then memcpy to caller buffer.
+        if (!deps.empty()) {
+            try {
+                sycl::event::wait(deps);
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] get_tensor_async pre-copy deps wait failed (%zu bytes): %s\n",
+                               size, e.what());
+                throw;
+            }
+        }
+        try {
+            stream->wait_and_throw();
+        } catch (const sycl::exception & e) {
+            GGML_LOG_ERROR("[SYCL] get_tensor_async pre-copy wait failed (%zu bytes): %s\n", size, e.what());
+            throw;
+        }
+        if (s_get_tensor_probe && tensor && std::strcmp(tensor->name, "result_output") == 0) {
+            constexpr size_t probe_nbytes = 16;
+            void * probe = ggml_sycl_malloc_host_tracked_bytes(probe_nbytes, *stream, "get_tensor_async_probe");
+            if (probe) {
+                auto run_probe = [&](const char * label, const void * ptr) {
+                    try {
+                        sycl::event pev = stream->memcpy(probe, ptr, probe_nbytes);
+                        pev.wait();
+                        GGML_LOG_INFO("[SYCL] get_tensor_async probe OK: %s ptr=%p bytes=%zu\n",
+                                      label, ptr, probe_nbytes);
+                    } catch (const sycl::exception & pe) {
+                        GGML_LOG_ERROR("[SYCL] get_tensor_async probe FAIL: %s ptr=%p bytes=%zu err=%s\n",
+                                       label, ptr, probe_nbytes, pe.what());
+                    }
+                };
+                run_probe("result_output", src_ptr);
+                if (tensor->src[0] && tensor->src[0]->data) {
+                    run_probe(tensor->src[0]->name[0] ? tensor->src[0]->name : "src0", tensor->src[0]->data);
+                }
+                if (tensor->src[1] && tensor->src[1]->data) {
+                    run_probe(tensor->src[1]->name[0] ? tensor->src[1]->name : "src1", tensor->src[1]->data);
+                }
+                ggml_sycl_free_host_tracked_bytes(probe, probe_nbytes, *stream);
+            } else {
+                GGML_LOG_ERROR("[SYCL] get_tensor_async probe alloc failed (%zu bytes)\n", probe_nbytes);
+            }
+        }
+        void * staging = ggml_sycl_malloc_host_tracked_bytes(size, *stream, "get_tensor_async_staging");
+        if (!staging) {
+            GGML_LOG_ERROR("[SYCL] get_tensor_async staging alloc failed (%zu bytes)\n", size);
+            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
+                                  "get_tensor_async staging allocation failed");
+        }
+        try {
+            sycl::event ev;
+            try {
+                // Avoid submitting host-readback memcpy with event dependencies.
+                // Under some Level Zero conditions this submit form can fail with
+                // UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY even with ample free VRAM.
+                ev = stream->memcpy(staging, (const char *) tensor->data + offset, size);
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] get_tensor_async staging memcpy submit failed (%zu bytes): %s\n", size, e.what());
+                ggml_sycl_enable_device_kernel_readback(sycl_ctx->device, "get_tensor_async memcpy submit", e.what());
+                ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
+                staging = nullptr;
+                const bool is_oom_submit = std::strstr(e.what(), "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY") != nullptr;
+                sycl::queue & readback_q = *stream;
+                if (!is_oom_submit) {
+                    // Retry on in-order queue to separate queue-state vs pointer/context issues.
+                    void * fallback_staging =
+                        ggml_sycl_malloc_host_tracked_bytes(size, readback_q, "get_tensor_async_staging_fallback");
+                    if (fallback_staging) {
+                        try {
+                            sycl::event fb_ev = readback_q.memcpy(fallback_staging, (const char *) tensor->data + offset, size);
+                            fb_ev.wait();
+                            std::memcpy(data, fallback_staging, size);
+                            ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
+                            GGML_LOG_INFO("[SYCL] get_tensor_async fallback staged readback succeeded on in-order queue (%zu bytes)\n", size);
+                            return;
+                        } catch (const sycl::exception & fb_e) {
+                            GGML_LOG_ERROR("[SYCL] get_tensor_async fallback staged readback failed (%zu bytes): %s\n",
+                                           size, fb_e.what());
+                            ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
+                        }
+                    }
+                } else {
+                    GGML_LOG_INFO("[SYCL] get_tensor_async skipping retry memcpy after OOM submit failure\n");
+                }
+                if (ggml_sycl_readback_via_shared_kernel(readback_q, (const char *) tensor->data + offset, data, size,
+                                                         "get_tensor_async_shared_fallback")) {
+                    GGML_LOG_INFO("[SYCL] get_tensor_async shared-kernel fallback succeeded (%zu bytes)\n", size);
+                    return;
+                }
+                GGML_LOG_ERROR("[SYCL] get_tensor_async shared-kernel fallback failed (%zu bytes)\n", size);
+                throw;
+            }
+            try {
+                ev.wait();
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] get_tensor_async staging memcpy wait failed (%zu bytes): %s\n", size, e.what());
+                throw;
+            }
             std::memcpy(data, staging, size);
             ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
-        } else {
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size, deps)));
+        } catch (...) {
+            if (staging) {
+                ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
+            }
+            throw;
         }
+    } else if (!deps.empty()) {
+        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size, deps)));
     } else {
-        const sycl::usm::alloc dst_alloc = sycl::get_pointer_type(data, stream->get_context());
-        if (dst_alloc == sycl::usm::alloc::unknown) {
-            void * staging = ggml_sycl_malloc_host_tracked_bytes(size, *stream, "get_tensor_async_staging");
-            if (!staging) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async staging alloc failed (%zu bytes)\n", size);
-                return;
-            }
-            sycl::event ev = stream->memcpy(staging, (const char *) tensor->data + offset, size);
-            ev.wait();
-            std::memcpy(data, staging, size);
-            ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
-        } else {
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size)));
-        }
+        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size)));
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -23095,8 +23657,207 @@ static bool execute_ffn_fusion(ggml_backend_sycl_context & ctx,
     GGML_SYCL_DEBUG("[FFN FUSION] Kernel launched successfully\n");
     return true;
 }
+static void * ggml_sycl_get_data_ptr_view(const ggml_tensor * tensor, int device);
+
+struct persistent_trace_entry {
+    ggml_op op = GGML_OP_NONE;
+    const ggml_tensor * tensor = nullptr;
+    const void * output_ptr = nullptr;
+    int op_index = -1;
+};
+static std::vector<persistent_trace_entry> g_persistent_trace_ops;
+static bool g_sycl_tg_trace_hash = false;
+static bool g_sycl_tg_trace_init = false;
+static size_t g_sycl_tg_trace_max_bytes = 4096;
+static int g_sycl_trace_op_index = 0;
+static uint64_t * g_persistent_debug_hash_ptr = nullptr;
+static bool g_sycl_tg_dump_rms = false;
+static bool g_sycl_tg_dump_rms_base_done = false;
+static bool g_sycl_tg_dump_matmul = false;
+static bool g_sycl_tg_dump_matmul_base_done = false;
+static bool g_sycl_tg_dump_mul = false;
+static bool g_sycl_tg_dump_mul_base_done = false;
+static bool g_sycl_tg_dump_add = false;
+static bool g_sycl_tg_dump_add_base_done = false;
+static int extract_layer_index(const char * name);
+static const char * ggml_sycl_dump_rms_path(const char * specific_env, const char * fallback) {
+    const char * specific = std::getenv(specific_env);
+    if (specific && *specific) {
+        return specific;
+    }
+    const char * generic = std::getenv("GGML_SYCL_TG_DUMP_RMS_PATH");
+    if (generic && *generic) {
+        return generic;
+    }
+    return fallback;
+}
+
+static const char * ggml_sycl_dump_matmul_path(const char * specific_env, const char * fallback) {
+    const char * specific = std::getenv(specific_env);
+    if (specific && *specific) {
+        return specific;
+    }
+    const char * generic = std::getenv("GGML_SYCL_TG_DUMP_MATMUL_PATH");
+    if (generic && *generic) {
+        return generic;
+    }
+    return fallback;
+}
+
+static const char * ggml_sycl_dump_mul_path(const char * specific_env, const char * fallback) {
+    const char * specific = std::getenv(specific_env);
+    if (specific && *specific) {
+        return specific;
+    }
+    const char * generic = std::getenv("GGML_SYCL_TG_DUMP_MUL_PATH");
+    if (generic && *generic) {
+        return generic;
+    }
+    return fallback;
+}
+
+static const char * ggml_sycl_dump_add_path(const char * specific_env, const char * fallback) {
+    const char * specific = std::getenv(specific_env);
+    if (specific && *specific) {
+        return specific;
+    }
+    const char * generic = std::getenv("GGML_SYCL_TG_DUMP_ADD_PATH");
+    if (generic && *generic) {
+        return generic;
+    }
+    return fallback;
+}
+
+static void init_sycl_tg_trace() {
+    if (g_sycl_tg_trace_init) {
+        return;
+    }
+    const char * env = std::getenv("GGML_SYCL_TG_TRACE_HASH");
+    g_sycl_tg_trace_hash = (env && std::atoi(env) != 0);
+    const char * env_bytes = std::getenv("GGML_SYCL_TG_TRACE_HASH_BYTES");
+    if (env_bytes && *env_bytes) {
+        char * end = nullptr;
+        unsigned long val = std::strtoul(env_bytes, &end, 10);
+        if (end && end != env_bytes && val > 0) {
+            g_sycl_tg_trace_max_bytes = (size_t) val;
+        }
+    }
+    const char * env_dump = std::getenv("GGML_SYCL_TG_DUMP_RMS");
+    g_sycl_tg_dump_rms = (env_dump && std::atoi(env_dump) != 0);
+    const char * env_matmul = std::getenv("GGML_SYCL_TG_DUMP_MATMUL");
+    g_sycl_tg_dump_matmul = (env_matmul && std::atoi(env_matmul) != 0);
+    const char * env_mul = std::getenv("GGML_SYCL_TG_DUMP_MUL");
+    g_sycl_tg_dump_mul = (env_mul && std::atoi(env_mul) != 0);
+    const char * env_add = std::getenv("GGML_SYCL_TG_DUMP_ADD");
+    g_sycl_tg_dump_add = (env_add && std::atoi(env_add) != 0);
+    g_sycl_tg_trace_init = true;
+}
+
+static uint64_t ggml_sycl_hash_bytes(const uint8_t * data, size_t n) {
+    uint64_t h = 1469598103934665603ull;
+    for (size_t i = 0; i < n; ++i) {
+        h ^= (uint64_t) data[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+static void ggml_sycl_dump_rms_buffer(const char * path, const float * input,
+                                      const float * output, int dim) {
+    if (!path || !input || !output || dim <= 0) {
+        return;
+    }
+    FILE * f = std::fopen(path, "wb");
+    if (!f) {
+        return;
+    }
+    const int32_t dim32 = dim;
+    std::fwrite(&dim32, sizeof(dim32), 1, f);
+    std::fwrite(input, sizeof(float), (size_t) dim, f);
+    std::fwrite(output, sizeof(float), (size_t) dim, f);
+    std::fclose(f);
+}
+
+static void ggml_sycl_dump_matmul_buffer(const char * path, const float * output, int dim) {
+    if (!path || !output || dim <= 0) {
+        return;
+    }
+    FILE * f = std::fopen(path, "wb");
+    if (!f) {
+        return;
+    }
+    const int32_t dim32 = dim;
+    std::fwrite(&dim32, sizeof(dim32), 1, f);
+    std::fwrite(output, sizeof(float), (size_t) dim, f);
+    std::fclose(f);
+}
+
+static void ggml_sycl_trace_tensor_hash(ggml_backend_sycl_context & ctx, const ggml_tensor * tensor,
+                                        const void * output_ptr, const char * phase, int index, ggml_op op) {
+    if (!g_sycl_tg_trace_hash || !tensor || !output_ptr) {
+        return;
+    }
+    if (!ggml_is_contiguous(tensor) || ggml_is_permuted(tensor)) {
+        GGML_LOG_INFO("[TG-TRACE] %s idx=%d op=%s name=%s skipped_noncontig\n",
+                      phase, index, ggml_op_name(op), tensor->name ? tensor->name : "(null)");
+        return;
+    }
+    const size_t nbytes = ggml_nbytes(tensor);
+    const size_t bytes = std::min(nbytes, g_sycl_tg_trace_max_bytes);
+    if (bytes == 0) {
+        return;
+    }
+    std::vector<uint8_t> host(bytes);
+    sycl::queue * q = ctx.stream();
+    q->memcpy(host.data(), output_ptr, bytes).wait();
+    const uint64_t h = ggml_sycl_hash_bytes(host.data(), bytes);
+    GGML_LOG_INFO("[TG-TRACE] %s idx=%d op=%s name=%s type=%d ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld] bytes=%zu hash=%016llx\n",
+                  phase, index, ggml_op_name(op), tensor->name ? tensor->name : "(null)", (int) tensor->type,
+                  (long long) tensor->ne[0], (long long) tensor->ne[1],
+                  (long long) tensor->ne[2], (long long) tensor->ne[3],
+                  (long long) tensor->nb[0], (long long) tensor->nb[1],
+                  (long long) tensor->nb[2], (long long) tensor->nb[3],
+                  bytes, (unsigned long long) h);
+}
+
+static void ggml_sycl_trace_persistent_ops(ggml_backend_sycl_context & ctx) {
+    if (!g_sycl_tg_trace_hash) {
+        return;
+    }
+    for (size_t i = 0; i < g_persistent_trace_ops.size(); ++i) {
+        const auto & entry = g_persistent_trace_ops[i];
+        if (g_persistent_debug_hash_ptr) {
+            const int op_index = entry.op_index;
+            const uint64_t h = (op_index >= 0) ? g_persistent_debug_hash_ptr[op_index] : 0;
+            GGML_LOG_INFO("[TG-TRACE] persist idx=%d op=%s name=%s type=%d ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld] bytes=%zu hash=%016llx\n",
+                          (int) i, ggml_op_name(entry.op), entry.tensor->name ? entry.tensor->name : "(null)",
+                          (int) entry.tensor->type,
+                          (long long) entry.tensor->ne[0], (long long) entry.tensor->ne[1],
+                          (long long) entry.tensor->ne[2], (long long) entry.tensor->ne[3],
+                          (long long) entry.tensor->nb[0], (long long) entry.tensor->nb[1],
+                          (long long) entry.tensor->nb[2], (long long) entry.tensor->nb[3],
+                          (size_t) g_sycl_tg_trace_max_bytes, (unsigned long long) h);
+        } else {
+            ggml_sycl_trace_tensor_hash(ctx, entry.tensor, entry.output_ptr, "persist", (int) i, entry.op);
+        }
+    }
+    if (g_persistent_debug_hash_ptr) {
+        sycl::queue * q = ctx.stream();
+        sycl::free(g_persistent_debug_hash_ptr, *q);
+        g_persistent_debug_hash_ptr = nullptr;
+    }
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
+    init_sycl_tg_trace();
+    static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
+    if (g_sycl_tg_dump_rms) {
+        g_sycl_rms_seen_per_layer.clear();
+    }
+    if (g_sycl_tg_trace_hash) {
+        g_sycl_trace_op_index = 0;
+    }
     // Debug: trace entry
     GGML_SYCL_DEBUG("[DEBUG-IMPL] ENTER graph_compute_impl: n_nodes=%d, device=%d\n", cgraph->n_nodes,
                     sycl_ctx->device);
@@ -23460,6 +24221,222 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
 
         GGML_ASSERT(ok);
+        if (g_sycl_tg_trace_hash) {
+            void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
+            ggml_sycl_trace_tensor_hash(*sycl_ctx, node, out_ptr, "base", g_sycl_trace_op_index++, node->op);
+        }
+        if (g_sycl_tg_dump_rms && !g_sycl_tg_dump_rms_base_done &&
+            node->op == GGML_OP_RMS_NORM &&
+            node->type == GGML_TYPE_F32 &&
+            node->src[0] && node->src[0]->type == GGML_TYPE_F32 &&
+            node->ne[1] >= 1 &&
+            ggml_is_contiguous(node) && !ggml_is_permuted(node) &&
+            ggml_is_contiguous(node->src[0]) && !ggml_is_permuted(node->src[0])) {
+            const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_NAME");
+            if (name_env && *name_env) {
+                if (!node->name || std::strstr(node->name, name_env) == nullptr) {
+                    continue;
+                }
+            }
+            int dump_instance = -1;
+            if (const char * inst_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_INSTANCE")) {
+                if (*inst_env) {
+                    char * end = nullptr;
+                    const long val = std::strtol(inst_env, &end, 10);
+                    if (end && end != inst_env) {
+                        dump_instance = (int) val;
+                    }
+                }
+            }
+            int dump_layer = -1;
+            if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_LAYER")) {
+                if (*layer_env) {
+                    char * end = nullptr;
+                    const long val = std::strtol(layer_env, &end, 10);
+                    if (end && end != layer_env) {
+                        dump_layer = (int) val;
+                    }
+                }
+            }
+            int node_layer = -1;
+            if (dump_layer >= 0) {
+                node_layer = extract_layer_index(node->name);
+                if (node_layer != dump_layer) {
+                    continue;
+                }
+            }
+            if (dump_instance >= 0) {
+                if (node_layer < 0) {
+                    node_layer = extract_layer_index(node->name);
+                }
+                const int current = g_sycl_rms_seen_per_layer[node_layer]++;
+                if (current != dump_instance) {
+                    continue;
+                }
+            }
+            const int dim = (int) node->src[0]->ne[0];
+            if (dim > 0) {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                std::vector<float> h_in((size_t) dim);
+                std::vector<float> h_out((size_t) dim);
+                const void * in_ptr = ggml_sycl_get_data_ptr_view(node->src[0], sycl_ctx->device);
+                const void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
+                if (in_ptr && out_ptr) {
+                    stream->memcpy(h_in.data(), in_ptr, (size_t) dim * sizeof(float)).wait();
+                    stream->memcpy(h_out.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+                    const char * path = ggml_sycl_dump_rms_path("GGML_SYCL_TG_DUMP_RMS_BASE_PATH",
+                                                               "/tmp/tg_rms_base.bin");
+                    ggml_sycl_dump_rms_buffer(path, h_in.data(), h_out.data(), dim);
+                    if (node_layer < 0) {
+                        node_layer = extract_layer_index(node->name);
+                    }
+                    GGML_LOG_INFO("[TG-TRACE] RMS base dump: name=%s layer=%d dim=%d path=%s\n",
+                                  node->name ? node->name : "(null)", node_layer, dim, path);
+                    g_sycl_tg_dump_rms_base_done = true;
+                }
+            }
+        }
+        if (g_sycl_tg_dump_matmul && !g_sycl_tg_dump_matmul_base_done &&
+            node->op == GGML_OP_MUL_MAT &&
+            node->type == GGML_TYPE_F32 &&
+            node->ne[1] == 1 &&
+            ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+            const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_MATMUL_NAME");
+            if (name_env && *name_env) {
+                if (!node->name || std::strstr(node->name, name_env) == nullptr) {
+                    continue;
+                }
+            }
+            int dump_layer = -1;
+            if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_MATMUL_LAYER")) {
+                if (*layer_env) {
+                    char * end = nullptr;
+                    const long val = std::strtol(layer_env, &end, 10);
+                    if (end && end != layer_env) {
+                        dump_layer = (int) val;
+                    }
+                }
+            }
+            int node_layer = -1;
+            if (dump_layer >= 0) {
+                node_layer = extract_layer_index(node->name);
+                if (node_layer != dump_layer) {
+                    continue;
+                }
+            }
+            const int dim = (int) ggml_nelements(node);
+            if (dim > 0) {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                std::vector<float> h_out((size_t) dim);
+                const void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
+                if (out_ptr) {
+                    stream->memcpy(h_out.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+                    const char * path = ggml_sycl_dump_matmul_path("GGML_SYCL_TG_DUMP_MATMUL_BASE_PATH",
+                                                                   "/tmp/tg_matmul_base.bin");
+                    ggml_sycl_dump_matmul_buffer(path, h_out.data(), dim);
+                    if (node_layer < 0) {
+                        node_layer = extract_layer_index(node->name);
+                    }
+                    GGML_LOG_INFO("[TG-TRACE] MATMUL base dump: name=%s layer=%d dim=%d path=%s\n",
+                                  node->name ? node->name : "(null)", node_layer, dim, path);
+                    g_sycl_tg_dump_matmul_base_done = true;
+                }
+            }
+        }
+        if (g_sycl_tg_dump_mul && !g_sycl_tg_dump_mul_base_done &&
+            node->op == GGML_OP_MUL &&
+            node->type == GGML_TYPE_F32 &&
+            node->ne[1] == 1 &&
+            ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+            const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_MUL_NAME");
+            if (name_env && *name_env) {
+                if (!node->name || std::strstr(node->name, name_env) == nullptr) {
+                    continue;
+                }
+            }
+            int dump_layer = -1;
+            if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_MUL_LAYER")) {
+                if (*layer_env) {
+                    char * end = nullptr;
+                    const long val = std::strtol(layer_env, &end, 10);
+                    if (end && end != layer_env) {
+                        dump_layer = (int) val;
+                    }
+                }
+            }
+            int node_layer = -1;
+            if (dump_layer >= 0) {
+                node_layer = extract_layer_index(node->name);
+                if (node_layer != dump_layer) {
+                    continue;
+                }
+            }
+            const int dim = (int) ggml_nelements(node);
+            if (dim > 0) {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                std::vector<float> h_out((size_t) dim);
+                const void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
+                if (out_ptr) {
+                    stream->memcpy(h_out.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+                    const char * path = ggml_sycl_dump_mul_path("GGML_SYCL_TG_DUMP_MUL_BASE_PATH",
+                                                                "/tmp/tg_mul_base.bin");
+                    ggml_sycl_dump_matmul_buffer(path, h_out.data(), dim);
+                    if (node_layer < 0) {
+                        node_layer = extract_layer_index(node->name);
+                    }
+                    GGML_LOG_INFO("[TG-TRACE] MUL base dump: name=%s layer=%d dim=%d path=%s\n",
+                                  node->name ? node->name : "(null)", node_layer, dim, path);
+                    g_sycl_tg_dump_mul_base_done = true;
+                }
+            }
+        }
+        if (g_sycl_tg_dump_add && !g_sycl_tg_dump_add_base_done &&
+            node->op == GGML_OP_ADD &&
+            node->type == GGML_TYPE_F32 &&
+            node->ne[1] == 1 &&
+            ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+            const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_ADD_NAME");
+            if (name_env && *name_env) {
+                if (!node->name || std::strstr(node->name, name_env) == nullptr) {
+                    continue;
+                }
+            }
+            int dump_layer = -1;
+            if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_ADD_LAYER")) {
+                if (*layer_env) {
+                    char * end = nullptr;
+                    const long val = std::strtol(layer_env, &end, 10);
+                    if (end && end != layer_env) {
+                        dump_layer = (int) val;
+                    }
+                }
+            }
+            int node_layer = -1;
+            if (dump_layer >= 0) {
+                node_layer = extract_layer_index(node->name);
+                if (node_layer != dump_layer) {
+                    continue;
+                }
+            }
+            const int dim = (int) ggml_nelements(node);
+            if (dim > 0) {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                std::vector<float> h_out((size_t) dim);
+                const void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
+                if (out_ptr) {
+                    stream->memcpy(h_out.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+                    const char * path = ggml_sycl_dump_add_path("GGML_SYCL_TG_DUMP_ADD_BASE_PATH",
+                                                                "/tmp/tg_add_base.bin");
+                    ggml_sycl_dump_matmul_buffer(path, h_out.data(), dim);
+                    if (node_layer < 0) {
+                        node_layer = extract_layer_index(node->name);
+                    }
+                    GGML_LOG_INFO("[TG-TRACE] ADD base dump: name=%s layer=%d dim=%d path=%s\n",
+                                  node->name ? node->name : "(null)", node_layer, dim, path);
+                    g_sycl_tg_dump_add_base_done = true;
+                }
+            }
+        }
         if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
             try {
                 queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
@@ -24399,8 +25376,52 @@ static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
 static int extract_layer_index(const char * name) {
     if (!name) return -1;
     const char * blk = std::strstr(name, "blk.");
-    if (!blk) return -1;
-    return std::atoi(blk + 4);  // Parse number after "blk."
+    if (blk) {
+        return std::atoi(blk + 4);  // Parse number after "blk."
+    }
+
+    // Fallback: suffix "-N" (e.g. "norm-0", "Qcur-1", "Qcur-0 (reshaped)").
+    const char * dash = std::strrchr(name, '-');
+    if (!dash || dash[1] == '\0') {
+        return -1;
+    }
+    char * end = nullptr;
+    const long layer = std::strtol(dash + 1, &end, 10);
+    if (end && end != dash + 1 && layer >= 0) {
+        return (int) layer;
+    }
+    return -1;
+}
+
+// Test hook: expose layer parsing for unit tests.
+int ggml_sycl_test_extract_layer_index(const char * name) {
+    return extract_layer_index(name);
+}
+
+static const ggml_tensor * ggml_sycl_get_view_root(const ggml_tensor * tensor, size_t & view_offs) {
+    view_offs = 0;
+    const ggml_tensor * cur = tensor;
+    while (cur && cur->view_src) {
+        view_offs += cur->view_offs;
+        cur = cur->view_src;
+    }
+    return cur;
+}
+
+static void * ggml_sycl_get_data_ptr_view(const ggml_tensor * tensor, int device) {
+    if (!tensor) {
+        return nullptr;
+    }
+    size_t view_offs = 0;
+    const ggml_tensor * root = ggml_sycl_get_view_root(tensor, view_offs);
+    void * base_ptr = ggml_sycl_get_data_ptr(root, device);
+    if (!base_ptr) {
+        return nullptr;
+    }
+    if (root != tensor || view_offs != 0) {
+        return static_cast<char *>(base_ptr) + view_offs;
+    }
+    return base_ptr;
 }
 
 /**
@@ -24510,6 +25531,70 @@ static bool extract_model_dimensions(ggml_cgraph * cgraph,
     return valid;
 }
 
+struct persistent_set_rows_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    const void * src_ptr = nullptr;
+    const void * idx_ptr = nullptr;
+    void *       dst_ptr = nullptr;
+    SetRowsMeta meta = {};
+    void * debug_ptr = nullptr;
+    int    debug_count = 0;
+};
+static persistent_set_rows_debug_state g_persistent_set_rows_dbg;
+
+struct persistent_attn_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    ggml_tensor * node = nullptr;
+    float * debug_ptr = nullptr;
+    int     debug_floats = 0;
+    int     layer = -1;
+};
+static persistent_attn_debug_state g_persistent_attn_dbg;
+
+struct persistent_rms_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    const ggml_tensor * node = nullptr;
+    float * debug_ptr = nullptr;
+    int * debug_flag = nullptr;
+    int hidden_dim = 0;
+    float eps = 0.0f;
+    int layer = -1;
+};
+static persistent_rms_debug_state g_persistent_rms_dbg;
+
+struct persistent_matmul_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    const ggml_tensor * node = nullptr;
+    float * debug_ptr = nullptr;
+    int * debug_flag = nullptr;
+    int out_dim = 0;
+    int layer = -1;
+    MatmulType mtype = MatmulType::GENERIC;
+};
+static persistent_matmul_debug_state g_persistent_matmul_dbg;
+
+struct persistent_add_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    const ggml_tensor * node = nullptr;
+    int out_dim = 0;
+    int layer = -1;
+};
+static persistent_add_debug_state g_persistent_add_dbg;
+
+struct persistent_mul_debug_state {
+    bool enabled = false;
+    bool captured = false;
+    const ggml_tensor * node = nullptr;
+    int out_dim = 0;
+    int layer = -1;
+};
+static persistent_mul_debug_state g_persistent_mul_dbg;
+
 /**
  * Build a persistent execution plan from the compute graph using UnifiedKernel API.
  *
@@ -24524,6 +25609,90 @@ static bool extract_model_dimensions(ggml_cgraph * cgraph,
 static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                     ggml_backend_sycl_context & ctx,
                                     ggml_cgraph * cgraph) {
+    init_sycl_tg_trace();
+    if (g_sycl_tg_trace_hash) {
+        g_persistent_trace_ops.clear();
+        g_sycl_trace_op_index = 0;
+    }
+    g_persistent_debug_hash_ptr = nullptr;
+    g_persistent_set_rows_dbg.enabled =
+        (std::getenv("GGML_SYCL_PERSISTENT_TG_CHECK_SET_ROWS") != nullptr) ||
+        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS") != nullptr);
+    g_persistent_set_rows_dbg.captured = false;
+    g_persistent_set_rows_dbg.debug_ptr = nullptr;
+    g_persistent_set_rows_dbg.debug_count = 0;
+    const char * attn_env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN");
+    g_persistent_attn_dbg.enabled = (attn_env != nullptr);
+    g_persistent_attn_dbg.captured = false;
+    g_persistent_attn_dbg.node = nullptr;
+    g_persistent_attn_dbg.debug_ptr = nullptr;
+    g_persistent_attn_dbg.debug_floats = 0;
+    g_persistent_attn_dbg.layer = -1;
+    g_persistent_rms_dbg.enabled =
+        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_RMS_NORM") != nullptr);
+    g_persistent_rms_dbg.captured = false;
+    g_persistent_rms_dbg.node = nullptr;
+    g_persistent_rms_dbg.debug_ptr = nullptr;
+    g_persistent_rms_dbg.debug_flag = nullptr;
+    g_persistent_rms_dbg.hidden_dim = 0;
+    g_persistent_rms_dbg.eps = 0.0f;
+    g_persistent_rms_dbg.layer = -1;
+    g_persistent_matmul_dbg.enabled =
+        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_MATMUL") != nullptr);
+    g_persistent_matmul_dbg.captured = false;
+    g_persistent_matmul_dbg.node = nullptr;
+    g_persistent_matmul_dbg.debug_ptr = nullptr;
+    g_persistent_matmul_dbg.debug_flag = nullptr;
+    g_persistent_matmul_dbg.out_dim = 0;
+    g_persistent_matmul_dbg.layer = -1;
+    g_persistent_matmul_dbg.mtype = MatmulType::GENERIC;
+    const char * add_env = std::getenv("GGML_SYCL_TG_DUMP_ADD");
+    g_persistent_add_dbg.enabled = (add_env && std::atoi(add_env) != 0);
+    g_persistent_add_dbg.captured = false;
+    g_persistent_add_dbg.node = nullptr;
+    g_persistent_add_dbg.out_dim = 0;
+    g_persistent_add_dbg.layer = -1;
+    const char * mul_env = std::getenv("GGML_SYCL_TG_DUMP_MUL");
+    g_persistent_mul_dbg.enabled = (mul_env && std::atoi(mul_env) != 0);
+    g_persistent_mul_dbg.captured = false;
+    g_persistent_mul_dbg.node = nullptr;
+    g_persistent_mul_dbg.out_dim = 0;
+    g_persistent_mul_dbg.layer = -1;
+    static bool logged_attn_env = false;
+    if (!logged_attn_env) {
+        logged_attn_env = true;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN validate env=%s\n",
+                        attn_env ? attn_env : "(null)");
+    }
+
+    std::array<int, GGML_OP_COUNT> graph_op_counts{};
+    std::array<int, GGML_OP_COUNT> plan_op_counts{};
+    int skipped_view    = 0;
+    int skipped_reshape = 0;
+    int skipped_permute = 0;
+    int executed_get_rows = 0;
+    int executed_cpy      = 0;
+    int64_t decode_kv_pos_hint = -1;
+    int ops_added = 0;
+    int max_ops_limit = -1;
+    const bool log_ops = (std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_OPS") != nullptr);
+    if (const char * max_ops_env = std::getenv("GGML_SYCL_PERSISTENT_TG_MAX_OPS")) {
+        const int val = std::atoi(max_ops_env);
+        if (val > 0) {
+            max_ops_limit = val;
+        }
+    }
+    int rms_dump_instance = -1;
+    if (const char * inst_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_INSTANCE")) {
+        if (*inst_env) {
+            char * end = nullptr;
+            const long val = std::strtol(inst_env, &end, 10);
+            if (end && end != inst_env) {
+                rms_dump_instance = (int) val;
+            }
+        }
+    }
+
     // 1. Extract model dimensions
     int n_layers, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type;
     if (!extract_model_dimensions(cgraph, n_layers, hidden_dim, intermediate_dim,
@@ -24531,89 +25700,876 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         GGML_LOG_ERROR("[PERSISTENT-TG] Failed to extract model dimensions from graph\n");
         return false;
     }
+    int tokens = -1;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (!node || node->op != GGML_OP_MUL || node->name[0] == '\0') {
+            continue;
+        }
+        if (std::strstr(node->name, "attn_norm") || std::strstr(node->name, "ffn_norm")) {
+            tokens = (int) node->ne[1];
+            break;
+        }
+    }
+    if (tokens < 0) {
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->nodes[i];
+            if (!node || node->op != GGML_OP_MUL_MAT || node->name[0] == '\0') {
+                continue;
+            }
+            if (std::strstr(node->name, "Qcur") != nullptr) {
+                tokens = (int) node->ne[1];
+                break;
+            }
+        }
+    }
+    if (tokens < 0) {
+        tokens = 1;
+    }
+    if (tokens > 1) {
+        GGML_LOG_INFO("[PERSISTENT-TG] Skipping persistent plan (n_tokens=%d > 1)\n", tokens);
+        return false;
+    }
 
     // 2. Begin building the persistent plan
     kernel.begin_persistent(n_layers, 1 /* batch_size */, hidden_dim,
                             intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type);
 
+    sycl::queue * q = ctx.stream();
+    std::unordered_map<const ggml_tensor *, void *> materialized_ptrs;
+    std::vector<int> rms_seen_per_layer(n_layers, 0);
+
+    auto compute_contiguous_nb = [](const ggml_tensor * tensor, int64_t nb[4]) {
+        const int64_t ts = (int64_t) ggml_type_size(tensor->type);
+        nb[0] = ts;
+        nb[1] = nb[0] * tensor->ne[0];
+        nb[2] = nb[1] * tensor->ne[1];
+        nb[3] = nb[2] * tensor->ne[2];
+    };
+    auto log_op = [&](const char * tag, int layer, const ggml_tensor * node, const void * output_ptr) {
+        if (!log_ops) {
+            return;
+        }
+        const char * name = (node && node->name[0] != '\0') ? node->name : "(unnamed)";
+        GGML_LOG_INFO("[PERSISTENT-TG] op[%d] %s layer=%d name=%s out=%p\n",
+                      ops_added, tag, layer, name, output_ptr);
+    };
+    auto log_tensor = [&](const char * tag, const ggml_tensor * t) {
+        if (!log_ops || (max_ops_limit > 0 && ops_added < max_ops_limit - 2)) {
+            return;
+        }
+        if (!t) {
+            GGML_LOG_INFO("[PERSISTENT-TG] %s: null\n", tag);
+            return;
+        }
+        GGML_LOG_INFO("[PERSISTENT-TG] %s: name=%s type=%d ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld] contig=%d permuted=%d\n",
+                      tag,
+                      t->name[0] != '\0' ? t->name : "(unnamed)",
+                      (int) t->type,
+                      (long long) t->ne[0], (long long) t->ne[1],
+                      (long long) t->ne[2], (long long) t->ne[3],
+                      (long long) t->nb[0], (long long) t->nb[1],
+                      (long long) t->nb[2], (long long) t->nb[3],
+                      ggml_is_contiguous(t) ? 1 : 0,
+                      ggml_is_permuted(t) ? 1 : 0);
+    };
+
+    auto resolve_input_ptr = [&](const ggml_tensor * tensor, int layer) -> const void * {
+        if (!tensor) {
+            return nullptr;
+        }
+        auto it = materialized_ptrs.find(tensor);
+        if (it != materialized_ptrs.end()) {
+            return it->second;
+        }
+
+        // If this tensor is a view, prefer an already-materialized root pointer.
+        // This preserves GET_ROWS stable snapshots across view/reshape chains.
+        size_t view_offs = 0;
+        const ggml_tensor * view_root = ggml_sycl_get_view_root(tensor, view_offs);
+        if (view_root && view_root != tensor) {
+            auto root_it = materialized_ptrs.find(view_root);
+            if (root_it != materialized_ptrs.end()) {
+                const void * ptr = static_cast<const char *>(root_it->second) + view_offs;
+                materialized_ptrs.emplace(tensor, const_cast<void *>(ptr));
+                return ptr;
+            }
+        }
+
+        if (ggml_is_contiguous(tensor) && !ggml_is_permuted(tensor)) {
+            void * ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+            materialized_ptrs.emplace(tensor, ptr);
+            return ptr;
+        }
+
+        const size_t bytes = ggml_nbytes(tensor);
+        void * dst_ptr = sycl::malloc_device(bytes, *q);
+        if (!dst_ptr) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate %zu bytes for materialized tensor\n", bytes);
+            return nullptr;
+        }
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc dst_ptr=%p bytes=%zu\n", dst_ptr, bytes);
+        }
+        kernel.add_temp_device_alloc(dst_ptr);
+
+        auto * meta_dev = sycl::malloc_device<StridedCopyMeta>(1, *q);
+        if (!meta_dev) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta\n");
+            return nullptr;
+        }
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc meta_dev=%p\n", (void *) meta_dev);
+        }
+        kernel.add_temp_device_alloc(meta_dev);
+
+        StridedCopyMeta meta = {};
+        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+            meta.ne[d] = tensor->ne[d];
+            meta.nb[d] = (int64_t) tensor->nb[d];
+        }
+        meta.type_size = (int32_t) ggml_type_size(tensor->type);
+        meta.pad       = 0;
+
+        q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
+
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: materialize name=%s bytes=%zu\n",
+                          tensor->name[0] != '\0' ? tensor->name : "(unnamed)",
+                          bytes);
+        }
+        const void * src_ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: src_ptr=%p\n", src_ptr);
+        }
+        const int64_t n_elements = ggml_nelements(tensor);
+        if (n_elements > std::numeric_limits<int>::max()) {
+            GGML_LOG_ERROR("[PERSISTENT-TG] Materialize tensor too large: %lld elements\n",
+                           (long long) n_elements);
+            return nullptr;
+        }
+        const int64_t output_bytes = n_elements * meta.type_size;
+        kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta_dev, (int) n_elements, output_bytes);
+        log_op("STRIDED_COPY", layer, tensor, dst_ptr);
+        ops_added++;
+
+        materialized_ptrs.emplace(tensor, dst_ptr);
+        return dst_ptr;
+    };
+
+    auto resolve_input_ptr_with_nb = [&](const ggml_tensor * tensor, int layer, int64_t nb[4],
+                                         bool allow_strided) -> const void * {
+        if (!tensor) {
+            return nullptr;
+        }
+        const bool materialize = !allow_strided &&
+                                 !(ggml_is_contiguous(tensor) && !ggml_is_permuted(tensor));
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr_with_nb: name=%s materialize=%d allow_strided=%d contig=%d permuted=%d\n",
+                          tensor->name[0] != '\0' ? tensor->name : "(unnamed)",
+                          materialize ? 1 : 0,
+                          allow_strided ? 1 : 0,
+                          ggml_is_contiguous(tensor) ? 1 : 0,
+                          ggml_is_permuted(tensor) ? 1 : 0);
+        }
+        if (allow_strided) {
+            void * ptr = ggml_sycl_get_data_ptr_view(tensor, ctx.device);
+            if (!ptr) {
+                return nullptr;
+            }
+            for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                nb[d] = (int64_t) tensor->nb[d];
+            }
+            return ptr;
+        }
+        const void * ptr = resolve_input_ptr(tensor, layer);
+        if (!ptr) {
+            return nullptr;
+        }
+        if (materialize) {
+            compute_contiguous_nb(tensor, nb);
+        } else {
+            for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                nb[d] = (int64_t) tensor->nb[d];
+            }
+        }
+        return ptr;
+    };
+
+    auto record_trace = [&](ggml_op op, const ggml_tensor * tensor, const void * output_ptr, int op_index) {
+        if (!g_sycl_tg_trace_hash || !tensor || !output_ptr) {
+            return;
+        }
+        persistent_trace_entry entry;
+        entry.op = op;
+        entry.tensor = tensor;
+        entry.output_ptr = output_ptr;
+        entry.op_index = op_index;
+        g_persistent_trace_ops.push_back(entry);
+    };
+
     // 3. Walk graph and add operations
-    int ops_added = 0;
+    int last_layer = -1;
+    int min_layer_seen = std::numeric_limits<int>::max();
+    int max_layer_seen = -1;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        if (max_ops_limit > 0 && ops_added >= max_ops_limit) {
+            if (g_ggml_sycl_debug) {
+                GGML_SYCL_DEBUG("[PERSISTENT-TG] Max ops limit reached (%d), truncating plan\n", max_ops_limit);
+            }
+            break;
+        }
+        if (g_ggml_sycl_debug && node) {
+            graph_op_counts[node->op]++;
+        }
         int layer = -1;
 
-        // Try to get layer index from the node or its sources
+        // Try to get layer index from the node or its source chain
+        // Walk up the source chain to find "blk.N" in tensor names
         if (node->name[0] != '\0') {
             layer = extract_layer_index(node->name);
         }
-        if (layer < 0 && node->src[0] && node->src[0]->name[0] != '\0') {
-            layer = extract_layer_index(node->src[0]->name);
+        for (int s = 0; s < GGML_MAX_SRC && layer < 0; s++) {
+            if (!node->src[s]) break;
+            if (node->src[s]->name[0] != '\0') {
+                layer = extract_layer_index(node->src[s]->name);
+            }
+            // Also check src's sources (2 levels deep)
+            if (layer < 0 && node->src[s]->src[0] && node->src[s]->src[0]->name[0] != '\0') {
+                layer = extract_layer_index(node->src[s]->src[0]->name);
+            }
         }
         if (layer < 0) {
-            layer = 0;  // Default to layer 0 for non-layer operations
+            layer = (last_layer >= 0) ? last_layer : 0;
+        } else {
+            last_layer = layer;
+        }
+
+        if (layer >= 0) {
+            min_layer_seen = std::min(min_layer_seen, layer);
+            max_layer_seen = std::max(max_layer_seen, layer);
+        }
+        if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+            const char * name = (node->name[0] != '\0') ? node->name : "(unnamed)";
+            GGML_LOG_INFO("[PERSISTENT-TG] node[%d] op=%s layer=%d name=%s ops_added=%d\n",
+                          i, ggml_op_name(node->op), layer, name, ops_added);
         }
 
         switch (node->op) {
+            case GGML_OP_GET_ROWS: {
+                if (!node->src[0] || !node->src[1]) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS missing src\n");
+                    return false;
+                }
+                if (node->src[1]->type != GGML_TYPE_I32 || node->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS unsupported types src1=%d dst=%d\n",
+                                   node->src[1]->type, node->type);
+                    return false;
+                }
+                const bool can_persist_get_rows =
+                    (node->src[0]->type == GGML_TYPE_F32 || node->src[0]->type == GGML_TYPE_F16) &&
+                    ggml_is_contiguous(node->src[0]) && !ggml_is_permuted(node->src[0]);
+
+                if (can_persist_get_rows) {
+                    const void * src0 = resolve_input_ptr(node->src[0], layer);
+                    const void * idx_ptr = resolve_input_ptr(node->src[1], layer);
+                    void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                    if (!src0 || !idx_ptr || !out_ptr) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS pointer resolution failed\n");
+                        return false;
+                    }
+
+                    // Indices can live in host memory. Materialize to device memory to keep
+                    // GET_ROWS inside the persistent execution order.
+                    const size_t idx_bytes = ggml_nbytes(node->src[1]);
+                    const sycl::usm::alloc idx_alloc = sycl::get_pointer_type(idx_ptr, q->get_context());
+                    if (idx_alloc != sycl::usm::alloc::device) {
+                        void * idx_dev = sycl::malloc_device(idx_bytes, *q);
+                        if (!idx_dev) {
+                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS index device alloc failed (%zu bytes)\n", idx_bytes);
+                            return false;
+                        }
+                        kernel.add_temp_device_alloc(idx_dev);
+                        ggml_sycl_safe_memcpy(*q, idx_dev, idx_ptr, idx_bytes, {});
+                        q->wait_and_throw();
+                        idx_ptr = idx_dev;
+                    }
+
+                    const int64_t ne00 = node->ne[0];
+                    const int64_t ne10 = std::max<int64_t>(1, node->src[1]->ne[0]);
+                    const int64_t ne11 = std::max<int64_t>(1, node->src[1]->ne[1]);
+                    const int64_t ne12 = std::max<int64_t>(1, node->src[1]->ne[2]);
+                    const int64_t n_elements = ne00 * ne10 * ne11 * ne12;
+                    if (n_elements > std::numeric_limits<int>::max()) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS tensor too large: %lld elements\n",
+                                       (long long) n_elements);
+                        return false;
+                    }
+
+                    const int64_t nb01 = node->src[0]->nb[1];
+                    const int64_t nb02 = node->src[0]->nb[2];
+                    const int64_t nb03 = node->src[0]->nb[3];
+                    const int64_t s10 = node->src[1]->nb[0] / (int64_t) sizeof(int32_t);
+                    const int64_t s11 = node->src[1]->nb[1] / (int64_t) sizeof(int32_t);
+                    const int64_t s12 = node->src[1]->nb[2] / (int64_t) sizeof(int32_t);
+                    const int64_t s1  = node->nb[1] / (int64_t) sizeof(float);
+                    const int64_t s2  = node->nb[2] / (int64_t) sizeof(float);
+                    const int64_t s3  = node->nb[3] / (int64_t) sizeof(float);
+                    const int src0_type = (node->src[0]->type == GGML_TYPE_F16) ? 1 : 0;
+
+                    kernel.add_get_rows(layer, src0, idx_ptr, out_ptr, (int) n_elements,
+                                        ne00, ne10, ne11, ne12,
+                                        nb01, nb02, nb03,
+                                        s10, s11, s12, s1, s2, s3, src0_type);
+                    log_op("GET_ROWS", layer, node, out_ptr);
+                    ops_added++;
+                    record_trace(node->op, node, out_ptr, ops_added - 1);
+                } else {
+                    ggml_sycl_op_get_rows(ctx, node);
+                    // GET_ROWS dispatch is async; ensure the output buffer is ready before
+                    // hashing/copying to a stable pointer for later persistent ops.
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+                        const size_t bytes = ggml_nbytes(node);
+                        void * stable_ptr = sycl::malloc_device(bytes, *q);
+                        if (!stable_ptr) {
+                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (%zu bytes)\n", bytes);
+                            return false;
+                        }
+                        kernel.add_temp_device_alloc(stable_ptr);
+                        const void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        if (!out_ptr) {
+                            GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS output ptr missing\n");
+                            return false;
+                        }
+                        q->memcpy(stable_ptr, out_ptr, bytes).wait();
+                        materialized_ptrs[node] = stable_ptr;
+                    }
+                    executed_get_rows++;
+                }
+                break;
+            }
             case GGML_OP_RMS_NORM: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_RMS_NORM") != nullptr) {
+                    ggml_sycl_op_rms_norm(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
                 // In ggml, RMS_NORM only has src[0] (input). The norm weights
                 // are applied via a separate GGML_OP_MUL node that follows.
                 // We pass weights=nullptr; the weight scaling MUL will be
                 // skipped (not added as silu_mul) since we handle it here.
-                const void * input  = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
-                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
-                kernel.add_rms_norm(layer, nullptr, input, output);
+                const void * input  = resolve_input_ptr(node->src[0], layer);
+                void *       output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!input || !ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] RMS_NORM input/output not contiguous\n");
+                    return false;
+                }
+                float eps = 1e-5f;
+                memcpy(&eps, node->op_params, sizeof(float));
+                const int rms_dim = node->src[0] ? (int) node->src[0]->ne[0] : 0;
+                int current_rms_instance = -1;
+                if (rms_dump_instance >= 0 && layer >= 0 && layer < (int) rms_seen_per_layer.size()) {
+                    current_rms_instance = rms_seen_per_layer[layer]++;
+                }
+                bool capture_rms = g_persistent_rms_dbg.enabled && !g_persistent_rms_dbg.captured && rms_dim > 0;
+                if (capture_rms) {
+                    const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_NAME");
+                    if (name_env && *name_env) {
+                        if (!node->name || std::strstr(node->name, name_env) == nullptr) {
+                            capture_rms = false;
+                        }
+                    }
+                }
+                if (capture_rms) {
+                    int dump_layer = -1;
+                    if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_LAYER")) {
+                        if (*layer_env) {
+                            char * end = nullptr;
+                            const long val = std::strtol(layer_env, &end, 10);
+                            if (end && end != layer_env) {
+                                dump_layer = (int) val;
+                            }
+                        }
+                    }
+                    if (dump_layer >= 0 && layer != dump_layer) {
+                        capture_rms = false;
+                    }
+                }
+                if (capture_rms && rms_dump_instance >= 0) {
+                    if (current_rms_instance != rms_dump_instance) {
+                        capture_rms = false;
+                    }
+                }
+                if (capture_rms) {
+                    const size_t total_floats = static_cast<size_t>(rms_dim) * 2u;
+                    float * dbg = sycl::malloc_shared<float>(total_floats, *q);
+                    int * flag = sycl::malloc_shared<int>(1, *q);
+                    if (dbg && flag) {
+                        std::fill_n(dbg, total_floats, 0.0f);
+                        *flag = 0;
+                        g_persistent_rms_dbg.captured = true;
+                        g_persistent_rms_dbg.node = node;
+                        g_persistent_rms_dbg.debug_ptr = dbg;
+                        g_persistent_rms_dbg.debug_flag = flag;
+                        g_persistent_rms_dbg.hidden_dim = rms_dim;
+                        g_persistent_rms_dbg.eps = eps;
+                        g_persistent_rms_dbg.layer = layer;
+                        kernel.set_persistent_debug_rms(dbg, layer, rms_dim, flag);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG] RMS debug capture enabled: layer=%d dim=%d floats=%zu\n",
+                                        layer, rms_dim, total_floats);
+                    } else {
+                        if (dbg) {
+                            sycl::free(dbg, *q);
+                        }
+                        if (flag) {
+                            sycl::free(flag, *q);
+                        }
+                        GGML_LOG_WARN("[PERSISTENT-TG] RMS debug buffer alloc failed (dim=%d)\n", rms_dim);
+                    }
+                }
+                kernel.add_rms_norm(layer, nullptr, input, output, eps, rms_dim);
+                log_op("RMS_NORM", layer, node, output);
                 ops_added++;
+                record_trace(node->op, node, output, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_RMS_NORM]++;
+                }
+                GGML_SYCL_DEBUG("[PERSISTENT-TG]   RMS_NORM: layer=%d input=%p output=%p\n",
+                                layer, input, output);
                 break;
             }
 
             case GGML_OP_MUL_MAT: {
+                bool use_base_matmul = (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL") != nullptr);
+                if (!use_base_matmul) {
+                    const char * base_name = std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL_NAME");
+                    if (base_name && *base_name && node->name && std::strstr(node->name, base_name) != nullptr) {
+                        int base_layer = -1;
+                        if (const char * layer_env = std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL_LAYER")) {
+                            if (*layer_env) {
+                                char * end = nullptr;
+                                const long val = std::strtol(layer_env, &end, 10);
+                                if (end && end != layer_env) {
+                                    base_layer = (int) val;
+                                }
+                            }
+                        }
+                        if (base_layer < 0 || base_layer == layer) {
+                            use_base_matmul = true;
+                        }
+                    }
+                }
+                if (use_base_matmul) {
+                    ggml_sycl_mul_mat(ctx, node->src[0], node->src[1], node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
                 // src[0] = weight matrix, src[1] = input activation, dst = output
-                const void * weight = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
-                const void * input  = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
-                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
+                const ggml_tensor * weight_tensor = node->src[0];
+                if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+                    log_tensor("MUL_MAT src0", weight_tensor);
+                    log_tensor("MUL_MAT src1", node->src[1]);
+                    log_tensor("MUL_MAT dst", node);
+                }
+                const int weight_type = weight_tensor->type;
+                const bool is_quantized_weight = (weight_type == GGML_TYPE_Q4_0 || weight_type == GGML_TYPE_Q6_K);
+                const bool is_f16_weight = (weight_type == GGML_TYPE_F16);
+                layout_mode weight_layout = GGML_LAYOUT_AOS;
 
-                MatmulType mtype = classify_matmul(node->src[0]->name);
+                if (is_quantized_weight) {
+                    if (ggml_sycl_tensor_is_weight(weight_tensor)) {
+                        layout_mode chosen = GGML_LAYOUT_AOS;
+                        if (ggml_sycl_get_layout_choice_for_tensor(weight_tensor, ctx.device, &chosen)) {
+                            weight_layout = chosen;
+                        }
+                    }
+                    if (weight_layout != GGML_LAYOUT_AOS && weight_layout != GGML_LAYOUT_SOA) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] MUL_MAT unsupported weight layout=%d\n",
+                                       (int) weight_layout);
+                        return false;
+                    }
+                }
+
+                const void * weight = nullptr;
+                int64_t weight_nb[4] = {0, 0, 0, 0};
+                int64_t input_nb[4]  = {0, 0, 0, 0};
+                int64_t output_nb[4] = {
+                    (int64_t) node->nb[0], (int64_t) node->nb[1],
+                    (int64_t) node->nb[2], (int64_t) node->nb[3],
+                };
+                if (is_quantized_weight) {
+                    if (weight_layout != GGML_LAYOUT_AOS) {
+                        weight = ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout);
+                        if (!weight) {
+                            GGML_SYCL_DEBUG("[PERSISTENT-TG] Weight layout %d unavailable for %s, falling back to AoS\n",
+                                            (int) weight_layout, weight_tensor->name ? weight_tensor->name : "(null)");
+                            weight_layout = GGML_LAYOUT_AOS;
+                        }
+                    }
+                    if (!weight) {
+                        weight = ggml_sycl_get_data_ptr_view(weight_tensor, ctx.device);
+                    }
+                } else if (is_f16_weight) {
+                    weight = resolve_input_ptr_with_nb(weight_tensor, layer, weight_nb, true);
+                } else {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL_MAT unsupported weight type=%d\n", weight_type);
+                    return false;
+                }
+                if (log_ops) {
+                    const ggml_tensor_layout * w_layout = ggml_sycl_get_layout_info(weight_tensor);
+                    const layout_mode tensor_layout = w_layout ? w_layout->mode : GGML_LAYOUT_AOS;
+                    GGML_LOG_INFO("[PERSISTENT-TG]   MUL_MAT weight=%s type=%d chosen_layout=%s tensor_layout=%s layout_ptr=%p data_ptr=%p\n",
+                                  weight_tensor->name ? weight_tensor->name : "(null)",
+                                  (int) weight_tensor->type,
+                                  ggml_sycl_layout_mode_name(weight_layout),
+                                  ggml_sycl_layout_mode_name(tensor_layout),
+                                  ggml_sycl_get_layout_ptr_for(weight_tensor, ctx.device, weight_layout),
+                                  ggml_sycl_get_data_ptr_view(weight_tensor, ctx.device));
+                }
+                const void * input  = nullptr;
+                void *       output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (is_quantized_weight) {
+                    input = resolve_input_ptr(node->src[1], layer);
+                } else {
+                    input = resolve_input_ptr_with_nb(node->src[1], layer, input_nb, true);
+                }
+                if (!weight || !input || !output) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL_MAT missing data pointers\n");
+                    return false;
+                }
+                if (is_quantized_weight && !ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL_MAT input/output not contiguous\n");
+                    return false;
+                }
+
+                MatmulType mtype = classify_matmul(weight_tensor->name);
 
                 // Matrix dimensions: C = A * B^T where A=weight (NxK), B=input (MxK)
                 int M = (int) node->src[1]->ne[1];  // Output rows (batch size, typically 1)
-                int N = (int) node->src[0]->ne[1];  // Output cols
-                int K = (int) node->src[0]->ne[0];  // Inner dimension
+                int N = (int) weight_tensor->ne[1];  // Output cols
+                int K = (int) weight_tensor->ne[0];  // Inner dimension
+                int src0_ne2 = 1;
+                int src0_ne3 = 1;
+                int src1_ne2 = 1;
+                int src1_ne3 = 1;
+                if (is_f16_weight) {
+                    if (node->src[1]->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F32) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] F16 MUL_MAT only supports F32 input/output (src1=%d dst=%d)\n",
+                                       node->src[1]->type, node->type);
+                        return false;
+                    }
+                    src0_ne2 = (int) weight_tensor->ne[2];
+                    src0_ne3 = (int) weight_tensor->ne[3];
+                    src1_ne2 = (int) node->src[1]->ne[2];
+                    src1_ne3 = (int) node->src[1]->ne[3];
+                    if (src0_ne2 <= 0 || src0_ne3 <= 0 || src1_ne2 <= 0 || src1_ne3 <= 0) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] F16 MUL_MAT invalid batch dims src0=[%d,%d] src1=[%d,%d]\n",
+                                       src0_ne2, src0_ne3, src1_ne2, src1_ne3);
+                        return false;
+                    }
+                    if (src1_ne2 % src0_ne2 != 0 || src1_ne3 % src0_ne3 != 0) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] F16 MUL_MAT unsupported broadcast src0.ne23=[%d,%d] src1.ne23=[%d,%d]\n",
+                                       src0_ne2, src0_ne3, src1_ne2, src1_ne3);
+                        return false;
+                    }
+                }
 
-                kernel.add_matmul(layer, weight, input, output, mtype, M, N, K);
+                bool matmul_dbg_match = true;
+                const char * dbg_name_env = std::getenv("GGML_SYCL_TG_DUMP_MATMUL_NAME");
+                if (dbg_name_env && *dbg_name_env) {
+                    if (!node->name || std::strstr(node->name, dbg_name_env) == nullptr) {
+                        matmul_dbg_match = false;
+                    }
+                } else if (mtype != MatmulType::Q_PROJ) {
+                    // Default to Q projection if no explicit name filter is set.
+                    matmul_dbg_match = false;
+                }
+                if (matmul_dbg_match) {
+                    if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_MATMUL_LAYER")) {
+                        if (*layer_env) {
+                            char * end = nullptr;
+                            const long val = std::strtol(layer_env, &end, 10);
+                            if (end && end != layer_env) {
+                                const int dump_layer = (int) val;
+                                if (dump_layer >= 0 && layer != dump_layer) {
+                                    matmul_dbg_match = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (g_persistent_matmul_dbg.enabled && !g_persistent_matmul_dbg.captured &&
+                    matmul_dbg_match && M == 1 && N > 0) {
+                    float * dbg = sycl::malloc_shared<float>((size_t) N, *q);
+                    int * flag = sycl::malloc_shared<int>(1, *q);
+                    if (dbg && flag) {
+                        std::fill_n(dbg, (size_t) N, 0.0f);
+                        *flag = 0;
+                        g_persistent_matmul_dbg.captured = true;
+                        g_persistent_matmul_dbg.node = node;
+                        g_persistent_matmul_dbg.debug_ptr = dbg;
+                        g_persistent_matmul_dbg.debug_flag = flag;
+                        g_persistent_matmul_dbg.out_dim = N;
+                        g_persistent_matmul_dbg.layer = layer;
+                        g_persistent_matmul_dbg.mtype = mtype;
+                        kernel.set_persistent_debug_matmul(dbg, layer, mtype, N, flag);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG] MATMUL debug capture enabled: layer=%d type=%d dim=%d\n",
+                                        layer, (int) mtype, N);
+                    } else {
+                        if (dbg) {
+                            sycl::free(dbg, *q);
+                        }
+                        if (flag) {
+                            sycl::free(flag, *q);
+                        }
+                        GGML_LOG_WARN("[PERSISTENT-TG] MATMUL debug buffer alloc failed (dim=%d)\n", N);
+                    }
+                }
+
+                kernel.add_matmul(layer, weight, input, output, mtype, M, N, K,
+                                  weight_type, (int) weight_layout,
+                                  is_f16_weight ? weight_nb : nullptr,
+                                  is_f16_weight ? input_nb : nullptr,
+                                  is_f16_weight ? output_nb : nullptr,
+                                  src0_ne2, src0_ne3, src1_ne2, src1_ne3);
+                log_op("MUL_MAT", layer, node, output);
                 ops_added++;
+                record_trace(node->op, node, output, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_MUL_MAT]++;
+                }
                 break;
             }
 
             case GGML_OP_MUL: {
-                // Element-wise multiply: src[0] * src[1] -> dst
-                // In LLaMA-style transformers, GGML_OP_MUL appears in two contexts:
-                // 1. RMS norm weight scaling: RMS_NORM(x) * norm_weights
-                //    - Identified by src[0]->op == GGML_OP_RMS_NORM
-                // 2. FFN gate activation: silu(gate) * up_proj
-                //    - All other MUL operations in the FFN block
-                //
-                // We skip norm weight scaling (handled as part of the RMS norm op
-                // in the persistent kernel) and only add actual FFN gate multiplies.
-                bool is_norm_weight_mul = (node->src[0] && node->src[0]->op == GGML_OP_RMS_NORM) ||
-                                          (node->src[1] && node->src[1]->op == GGML_OP_RMS_NORM);
-
-                if (is_norm_weight_mul) {
-                    // Skip: this is norm_weight * rms_norm(x), not a SiLU multiply.
-                    // The persistent kernel's RMS norm implementation handles the
-                    // full normalized + scaled output when weights are provided.
-                    // For now, we skip this and let the normal dispatch handle it.
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MUL") != nullptr) {
+                    ggml_sycl_mul(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
                     break;
                 }
-
-                const void * gate   = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
-                const void * up     = ggml_sycl_get_data_ptr(node->src[1], ctx.device);
-                void *       output = ggml_sycl_get_data_ptr(node, ctx.device);
-                kernel.add_silu_mul(layer, gate, up, output);
+                // MUL is used for two purposes in the transformer graph:
+                // 1. RMS_NORM weight scaling: RMS_NORM output * norm weights
+                // 2. SiLU gating: gate * up (after SiLU activation)
+                if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+                    log_tensor("MUL src0", node->src[0]);
+                    log_tensor("MUL src1", node->src[1]);
+                    log_tensor("MUL dst", node);
+                }
+                if (node->type != GGML_TYPE_F32 ||
+                    node->src[0]->type != GGML_TYPE_F32 ||
+                    node->src[1]->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL only supports F32\n");
+                    return false;
+                }
+                if (!ggml_are_same_shape(node->src[0], node->src[1])) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL broadcast not supported\n");
+                    return false;
+                }
+                if (!ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL output not contiguous\n");
+                    return false;
+                }
+                const void * src0 = resolve_input_ptr(node->src[0], layer);
+                const void * src1 = resolve_input_ptr(node->src[1], layer);
+                if (!src0 || !src1) {
+                    return false;
+                }
+                if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
+                    GGML_LOG_INFO("[PERSISTENT-TG] MUL ptrs: src0=%p src1=%p dst=%p\n",
+                                  src0, src1, ggml_sycl_get_data_ptr_view(node, ctx.device));
+                }
+                const int64_t n_elements = ggml_nelements(node);
+                if (n_elements > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] MUL tensor too large: %lld elements\n",
+                                   (long long) n_elements);
+                    return false;
+                }
+                void * mul_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (g_persistent_mul_dbg.enabled && !g_persistent_mul_dbg.captured &&
+                    node->type == GGML_TYPE_F32 && node->ne[1] >= 1) {
+                    const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_MUL_NAME");
+                    if (!name_env || !*name_env ||
+                        (node->name && std::strstr(node->name, name_env) != nullptr)) {
+                        int dump_layer = -1;
+                        if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_MUL_LAYER")) {
+                            if (*layer_env) {
+                                char * end = nullptr;
+                                const long val = std::strtol(layer_env, &end, 10);
+                                if (end && end != layer_env) {
+                                    dump_layer = (int) val;
+                                }
+                            }
+                        }
+                        if (dump_layer < 0 || dump_layer == layer) {
+                            g_persistent_mul_dbg.captured = true;
+                            g_persistent_mul_dbg.node = node;
+                            g_persistent_mul_dbg.out_dim = (int) n_elements;
+                            g_persistent_mul_dbg.layer = layer;
+                        }
+                    }
+                }
+                kernel.add_mul(layer, src0, src1, mul_out, (int) n_elements);
+                log_op("MUL", layer, node, mul_out);
                 ops_added++;
+                record_trace(node->op, node, mul_out, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_MUL]++;
+                }
+                break;
+            }
+
+            case GGML_OP_ADD: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ADD") != nullptr) {
+                    ggml_sycl_add(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
+                if (node->type != GGML_TYPE_F32 ||
+                    node->src[0]->type != GGML_TYPE_F32 ||
+                    node->src[1]->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ADD only supports F32\n");
+                    return false;
+                }
+                if (!ggml_are_same_shape(node->src[0], node->src[1])) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ADD broadcast not supported\n");
+                    return false;
+                }
+                if (!ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ADD output not contiguous\n");
+                    return false;
+                }
+                const void * src0 = resolve_input_ptr(node->src[0], layer);
+                const void * src1 = resolve_input_ptr(node->src[1], layer);
+                if (!src0 || !src1) {
+                    return false;
+                }
+                const int64_t n_elements = ggml_nelements(node);
+                if (n_elements > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ADD tensor too large: %lld elements\n",
+                                   (long long) n_elements);
+                    return false;
+                }
+                void * add_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (g_persistent_add_dbg.enabled && !g_persistent_add_dbg.captured &&
+                    node->type == GGML_TYPE_F32 && node->ne[1] >= 1) {
+                    const char * name_env = std::getenv("GGML_SYCL_TG_DUMP_ADD_NAME");
+                    if (!name_env || !*name_env ||
+                        (node->name && std::strstr(node->name, name_env) != nullptr)) {
+                        int dump_layer = -1;
+                        if (const char * layer_env = std::getenv("GGML_SYCL_TG_DUMP_ADD_LAYER")) {
+                            if (*layer_env) {
+                                char * end = nullptr;
+                                const long val = std::strtol(layer_env, &end, 10);
+                                if (end && end != layer_env) {
+                                    dump_layer = (int) val;
+                                }
+                            }
+                        }
+                        if (dump_layer < 0 || dump_layer == layer) {
+                            g_persistent_add_dbg.captured = true;
+                            g_persistent_add_dbg.node = node;
+                            g_persistent_add_dbg.out_dim = (int) n_elements;
+                            g_persistent_add_dbg.layer = layer;
+                        }
+                    }
+                }
+                kernel.add_add(layer, src0, src1, add_out, (int) n_elements);
+                log_op("ADD", layer, node, add_out);
+                ops_added++;
+                record_trace(node->op, node, add_out, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_ADD]++;
+                }
+                break;
+            }
+
+            case GGML_OP_GLU: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_GLU") != nullptr) {
+                    ggml_sycl_swiglu(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
+                const ggml_glu_op glu_op = ggml_get_glu_op(node);
+                if (glu_op != GGML_GLU_OP_SWIGLU) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GLU op %s not supported\n", ggml_glu_op_name(glu_op));
+                    return false;
+                }
+                if (node->src[1] == nullptr) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GLU split mode required (src1)\n");
+                    return false;
+                }
+                if (node->type != GGML_TYPE_F32 ||
+                    node->src[0]->type != GGML_TYPE_F32 ||
+                    node->src[1]->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GLU only supports F32\n");
+                    return false;
+                }
+                if (!ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GLU output not contiguous\n");
+                    return false;
+                }
+                const int32_t swapped = ggml_get_op_params_i32(node, 1);
+                const ggml_tensor * gate_src = swapped ? node->src[1] : node->src[0];
+                const ggml_tensor * up_src   = swapped ? node->src[0] : node->src[1];
+                const void * gate = resolve_input_ptr(gate_src, layer);
+                const void * up   = resolve_input_ptr(up_src, layer);
+                if (!gate || !up) {
+                    return false;
+                }
+                const int64_t n_elements = ggml_nelements(node);
+                if (n_elements > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] GLU tensor too large: %lld elements\n",
+                                   (long long) n_elements);
+                    return false;
+                }
+                void * glu_out = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                kernel.add_silu_mul(layer, gate, up, glu_out);
+                log_op("GLU", layer, node, glu_out);
+                ops_added++;
+                record_trace(node->op, node, glu_out, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_GLU]++;
+                }
                 break;
             }
 
             case GGML_OP_ROPE: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ROPE") != nullptr) {
+                    ggml_sycl_rope(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
                 // RoPE: Apply rotary position embeddings to a single tensor (Q or K).
                 // In the ggml graph, ROPE is applied separately to Q and K tensors.
                 // Each ROPE op processes one tensor: src[0] = input (Q or K), src[1] = position.
@@ -24627,6 +26583,26 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
 
                 float freq_base;
                 memcpy(&freq_base, (int32_t *) node->op_params + 5, sizeof(float));
+                float freq_scale;
+                float ext_factor;
+                float attn_factor;
+                float beta_fast;
+                float beta_slow;
+                memcpy(&freq_scale,  (int32_t *) node->op_params + 6, sizeof(float));
+                memcpy(&ext_factor,  (int32_t *) node->op_params + 7, sizeof(float));
+                memcpy(&attn_factor, (int32_t *) node->op_params + 8, sizeof(float));
+                memcpy(&beta_fast,   (int32_t *) node->op_params + 9, sizeof(float));
+                memcpy(&beta_slow,   (int32_t *) node->op_params + 10, sizeof(float));
+                if (g_ggml_sycl_debug) {
+                    static int rope_dbg = 0;
+                    if (rope_dbg++ < 1) {
+                        const int n_ctx_orig = ((int32_t *) node->op_params)[4];
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   ROPE params: n_ctx_orig=%d freq_base=%.4f freq_scale=%.4f "
+                                        "ext=%.4f attn=%.4f beta_fast=%.4f beta_slow=%.4f\n",
+                                        n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor,
+                                        beta_fast, beta_slow);
+                    }
+                }
 
                 // Support normal (mode=0) and neox (mode=2) RoPE modes
                 const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
@@ -24635,15 +26611,30 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                     GGML_SYCL_DEBUG("[PERSISTENT-TG] Skipping unsupported ROPE mode=%d\n", mode);
                     break;
                 }
+                if (freq_scale != 1.0f || ext_factor != 0.0f || attn_factor != 1.0f) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ROPE unsupported scaling: freq_scale=%g ext=%g attn=%g\n",
+                                   freq_scale, ext_factor, attn_factor);
+                    return false;
+                }
+                if (node->src[2] != nullptr) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ROPE unsupported freq_factors tensor\n");
+                    return false;
+                }
 
                 // Get tensor dimensions
                 const int head_dim_rope = (int) node->src[0]->ne[0];
                 const int n_heads_rope  = (int) node->src[0]->ne[1];
                 const int half_dim      = n_dims / 2;  // n_dims may be <= head_dim
+                if (n_dims != head_dim_rope) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ROPE unsupported n_dims=%d head_dim=%d\n",
+                                   n_dims, head_dim_rope);
+                    return false;
+                }
 
                 // Read position from device (src[1] is position tensor)
                 // For TG mode (M=1), there's only one position value
-                const int32_t * pos_device = (const int32_t *) ggml_sycl_get_data_ptr(node->src[1], ctx.device);
+                const int32_t * pos_device =
+                    (const int32_t *) ggml_sycl_get_data_ptr_view(node->src[1], ctx.device);
                 int32_t position = 0;
                 sycl::queue * q = ctx.stream();
                 q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
@@ -24670,8 +26661,12 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
 
                 // Each graph ROPE op processes a single tensor (Q or K)
                 // src[0] is the input tensor, dst is the output tensor
-                void * input_rope  = ggml_sycl_get_data_ptr(node->src[0], ctx.device);
-                void * output_rope = ggml_sycl_get_data_ptr(node, ctx.device);
+                void * input_rope  = const_cast<void *>(resolve_input_ptr(node->src[0], layer));
+                void * output_rope = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!input_rope || !ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] ROPE input/output not contiguous\n");
+                    return false;
+                }
 
                 RopeDescriptor desc = {};
                 desc.q         = input_rope;     // Source data (read from src[0])
@@ -24684,48 +26679,501 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 desc.position  = position;
                 desc.is_neox   = is_neox;
                 kernel.add_rope(layer, desc);
+                log_op("ROPE", layer, node, output_rope);
                 ops_added++;
+                record_trace(node->op, node, output_rope, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_ROPE]++;
+                }
 
                 GGML_SYCL_DEBUG("[PERSISTENT-TG]   ROPE: heads=%d head_dim=%d n_dims=%d pos=%d\n",
                                 n_heads_rope, head_dim_rope, n_dims, position);
                 break;
             }
 
+            case GGML_OP_SOFT_MAX: {
+                const ggml_tensor * src0  = node->src[0];
+                const ggml_tensor * mask  = node->src[1];
+                const ggml_tensor * sinks = node->src[2];
+
+                if (!src0) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX missing src0\n");
+                    return false;
+                }
+                if (src0->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX only supports F32 src/dst (src=%d dst=%d)\n",
+                                   src0->type, node->type);
+                    return false;
+                }
+                if (sinks != nullptr) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX sinks tensor not supported in persistent path\n");
+                    return false;
+                }
+
+                float scale = 1.0f;
+                float max_bias = 0.0f;
+                std::memcpy(&scale,    (const float *) node->op_params + 0, sizeof(float));
+                std::memcpy(&max_bias, (const float *) node->op_params + 1, sizeof(float));
+                if (max_bias != 0.0f) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX max_bias=%g not supported in persistent path\n", max_bias);
+                    return false;
+                }
+
+                const void * input = resolve_input_ptr(src0, layer);
+                void * output = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!input || !output || !ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX input/output not available or output not contiguous\n");
+                    return false;
+                }
+
+                int      mask_type = -1;
+                int64_t  mask_nb0 = 0;
+                int64_t  mask_nb1 = 0;
+                int64_t  mask_nb2 = 0;
+                int64_t  mask_nb3 = 0;
+                int      mask_ne2 = 1;
+                int      mask_ne3 = 1;
+                const void * mask_ptr = nullptr;
+                if (mask) {
+                    if (mask->type != GGML_TYPE_F16 && mask->type != GGML_TYPE_F32) {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX unsupported mask type=%d\n", mask->type);
+                        return false;
+                    }
+                    int64_t mask_nb[GGML_MAX_DIMS] = {};
+                    mask_ptr = resolve_input_ptr_with_nb(mask, layer, mask_nb, true);
+                    if (!mask_ptr) {
+                        return false;
+                    }
+                    mask_type = (mask->type == GGML_TYPE_F16) ? 1 : 0;
+                    mask_nb0  = mask_nb[0];
+                    mask_nb1  = mask_nb[1];
+                    mask_nb2  = mask_nb[2];
+                    mask_nb3  = mask_nb[3];
+                    mask_ne2  = (int) mask->ne[2];
+                    mask_ne3  = (int) mask->ne[3];
+                }
+
+                const int64_t n_rows = ggml_nrows(src0);
+                const int64_t n_cols = src0->ne[0];
+                if (n_rows <= 0 || n_cols <= 0 ||
+                    n_rows > std::numeric_limits<int>::max() ||
+                    n_cols > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX invalid shape rows=%lld cols=%lld\n",
+                                   (long long) n_rows, (long long) n_cols);
+                    return false;
+                }
+                if (src0->ne[1] > std::numeric_limits<int>::max() ||
+                    src0->ne[2] > std::numeric_limits<int>::max() ||
+                    src0->ne[3] > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SOFT_MAX shape exceeds int range ne=[%lld,%lld,%lld,%lld]\n",
+                                   (long long) src0->ne[0], (long long) src0->ne[1],
+                                   (long long) src0->ne[2], (long long) src0->ne[3]);
+                    return false;
+                }
+
+                kernel.add_softmax(
+                    layer,
+                    input,
+                    mask_ptr,
+                    nullptr,
+                    output,
+                    (int) n_rows,
+                    (int) n_cols,
+                    (int) src0->ne[1],
+                    (int) src0->ne[2],
+                    (int) src0->ne[3],
+                    scale,
+                    max_bias,
+                    mask_type,
+                    mask_nb0,
+                    mask_nb1,
+                    mask_nb2,
+                    mask_nb3,
+                    mask_ne2,
+                    mask_ne3);
+                log_op("SOFT_MAX", layer, node, output);
+                ops_added++;
+                record_trace(node->op, node, output, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_SOFT_MAX]++;
+                }
+                break;
+            }
+
             case GGML_OP_FLASH_ATTN_EXT: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ATTN") != nullptr) {
+                    ggml_sycl_flash_attn_ext(ctx, node);
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_SKIP_ATTN") != nullptr) {
+                    if (g_ggml_sycl_debug) {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN skipped via env\n");
+                    }
+                    break;
+                }
                 // Flash attention: src[0]=Q, src[1]=K, src[2]=V, dst=output
                 // Q dimensions: ne[0]=head_dim, ne[1]=n_queries, ne[2]=n_heads
                 // K dimensions: ne[0]=head_dim, ne[1]=n_kv (seq_len), ne[2]=n_kv_heads
                 const ggml_tensor * Q_fa = node->src[0];
                 const ggml_tensor * K_fa = node->src[1];
                 const ggml_tensor * V_fa = node->src[2];
+                const ggml_tensor * mask = node->src[3];
+                const ggml_tensor * sinks = node->src[4];
+                const ggml_tensor * q_seq_ids = node->src[5];
+                const ggml_tensor * kv_seq_ids = node->src[6];
+                const ggml_tensor * block_table = node->src[7];
+                const ggml_tensor * seq_lens = node->src[8];
 
-                const void * q_ptr = ggml_sycl_get_data_ptr(Q_fa, ctx.device);
-                const void * k_ptr = ggml_sycl_get_data_ptr(K_fa, ctx.device);
-                const void * v_ptr = ggml_sycl_get_data_ptr(V_fa, ctx.device);
-                void * out_ptr     = ggml_sycl_get_data_ptr(node, ctx.device);
+                const int32_t use_paged_layout = ((int32_t *) node->op_params)[4];
+                if (sinks || q_seq_ids || kv_seq_ids || block_table || seq_lens || use_paged_layout != 0) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN unsupported extras: sinks=%p q_seq=%p kv_seq=%p "
+                                   "block_table=%p seq_lens=%p paged=%d\n",
+                                   (const void *) sinks, (const void *) q_seq_ids, (const void *) kv_seq_ids,
+                                   (const void *) block_table, (const void *) seq_lens, (int) use_paged_layout);
+                    return false;
+                }
 
-                // Extract dimensions
-                const int head_dim_attn    = (int) Q_fa->ne[0];
-                const int n_heads_attn     = (int) Q_fa->ne[2];  // Q heads in ne[2]
-                const int n_kv_heads_attn  = (int) K_fa->ne[2];  // KV heads in ne[2]
-                const int seq_len_attn     = (int) K_fa->ne[1];  // Sequence length from K
+                log_tensor("ATTN Q", Q_fa);
+                log_tensor("ATTN K", K_fa);
+                log_tensor("ATTN V", V_fa);
+                log_tensor("ATTN mask", mask);
 
-                // Scale from op_params[0]
+                if (Q_fa->type != GGML_TYPE_F32) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN unsupported Q type=%d (expected F32)\n", Q_fa->type);
+                    return false;
+                }
+
+                int64_t q_nb[GGML_MAX_DIMS] = {};
+                int64_t k_nb[GGML_MAX_DIMS] = {};
+                int64_t v_nb[GGML_MAX_DIMS] = {};
+
+                const void * q_ptr = resolve_input_ptr_with_nb(Q_fa, layer, q_nb, true);
+                const void * k_ptr = resolve_input_ptr_with_nb(K_fa, layer, k_nb, true);
+                const void * v_ptr = resolve_input_ptr_with_nb(V_fa, layer, v_nb, true);
+                void * out_ptr     = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!q_ptr || !k_ptr || !v_ptr || !ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN input/output not contiguous\n");
+                    return false;
+                }
+                const int model_n_heads = n_heads;
+                const int model_n_kv_heads = n_kv_heads;
+
+                auto find_axis_for_dim = [](const ggml_tensor * t, int dim) -> int {
+                    if (!t || dim <= 0) {
+                        return -1;
+                    }
+                    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+                        if ((int) t->ne[i] == dim) {
+                            return i;
+                        }
+                    }
+                    return -1;
+                };
+
+                auto pick_seq_axis = [](const ggml_tensor * t, int head_axis) -> int {
+                    if (!t) {
+                        return -1;
+                    }
+                    int best_axis = -1;
+                    int64_t best_ne = -1;
+                    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                        if (i == head_axis) {
+                            continue;
+                        }
+                        if (t->ne[i] > best_ne) {
+                            best_ne = t->ne[i];
+                            best_axis = i;
+                        }
+                    }
+                    return best_axis;
+                };
+
+                const int head_dim_attn = (int) Q_fa->ne[0];
+
+                int q_head_axis = find_axis_for_dim(Q_fa, model_n_heads);
+                if (q_head_axis < 0) {
+                    q_head_axis = 2;
+                }
+                int k_head_axis = find_axis_for_dim(K_fa, model_n_kv_heads);
+                if (k_head_axis < 0) {
+                    k_head_axis = 2;
+                }
+                int v_head_axis = find_axis_for_dim(V_fa, model_n_kv_heads);
+                if (v_head_axis < 0) {
+                    v_head_axis = k_head_axis;
+                }
+
+                int k_seq_axis = pick_seq_axis(K_fa, k_head_axis);
+                if (k_seq_axis < 0) {
+                    k_seq_axis = 1;
+                }
+                int v_seq_axis = pick_seq_axis(V_fa, v_head_axis);
+                if (v_seq_axis < 0) {
+                    v_seq_axis = k_seq_axis;
+                }
+
+                if (v_head_axis != k_head_axis || v_seq_axis != k_seq_axis) {
+                    GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN axis mismatch: k_head=%d v_head=%d k_seq=%d v_seq=%d\n",
+                                    k_head_axis, v_head_axis, k_seq_axis, v_seq_axis);
+                    v_head_axis = k_head_axis;
+                    v_seq_axis  = k_seq_axis;
+                }
+
+                const int n_heads_attn    = (int) Q_fa->ne[q_head_axis];
+                const int n_kv_heads_attn = (int) K_fa->ne[k_head_axis];
+                const int seq_len_attn_capacity = (int) K_fa->ne[k_seq_axis];
+                int seq_len_attn = seq_len_attn_capacity;
+                if (decode_kv_pos_hint >= 0 && decode_kv_pos_hint + 1 < (int64_t) seq_len_attn) {
+                    seq_len_attn = (int) (decode_kv_pos_hint + 1);
+                }
+
+                if (g_ggml_sycl_debug) {
+                    static int attn_dbg = 0;
+                    if (attn_dbg++ < 1) {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN Q ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                        (long long) Q_fa->ne[0], (long long) Q_fa->ne[1],
+                                        (long long) Q_fa->ne[2], (long long) Q_fa->ne[3],
+                                        (long long) Q_fa->nb[0], (long long) Q_fa->nb[1],
+                                        (long long) Q_fa->nb[2], (long long) Q_fa->nb[3]);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN K ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                        (long long) K_fa->ne[0], (long long) K_fa->ne[1],
+                                        (long long) K_fa->ne[2], (long long) K_fa->ne[3],
+                                        (long long) K_fa->nb[0], (long long) K_fa->nb[1],
+                                        (long long) K_fa->nb[2], (long long) K_fa->nb[3]);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN V ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                        (long long) V_fa->ne[0], (long long) V_fa->ne[1],
+                                        (long long) V_fa->ne[2], (long long) V_fa->ne[3],
+                                        (long long) V_fa->nb[0], (long long) V_fa->nb[1],
+                                        (long long) V_fa->nb[2], (long long) V_fa->nb[3]);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN axes: q_head=%d k_head=%d k_seq=%d v_head=%d v_seq=%d model_heads=%d model_kv_heads=%d\n",
+                                        q_head_axis, k_head_axis, k_seq_axis, v_head_axis, v_seq_axis,
+                                        model_n_heads, model_n_kv_heads);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN ptrs: q=%p k=%p v=%p out=%p\n",
+                                        q_ptr, k_ptr, v_ptr, out_ptr);
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN seq_len: capacity=%d effective=%d kv_pos_hint=%lld\n",
+                                        seq_len_attn_capacity, seq_len_attn, (long long) decode_kv_pos_hint);
+                    }
+                }
+                static bool logged_attn_shapes = false;
+                if (!logged_attn_shapes) {
+                    const char * log_env = std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_ATTN");
+                    if (log_env && std::atoi(log_env) != 0) {
+                        logged_attn_shapes = true;
+                        GGML_LOG_INFO("[PERSISTENT-TG] ATTN Q ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                      (long long) Q_fa->ne[0], (long long) Q_fa->ne[1],
+                                      (long long) Q_fa->ne[2], (long long) Q_fa->ne[3],
+                                      (long long) Q_fa->nb[0], (long long) Q_fa->nb[1],
+                                      (long long) Q_fa->nb[2], (long long) Q_fa->nb[3]);
+                        GGML_LOG_INFO("[PERSISTENT-TG] ATTN K ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                      (long long) K_fa->ne[0], (long long) K_fa->ne[1],
+                                      (long long) K_fa->ne[2], (long long) K_fa->ne[3],
+                                      (long long) K_fa->nb[0], (long long) K_fa->nb[1],
+                                      (long long) K_fa->nb[2], (long long) K_fa->nb[3]);
+                        GGML_LOG_INFO("[PERSISTENT-TG] ATTN V ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                      (long long) V_fa->ne[0], (long long) V_fa->ne[1],
+                                      (long long) V_fa->ne[2], (long long) V_fa->ne[3],
+                                      (long long) V_fa->nb[0], (long long) V_fa->nb[1],
+                                      (long long) V_fa->nb[2], (long long) V_fa->nb[3]);
+                        if (mask) {
+                            GGML_LOG_INFO("[PERSISTENT-TG] ATTN mask ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld] type=%d\n",
+                                          (long long) mask->ne[0], (long long) mask->ne[1],
+                                          (long long) mask->ne[2], (long long) mask->ne[3],
+                                          (long long) mask->nb[0], (long long) mask->nb[1],
+                                          (long long) mask->nb[2], (long long) mask->nb[3],
+                                          (int) mask->type);
+                        } else {
+                            GGML_LOG_INFO("[PERSISTENT-TG] ATTN mask: none\n");
+                        }
+                        GGML_LOG_INFO("[PERSISTENT-TG] ATTN axes: q_head=%d k_head=%d k_seq=%d v_head=%d v_seq=%d n_heads=%d n_kv_heads=%d seq_len=%d\n",
+                                      q_head_axis, k_head_axis, k_seq_axis, v_head_axis, v_seq_axis,
+                                      n_heads_attn, n_kv_heads_attn, seq_len_attn);
+                    }
+                }
+
+                if (K_fa->type != V_fa->type) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN KV type mismatch K=%d V=%d\n",
+                                   K_fa->type, V_fa->type);
+                    return false;
+                }
+                KvCacheType kv_type;
+                if (K_fa->type == GGML_TYPE_F16) {
+                    kv_type = KvCacheType::F16;
+                } else if (K_fa->type == GGML_TYPE_F32) {
+                    kv_type = KvCacheType::F32;
+                } else {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN unsupported KV type=%d\n", K_fa->type);
+                    return false;
+                }
+
+                // Scale/max_bias/logit_softcap from op_params[0..2]
                 float scale_attn;
+                float max_bias;
+                float logit_softcap;
                 memcpy(&scale_attn, (const float *) node->op_params, sizeof(float));
+                memcpy(&max_bias, (const float *) node->op_params + 1, sizeof(float));
+                memcpy(&logit_softcap, (const float *) node->op_params + 2, sizeof(float));
+                if (max_bias != 0.0f || logit_softcap != 0.0f) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN unsupported bias/softcap: max_bias=%g softcap=%g\n",
+                                   max_bias, logit_softcap);
+                    return false;
+                }
+
+                const void * mask_ptr = nullptr;
+                int          mask_type = -1;
+                int64_t      mask_nb0 = 0;
+                int64_t      mask_nb1 = 0;
+                int64_t      mask_nb2 = 0;
+                int64_t      mask_nb3 = 0;
+                int          mask_ne2 = 0;
+                int          mask_ne3 = 0;
+                if (mask) {
+                    if (mask->type == GGML_TYPE_F16) {
+                        mask_type = 1;
+                    } else if (mask->type == GGML_TYPE_F32) {
+                        mask_type = 0;
+                    } else {
+                        GGML_LOG_ERROR("[PERSISTENT-TG] FLASH_ATTN unsupported mask type=%d\n", mask->type);
+                        return false;
+                    }
+                    int64_t mask_nb[GGML_MAX_DIMS] = {};
+                    mask_ptr = resolve_input_ptr_with_nb(mask, layer, mask_nb, true);
+                    if (!mask_ptr) {
+                        return false;
+                    }
+                    mask_nb0 = mask_nb[0];
+                    mask_nb1 = mask_nb[1];
+                    mask_nb2 = mask_nb[2];
+                    mask_nb3 = mask_nb[3];
+                    mask_ne2 = (int) mask->ne[2];
+                    mask_ne3 = (int) mask->ne[3];
+                }
+                if (g_ggml_sycl_debug) {
+                    if (mask) {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN mask: type=%d ne=[%lld,%lld,%lld,%lld] nb=[%lld,%lld,%lld,%lld]\n",
+                                        mask->type,
+                                        (long long) mask->ne[0], (long long) mask->ne[1],
+                                        (long long) mask->ne[2], (long long) mask->ne[3],
+                                        (long long) mask->nb[0], (long long) mask->nb[1],
+                                        (long long) mask->nb[2], (long long) mask->nb[3]);
+                        static int mask_dbg = 0;
+                        if (mask_dbg++ < 1) {
+                            const int sample_idx[] = {0, 1, 2, 15, 16, 63, 127, 255};
+                            const int n_samples = (int) (sizeof(sample_idx) / sizeof(sample_idx[0]));
+                            for (int si = 0; si < n_samples; si++) {
+                                const int p = sample_idx[si];
+                                if (p >= seq_len_attn) {
+                                    continue;
+                                }
+                                const int64_t mask_off = (int64_t) p * mask_nb0;
+                                float mask_val = 0.0f;
+                                if (mask_type == 1) {
+                                    sycl::half tmp;
+                                    q->memcpy(&tmp, (const char *) mask_ptr + mask_off, sizeof(tmp)).wait();
+                                    mask_val = (float) tmp;
+                                } else if (mask_type == 0) {
+                                    float tmp;
+                                    q->memcpy(&tmp, (const char *) mask_ptr + mask_off, sizeof(tmp)).wait();
+                                    mask_val = tmp;
+                                }
+                                GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN mask[%d]=%.6f\n", p, mask_val);
+                            }
+                        }
+                    } else {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN mask: none\n");
+                    }
+                }
+
+                const char * attn_env_local = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN");
+                const bool   attn_debug_enabled = (attn_env_local && std::atoi(attn_env_local) != 0);
+                static bool  logged_attn_state = false;
+                if (!logged_attn_state) {
+                    logged_attn_state = true;
+                    GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN debug state: enabled=%d captured=%d\n",
+                                    attn_debug_enabled ? 1 : 0,
+                                    g_persistent_attn_dbg.captured ? 1 : 0);
+                }
+                if (attn_debug_enabled && !g_persistent_attn_dbg.captured) {
+                    GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN debug capture path entered\n");
+                    const int dbg_head_dim = head_dim_attn;
+                    const int dbg_seq_len  = seq_len_attn;
+                    if (dbg_head_dim > 0 && dbg_seq_len > 0) {
+                        const size_t kv_elems = static_cast<size_t>(dbg_head_dim) * static_cast<size_t>(dbg_seq_len);
+                        const size_t overhead = 4u + 2u * static_cast<size_t>(dbg_head_dim) +
+                                                static_cast<size_t>(dbg_seq_len);
+                        const size_t max_size = std::numeric_limits<size_t>::max();
+                        if (kv_elems > (max_size - overhead) / 2u) {
+                            GGML_LOG_WARN("[PERSISTENT-TG] ATTN debug buffer size overflow (head_dim=%d seq_len=%d)\n",
+                                          dbg_head_dim, dbg_seq_len);
+                        } else {
+                            const size_t total_floats = overhead + 2u * kv_elems;
+                            if (total_floats > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                                GGML_LOG_WARN("[PERSISTENT-TG] ATTN debug buffer too large: %zu floats\n",
+                                              total_floats);
+                            } else {
+                                float * dbg = sycl::malloc_shared<float>(total_floats, *q);
+                                if (dbg) {
+                                    std::fill_n(dbg, total_floats, 0.0f);
+                                    g_persistent_attn_dbg.captured = true;
+                                    g_persistent_attn_dbg.node = node;
+                                    g_persistent_attn_dbg.layer = layer;
+                                    g_persistent_attn_dbg.debug_ptr = dbg;
+                                    g_persistent_attn_dbg.debug_floats = static_cast<int>(total_floats);
+                                    kernel.set_persistent_debug_attn(dbg, layer, static_cast<int>(total_floats));
+                                    GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN debug capture enabled: layer=%d head_dim=%d "
+                                                    "seq_len=%d floats=%zu\n",
+                                                    layer, dbg_head_dim, dbg_seq_len, total_floats);
+                                } else {
+                                    GGML_LOG_WARN("[PERSISTENT-TG] ATTN debug buffer alloc failed (%zu floats)\n",
+                                                  total_floats);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 AttentionDescriptor attn_desc = {};
                 attn_desc.q          = q_ptr;
                 attn_desc.k_cache    = k_ptr;
                 attn_desc.v_cache    = v_ptr;
+                attn_desc.mask       = mask_ptr;
                 attn_desc.output     = out_ptr;
+                attn_desc.kv_type    = kv_type;
                 attn_desc.n_heads    = n_heads_attn;
                 attn_desc.n_kv_heads = n_kv_heads_attn;
                 attn_desc.head_dim   = head_dim_attn;
                 attn_desc.seq_len    = seq_len_attn;
+                attn_desc.q_nb0      = q_nb[0];
+                attn_desc.q_nb1      = q_nb[1];
+                attn_desc.q_nb2      = q_nb[q_head_axis];
+                attn_desc.q_nb3      = q_nb[3];
+                attn_desc.k_nb0      = k_nb[0];
+                attn_desc.k_nb1      = k_nb[k_seq_axis];
+                attn_desc.k_nb2      = k_nb[k_head_axis];
+                attn_desc.k_nb3      = k_nb[3];
+                attn_desc.v_nb0      = v_nb[0];
+                attn_desc.v_nb1      = v_nb[v_seq_axis];
+                attn_desc.v_nb2      = v_nb[v_head_axis];
+                attn_desc.v_nb3      = v_nb[3];
                 attn_desc.scale      = scale_attn;
+                attn_desc.mask_type  = mask_type;
+                attn_desc.mask_nb0   = mask_nb0;
+                attn_desc.mask_nb1   = mask_nb1;
+                attn_desc.mask_nb2   = mask_nb2;
+                attn_desc.mask_nb3   = mask_nb3;
+                attn_desc.mask_ne2   = mask_ne2;
+                attn_desc.mask_ne3   = mask_ne3;
                 kernel.add_attention(layer, attn_desc);
+                log_op("FLASH_ATTN_EXT", layer, node, out_ptr);
                 ops_added++;
+                record_trace(node->op, node, out_ptr, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_FLASH_ATTN_EXT]++;
+                }
 
                 GGML_SYCL_DEBUG("[PERSISTENT-TG]   FLASH_ATTN: heads=%d kv_heads=%d "
                                 "head_dim=%d seq_len=%d scale=%.4f\n",
@@ -24734,17 +27182,512 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 break;
             }
 
-            default:
-                // Skip operations not yet supported in persistent kernel
-                // (SOFTMAX, etc.)
+            case GGML_OP_SET_ROWS: {
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_SET_ROWS") != nullptr) {
+                    ggml_sycl_op_set_rows(ctx, node);
+                    // Keep ordering deterministic for subsequent persistent ops.
+                    q->wait_and_throw();
+                    if (g_sycl_tg_trace_hash) {
+                        void * out_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                        ggml_sycl_trace_tensor_hash(ctx, node, out_ptr, "persist-pre", g_sycl_trace_op_index++, node->op);
+                    }
+                    break;
+                }
+                if (std::getenv("GGML_SYCL_PERSISTENT_TG_SKIP_SET_ROWS") != nullptr) {
+                    if (g_ggml_sycl_debug) {
+                        GGML_SYCL_DEBUG("[PERSISTENT-TG]   SET_ROWS skipped via env\n");
+                    }
+                    break;
+                }
+                const ggml_tensor * src0 = node->src[0];
+                const ggml_tensor * src1 = node->src[1];
+                if (!src0 || !src1) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SET_ROWS missing src\n");
+                    return false;
+                }
+                if (!ggml_is_contiguous_rows(src0)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SET_ROWS requires contiguous rows in src0\n");
+                    return false;
+                }
+                const int32_t src_type = (src0->type == GGML_TYPE_F16) ? 1 :
+                                         (src0->type == GGML_TYPE_F32 ? 0 : -1);
+                const int32_t dst_type = (node->type == GGML_TYPE_F16) ? 1 :
+                                         (node->type == GGML_TYPE_F32 ? 0 : -1);
+                const int32_t idx_type = (src1->type == GGML_TYPE_I64) ? 1 :
+                                         (src1->type == GGML_TYPE_I32 ? 0 : -1);
+                if (src_type < 0 || dst_type < 0 || idx_type < 0) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SET_ROWS unsupported types src=%d dst=%d idx=%d\n",
+                                   src0->type, node->type, src1->type);
+                    return false;
+                }
+                // Use the original tensor layout for SET_ROWS. It relies on src0 strides,
+                // so materializing to a contiguous buffer would corrupt indexing.
+                const void * src_ptr = ggml_sycl_get_data_ptr_view(src0, ctx.device);
+                const void * idx_ptr = ggml_sycl_get_data_ptr_view(src1, ctx.device);
+                // GGML_OP_SET_ROWS writes through the op output view (dst/node), not the
+                // src[2] root tensor base. Using src[2] here can drop view offsets.
+                void * dst_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!dst_ptr && node->src[2]) {
+                    dst_ptr = ggml_sycl_get_data_ptr_view(node->src[2], ctx.device);
+                }
+                if (!src_ptr || !idx_ptr || !dst_ptr) {
+                    return false;
+                }
+
+                // Decode-phase hint: SET_ROWS indices encode which KV row is written.
+                // Later FLASH_ATTN uses this to clamp seq_len to the live KV extent.
+                if (idx_type == 1) {
+                    int64_t idx0 = -1;
+                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                    if (idx0 >= 0) {
+                        decode_kv_pos_hint = idx0;
+                    }
+                } else if (idx_type == 0) {
+                    int32_t idx0 = -1;
+                    q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                    if (idx0 >= 0) {
+                        decode_kv_pos_hint = idx0;
+                    }
+                }
+
+                SetRowsMeta meta = {};
+                meta.nc    = src0->ne[0];
+                meta.nr    = src0->ne[1];
+                meta.ne1   = node->ne[1];
+                meta.ne02  = src0->ne[2];
+                meta.ne03  = src0->ne[3];
+                meta.ne11  = src1->ne[1];
+                meta.ne12  = src1->ne[2];
+                meta.nb00  = (int64_t) src0->nb[0];
+                meta.nb01  = (int64_t) src0->nb[1];
+                meta.nb02  = (int64_t) src0->nb[2];
+                meta.nb03  = (int64_t) src0->nb[3];
+                meta.nb0   = (int64_t) node->nb[0];
+                meta.nb1   = (int64_t) node->nb[1];
+                meta.nb2   = (int64_t) node->nb[2];
+                meta.nb3   = (int64_t) node->nb[3];
+                meta.nb10  = (int64_t) src1->nb[0];
+                meta.nb11  = (int64_t) src1->nb[1];
+                meta.nb12  = (int64_t) src1->nb[2];
+                meta.src_type = src_type;
+                meta.dst_type = dst_type;
+                meta.idx_type = idx_type;
+                meta.pad = 0;
+
+                auto * meta_dev = sycl::malloc_device<SetRowsMeta>(1, *q);
+                if (!meta_dev) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate SetRowsMeta\n");
+                    return false;
+                }
+                kernel.add_temp_device_alloc(meta_dev);
+                q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
+
+                const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
+                if (n_elements > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] SET_ROWS tensor too large: %lld elements\n",
+                                   (long long) n_elements);
+                    return false;
+                }
+                void * debug_ptr = nullptr;
+                if (g_persistent_set_rows_dbg.enabled && !g_persistent_set_rows_dbg.captured) {
+                    g_persistent_set_rows_dbg.captured = true;
+                    g_persistent_set_rows_dbg.src_ptr = src_ptr;
+                    g_persistent_set_rows_dbg.idx_ptr = idx_ptr;
+                    g_persistent_set_rows_dbg.dst_ptr = dst_ptr;
+                    g_persistent_set_rows_dbg.meta    = meta;
+
+                    if (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS") != nullptr) {
+                        constexpr int k_sample = 8;
+                        float * dbg = sycl::malloc_shared<float>(2 * k_sample + 1, *q);
+                        if (dbg) {
+                            std::fill_n(dbg, 2 * k_sample + 1, 0.0f);
+                            g_persistent_set_rows_dbg.debug_ptr = dbg;
+                            g_persistent_set_rows_dbg.debug_count = k_sample;
+                            debug_ptr = dbg;
+                        } else {
+                            GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS debug alloc failed\n");
+                        }
+                    }
+                }
+                const int elem_size = (meta.dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+                const int64_t last = (meta.nc  > 0 ? (meta.nc  - 1) * meta.nb0  : 0) +
+                                     (meta.ne1 > 0 ? (meta.ne1 - 1) * meta.nb1  : 0) +
+                                     (meta.ne02> 0 ? (meta.ne02- 1) * meta.nb2  : 0) +
+                                     (meta.ne03> 0 ? (meta.ne03- 1) * meta.nb3  : 0);
+                const int64_t output_bytes = last + elem_size;
+                kernel.add_set_rows(layer, src_ptr, idx_ptr, dst_ptr, meta_dev, (int) n_elements,
+                                    debug_ptr, output_bytes);
+                log_op("SET_ROWS", layer, node, dst_ptr);
+                ops_added++;
+                record_trace(node->op, node, dst_ptr, ops_added - 1);
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_SET_ROWS]++;
+                }
                 break;
+            }
+
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+                if (g_ggml_sycl_debug) {
+                    if (node->op == GGML_OP_VIEW) {
+                        skipped_view++;
+                    } else if (node->op == GGML_OP_RESHAPE) {
+                        skipped_reshape++;
+                    } else {
+                        skipped_permute++;
+                    }
+                }
+                // Views/reshapes are materialized on-demand when used as inputs.
+                break;
+
+            case GGML_OP_CONT: {
+                if (!node->src[0]) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] CONT missing src0\n");
+                    return false;
+                }
+                if (node->type != node->src[0]->type) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] CONT type mismatch src=%d dst=%d\n",
+                                   node->src[0]->type, node->type);
+                    return false;
+                }
+                if (!ggml_is_contiguous(node)) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] CONT output not contiguous\n");
+                    return false;
+                }
+                const void * src_ptr = ggml_sycl_get_data_ptr_view(node->src[0], ctx.device);
+                void * dst_ptr = ggml_sycl_get_data_ptr_view(node, ctx.device);
+                if (!src_ptr || !dst_ptr) {
+                    return false;
+                }
+                StridedCopyMeta meta = {};
+                for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                    meta.ne[d] = node->src[0]->ne[d];
+                    meta.nb[d] = (int64_t) node->src[0]->nb[d];
+                }
+                meta.type_size = (int32_t) ggml_type_size(node->type);
+                meta.pad = 0;
+
+                auto * meta_dev = sycl::malloc_device<StridedCopyMeta>(1, *q);
+                if (!meta_dev) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta for CONT\n");
+                    return false;
+                }
+                kernel.add_temp_device_alloc(meta_dev);
+                q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
+
+                const int64_t n_elements = ggml_nelements(node->src[0]);
+                if (n_elements > std::numeric_limits<int>::max()) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] CONT tensor too large: %lld elements\n",
+                                   (long long) n_elements);
+                    return false;
+                }
+                const int64_t output_bytes = n_elements * meta.type_size;
+                kernel.add_strided_copy(layer, src_ptr, dst_ptr, meta_dev, (int) n_elements, output_bytes);
+                log_op("STRIDED_COPY", layer, node, dst_ptr);
+                ops_added++;
+                if (g_ggml_sycl_debug) {
+                    plan_op_counts[GGML_OP_CONT]++;
+                }
+                break;
+            }
+
+            case GGML_OP_CPY:
+                // Keep CPY side effects in order for downstream consumers.
+                if (!node->src[0] || !node->src[1]) {
+                    GGML_LOG_ERROR("[PERSISTENT-TG] CPY missing src\n");
+                    return false;
+                }
+                ggml_sycl_cpy(ctx, node->src[0], node->src[1]);
+                executed_cpy++;
+                break;
+
+            default:
+                GGML_LOG_ERROR("[PERSISTENT-TG] Unsupported op in extraction: %s (%s)\n",
+                               ggml_op_name(node->op), node->name ? node->name : "(null)");
+                return false;
         }
+    }
+
+    if (max_layer_seen >= n_layers) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] Layer index out of range: max=%d expected<%d\n",
+                       max_layer_seen, n_layers);
+        return false;
+    }
+    if (g_sycl_tg_trace_hash && ops_added > 0) {
+        const size_t max_ops = (size_t) ops_added;
+        uint64_t * dbg = sycl::malloc_shared<uint64_t>(max_ops, *q);
+        if (dbg) {
+            std::fill_n(dbg, max_ops, 0ull);
+            g_persistent_debug_hash_ptr = dbg;
+            kernel.set_persistent_debug_hash(dbg, (int) g_sycl_tg_trace_max_bytes);
+        } else {
+            GGML_LOG_WARN("[PERSISTENT-TG] debug hash alloc failed (%zu entries)\n", max_ops);
+        }
+    }
+    if (g_ggml_sycl_debug) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Layer range: min=%d max=%d expected=%d\n",
+                        min_layer_seen == std::numeric_limits<int>::max() ? -1 : min_layer_seen,
+                        max_layer_seen, n_layers);
     }
 
     GGML_SYCL_DEBUG("[PERSISTENT-TG] Built persistent plan: %d ops from %d graph nodes\n",
                     ops_added, cgraph->n_nodes);
+    if (g_ggml_sycl_debug) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Graph ops: MUL_MAT=%d RMS_NORM=%d MUL=%d ADD=%d GLU=%d SET_ROWS=%d "
+                        "ROPE=%d FLASH_ATTN=%d VIEW=%d RESHAPE=%d PERMUTE=%d CONT=%d GET_ROWS=%d CPY=%d\n",
+                        graph_op_counts[GGML_OP_MUL_MAT],
+                        graph_op_counts[GGML_OP_RMS_NORM],
+                        graph_op_counts[GGML_OP_MUL],
+                        graph_op_counts[GGML_OP_ADD],
+                        graph_op_counts[GGML_OP_GLU],
+                        graph_op_counts[GGML_OP_SET_ROWS],
+                        graph_op_counts[GGML_OP_ROPE],
+                        graph_op_counts[GGML_OP_FLASH_ATTN_EXT],
+                        graph_op_counts[GGML_OP_VIEW],
+                        graph_op_counts[GGML_OP_RESHAPE],
+                        graph_op_counts[GGML_OP_PERMUTE],
+                        graph_op_counts[GGML_OP_CONT],
+                        graph_op_counts[GGML_OP_GET_ROWS],
+                        graph_op_counts[GGML_OP_CPY]);
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan ops:  MUL_MAT=%d RMS_NORM=%d MUL=%d ADD=%d GLU=%d SET_ROWS=%d "
+                        "ROPE=%d FLASH_ATTN=%d CONT=%d | skipped VIEW=%d RESHAPE=%d PERMUTE=%d | exec GET_ROWS=%d CPY=%d\n",
+                        plan_op_counts[GGML_OP_MUL_MAT],
+                        plan_op_counts[GGML_OP_RMS_NORM],
+                        plan_op_counts[GGML_OP_MUL],
+                        plan_op_counts[GGML_OP_ADD],
+                        plan_op_counts[GGML_OP_GLU],
+                        plan_op_counts[GGML_OP_SET_ROWS],
+                        plan_op_counts[GGML_OP_ROPE],
+                        plan_op_counts[GGML_OP_FLASH_ATTN_EXT],
+                        plan_op_counts[GGML_OP_CONT],
+                        skipped_view,
+                        skipped_reshape,
+                        skipped_permute,
+                        executed_get_rows,
+                        executed_cpy);
+    }
 
     return ops_added > 0;
+}
+
+static void debug_check_persistent_set_rows(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_CHECK_SET_ROWS");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+
+    if (!g_persistent_set_rows_dbg.captured || !g_persistent_set_rows_dbg.src_ptr ||
+        !g_persistent_set_rows_dbg.idx_ptr || !g_persistent_set_rows_dbg.dst_ptr) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS debug requested but no capture available\n");
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    int64_t idx_val = 0;
+    if (g_persistent_set_rows_dbg.meta.idx_type == 1) {
+        q->memcpy(&idx_val, g_persistent_set_rows_dbg.idx_ptr, sizeof(int64_t)).wait();
+    } else {
+        int32_t idx32 = 0;
+        q->memcpy(&idx32, g_persistent_set_rows_dbg.idx_ptr, sizeof(int32_t)).wait();
+        idx_val = idx32;
+    }
+    if (idx_val < 0 || idx_val >= g_persistent_set_rows_dbg.meta.ne1) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS debug: index out of range (%lld)\n",
+                      (long long) idx_val);
+        return;
+    }
+
+    const int64_t sample = std::min<int64_t>(g_persistent_set_rows_dbg.meta.nc, 8);
+    const size_t src_elem_size = (g_persistent_set_rows_dbg.meta.src_type == 1) ? sizeof(sycl::half) : sizeof(float);
+    const size_t dst_elem_size = (g_persistent_set_rows_dbg.meta.dst_type == 1) ? sizeof(sycl::half) : sizeof(float);
+
+    const int64_t src_off = 0 * g_persistent_set_rows_dbg.meta.nb01 +
+                            0 * g_persistent_set_rows_dbg.meta.nb02 +
+                            0 * g_persistent_set_rows_dbg.meta.nb03;
+    const int64_t dst_off = idx_val * g_persistent_set_rows_dbg.meta.nb1 +
+                            0 * g_persistent_set_rows_dbg.meta.nb2 +
+                            0 * g_persistent_set_rows_dbg.meta.nb3;
+
+    std::vector<uint8_t> src_bytes(sample * src_elem_size);
+    std::vector<uint8_t> dst_bytes(sample * dst_elem_size);
+    q->memcpy(src_bytes.data(), (const char *) g_persistent_set_rows_dbg.src_ptr + src_off, src_bytes.size()).wait();
+    q->memcpy(dst_bytes.data(), (const char *) g_persistent_set_rows_dbg.dst_ptr + dst_off, dst_bytes.size()).wait();
+
+    GGML_LOG_INFO("[PERSISTENT-TG] SET_ROWS debug: idx=%lld sample=%lld src_type=%d dst_type=%d\n",
+                  (long long) idx_val, (long long) sample,
+                  g_persistent_set_rows_dbg.meta.src_type, g_persistent_set_rows_dbg.meta.dst_type);
+    for (int64_t i = 0; i < sample; i++) {
+        float src_val = 0.0f;
+        float dst_val = 0.0f;
+        if (g_persistent_set_rows_dbg.meta.src_type == 1) {
+            const sycl::half * in = reinterpret_cast<const sycl::half *>(src_bytes.data() + i * src_elem_size);
+            src_val = (float) *in;
+        } else {
+            const float * in = reinterpret_cast<const float *>(src_bytes.data() + i * src_elem_size);
+            src_val = *in;
+        }
+        if (g_persistent_set_rows_dbg.meta.dst_type == 1) {
+            const sycl::half * out = reinterpret_cast<const sycl::half *>(dst_bytes.data() + i * dst_elem_size);
+            dst_val = (float) *out;
+        } else {
+            const float * out = reinterpret_cast<const float *>(dst_bytes.data() + i * dst_elem_size);
+            dst_val = *out;
+        }
+        GGML_LOG_INFO("[PERSISTENT-TG]   SET_ROWS[%lld]: src=%.6f dst=%.6f\n",
+                      (long long) i, src_val, dst_val);
+    }
+}
+
+static void debug_validate_persistent_set_rows(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    float * dbg = static_cast<float *>(g_persistent_set_rows_dbg.debug_ptr);
+    const int dbg_count = g_persistent_set_rows_dbg.debug_count;
+    if (dbg && dbg_count > 0) {
+        const int idx_debug = (int) dbg[2 * dbg_count];
+        GGML_LOG_INFO("[PERSISTENT-TG] SET_ROWS debug (kernel): idx=%d sample=%d\n",
+                      idx_debug, dbg_count);
+        for (int i = 0; i < dbg_count; ++i) {
+            GGML_LOG_INFO("[PERSISTENT-TG]   SET_ROWS[%d]: src=%.6f dst=%.6f\n",
+                          i, dbg[i], dbg[dbg_count + i]);
+        }
+        sycl::free(dbg, *q);
+        g_persistent_set_rows_dbg.debug_ptr = nullptr;
+        g_persistent_set_rows_dbg.debug_count = 0;
+    }
+    if (!g_persistent_set_rows_dbg.captured || !g_persistent_set_rows_dbg.src_ptr ||
+        !g_persistent_set_rows_dbg.idx_ptr || !g_persistent_set_rows_dbg.dst_ptr) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate requested but no capture available\n");
+        return;
+    }
+    if (g_persistent_set_rows_dbg.meta.src_type != 0) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: src_type=%d (expected F32)\n",
+                      g_persistent_set_rows_dbg.meta.src_type);
+        return;
+    }
+    if (g_persistent_set_rows_dbg.meta.dst_type != 0 && g_persistent_set_rows_dbg.meta.dst_type != 1) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: dst_type=%d\n",
+                      g_persistent_set_rows_dbg.meta.dst_type);
+        return;
+    }
+    if (g_persistent_set_rows_dbg.meta.idx_type != 0 && g_persistent_set_rows_dbg.meta.idx_type != 1) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: idx_type=%d\n",
+                      g_persistent_set_rows_dbg.meta.idx_type);
+        return;
+    }
+
+    const auto & meta = g_persistent_set_rows_dbg.meta;
+    if (meta.nc <= 0 || meta.nr <= 0 || meta.ne1 <= 0 || meta.ne02 <= 0 || meta.ne03 <= 0) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: invalid dims nc=%lld nr=%lld ne1=%lld ne02=%lld ne03=%lld\n",
+                      (long long) meta.nc, (long long) meta.nr, (long long) meta.ne1,
+                      (long long) meta.ne02, (long long) meta.ne03);
+        return;
+    }
+
+    ggml_tensor src0 = {};
+    ggml_tensor src1 = {};
+    ggml_tensor dst  = {};
+
+    src0.type = GGML_TYPE_F32;
+    src0.data = const_cast<void *>(g_persistent_set_rows_dbg.src_ptr);
+    src0.ne[0] = meta.nc;
+    src0.ne[1] = meta.nr;
+    src0.ne[2] = meta.ne02;
+    src0.ne[3] = meta.ne03;
+    src0.nb[0] = (size_t) meta.nb00;
+    src0.nb[1] = (size_t) meta.nb01;
+    src0.nb[2] = (size_t) meta.nb02;
+    src0.nb[3] = (size_t) meta.nb03;
+
+    src1.type = (meta.idx_type == 1) ? GGML_TYPE_I64 : GGML_TYPE_I32;
+    src1.data = const_cast<void *>(g_persistent_set_rows_dbg.idx_ptr);
+    src1.ne[0] = meta.nr;
+    src1.ne[1] = meta.ne11 > 0 ? meta.ne11 : 1;
+    src1.ne[2] = meta.ne12 > 0 ? meta.ne12 : 1;
+    src1.ne[3] = 1;
+    src1.nb[0] = (size_t) meta.nb10;
+    src1.nb[1] = (size_t) meta.nb11;
+    src1.nb[2] = (size_t) meta.nb12;
+    src1.nb[3] = (size_t) (meta.nb12 * (meta.ne12 > 0 ? meta.ne12 : 1));
+
+    dst.type = (meta.dst_type == 1) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    dst.ne[0] = meta.nc;
+    dst.ne[1] = meta.ne1;
+    dst.ne[2] = meta.ne02;
+    dst.ne[3] = meta.ne03;
+    dst.nb[0] = (size_t) meta.nb0;
+    dst.nb[1] = (size_t) meta.nb1;
+    dst.nb[2] = (size_t) meta.nb2;
+    dst.nb[3] = (size_t) meta.nb3;
+    dst.src[0] = &src0;
+    dst.src[1] = &src1;
+
+    const size_t dst_bytes = ggml_nbytes(&dst);
+    if (dst_bytes == 0) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: zero-sized dst buffer\n");
+        return;
+    }
+    void * tmp_dst = sycl::malloc_device(dst_bytes, *q);
+    if (!tmp_dst) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: alloc %zu bytes failed\n", dst_bytes);
+        return;
+    }
+    dst.data = tmp_dst;
+    q->memset(tmp_dst, 0, dst_bytes).wait();
+
+    GGML_LOG_INFO("[PERSISTENT-TG] SET_ROWS validate: replaying reference kernel on current buffers\n");
+    ggml_sycl_op_set_rows(ctx, &dst);
+    q->wait_and_throw();
+
+    int64_t idx_val = 0;
+    if (meta.idx_type == 1) {
+        q->memcpy(&idx_val, g_persistent_set_rows_dbg.idx_ptr, sizeof(int64_t)).wait();
+    } else {
+        int32_t idx32 = 0;
+        q->memcpy(&idx32, g_persistent_set_rows_dbg.idx_ptr, sizeof(int32_t)).wait();
+        idx_val = idx32;
+    }
+    if (idx_val < 0 || idx_val >= meta.ne1) {
+        GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate: index out of range (%lld)\n",
+                      (long long) idx_val);
+        sycl::free(tmp_dst, *q);
+        return;
+    }
+
+    const int64_t sample = std::min<int64_t>(meta.nc, 8);
+    const size_t dst_elem_size = (meta.dst_type == 1) ? sizeof(sycl::half) : sizeof(float);
+    const int64_t dst_off = idx_val * meta.nb1 +
+                            0 * meta.nb2 +
+                            0 * meta.nb3;
+
+    std::vector<uint8_t> expected_bytes(sample * dst_elem_size);
+    std::vector<uint8_t> actual_bytes(sample * dst_elem_size);
+    q->memcpy(expected_bytes.data(), (const char *) tmp_dst + dst_off, expected_bytes.size()).wait();
+    q->memcpy(actual_bytes.data(), (const char *) g_persistent_set_rows_dbg.dst_ptr + dst_off,
+              actual_bytes.size()).wait();
+
+    GGML_LOG_INFO("[PERSISTENT-TG] SET_ROWS validate: idx=%lld sample=%lld dst_type=%d\n",
+                  (long long) idx_val, (long long) sample, meta.dst_type);
+    for (int64_t i = 0; i < sample; i++) {
+        float expected = 0.0f;
+        float actual = 0.0f;
+        if (meta.dst_type == 1) {
+            expected = (float) *reinterpret_cast<const sycl::half *>(expected_bytes.data() + i * dst_elem_size);
+            actual   = (float) *reinterpret_cast<const sycl::half *>(actual_bytes.data() + i * dst_elem_size);
+        } else {
+            expected = *reinterpret_cast<const float *>(expected_bytes.data() + i * dst_elem_size);
+            actual   = *reinterpret_cast<const float *>(actual_bytes.data() + i * dst_elem_size);
+        }
+        GGML_LOG_INFO("[PERSISTENT-TG]   SET_ROWS[%lld]: expected=%.6f actual=%.6f diff=%.6f\n",
+                      (long long) i, expected, actual, expected - actual);
+    }
+
+    sycl::free(tmp_dst, *q);
 }
 
 /**
@@ -24768,6 +27711,329 @@ static bool is_decode_phase_graph(ggml_cgraph * cgraph) {
     return found_mul_mat;  // Must have at least one MUL_MAT
 }
 
+static void debug_validate_persistent_attention(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+    float * dbg = g_persistent_attn_dbg.debug_ptr;
+    const int dbg_floats = g_persistent_attn_dbg.debug_floats;
+    if (!dbg || dbg_floats <= 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            GGML_LOG_WARN("[PERSISTENT-TG] ATTN validate: no debug buffer captured\n");
+        }
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    try {
+        q->wait_and_throw();
+    } catch (const sycl::exception & exc) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] ATTN validate: queue wait failed: %s\n", exc.what());
+        return;
+    }
+
+    if (dbg[0] == 0.0f) {
+        GGML_LOG_WARN("[PERSISTENT-TG] ATTN validate: debug buffer not captured\n");
+        sycl::free(dbg, *q);
+        g_persistent_attn_dbg.debug_ptr = nullptr;
+        g_persistent_attn_dbg.debug_floats = 0;
+        return;
+    }
+
+    const int head_dim = static_cast<int>(dbg[1]);
+    const int seq_len  = static_cast<int>(dbg[2]);
+    const float scale  = dbg[3];
+    if (head_dim <= 0 || seq_len <= 0) {
+        GGML_LOG_WARN("[PERSISTENT-TG] ATTN validate: invalid dims head_dim=%d seq_len=%d\n",
+                      head_dim, seq_len);
+        sycl::free(dbg, *q);
+        g_persistent_attn_dbg.debug_ptr = nullptr;
+        g_persistent_attn_dbg.debug_floats = 0;
+        return;
+    }
+
+    const size_t kv_elems = static_cast<size_t>(head_dim) * static_cast<size_t>(seq_len);
+    const size_t expected_floats = 4u + 2u * static_cast<size_t>(head_dim) +
+                                   static_cast<size_t>(seq_len) + 2u * kv_elems;
+    if (expected_floats > static_cast<size_t>(dbg_floats)) {
+        GGML_LOG_WARN("[PERSISTENT-TG] ATTN validate: debug buffer too small (%d < %zu)\n",
+                      dbg_floats, expected_floats);
+        sycl::free(dbg, *q);
+        g_persistent_attn_dbg.debug_ptr = nullptr;
+        g_persistent_attn_dbg.debug_floats = 0;
+        return;
+    }
+
+    const float * q_vec = dbg + 4;
+    const float * k_vec = q_vec + head_dim;
+    const float * v_vec = k_vec + kv_elems;
+    const float * mask  = v_vec + kv_elems;
+    const float * out   = mask + seq_len;
+
+    double max_score = -1e30;
+    for (int p = 0; p < seq_len; p++) {
+        double dot = 0.0;
+        const size_t base = static_cast<size_t>(p) * static_cast<size_t>(head_dim);
+        for (int d = 0; d < head_dim; d++) {
+            dot += static_cast<double>(q_vec[d]) * static_cast<double>(k_vec[base + d]);
+        }
+        const double score = dot * static_cast<double>(scale) + static_cast<double>(mask[p]);
+        if (score > max_score) {
+            max_score = score;
+        }
+    }
+
+    double sum_exp = 0.0;
+    for (int p = 0; p < seq_len; p++) {
+        double dot = 0.0;
+        const size_t base = static_cast<size_t>(p) * static_cast<size_t>(head_dim);
+        for (int d = 0; d < head_dim; d++) {
+            dot += static_cast<double>(q_vec[d]) * static_cast<double>(k_vec[base + d]);
+        }
+        const double score = dot * static_cast<double>(scale) + static_cast<double>(mask[p]);
+        sum_exp += std::exp(score - max_score);
+    }
+
+    std::vector<float> ref_out(head_dim, 0.0f);
+    if (sum_exp > 0.0) {
+        const double inv_sum = 1.0 / sum_exp;
+        for (int d = 0; d < head_dim; d++) {
+            double acc = 0.0;
+            for (int p = 0; p < seq_len; p++) {
+                double dot = 0.0;
+                const size_t base = static_cast<size_t>(p) * static_cast<size_t>(head_dim);
+                for (int dd = 0; dd < head_dim; dd++) {
+                    dot += static_cast<double>(q_vec[dd]) * static_cast<double>(k_vec[base + dd]);
+                }
+                const double score = dot * static_cast<double>(scale) + static_cast<double>(mask[p]);
+                const double prob = std::exp(score - max_score) * inv_sum;
+                acc += prob * static_cast<double>(v_vec[base + d]);
+            }
+            ref_out[d] = static_cast<float>(acc);
+        }
+    }
+
+    float max_abs = 0.0f;
+    int max_idx = 0;
+    for (int d = 0; d < head_dim; d++) {
+        const float diff = std::fabs(out[d] - ref_out[d]);
+        if (diff > max_abs) {
+            max_abs = diff;
+            max_idx = d;
+        }
+    }
+
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN validate: head_dim=%d seq_len=%d scale=%.6f max_abs=%.6f idx=%d\n",
+                    head_dim, seq_len, scale, max_abs, max_idx);
+    const int sample = std::min(head_dim, 8);
+    for (int i = 0; i < sample; i++) {
+        const float diff = out[i] - ref_out[i];
+        GGML_SYCL_DEBUG("[PERSISTENT-TG]   ATTN[%d]: expected=%.6f actual=%.6f diff=%.6f\n",
+                        i, ref_out[i], out[i], diff);
+    }
+
+    sycl::free(dbg, *q);
+    g_persistent_attn_dbg.debug_ptr = nullptr;
+    g_persistent_attn_dbg.debug_floats = 0;
+}
+
+static void debug_validate_persistent_rms_norm(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_RMS_NORM");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+    if (!g_persistent_rms_dbg.debug_ptr || g_persistent_rms_dbg.hidden_dim <= 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            GGML_LOG_WARN("[PERSISTENT-TG] RMS validate: no debug buffer captured\n");
+        }
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    try {
+        q->wait_and_throw();
+    } catch (const sycl::exception & exc) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] RMS validate: queue wait failed: %s\n", exc.what());
+        return;
+    }
+
+    const int dim = g_persistent_rms_dbg.hidden_dim;
+    const float eps = g_persistent_rms_dbg.eps;
+    float * dbg = g_persistent_rms_dbg.debug_ptr;
+    const float * input = dbg;
+    const float * output = dbg + dim;
+
+    double sum_sq = 0.0;
+    for (int i = 0; i < dim; i++) {
+        const double v = input[i];
+        sum_sq += v * v;
+    }
+    const float mean = (dim > 0) ? static_cast<float>(sum_sq / (double) dim) : 0.0f;
+    const float scale = 1.0f / std::sqrt(mean + eps);
+
+    float max_abs = 0.0f;
+    int max_idx = 0;
+    for (int i = 0; i < dim; i++) {
+        const float ref = input[i] * scale;
+        const float err = std::fabs(output[i] - ref);
+        if (err > max_abs) {
+            max_abs = err;
+            max_idx = i;
+        }
+    }
+
+    GGML_LOG_INFO("[PERSISTENT-TG] RMS validate: layer=%d dim=%d eps=%.6g max_abs=%.6g idx=%d "
+                  "in0=%.6g out0=%.6g ref0=%.6g\n",
+                  g_persistent_rms_dbg.layer, dim, eps, max_abs, max_idx,
+                  (double) input[0], (double) output[0], (double) (input[0] * scale));
+    const char * dump_env = std::getenv("GGML_SYCL_TG_DUMP_RMS");
+    if (dump_env && std::atoi(dump_env) != 0) {
+        const char * path = ggml_sycl_dump_rms_path("GGML_SYCL_TG_DUMP_RMS_PERSIST_PATH",
+                                                   "/tmp/tg_rms_persist.bin");
+        ggml_sycl_dump_rms_buffer(path, input, output, dim);
+        GGML_LOG_INFO("[PERSISTENT-TG] RMS dump: layer=%d dim=%d path=%s\n",
+                      g_persistent_rms_dbg.layer, dim, path);
+    }
+
+    if (g_persistent_rms_dbg.debug_ptr) {
+        sycl::free(g_persistent_rms_dbg.debug_ptr, *q);
+    }
+    if (g_persistent_rms_dbg.debug_flag) {
+        sycl::free(g_persistent_rms_dbg.debug_flag, *q);
+    }
+    g_persistent_rms_dbg = {};
+}
+
+static void debug_validate_persistent_matmul(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_MATMUL");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+    if (!g_persistent_matmul_dbg.debug_ptr || g_persistent_matmul_dbg.out_dim <= 0) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            GGML_LOG_WARN("[PERSISTENT-TG] MATMUL validate: no debug buffer captured\n");
+        }
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    try {
+        q->wait_and_throw();
+    } catch (const sycl::exception & exc) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] MATMUL validate: queue wait failed: %s\n", exc.what());
+        return;
+    }
+
+    const int dim = g_persistent_matmul_dbg.out_dim;
+    std::vector<float> output((size_t) dim);
+    q->memcpy(output.data(), g_persistent_matmul_dbg.debug_ptr, (size_t) dim * sizeof(float)).wait();
+
+    float max_abs = 0.0f;
+    int max_idx = 0;
+    for (int i = 0; i < dim; i++) {
+        const float v = std::fabs(output[i]);
+        if (v > max_abs) {
+            max_abs = v;
+            max_idx = i;
+        }
+    }
+
+    GGML_LOG_INFO("[PERSISTENT-TG] MATMUL validate: layer=%d type=%d dim=%d max_abs=%.6g idx=%d out0=%.6g\n",
+                  g_persistent_matmul_dbg.layer, (int) g_persistent_matmul_dbg.mtype, dim, max_abs, max_idx,
+                  (double) output[0]);
+    const char * dump_env = std::getenv("GGML_SYCL_TG_DUMP_MATMUL");
+    if (dump_env && std::atoi(dump_env) != 0) {
+        const char * path = ggml_sycl_dump_matmul_path("GGML_SYCL_TG_DUMP_MATMUL_PERSIST_PATH",
+                                                       "/tmp/tg_matmul_persist.bin");
+        ggml_sycl_dump_matmul_buffer(path, output.data(), dim);
+        GGML_LOG_INFO("[PERSISTENT-TG] MATMUL dump: layer=%d dim=%d path=%s\n",
+                      g_persistent_matmul_dbg.layer, dim, path);
+    }
+
+    if (g_persistent_matmul_dbg.debug_ptr) {
+        sycl::free(g_persistent_matmul_dbg.debug_ptr, *q);
+    }
+    if (g_persistent_matmul_dbg.debug_flag) {
+        sycl::free(g_persistent_matmul_dbg.debug_flag, *q);
+    }
+    g_persistent_matmul_dbg = {};
+}
+
+static void debug_dump_persistent_add(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_TG_DUMP_ADD");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+    if (!g_persistent_add_dbg.enabled || !g_persistent_add_dbg.captured ||
+        !g_persistent_add_dbg.node || g_persistent_add_dbg.out_dim <= 0) {
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    try {
+        q->wait_and_throw();
+    } catch (const sycl::exception & exc) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] ADD dump: queue wait failed: %s\n", exc.what());
+        return;
+    }
+
+    const int dim = g_persistent_add_dbg.out_dim;
+    std::vector<float> output((size_t) dim);
+    const void * out_ptr = ggml_sycl_get_data_ptr_view(g_persistent_add_dbg.node, ctx.device);
+    if (!out_ptr) {
+        return;
+    }
+    q->memcpy(output.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+
+    const char * path = ggml_sycl_dump_add_path("GGML_SYCL_TG_DUMP_ADD_PERSIST_PATH",
+                                                "/tmp/tg_add_persist.bin");
+    ggml_sycl_dump_matmul_buffer(path, output.data(), dim);
+    GGML_LOG_INFO("[PERSISTENT-TG] ADD dump: layer=%d dim=%d path=%s\n",
+                  g_persistent_add_dbg.layer, dim, path);
+    g_persistent_add_dbg = {};
+}
+
+static void debug_dump_persistent_mul(ggml_backend_sycl_context & ctx) {
+    const char * env = std::getenv("GGML_SYCL_TG_DUMP_MUL");
+    if (!env || std::atoi(env) == 0) {
+        return;
+    }
+    if (!g_persistent_mul_dbg.enabled || !g_persistent_mul_dbg.captured ||
+        !g_persistent_mul_dbg.node || g_persistent_mul_dbg.out_dim <= 0) {
+        return;
+    }
+
+    sycl::queue * q = ctx.stream();
+    try {
+        q->wait_and_throw();
+    } catch (const sycl::exception & exc) {
+        GGML_LOG_ERROR("[PERSISTENT-TG] MUL dump: queue wait failed: %s\n", exc.what());
+        return;
+    }
+
+    const int dim = g_persistent_mul_dbg.out_dim;
+    std::vector<float> output((size_t) dim);
+    const void * out_ptr = ggml_sycl_get_data_ptr_view(g_persistent_mul_dbg.node, ctx.device);
+    if (!out_ptr) {
+        return;
+    }
+    q->memcpy(output.data(), out_ptr, (size_t) dim * sizeof(float)).wait();
+
+    const char * path = ggml_sycl_dump_mul_path("GGML_SYCL_TG_DUMP_MUL_PERSIST_PATH",
+                                                "/tmp/tg_mul_persist.bin");
+    ggml_sycl_dump_matmul_buffer(path, output.data(), dim);
+    GGML_LOG_INFO("[PERSISTENT-TG] MUL dump: layer=%d dim=%d path=%s\n",
+                  g_persistent_mul_dbg.layer, dim, path);
+    g_persistent_mul_dbg = {};
+}
+
 /**
  * Check if the graph has a supported transformer architecture for persistent execution.
  * Requires both RMS_NORM and MUL_MAT operations to be present.
@@ -24784,6 +28050,47 @@ static bool has_supported_architecture(ggml_cgraph * cgraph) {
     }
 
     return has_rms_norm && has_mul_mat;
+}
+
+/**
+ * Check if the graph contains only ops supported by the persistent kernel.
+ *
+ * The persistent path currently only supports a subset of ggml ops. If the
+ * graph contains any unsupported ops, fall back to normal dispatch to avoid
+ * incorrect results.
+ */
+static bool graph_has_only_persistent_ops(ggml_cgraph * cgraph) {
+    if (!cgraph) {
+        return false;
+    }
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        switch (node->op) {
+            case GGML_OP_GET_ROWS:
+            case GGML_OP_RMS_NORM:
+            case GGML_OP_ADD:
+            case GGML_OP_MUL:
+            case GGML_OP_MUL_MAT:
+            case GGML_OP_ROPE:
+            case GGML_OP_FLASH_ATTN_EXT:
+            case GGML_OP_GLU:
+            case GGML_OP_SET_ROWS:
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_CONT:
+            case GGML_OP_CPY:
+            case GGML_OP_SOFT_MAX:
+                break;
+            default:
+                GGML_SYCL_DEBUG("[PERSISTENT-TG] Unsupported op in graph: %s (%s)\n",
+                                ggml_op_name(node->op), node->name ? node->name : "(null)");
+                return false;
+        }
+    }
+
+    return true;
 }
 
 /**
@@ -24818,7 +28125,13 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
         return false;
     }
 
-    // 4. XMX hardware check
+    // 4. Full op support check
+    if (!graph_has_only_persistent_ops(cgraph)) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Graph contains unsupported ops, skipping persistent kernel\n");
+        return false;
+    }
+
+    // 5. XMX hardware check
     ggml_sycl_unified::XMXConfig xmx_config = ggml_sycl_unified::XMXConfig::from_device(ctx.device);
     if (!xmx_config.supported) {
         GGML_SYCL_DEBUG("[PERSISTENT-TG] No XMX support, skipping persistent kernel\n");
@@ -24847,6 +28160,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     auto *                      sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] sycl_ctx=%p device=%d\n", (void *) sycl_ctx,
                     sycl_ctx ? sycl_ctx->device : -1);
+    ggml_sycl_set_main_device(sycl_ctx->device);
     std::lock_guard<std::mutex> graph_lock(sycl_ctx->graph_mutex);
     if (g_sycl_graph_inflight.load(std::memory_order_relaxed) > 1) {
 
@@ -24933,6 +28247,31 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // Extract persistent plan from graph
         if (!extract_persistent_plan(kernel, *sycl_ctx, cgraph)) {
             GGML_LOG_ERROR("[PERSISTENT-TG] Failed to build persistent plan, falling back to normal dispatch\n");
+            if (g_persistent_debug_hash_ptr) {
+                sycl::queue * q = sycl_ctx->stream();
+                sycl::free(g_persistent_debug_hash_ptr, *q);
+                g_persistent_debug_hash_ptr = nullptr;
+            }
+            if (g_persistent_rms_dbg.debug_ptr || g_persistent_rms_dbg.debug_flag) {
+                sycl::queue * q = sycl_ctx->stream();
+                if (g_persistent_rms_dbg.debug_ptr) {
+                    sycl::free(g_persistent_rms_dbg.debug_ptr, *q);
+                }
+                if (g_persistent_rms_dbg.debug_flag) {
+                    sycl::free(g_persistent_rms_dbg.debug_flag, *q);
+                }
+                g_persistent_rms_dbg = {};
+            }
+            if (g_persistent_matmul_dbg.debug_ptr || g_persistent_matmul_dbg.debug_flag) {
+                sycl::queue * q = sycl_ctx->stream();
+                if (g_persistent_matmul_dbg.debug_ptr) {
+                    sycl::free(g_persistent_matmul_dbg.debug_ptr, *q);
+                }
+                if (g_persistent_matmul_dbg.debug_flag) {
+                    sycl::free(g_persistent_matmul_dbg.debug_flag, *q);
+                }
+                g_persistent_matmul_dbg = {};
+            }
             kernel.cancel_persistent();
             goto normal_dispatch;
         }
@@ -24943,8 +28282,41 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             PersistentStats stats = kernel.get_last_stats();
             GGML_SYCL_DEBUG("[PERSISTENT-TG] Execution complete: %d ops, %.2f ms\n",
                             stats.n_operations, stats.kernel_time_ms);
+            debug_check_persistent_set_rows(*sycl_ctx);
+            debug_validate_persistent_set_rows(*sycl_ctx);
+            debug_validate_persistent_attention(*sycl_ctx);
+            debug_validate_persistent_rms_norm(*sycl_ctx);
+            debug_validate_persistent_matmul(*sycl_ctx);
+            debug_dump_persistent_add(*sycl_ctx);
+            debug_dump_persistent_mul(*sycl_ctx);
+            ggml_sycl_trace_persistent_ops(*sycl_ctx);
         } catch (const sycl::exception & exc) {
             GGML_LOG_ERROR("[PERSISTENT-TG] Kernel execution failed: %s\n", exc.what());
+            if (g_persistent_debug_hash_ptr) {
+                sycl::queue * q = sycl_ctx->stream();
+                sycl::free(g_persistent_debug_hash_ptr, *q);
+                g_persistent_debug_hash_ptr = nullptr;
+            }
+            if (g_persistent_rms_dbg.debug_ptr || g_persistent_rms_dbg.debug_flag) {
+                sycl::queue * q = sycl_ctx->stream();
+                if (g_persistent_rms_dbg.debug_ptr) {
+                    sycl::free(g_persistent_rms_dbg.debug_ptr, *q);
+                }
+                if (g_persistent_rms_dbg.debug_flag) {
+                    sycl::free(g_persistent_rms_dbg.debug_flag, *q);
+                }
+                g_persistent_rms_dbg = {};
+            }
+            if (g_persistent_matmul_dbg.debug_ptr || g_persistent_matmul_dbg.debug_flag) {
+                sycl::queue * q = sycl_ctx->stream();
+                if (g_persistent_matmul_dbg.debug_ptr) {
+                    sycl::free(g_persistent_matmul_dbg.debug_ptr, *q);
+                }
+                if (g_persistent_matmul_dbg.debug_flag) {
+                    sycl::free(g_persistent_matmul_dbg.debug_flag, *q);
+                }
+                g_persistent_matmul_dbg = {};
+            }
             // Fall through to normal dispatch on failure
             goto normal_dispatch;
         }

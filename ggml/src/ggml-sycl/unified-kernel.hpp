@@ -196,6 +196,9 @@ class UnifiedCache;
 // Operation types for persistent kernel
 enum class OperationType {
     RMS_NORM,
+    ADD,
+    MUL,
+    GET_ROWS,
     MATMUL_Q_PROJ,
     MATMUL_K_PROJ,
     MATMUL_V_PROJ,
@@ -204,9 +207,18 @@ enum class OperationType {
     MATMUL_UP,
     MATMUL_DOWN,
     ROPE,
-    ATTENTION,
+    ATTENTION_F16,
+    ATTENTION_F32,
     SILU_MUL,
+    SET_ROWS,
+    STRIDED_COPY,
     SOFTMAX
+};
+
+// KV cache element type for attention.
+enum class KvCacheType {
+    F32 = 0,
+    F16 = 1,
 };
 
 // Matmul type classification
@@ -245,12 +257,33 @@ struct AttentionDescriptor {
     const void * q;
     const void * k_cache;
     const void * v_cache;
+    const void * mask;
     void *       output;
+    KvCacheType  kv_type;
     int          n_heads;
     int          n_kv_heads;
     int          head_dim;
     int          seq_len;
+    int64_t      q_nb0;
+    int64_t      q_nb1;
+    int64_t      q_nb2;
+    int64_t      q_nb3;
+    int64_t      k_nb0;
+    int64_t      k_nb1;
+    int64_t      k_nb2;
+    int64_t      k_nb3;
+    int64_t      v_nb0;
+    int64_t      v_nb1;
+    int64_t      v_nb2;
+    int64_t      v_nb3;
     float        scale;
+    int          mask_type;   // 0 = F32, 1 = F16, -1 = none
+    int64_t      mask_nb0;
+    int64_t      mask_nb1;
+    int64_t      mask_nb2;
+    int64_t      mask_nb3;
+    int          mask_ne2;
+    int          mask_ne3;
 };
 
 struct RopeDescriptor {
@@ -272,13 +305,69 @@ struct OperationDescriptor {
     const void *  input;
     void *        output;
     void *        aux;
+    const void *  mask;
+    int64_t       q_nb0;
+    int64_t       q_nb1;
+    int64_t       q_nb2;
+    int64_t       q_nb3;
+    int64_t       k_nb0;
+    int64_t       k_nb1;
+    int64_t       k_nb2;
+    int64_t       k_nb3;
+    int64_t       v_nb0;
+    int64_t       v_nb1;
+    int64_t       v_nb2;
+    int64_t       v_nb3;
     int           M, N, K;
+    int64_t       output_bytes;
     int           hidden_dim;
     int           intermediate_dim;
     float         eps;
     float         scale;
     int           quant_type;
+    int           weight_layout;
     int           n_kv_heads;   // For GQA support in attention (0 = same as n_heads)
+    int           mask_type;
+    int64_t       mask_nb0;
+    int64_t       mask_nb1;
+    int64_t       mask_nb2;
+    int64_t       mask_nb3;
+    int           mask_ne2;
+    int           mask_ne3;
+};
+
+// Metadata for materializing strided/view tensors into contiguous buffers.
+struct StridedCopyMeta {
+    int64_t ne[4];
+    int64_t nb[4];
+    int32_t type_size;
+    int32_t pad;
+};
+
+// Metadata for GGML_OP_SET_ROWS.
+struct SetRowsMeta {
+    int64_t nc;
+    int64_t nr;
+    int64_t ne1;
+    int64_t ne02;
+    int64_t ne03;
+    int64_t ne11;
+    int64_t ne12;
+    int64_t nb00;
+    int64_t nb01;
+    int64_t nb02;
+    int64_t nb03;
+    int64_t nb0;
+    int64_t nb1;
+    int64_t nb2;
+    int64_t nb3;
+    int64_t nb10;
+    int64_t nb11;
+    int64_t nb12;
+    int32_t src_type;
+    int32_t dst_type;
+    int32_t idx_type;
+    int32_t pad;
 };
 
 // =============================================================================
@@ -308,6 +397,23 @@ struct PersistentPlan {
     void * intermediate_buffers[4];
     int *  tile_counter;
     void * weight_table;
+
+    float * debug_attn_ptr = nullptr;
+    int     debug_attn_layer = -1;
+    int     debug_attn_floats = 0;
+    float * debug_rms_ptr = nullptr;
+    int     debug_rms_layer = -1;
+    int     debug_rms_dim = 0;
+    int *   debug_rms_flag = nullptr;
+    float * debug_matmul_ptr = nullptr;
+    int     debug_matmul_layer = -1;
+    int     debug_matmul_type = -1;
+    int     debug_matmul_dim = 0;
+    int *   debug_matmul_flag = nullptr;
+    int     rms_base_wg_size = 0;
+    int     rms_match_base = 0;
+    uint64_t * debug_hash_ptr = nullptr;
+    int        debug_hash_bytes = 0;
 
     // Device memory allocations made during plan building (e.g. RoPE cos/sin caches).
     // These are freed after execute_persistent() completes.
@@ -1066,6 +1172,12 @@ constexpr int QUANT_TYPE_Q4_0 = 2;   // GGML_TYPE_Q4_0
 constexpr int QUANT_TYPE_Q4_1 = 3;   // GGML_TYPE_Q4_1
 constexpr int QUANT_TYPE_Q8_0 = 8;   // GGML_TYPE_Q8_0
 constexpr int QUANT_TYPE_Q6_K = 14;  // GGML_TYPE_Q6_K
+constexpr int QUANT_TYPE_F32  = 0;   // GGML_TYPE_F32
+constexpr int QUANT_TYPE_F16  = 1;   // GGML_TYPE_F16
+
+// Weight layout modes (mirror ggml_layout_mode values for AoS/SoA)
+constexpr int WEIGHT_LAYOUT_AOS = 0;
+constexpr int WEIGHT_LAYOUT_SOA = 1;
 
 // =============================================================================
 // Q4_0 Block Structure
@@ -1086,6 +1198,26 @@ struct block_q4_0_unified {
 static_assert(sizeof(block_q4_0_unified) == sizeof(sycl::half) + UNIFIED_QK4_0 / 2, "wrong q4_0 block size");
 static_assert(sizeof(block_q4_0_unified) == 18,
               "block_q4_0_unified must be exactly 18 bytes for correct prefetch behavior");
+
+// =============================================================================
+// Q6_K Block Structure
+// =============================================================================
+// Q6_K: 256 weights per block, 6 bits per weight
+// Block layout: [ql: 128 bytes] [qh: 64 bytes] [scales: 16 bytes] [d: fp16]
+// Total size: 210 bytes per block
+
+constexpr int UNIFIED_QK6_K = 256;  // Weights per Q6_K block
+
+struct block_q6_K_unified {
+    uint8_t    ql[UNIFIED_QK6_K / 2];   // Lower 4 bits
+    uint8_t    qh[UNIFIED_QK6_K / 4];   // Upper 2 bits
+    int8_t     scales[UNIFIED_QK6_K / 16];
+    sycl::half d;                       // Super-block scale
+};
+
+static_assert(sizeof(block_q6_K_unified) ==
+                  sizeof(sycl::half) + UNIFIED_QK6_K / 16 + 3 * UNIFIED_QK6_K / 4,
+              "wrong q6_K block size");
 
 // =============================================================================
 // MXFP4 Block Structure
@@ -2419,12 +2551,41 @@ public:
     void begin_persistent(int n_layers, int batch_size, int hidden_dim,
                           int intermediate_dim, int n_heads, int n_kv_heads,
                           int head_dim, int quant_type);
-    void add_rms_norm(int layer, const void * weights, const void * input, void * output);
+    void add_rms_norm(int layer, const void * weights, const void * input, void * output,
+                      float eps, int hidden_dim);
     void add_matmul(int layer, const void * weights, const void * input,
-                    void * output, MatmulType type, int M, int N, int K);
+                    void * output, MatmulType type, int M, int N, int K,
+                    int quant_type, int weight_layout,
+                    const int64_t * weight_nb = nullptr,
+                    const int64_t * input_nb = nullptr,
+                    const int64_t * output_nb = nullptr,
+                    int weight_ne2 = 1, int weight_ne3 = 1,
+                    int input_ne2 = 1, int input_ne3 = 1);
     void add_attention(int layer, const AttentionDescriptor & desc);
     void add_silu_mul(int layer, const void * gate, const void * up, void * output);
+    void add_add(int layer, const void * src0, const void * src1, void * output, int n_elements);
+    void add_mul(int layer, const void * src0, const void * src1, void * output, int n_elements);
+    void add_get_rows(int layer, const void * src0, const void * indices, void * output,
+                      int n_elements, int64_t ne00, int64_t ne10, int64_t ne11, int64_t ne12,
+                      int64_t nb01, int64_t nb02, int64_t nb03,
+                      int64_t s10, int64_t s11, int64_t s12,
+                      int64_t s1, int64_t s2, int64_t s3, int src0_type);
+    void add_set_rows(int layer, const void * src0, const void * indices,
+                      void * dst, const SetRowsMeta * meta, int n_elements,
+                      const void * debug_ptr = nullptr, int64_t output_bytes = -1);
+    void add_strided_copy(int layer, const void * src, void * dst,
+                          const StridedCopyMeta * meta, int n_elements,
+                          int64_t output_bytes = -1);
+    void add_softmax(int layer, const void * input, const void * mask,
+                     const void * sinks, void * output, int n_rows, int n_cols,
+                     int ne01, int ne02, int ne03, float scale, float max_bias,
+                     int mask_type, int64_t mask_nb0, int64_t mask_nb1,
+                     int64_t mask_nb2, int64_t mask_nb3, int mask_ne2, int mask_ne3);
     void add_rope(int layer, const RopeDescriptor & desc);
+    void set_persistent_debug_attn(float * debug_ptr, int layer, int debug_floats);
+    void set_persistent_debug_rms(float * debug_ptr, int layer, int hidden_dim, int * flag);
+    void set_persistent_debug_matmul(float * debug_ptr, int layer, MatmulType type, int out_dim, int * flag);
+    void set_persistent_debug_hash(uint64_t * debug_ptr, int debug_bytes);
     void add_temp_device_alloc(void * ptr);
     void execute_persistent();
     void cancel_persistent();
