@@ -10,45 +10,17 @@ The unified auto-parser uses a **pure differential, compositional approach** to 
 
 - **Zero Hardcoded Patterns**: All markers extracted through template comparison (the **only heuristic** is JSON detection)
 - **Compositional Architecture**: Separate parsers for reasoning, content, and tools that compose cleanly
-- **Variant Types**: Structural descriptions (strings) instead of forced enum classification
 
-**Two-Phase Analysis**:
+**Four-Phase Analysis**:
 
-1. **Phase 1: Content & Reasoning Analysis** - Analyzes how the template handles basic content and reasoning, without considering tools
-2. **Phase 2: Tool Call Analysis** - Analyzes tool calling patterns, layered on top of Phase 1
+1. **Phase 1: Reasoning Analysis** (R1-R3) - Detects reasoning markers and mode
+2. **Phase 2: Content Analysis** (C1) - Detects content wrapping markers
+3. **Phase 3: Tool Call Analysis** (T1-T7) - Extracts tool section, function, and call ID markers
+4. **Phase 4: Argument Analysis** (A1-A2) - Extracts argument name/value markers (TAG_WITH_TAGGED only)
 
 ## Data Structures
 
-### content_structure (Phase 1 Result)
-
-Describes how the template handles content and reasoning:
-
-```cpp
-struct content_structure {
-    enum reasoning_mode_type {
-        REASONING_NONE,         // No reasoning markers detected
-        REASONING_OPTIONAL,     // <think>...</think> may appear before content
-        REASONING_FORCED_OPEN,  // Template ends with open reasoning tag OR starts implicitly (empty start, present end)
-    };
-
-    reasoning_mode_type reasoning_mode = REASONING_NONE;
-    std::string         reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
-    std::string         reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
-
-    // Content wrapping mode
-    enum content_mode_type {
-        CONTENT_PLAIN,                   // No content markers
-        CONTENT_ALWAYS_WRAPPED,          // <response>...</response> always present
-        CONTENT_WRAPPED_WITH_REASONING,  // Content wrapped only when reasoning present
-    };
-
-    content_mode_type content_mode = CONTENT_PLAIN;
-    std::string       content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
-    std::string       content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
-};
-```
-
-### diff_analysis_result (Analysis Result)
+### diff_analysis_result
 
 The result of differential analysis contains all extracted markers and format classifications:
 
@@ -58,77 +30,128 @@ struct diff_analysis_result {
     reasoning_mode  reasoning = reasoning_mode::NONE;
     content_mode    content   = content_mode::PLAIN;
     tool_format     tools     = tool_format::NONE;
-    argument_format args      = argument_format::JSON;
 
     // All extracted markers (see marker_registry below)
     marker_registry markers;
 
-    // JSON field names (for JSON-based formats)
-    std::string name_field = "name";
-    std::string args_field = "arguments";
-    std::string id_field;
+    // JSON field names (for JSON_NATIVE format)
+    bool        fun_name_is_key = false;   // Function name is the JSON key: {"func_name": {...}}
+    std::string function_field  = "function";  // Outer object key (e.g., "function" in "function.name")
+    std::string name_field      = "name";
+    std::string args_field      = "arguments";
+    std::string id_field;                  // String call ID field (e.g., "id")
+    std::string gen_id_field;              // Generated integer call ID field (e.g., "tool_call_id")
+    std::vector<std::string> parameter_order;  // Order of JSON fields for parsing
+
+    // Call ID position (for non-JSON formats)
+    call_id_position call_id_pos = call_id_position::NONE;
 
     // Flags
     bool supports_tools           = false;
     bool supports_parallel_calls  = false;
     bool requires_nonnull_content = false;
+    bool tools_array_wrapped      = false;  // Tool calls wrapped in JSON array [...]
 
-    // Preserved tokens for tokenizer
+    // Preserved tokens for tokenizer (union of all non-empty markers)
     std::vector<std::string> preserved_tokens;
 };
 ```
 
-### marker_registry (Extracted Markers)
+### Enums
+
+**`reasoning_mode`**: How the template handles reasoning/thinking blocks.
+
+| Value                | Description                                                                   |
+|----------------------|-------------------------------------------------------------------------------|
+| `NONE`               | No reasoning markers detected                                                 |
+| `TAG_BASED`          | Standard tag-based: `<think>...</think>`                                      |
+| `DELIMITER`          | Delimiter-based: reasoning ends at delimiter (e.g., `[BEGIN FINAL RESPONSE]`) |
+| `FORCED_OPEN`        | Template ends with open reasoning tag (empty start, non-empty end)            |
+| `FORCED_CLOSED`      | Both tags when disabled; only start tag when enabled                          |
+| `TOOLS_ONLY`         | Reasoning only appears when tool calls are present                            |
+
+**`content_mode`**: How the template wraps content.
+
+| Value                      | Description                                          |
+|----------------------------|------------------------------------------------------|
+| `PLAIN`                    | No content markers                                   |
+| `ALWAYS_WRAPPED`           | Content always wrapped: `<response>...</response>`   |
+| `WRAPPED_WITH_REASONING`   | Content wrapped only when reasoning is present       |
+
+**`tool_format`**: Classification of tool call structure.
+
+| Value              | Description                                                      |
+|--------------------|------------------------------------------------------------------|
+| `NONE`             | No tool support detected                                         |
+| `JSON_NATIVE`      | Pure JSON: `{"name": "X", "arguments": {...}}`                   |
+| `TAG_WITH_JSON`    | Tag-based with JSON args: `<function=X>{...}</function>`         |
+| `TAG_WITH_TAGGED`  | Tag-based with tagged args: `<param=key>value</param>`           |
+
+**`call_id_position`**: Where call IDs appear relative to function name and arguments (for non-JSON formats).
+
+| Value                      | Description                              |
+|----------------------------|------------------------------------------|
+| `NONE`                     | No call ID support detected              |
+| `PRE_FUNC_NAME`            | Before function name                     |
+| `BETWEEN_FUNC_AND_ARGS`    | Between function name and arguments      |
+| `POST_ARGS`                | After arguments                          |
+
+### marker_registry
 
 All markers are extracted via differential analysis without hardcoded patterns:
 
 ```cpp
 struct marker_registry {
-    // === Reasoning markers ===
-    std::string reasoning_start;  // e.g., "<think>", "[THINK]", "<|START_THINKING|>"
-    std::string reasoning_end;    // e.g., "</think>", "[/THINK]", "<|END_THINKING|>"
+    // === Reasoning markers (from R1-R3) ===
+    std::string reasoning_start;  // e.g., "<think>", "[THINK]", "<|START_THINKING|>", ""
+    std::string reasoning_end;    // e.g., "</think>", "[BEGIN FINAL RESPONSE]", "<|END_THINKING|>"
 
-    // === Content markers ===
-    std::string content_start;  // e.g., "<response>", ">>>all\n"
-    std::string content_end;    // e.g., "</response>"
+    // === Content markers (from C1) ===
+    std::string content_start;  // e.g., "<response>", ""
+    std::string content_end;    // e.g., "</response>", ""
 
-    // === Tool section markers ===
+    // === Tool section markers (from T1-T2) ===
     std::string tool_section_start;  // e.g., "<tool_call>", "[TOOL_CALLS]"
-    std::string tool_section_end;    // e.g., "</tool_call>", "]"
-    std::string per_call_start;      // e.g., "\u2985" (for multi-call templates)
-    std::string per_call_end;        // e.g., " \u2985"
+    std::string tool_section_end;    // e.g., "</tool_call>", ""
+    std::string per_call_start;      // e.g., "<|tool_call_begin|>" (for multi-call templates)
+    std::string per_call_end;        // e.g., "<|tool_call_end|>"
     std::string call_separator;      // e.g., ",", "\n"
 
-    // === Function markers ===
-    std::string func_name_prefix;  // e.g., "<function=", "\"name\": \""
-    std::string func_name_suffix;  // e.g., ">", "\""
+    // === Function markers (from T3-T6) ===
+    std::string func_name_prefix;  // e.g., "<function=", "functions."
+    std::string func_name_suffix;  // e.g., ">", ":0"
     std::string func_close;        // e.g., "</function>"
-    std::string args_start;        // e.g., "{", " \u300b"
-    std::string args_end;          // e.g., "}", ""
+    std::string args_start;        // e.g., "{"
+    std::string args_end;          // e.g., "}"
 
-    // === Argument markers (for tagged args format) ===
+    // === Argument markers (from A1-A2, for TAG_WITH_TAGGED) ===
     std::string arg_name_prefix;   // e.g., "<param=", "<arg_key>"
     std::string arg_name_suffix;   // e.g., ">", "</arg_key>"
     std::string arg_value_prefix;  // e.g., "", "<arg_value>"
     std::string arg_value_suffix;  // e.g., "</param>", "</arg_value>"
-    std::string arg_separator;
+    std::string arg_separator;     // e.g., "", "\n"
+
+    // === Call ID markers (from T7) ===
+    std::string call_id_prefix;       // e.g., "[CALL_ID]"
+    std::string call_id_suffix;       // e.g., "[ARGS]"
 
     // === Special markers ===
-    std::string code_block_marker;    // e.g., "Action:" (markdown code block format)
-    std::string id_marker;            // e.g., "[CALL_ID]" (bracket-tag format)
-    std::string function_namespace;   // e.g., "functions." (prefixed-indexed format)
+    std::string code_block_marker;    // e.g., "Action:" (for markdown code block format)
+    std::string code_block_language;  // e.g., "json"
+    std::string function_namespace;   // e.g., "functions." (for prefixed-indexed format)
 };
 ```
 
 ## Tool Calling Formats
 
-The auto-parser recognizes three primary tool calling formats. Other formats may be deprecated in future versions.
+The auto-parser recognizes three tool calling formats.
 
 ### JSON_NATIVE
 
 **Structure**: The entire tool call (function name, arguments, and values) is in JSON format. There may be enclosing tags around the tool calling section.
 
 **Characteristics**:
+
 - Function name is a JSON field: `"name": "function_name"`
 - Arguments are a JSON object: `"arguments": {"key": "value"}`
 - May be wrapped in section markers like `<tool_call>...</tool_call>` or `[TOOL_CALLS]...]`
@@ -136,6 +159,7 @@ The auto-parser recognizes three primary tool calling formats. Other formats may
 **Examples**:
 
 Standard OpenAI-style:
+
 ```json
 <tool_call>
 {"name": "get_weather", "arguments": {"location": "Paris", "unit": "celsius"}}
@@ -143,19 +167,13 @@ Standard OpenAI-style:
 ```
 
 Mistral Nemo with array wrapper:
+
 ```json
 [TOOL_CALLS]
 [{"name": "calculate", "arguments": {"expr": "2+2"}}]
 ```
 
-Hermes-style with tool_calls wrapper:
-```json
-<tool_calls>
-{"name": "search", "arguments": {"query": "llama.cpp"}}
-</tool_calls>
-```
-
-**Detection**: `args_start == "{"`, `args_end == "}"`, no function name prefix markers
+**Detection**: Function name found inside a JSON structure (determined by JSON parse attempt).
 
 ---
 
@@ -164,32 +182,22 @@ Hermes-style with tool_calls wrapper:
 **Structure**: The function name is outside the JSON structure, typically within quasi-XML markers. Arguments are still provided as a JSON object.
 
 **Characteristics**:
-- Function name appears in tag attributes: `<function=function_name>` or `<tool_call name="function_name">`
+
+- Function name appears in tag attributes: `<function=function_name>` or `<tool_name>function_name</tool_name>`
 - Arguments are a JSON object following the tag
 - Has closing tags: `</function>` or `</tool_call>`
 - Arguments remain valid JSON
 
 **Examples**:
 
-Nemotron-style:
-```xml
-<TOOLCALL>get_weather{"location": "Paris"}</TOOLCALL>
-```
-
 Functionary v3.1:
+
 ```xml
 <function=get_weather>{"location": "Paris", "unit": "celsius"}</function>
 ```
 
-ByteDance Seed-OSS:
-```xml
-<seed:tool_call>
-<tool_name>get_weather</tool_name>
-<parameters>{"location": "Paris"}</parameters>
-</seed:tool_call>
-```
-
 MiniMax:
+
 ```xml
 <minimax:tool_call>
 <tool_name>calculate</tool_name>
@@ -197,7 +205,7 @@ MiniMax:
 </minimax:tool_call>
 ```
 
-**Detection**: `func_name_prefix` starts with `<`, `args_start == "{"`, arguments are JSON
+**Detection**: Function name not in JSON, but arguments are JSON (args_start is `{`).
 
 ---
 
@@ -206,6 +214,7 @@ MiniMax:
 **Structure**: Both the function name AND argument names are in XML-style tags. Argument values may be JSON or unquoted primitives depending on schema type.
 
 **Characteristics**:
+
 - Function name in tag: `<function=name>` or `<invoke=name>`
 - Each argument has its own tag: `<param=key>value</param>`
 - String values are **unquoted** (raw text content of the tag)
@@ -215,6 +224,7 @@ MiniMax:
 **Examples**:
 
 Qwen/Hermes XML format:
+
 ```xml
 <function=get_weather>
 <param=location>Paris</param>
@@ -225,6 +235,7 @@ Qwen/Hermes XML format:
 Note how string values (`Paris`, `celsius`) are unquoted inside the tags.
 
 Mixed types example:
+
 ```xml
 <function=calculate>
 <param=expr>2+2</param>
@@ -234,467 +245,365 @@ Mixed types example:
 ```
 
 Here:
+
 - `expr` and `precision` are strings (unquoted)
 - `options` is an object (JSON-formatted inside the tag)
 
-**Detection**: `arg_name_prefix` is non-empty, arguments use tagged format rather than JSON object
+**Detection**: `arg_name_prefix` is non-empty, arguments use tagged format rather than JSON object.
 
 ---
 
-### Other Formats (To Be Deprecated)
-
-The following formats are currently supported but will likely be deprecated:
-
-| Format | Description | Example |
-|--------|-------------|---------|
-| `BRACKET_TAG` | Bracket-based markers | `[TOOL_CALLS]func[ARGS]{...}` |
-| `PREFIXED_INDEXED` | Namespace prefix with index | `functions.name:0{...}` |
-| `RECIPIENT_BASED` | Recipient routing | `>>>recipient\n{content}` |
-| `MARKDOWN_BLOCK` | Markdown code blocks | `Action:\n\`\`\`json\n[...]` |
-
 ## Analysis Flow
 
-```console
+```text
 Template
     |
     v
-Phase 1: analyze_content_structure()
-    |-- detect_reasoning_markers() - compare outputs with reasoning_content vs without
-    |-- detect_content_markers() - render with content and detect wrapping
-    |-- detect_reasoning_mode() - check if prompt ends with open tag
+differential_analyzer::analyze(tmpl)
     |
-    v
-content_structure
+    |-- Phase 1: analyze_reasoning(tmpl, result)
+    |     |-- R1: compare_reasoning_presence() — with/without reasoning_content field
+    |     |-- R2: compare_thinking_enabled() — enable_thinking=false vs true
+    |     '-- R3: compare_reasoning_scope() — reasoning with content vs with tools
     |
-    v
-Phase 2: analyze_tool_structure()
-    |-- Check minja.supports_tool_calls
-    |-- Differential analysis for tool patterns
-    |-- Classify function format (JSON vs tagged)
-    |-- Classify argument format (JSON vs tagged)
+    |-- Phase 2: analyze_content(tmpl, result)
+    |     '-- C1: compare_content_values() — content vs tools vs reasoning
+    |
+    |-- Phase 3: analyze_tools(tmpl, result)
+    |     |-- T1: analyze_tool_calls() — no tools vs with tools + format classification
+    |     |-- T2: check_per_call_markers() — per-section vs per-call markers
+    |     |-- T3: extract_call_separator() — separator between multiple calls
+    |     |-- T4: extract_function_markers() — func_alpha vs func_beta
+    |     |-- T5: extract_argument_separator() — 1 arg vs 2 args
+    |     |-- T6: extract_args_markers() — no args vs with args
+    |     '-- T7: extract_call_id_markers() — call_id "call00001" vs "call99999"
+    |
+    |-- Phase 4: analyze_arguments(tmpl, result)  [TAG_WITH_TAGGED only]
+    |     |-- A1: extract_argument_name_markers() — "first" arg vs "second" arg
+    |     '-- A2: extract_argument_value_markers() — value "XXXX" vs "YYYY"
+    |
+    '-- collect_preserved_tokens(result)
     |
     v
 diff_analysis_result
     |
     v
-generate_parser(diff_analysis_result)
-    |-- build_reasoning_block(diff_analysis_result)
-    |-- build_content_block(diff_analysis_result)
-    |-- build_tool_section(diff_analysis_result, tools)
-    |-- Compose into final parser
+universal_peg_generator::generate_parser(tmpl, inputs, analysis)
+    |-- build_parser(analysis, inputs, ...)  — builds PEG parser arena
+    |     |-- Reasoning parser (based on reasoning_mode)
+    |     |-- Content parser (based on content_mode)
+    |     '-- Tool parser (dispatches by tool_format):
+    |           |-- build_tool_parser_json_native()
+    |           |-- build_tool_parser_tag_json()
+    |           '-- build_tool_parser_tag_tagged()
+    |
+    |-- Build GBNF grammar (if tools present)
+    '-- Set grammar triggers from tool markers
     |
     v
-common_chat_params (parser, grammar, triggers, preserved_tokens)
+common_chat_params (prompt, parser, grammar, triggers, preserved_tokens)
 ```
 
 ## Entry Point
 
-The mechanism starts in `common/chat.cpp`, in `common_chat_templates_apply_jinja`:
+The auto-parser is invoked in `common/chat.cpp` in `common_chat_templates_apply_jinja`. A few specialized templates are handled first (Ministral/Magistral Large 3, GPT-OSS, Functionary v3.2), then the auto-parser handles everything else:
 
 ```cpp
-// 1. Analyze the template (two-phase)
-auto analysis = differential_analyzer::analyze(tmpl);
-
-// 2. Generate the parser and grammar
-auto auto_params = universal_peg_generator::generate_parser(tmpl, params);
-
-// 3. Use if it provides more than basic content handling
-if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY ||
-    !auto_params.parser.empty()) {
+try {
+    LOG_DBG("Using differential autoparser\n");
+    auto auto_params = universal_peg_generator::generate_parser(tmpl, params);
     return auto_params;
+} catch (const std::exception & e) {
+    LOG_WRN("Automatic parser generation failed: %s\n", e.what());
 }
 ```
-
-## Builder Methods
-
-The unified builder (`common_chat_peg_unified_builder`) provides high-level methods:
-
-- `build_reasoning_block(analysis, reasoning_format, thinking_forced_open)` - Build reasoning parser
-- `build_content_block(analysis, reasoning_format)` - Build content parser
-- `build_tool_section(analysis, tools, parallel_tool_calls, force_tool_calls)` - Build tool section
-- `build_function(analysis, name, schema)` - Build single function parser
-- `build_arguments(analysis, schema)` - Build arguments parser
-
-## Key Templates Supported
-
-- **Granite** - `<think></think>` + `<response></response>` with tool calls
-- **Nemotron** - JSON tools with `<TOOLCALL>` wrapper
-- **Qwen/Hermes** - XML-style `<function=X><param=key>` format (TAG_WITH_TAGGED)
-- **Command-R7B** - `<|START_THINKING|>`/`<|START_RESPONSE|>` + `<|START_ACTION|>` tools
-- **DeepSeek R1** - Forced thinking + complex tools
-- **Mistral Nemo** - `[TOOL_CALLS]` wrapper (JSON_NATIVE)
-- **MiniMax** - `<minimax:tool_call>` wrapper with JSON args (TAG_WITH_JSON)
-- **GLM-4.6** - `<minimax:tool_call>` + `<tool_call>name\n<arg_key>...<arg_value>...` format
-- **Kimi-K2** - `PREFIXED_INDEXED` format with namespace and indices
-- **Mistral Small 3.2** - `BRACKET_TAG` format with `[TOOL_CALLS]` markers
-- **Functionary v3.2** - `RECIPIENT_BASED` format with `>>>` routing
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `common/chat-auto-parser.h` | Data structures and API declarations |
-| `common/chat-diff-analyzer.h/cpp` | Differential analysis implementation |
-| `common/chat-auto-parser-generator.cpp` | PEG parser generator |
-| `common/chat-auto-parser-helpers.h/cpp` | Shared helper functions |
-| `common/chat-peg-parser.h/cpp` | Unified builder and mapper classes |
-| `common/chat.cpp` | Main entry point and wire-up |
 
 ## Algorithm Details
 
-### Phase 1: Content & Reasoning Analysis
+### Core Mechanism: Differential Comparison
 
-#### Reasoning Detection (4 Methods)
-
-**Method 1: Differential Reasoning Content Analysis**
-
-- Render template with `reasoning_content` field present vs absent
-- Compare outputs to find markers between reasoning and content
-- If only closing tag found, derive opening tag using patterns:
-  - XML: `</tag>` → `<tag>`
-  - Special tokens: `<|END_X|>` → `<|START_X|>`, `<|/X|>` → `<|X|>`
-- Handles various tag formats including XML and special token formats
-
-**Method 2: Enable-Thinking Toggle Analysis**
-
-- Toggle `enable_thinking` context variable between true/false
-- Detects differences in generated prompts
-- Handles two scenarios:
-  - **Normal case**: enable_thinking=true adds reasoning markers
-  - **Reverse case**: enable_thinking=false adds empty thinking block (GLM-4.6 style)
-- Uses string difference analysis to extract markers
-- Validates extracted tags against blacklist of role markers
-
-**Method 3: Prompt Ending Analysis**
-
-- Checks if prompt ends with unclosed reasoning tag
-- Looks for trailing tags in prompt with `enable_thinking=true`
-- Differentiates between open tags (`<think>`) and close tags (`</think>`)
-- Handles blacklisted tags (role markers, system tokens)
-- Validates reasoning-like patterns (contains "think", "reason", "thought")
-
-**Method 4: Adjacent Tag Pair Detection**
-
-- Looks for patterns like `<minimax:tool_call></think>`, `<|START_THINKING|><|END_THINKING|>`, `[think][/think]`
-- Searches for predefined tag patterns in prompt
-- Validates tags are adjacent with only whitespace between
-- Supports both simple and complex token formats
-
-#### Content Detection Algorithm
-
-1. **Dual-Mode Rendering**: Render template with content marker in both thinking-enabled and thinking-disabled modes
-2. **Pattern Matching**: Search for known content wrapper patterns:
-   - `<|START_RESPONSE|>` / `<|END_RESPONSE|>`
-   - `<response>` / `</response>`
-   - `<output>` / `</output>`
-   - `<answer>` / `</answer>`
-   - `<|CHATBOT_TOKEN|>` / `<|END_OF_TURN_TOKEN|>`
-3. **Mode Classification**:
-   - `CONTENT_ALWAYS_WRAPPED`: Found in both thinking modes
-   - `CONTENT_WRAPPED_WITH_REASONING`: Found only with thinking enabled
-   - `CONTENT_PLAIN`: No wrapping detected
-
-#### Reasoning Mode Detection
-
-- **REASONING_FORCED_OPEN**:
-  - **Explicit**: Prompt ends with reasoning start marker (e.g., `<think>`).
-  - **Implicit**: reasoning end marker is present but start marker is empty (e.g., `[BEGIN FINAL RESPONSE]`).
-- **REASONING_OPTIONAL**: Markers present but not forced.
-- **REASONING_NONE**: No markers detected.
-
-### Phase 2: Tool Call Structure Analysis
-
-#### Pure Differential Analysis Algorithm
-
-**Key Principle**: All patterns are extracted through template comparison. The **only heuristic** is detecting JSON vs marker-based structures (via JSON parse attempt). No hardcoded pattern lists.
-
-**Comparison Matrix**:
-
-| Comparison | Purpose | What's Extracted |
-|------------|---------|------------------|
-| **T1**: No tools vs tools | Tool section markers | `tool_section_start`, `tool_section_end` |
-| **T2**: 1 call vs 2 calls | Call separators | `per_call_start`, `call_separator` |
-| **T3**: func_alpha vs func_beta | Function boundaries | `func_name_prefix`, `func_name_suffix` |
-| **T4**: 1 arg vs 2 args | Argument separator | `arg_separator` |
-| **T5**: No args vs args | Args container | `args_start`, `args_end` |
-| **A1**: key1 vs key2 | Arg name boundaries | `arg_name_prefix`, `arg_name_suffix` |
-| **A2**: value A vs B | Arg value boundaries | `arg_value_prefix`, `arg_value_suffix` |
-| **A3**: number vs string | Quoting behavior | Value type handling |
-
-**Structural Extraction Helpers**:
+All analysis phases use the same factorized comparison function:
 
 ```cpp
-// Extract last structural marker from string (finds last <, [, {, or ")
-std::string extract_structural_suffix(const std::string & str);
-
-// Extract first structural marker from string (finds first >, ], }, or ")
-std::string extract_structural_prefix(const std::string & str);
-
-// The only heuristic: detect if content is valid JSON
-bool is_json_based(const std::string & content);
+compare_variants(tmpl, params_A, params_modifier)
 ```
 
-**Pattern Extraction Process** (Example - T1: Tool Section Markers):
-
-1. Render template with/without tool calls
-2. Compute diff: `calculate_diff_split(output_no_tools, output_with_tools)`
-3. Use controlled function name (`func_alpha`) as anchor in `diff.right`
-4. Extract structural prefix before function name → `tool_section_start`
-5. Extract structural suffix after tool content → `tool_section_end`
-
-**No Pattern Lists**: Unlike the old approach, there are no hardcoded lists like `["<tool_call>", "[TOOL_CALLS]", ...]`. All markers are discovered through differential comparison.
-
-#### Variant Detection Logic
-
-Instead of forcing patterns into enum types, the analyzer detects **variant types** as strings that describe the structural characteristics:
-
-**Variant Types**:
-
-- `"json-native"`: Pure JSON tool calls (Llama, Mistral Nemo)
-- `"tagged-json"`: Function name in markers, args in JSON (Functionary v3.1, Nemotron)
-- `"tagged-args"`: Full XML-style with tagged arguments (Qwen, Hermes, MiniMax)
-- `"bracket-tag"`: Bracket markers (Mistral Small 3.2: `[TOOL_CALLS]func[ARGS]{...}`)
-- `"recipient-based"`: Recipient routing (Functionary v3.2: `>>>func_name`)
-- `"markdown-block"`: Markdown code blocks (Cohere Command-R Plus)
-- `"prefixed-indexed"`: Namespace prefix with indices (Kimi-K2: `functions.name:0`)
-
-**Detection Strategy** (from most to least distinctive):
+This creates variant B by applying a modifier lambda to a copy of params_A, renders both through the template, and computes a `diff_split`:
 
 ```cpp
-void detect_tool_variant(diff_analysis_result & result) {
-    // 1. Check for unique markers (most distinctive)
-    if (!result.markers.id_marker.empty())
-        → "bracket-tag"
-
-    if (markers contain ">>>")
-        → "recipient-based"
-
-    if (code_block_marker present)
-        → "markdown-block"
-
-    if (function_namespace or suffix contains ':')
-        → "prefixed-indexed"
-
-    // 2. Check argument structure (JSON variants)
-    if (arg_name_prefix starts with '<')
-        → "tagged-args"
-
-    if (func_name_prefix starts with '<')
-        → "tagged-json"
-
-    // 3. Default
-    → "json-native"
-}
+struct diff_split {
+    std::string prefix;   // Common prefix between A and B
+    std::string suffix;   // Common suffix between A and B
+    std::string left;     // Unique to variant A
+    std::string right;    // Unique to variant B
+};
 ```
 
-#### Compositional Parser Building
+The diff is computed via `calculate_diff_split()`, which uses longest-common-prefix/suffix with iterative tag boundary fixing — it moves incomplete `<...>` or `[...]` markers from prefix/suffix into the left/right parts until stable.
 
-The analyzer builds separate, composable parsers for each component:
+Text is segmentized into markers and non-marker fragments using `segmentize_markers()`, which splits on `<...>` and `[...]` boundaries.
 
-**Reasoning Parser**:
+### Phase 1: Reasoning Analysis
 
-- Built from `reasoning_start` and `reasoning_end` markers
-- Supports tag-based, delimiter, and forced-open modes
+Three comparisons extract reasoning markers and classify the reasoning mode:
 
-**Content Parser**:
+**R1 — `compare_reasoning_presence()`**: Compares assistant message with vs without a `reasoning_content` field.
 
-- Built from `content_start` and `content_end` markers
-- Supports plain, always-wrapped, and conditionally-wrapped modes
+- Segmentizes `diff.right` to find markers around the reasoning content
+- 3+ segments → `TAG_BASED` (start marker, content, end marker)
+- 2 segments → `DELIMITER` (content followed by delimiter)
+- Special case: markers found in prefix/suffix → `FORCED_CLOSED`
 
-**Tool Parser** (variant-specific):
+**R2 — `compare_thinking_enabled()`**: Compares `enable_thinking=false` vs `true`.
 
-- Built based on `variant_type` detection
-- Each variant has its own builder that uses the extracted markers
-- No enum forcing - structure preserved as discovered
+- Detects `FORCED_OPEN`: template adds opening tag when thinking enabled
+- Detects `FORCED_CLOSED`: disable mode has both markers, enable mode has only start
+- Handles reverse patterns (e.g., GLM-4.6 where disabled adds empty block)
 
-**Final Composition**:
+**R3 — `compare_reasoning_scope()`**: Compares reasoning with content vs with tool calls.
 
-```cpp
-sequence({
-    reasoning_parser,
-    space(),
-    content_parser,
-    space(),
-    tool_parser,
-    end()
-})
+- Detects `TOOLS_ONLY`: reasoning appears only when tool calls are present
+- Extracts reasoning markers from tool call output by segmentizing
+
+### Phase 2: Content Analysis
+
+**C1 — `compare_content_values()`**: Compares content-only output vs tools output vs reasoning output.
+
+- Creates two comparisons: content→tools and content→reasoning
+- Finds content text position in diff to extract surrounding markers
+- Classifies:
+  - `ALWAYS_WRAPPED`: content has start/end markers in both comparisons
+  - `WRAPPED_WITH_REASONING`: markers only when reasoning is present
+  - `PLAIN`: no wrapping markers detected
+
+### Phase 3: Tool Call Analysis
+
+**T1 — `analyze_tool_calls()`**: Compares no-tools vs with-tools output.
+
+- Calls `analyze_tool_call_format()` to classify the format using the **only heuristic**: a JSON parse attempt
+  - `in_json_haystack()` checks whether the function name appears inside a JSON structure
+  - If function name is in JSON → `JSON_NATIVE` → `analyze_tool_call_format_json_native()`:
+    - Parses JSON structure, matches needle values to extract field names
+    - Detects `fun_name_is_key`, `function_field`, `name_field`, `args_field`, `id_field`, `gen_id_field`
+    - Detects `tools_array_wrapped` by checking for `[` before JSON
+    - Builds `parameter_order` by sorting fields by position
+    - Extracts `tool_section_start`/`tool_section_end`
+  - If function name is not in JSON → `analyze_tool_call_format_non_json()`:
+    - Segmentizes the haystack into markers and text
+    - Uses symmetry: counts opening markers, matches with closing markers
+    - Extracts `tool_section_start`, `tool_section_end`, `per_call_start`, `per_call_end`
+
+**T2 — `check_per_call_markers()`**: Compares 1 call vs 2 calls.
+
+- If the second call starts with `tool_section_start`, markers are per-call not per-section
+- Moves tool_section markers to per_call markers, clears section markers
+
+**T3 — `extract_call_separator()`**: Compares 1 call vs 2 calls.
+
+- Finds separator between calls using `until_common_prefix(diff.right, ...)` with the two function names as anchors
+
+**T4 — `extract_function_markers()`**: Compares function name "foofoo" vs "barbar".
+
+- Finds function name in diff, segmentizes to extract prefix/suffix markers
+- Extracts `func_name_prefix`, `func_name_suffix`
+- Searches for closing marker after args to extract `func_close`
+
+**T5 — `extract_argument_separator()`**: Compares 1 argument vs 2 arguments.
+
+- Uses `until_common_prefix()` with argument names as anchors to find the separator
+
+**T6 — `extract_args_markers()`**: Compares 0 arguments vs 1 argument.
+
+- Uses `until_common_prefix()` and `after_common_suffix()` to find container markers
+- Extracts `args_start`, `args_end`
+
+**T7 — `extract_call_id_markers()`**: Compares call IDs "call00001" vs "call99999".
+
+- Determines position relative to function name and arguments
+- Classifies as `PRE_FUNC_NAME`, `BETWEEN_FUNC_AND_ARGS`, or `POST_ARGS`
+- Extracts `call_id_prefix`, `call_id_suffix`
+
+### Phase 4: Argument Analysis (TAG_WITH_TAGGED only)
+
+Only runs when Phase 3 detected TAG_WITH_TAGGED or TAG_WITH_JSON format with non-JSON argument structures.
+
+**A1 — `extract_argument_name_markers()`**: Compares argument name "first" vs "second".
+
+- Finds common prefix of diff.left/right to extract marker structure
+- Extracts `arg_name_prefix`, `arg_name_suffix`
+
+**A2 — `extract_argument_value_markers()`**: Compares value "XXXX" vs "YYYY".
+
+- Segmentizes prefix/suffix around value to find markers
+- Extracts `arg_value_prefix`, `arg_value_suffix`
+
+### Parser Building
+
+The parser generator (`universal_peg_generator`) takes the analysis result and builds a PEG parser arena. The entry point is `generate_parser(tmpl, inputs)`, which:
+
+1. Runs `differential_analyzer::analyze(tmpl)` to get the analysis result
+2. Calls `build_parser(analysis, inputs, ...)` to construct the PEG parser
+3. Builds a GBNF grammar if tools are present (for constrained decoding)
+4. Sets grammar triggers from `tool_section_start` or `per_call_start`
+
+#### Reasoning Parser Construction
+
+Built inline in `build_parser()` based on `reasoning_mode`:
+
+| Mode                              | Parser                                                                                      |
+|-----------------------------------|---------------------------------------------------------------------------------------------|
+| `FORCED_OPEN` / `FORCED_CLOSED`   | `reasoning(until(end)) + end` — expects reasoning immediately (opening tag was in template) |
+| `TAG_BASED` / `TOOLS_ONLY`        | `optional(start + reasoning(until(end)) + end)`                                             |
+| `DELIMITER`                       | `optional(reasoning(until(end)) + end)` — no start marker, reasoning ends at delimiter      |
+
+#### Content Parser Construction
+
+| Condition                          | Parser                                                                    |
+|------------------------------------|---------------------------------------------------------------------------|
+| `json_schema` present              | `reasoning + space() + content(schema(json(), ...)) + end()`              |
+| Tools present                      | Dispatches to tool parser builder                                         |
+| `ALWAYS_WRAPPED` with reasoning    | `reasoning + start + content(until(end)) + end + end()`                   |
+| `ALWAYS_WRAPPED` without reasoning | `content(until(start)) + start + content(until(end)) + end + end()`       |
+| Default                            | `reasoning + content(rest()) + end()`                                     |
+
+#### Tool Parser Construction
+
+`build_tool_parser()` dispatches by `tool_format`:
+
+**`build_tool_parser_json_native()`**: Uses the `standard_json_tools()` builder helper which has three internal modes:
+
+- `build_json_tools_function_is_key()` — function name is the JSON key: `{"get_weather": {"location": "Paris"}}`
+- `build_json_tools_nested_keys()` — nested object: `{"function": {"name": "X", "arguments": {...}}}`
+- `build_json_tools_flat_keys()` — flat object: `{"name": "X", "arguments": {...}}`
+
+Handles content wrappers, array wrapping, parallel calls, and section markers.
+
+**`build_tool_parser_tag_json()`**: For each tool, builds:
+
+```text
+tool_open(prefix + tool_name(literal(name)) + suffix) +
+  call_id_section +
+  tool_args(schema(json(), tool_schema))
 ```
 
-### Generator Algorithms
+Wraps in per-call or section markers. Handles parallel calls.
 
-#### Unified Parser Building
+**`build_tool_parser_tag_tagged()`**: For each tool, builds per-argument parsers:
 
-**Composition Strategy**:
+- String types: `tool_arg_string_value(schema(until(suffix), ...))`
+- JSON types: `tool_arg_json_value(schema(json(), ...))`
+- Required vs optional arguments
+- Arguments joined with `space()` between them
 
-```cpp
-// Standard format
-sequence({ reasoning, space(), content, space(), tools, space(), content, end() })
+Handles `func_close`, `peek()` for partial parsing safety, and call_id sections.
 
-// With section markers
-sequence({ reasoning, space(), content_until(section_start), space(), tools, space(), content, end() })
+All three return: `reasoning + optional(content(until(trigger))) + tool_calls + end()`
 
-// Forced thinking handling
-optional(reasoning) when thinking_forced_open && tools present
-```
+### Mapper
 
-**Trigger Word Detection**:
+The `common_chat_peg_unified_mapper` maps PEG parse results (AST nodes) into `common_chat_msg` structures. Key design:
 
-- Uses `tool_section_start` as primary trigger
-- Falls back to `function_prefix` or `per_call_start`
-- Raw JSON uses regex pattern trigger
+- **Buffered arguments**: Before `tool_name` is known, argument text goes to `args_buffer`; once name is set, the buffer is flushed to `current_tool->arguments`
+- **`args_target()`**: Returns a reference to whichever destination is active, eliminating branching
+- **`closing_quote_pending`**: Tracks whether a closing `"` needs to be appended when a string argument value is finalized
+- **Quote normalization**: Python-style quotes (`'key': 'value'`) are converted to JSON (`"key": "value"`)
+- **Brace auto-closing**: At tool close, unclosed `{` braces are closed automatically (tracked via `json_brace_depth()`)
 
-**Lazy Grammar Optimization**:
+## Files
 
-- Enabled by default for performance
-- Disabled when thinking forced open
-- Disabled when no clear trigger word exists
+| File                                      | Purpose                                                           |
+|-------------------------------------------|-------------------------------------------------------------------|
+| `common/chat-auto-parser.h`               | `universal_peg_generator` class and `templates_params` struct     |
+| `common/chat-auto-parser-generator.cpp`   | Parser generator implementation                                   |
+| `common/chat-diff-analyzer.h`             | Analysis result types, enums, and `differential_analyzer` class   |
+| `common/chat-diff-analyzer.cpp`           | Differential analysis implementation                              |
+| `common/chat-auto-parser-helpers.h/cpp`   | `calculate_diff_split()`, `segmentize_markers()`, string helpers  |
+| `common/chat-peg-parser.h/cpp`            | PEG builder and mapper classes                                    |
+| `common/chat.cpp`                         | Entry point: `common_chat_templates_apply_jinja()`                |
+| `tools/parser/debug-template-parser.cpp`  | Debug tool for template analysis                                  |
+| `tools/parser/template-analysis.cpp`      | Template analysis tool                                            |
 
 ## Testing & Debugging
 
-### Comprehensive Test Coverage
-
-The test suite covers:
-
-**Reasoning Models**:
-
-- Qwen-QwQ-32B (forced-open thinking)
-- DeepSeek R1 variants (reasoning only)
-- IBM Granite (reasoning + tools)
-- ByteDance Seed-OSS (custom reasoning tags)
-- Ministral-3-14B-Reasoning
-- llama-cpp-deepseek-r1
-
-**Tool Call Formats**:
-
-- JSON_NATIVE: Llama 3.x, Mistral Nemo, Hermes, MiMo-VL
-- TAG_WITH_JSON: Nemotron, Qwen3-Coder, MiniMax
-- TAG_WITH_TAGGED: Qwen, Hermes (XML), ByteDance Seed-OSS
-- BRACKET_TAG: Mistral Small 3.2, Devstral
-- PREFIXED_INDEXED: Kimi-K2 variants
-- RECIPIENT_BASED: Functionary v3.2
-- MARKDOWN_BLOCK: Cohere Command-R Plus
-
-**Edge Cases**:
-
-- Streaming/partial parsing
-- Empty content with tools
-- Parallel tool calls
-- Forced thinking mode
-- Multi-byte Unicode markers
-- Null content handling
-- Multi-line code in tool arguments
-- Custom reasoning tags (ByteDance Seed-OSS)
-
 ### Debug Tools
 
-**Template Debugger**: `tests/debug-template-parser.cpp`
+**Template Debugger**: `tools/parser/debug-template-parser.cpp`
 
-- Usage: `./bin/debug-template-parser path/to/template.jinja`
+- Usage: `./bin/llama-debug-template-parser path/to/template.jinja`
 - Shows detected format, markers, generated parser, and GBNF grammar
+
+**Template Analysis**: `tools/parser/template-analysis.cpp`
+
+- Usage: `./bin/llama-template-analysis path/to/template.jinja`
 
 **Debug Logging**: Enable with `LLAMA_LOG_VERBOSITY=2`
 
-- Shows detailed analysis steps
-- Displays pattern extraction results
-- Lists generated parser structure
+- Shows detailed analysis steps, pattern extraction results, and generated parser structure
 
-**PEG Test Builder**: Fluent API for creating test cases
+**PEG Test Builder**: Fluent API for creating test cases in `tests/test-chat.cpp`:
 
 ```cpp
-auto tst = peg_tester("template.jinja");
-tst.test("input")
+auto tst = peg_tester("models/templates/Template.jinja");
+tst.test("input text")
    .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-   .tools({tool})
+   .tools({tool_json})
+   .parallel_tool_calls(true)
+   .enable_thinking(true)
    .expect(expected_message)
    .run();
 ```
-
-## Adding Support for New Templates
-
-To support a new template format:
-
-1. **If it follows standard patterns** - The auto-parser should detect it automatically using the three main formats (JSON_NATIVE, TAG_WITH_JSON, TAG_WITH_TAGGED)
-2. **If it has unique markers** - Add differential analysis patterns in:
-   - `compare_reasoning_presence()` for reasoning tags
-   - `compare_content_values()` for content wrappers
-   - `extract_tool_section()` for tool call patterns
-3. **If it needs special handling** - Add a dedicated handler in `chat.cpp` before the auto-parser block
-
-## Edge Cases and Quirks
-
-1. **Forced Thinking**: If `enable_thinking` is true but the model has already started a thought block (e.g., ended the prompt with `<think>`), the parser enters "forced thinking" mode where it immediately expects reasoning content.
-2. **Ambiguous Content**: Templates that mix content and tool calls without clear delimiters can be tricky. The analyzer tries to find "common" start/end patterns across multiple examples to be robust.
-3. **Double Wrapping**: Some templates (e.g., Functionary) use the same string for both the tool section start and the function prefix (e.g., `<function=`). The analyzer detects this overlap and prevents double-wrapping in the generated parser.
-4. **Null Content Rendering**: Some templates render `null` content as Python "None" string. The analyzer detects this and patches content to empty string.
-5. **Multi-byte Unicode Markers**: Some templates use special Unicode characters in markers that require careful handling in GBNF generation.
-
-## State of the Autoparser (Jan 2026)
-
-As of January 2026, the unified auto-parser successfully handles major template families including DeepSeek V3/R1, Llama 3.x (native JSON), GLM-4/4.6, and standard XML/JSON formats. It also supports Functionary v3.1/v3.2, Mistral variants, and specialized formats like Kimi-K2's prefixed-indexed structure.
 
 ### Tested Templates
 
 The following templates have active tests in `tests/test-chat.cpp`:
 
 | Template | Format | Notes |
-|----------|--------|-------|
-| DeepSeek V3.1 | `JSON_NATIVE` | Forced thinking mode |
-| DeepSeek R1 Distill (Llama/Qwen) | Reasoning only | Forced-open thinking |
-| llama-cpp-deepseek-r1 | Reasoning only | Forced-open thinking |
-| GLM-4.6 | `TAGGED` | `<tool_call>name\n<arg_key>...<arg_value>...` format |
-| Kimi-K2 / Kimi-K2-Instruct / Kimi-K2-Thinking | `PREFIXED_INDEXED` | `functions.name:0` with special markers |
-| Apertus-8B-Instruct | `NAME_AS_KEY` | `{"function_name": {...}}` format |
-| MiniMax-M2 | `TAG_WITH_JSON` | XML invoke with parameter tags |
-| NVIDIA-Nemotron-Nano-v2 | `JSON_NATIVE` | `<TOOLCALL>` wrapper (nested) |
-| Mistral-Nemo-Instruct-2407 | `JSON_NATIVE` | `[TOOL_CALLS]` wrapper with id field |
-| Functionary v3.1 | `TAG_WITH_JSON` | `<function=X>` non-nested format |
-| Functionary v3.2 | `RECIPIENT_BASED` | `>>>` recipient delimiter format |
-| MiMo-VL / Hermes 3 / Qwen 2.5 | `JSON_NATIVE` | `<tool_call>` wrapper |
-| Apriel 1.5 | `JSON_NATIVE` | `<tool_calls>` wrapper with JSON array |
-| Apriel 1.6 Thinker | Reasoning only | Implicit reasoning start |
-| Cohere Command-R7B | `JSON_NATIVE` | START_RESPONSE/ACTION/THINKING markers |
-| Mistral Small 3.2 | `BRACKET_TAG` | `[TOOL_CALLS]func[ARGS]{...}` with ID |
-| Devstral | `BRACKET_TAG` | `[TOOL_CALLS]func[ARGS]{...}` without ID |
-| Ministral-3-14B-Reasoning | Custom reasoning | `[THINK]...[/THINK]` tags |
-| IBM Granite | `JSON_NATIVE` | `<think></think>` + `<response></response>` |
-| ByteDance Seed-OSS | `TAG_WITH_TAGGED` | Custom `<seed:think>` and `<seed:tool_call>` tags |
-| Qwen3-Coder | `TAG_WITH_TAGGED` | XML-style tool format |
-| Cohere Command-R Plus | `MARKDOWN_BLOCK` | `Action:\n`\`\`\`json\n[...]\n`\`\`` format |
+| -------- | ------ | ----- |
+| Ministral-3-14B-Reasoning | Reasoning | `[THINK]...[/THINK]` tags |
+| NVIDIA-Nemotron-3-Nano-30B | TAG_WITH_TAGGED | Reasoning + tools |
+| CohereForAI Command-R7B | JSON_NATIVE | `<\|START_THINKING\|>`/`<\|START_RESPONSE\|>` markers |
+| Google Gemma 2 2B | Content only | No tool support |
+| Qwen-QwQ-32B | Reasoning | Forced-open thinking |
+| NousResearch Hermes 2 Pro | JSON_NATIVE | `<tool_call>` wrapper |
+| IBM Granite 3.3 | JSON_NATIVE | `<think></think>` + `<response></response>` |
+| ByteDance Seed-OSS | TAG_WITH_TAGGED | Custom `<seed:think>` and `<seed:tool_call>` tags |
+| Qwen3-Coder | TAG_WITH_TAGGED | XML-style tool format |
+| DeepSeek V3.1 | JSON_NATIVE | Forced thinking mode |
+| GLM-4.6 | TAG_WITH_TAGGED | `<tool_call>name\n<arg_key>...<arg_value>...` format |
+| GLM-4.7-Flash | TAG_WITH_TAGGED | Updated GLM format |
+| Kimi-K2-Thinking | JSON_NATIVE | Reasoning + JSON tools |
+| Apertus-8B-Instruct | JSON_NATIVE | Function name as JSON key |
+| MiniMax-M2 | TAG_WITH_JSON | XML invoke with JSON args |
+| NVIDIA-Nemotron-Nano-v2 | JSON_NATIVE | `<TOOLCALL>` wrapper (nested) |
+| CohereForAI Command-R Plus | JSON_NATIVE | Markdown code block format |
+| Mistral-Nemo-Instruct-2407 | JSON_NATIVE | `[TOOL_CALLS]` wrapper with ID field |
+| Functionary v3.1 | TAG_WITH_JSON | `<function=X>` format |
+| Functionary v3.2 | Specialized | `>>>` recipient delimiter (dedicated handler) |
+| Fireworks Firefunction v2 | TAG_WITH_JSON | Fireworks tool format |
+| DeepSeek R1 Distill (Llama/Qwen) | Reasoning | Forced-open thinking |
+| llama-cpp-deepseek-r1 | Reasoning | Forced-open thinking |
+| Kimi-K2 / Kimi-K2-Instruct | JSON_NATIVE | JSON tools with special markers |
+| Llama 3.1/3.2/3.3 | JSON_NATIVE | Standard Llama tool format |
+| OpenAI GPT-OSS | Specialized | Channel-based (dedicated handler) |
+| Apriel 1.5 | JSON_NATIVE | `<tool_calls>` wrapper with JSON array |
+| Apriel 1.6 Thinker | Reasoning | Implicit reasoning start |
+| Mistral Small 3.2 | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` with call ID |
+| Devstral | JSON_NATIVE | `[TOOL_CALLS]func[ARGS]{...}` without call ID |
+| StepFun 3.5 Flash | TAG_WITH_TAGGED | `<function=X><parameter=Y>` format |
 
-### Currently Unsupported Templates
+## Adding Support for New Templates
 
-| Template Family | Model / Variant | Issue Description |
-|-----------------|-----------------|-------------------|
-| **OpenAI** | `GPT-OSS` | Complex channel markers need new format |
+To support a new template format:
 
-### Templates Without Tool Support
+1. **If it follows standard patterns** - The auto-parser should detect it automatically using the three formats (JSON_NATIVE, TAG_WITH_JSON, TAG_WITH_TAGGED)
+2. **If differential analysis doesn't extract markers correctly** - Add a workaround in the workarounds array in `chat-diff-analyzer.cpp`
+3. **If it needs fundamentally different handling** - Add a dedicated handler in `chat.cpp` before the auto-parser block (as done for GPT-OSS, Functionary v3.2, and Ministral)
 
-Some templates genuinely don't support tool calls (this is not a detection bug):
+## Edge Cases and Quirks
 
-- **Phi 3.5 Mini** - The official template has no tool handling. Use Phi-4-mini-instruct for function calling, or community fine-tuned versions.
-- **Google Gemma 2 2B** - Pure instruction-following model without tool capabilities.
-
-### TODO / Roadmap
-
-- [ ] **Fix OpenAI GPT-OSS**: Add handling for channel marker structure.
-- [x] **~~Fix Cohere Command-R Plus~~**: Added `MARKDOWN_BLOCK` format for `Action:\n`\`\`\`json` structure.
-
-### Recent Additions (Dec 2025 - Jan 2026)
-
-- **RECIPIENT_BASED**: Support for Functionary v3.2's `>>>` recipient delimiter format
-- **BRACKET_TAG**: Support for Mistral Small 3.2 and Devstral's `[TOOL_CALLS]...` format
-- **Enhanced Content Detection**: Better handling of custom reasoning tags and content wrappers
-- **Improved Streaming Support**: Better handling of partial parsing for all supported formats
-- **Custom Tag Support**: Support for non-standard reasoning tags like `<seed:think>` (ByteDance)
-- **Multi-line Tool Arguments**: Better parsing of complex tool arguments with code blocks
-- **MARKDOWN_BLOCK**: Support for Cohere Command-R Plus markdown code block format
-- **Implicit Reasoning Support**: Support for templates where reasoning starts implicitly without a start marker.
-- **Pure Differential Refactoring (Jan 2026)**: Complete refactoring to eliminate hardcoded patterns:
-  - Removed all hardcoded pattern lists (previously had `["<tool_call>", "[TOOL_CALLS]", ...]`)
-  - Added structural extraction helpers (`extract_structural_suffix`, `extract_structural_prefix`)
-  - Replaced enum-based classification with string-based variant types
-  - Only remaining heuristic: JSON detection via parse attempt
-  - All markers now discovered through differential template comparison
-- **Three Primary Tool Formats**: Consolidated tool calling formats to JSON_NATIVE, TAG_WITH_JSON, and TAG_WITH_TAGGED for clarity and maintainability
-
-The auto-parser now successfully handles 25+ different template formats across reasoning-only, tool-calling, and hybrid models, with comprehensive test coverage ensuring robust parsing across streaming and non-streaming scenarios.
+1. **Forced Thinking**: If `enable_thinking` is true but the model has already started a thought block (e.g., ended the prompt with `<think>`), the parser enters "forced thinking" mode where it immediately expects reasoning content.
+2. **Per-Call vs Per-Section Markers**: Some templates wrap each tool call individually (`per_call_start`/`per_call_end`), others wrap the entire tool section (`tool_section_start`/`tool_section_end`). T2 disambiguates by checking if the second call in a two-call output starts with the section marker.
+3. **Double Wrapping**: Some templates (e.g., Functionary) use the same string for both the tool section start and the function prefix (e.g., `<function=`). The analyzer detects this overlap and prevents double-wrapping in the generated parser.
+4. **Null Content Rendering**: Some templates render `null` content as Python "None" string. The analyzer detects this and patches content to empty string.
+5. **Tag Boundary Fixing**: The `calculate_diff_split()` function iteratively adjusts the prefix/suffix boundary to avoid splitting `<tag>` or `[marker]` tokens, ensuring clean extraction.
+6. **Workarounds**: A workaround array in `chat-diff-analyzer.cpp` applies post-analysis patches for templates whose differential analysis produces incomplete or incorrect results (e.g., old Qwen thinking, Granite 3.3, Cohere Command-R+, Functionary, DeepSeek-R1-Distill-Qwen).
