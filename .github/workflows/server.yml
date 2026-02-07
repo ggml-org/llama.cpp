@@ -88,11 +88,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r tools/server/tests/requirements.txt
+          pip-install: -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests
@@ -132,11 +128,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-
-      - name: Tests dependencies
-        id: test_dependencies
-        run: |
-          pip install -r tools/server/tests/requirements.txt
+          pip-install: -r tools/server/tests/requirements.txt
 
       - name: Tests
         id: server_integration_tests
