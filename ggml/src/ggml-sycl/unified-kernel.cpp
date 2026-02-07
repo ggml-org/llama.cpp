@@ -5212,15 +5212,13 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
         persistent_buffers_[i] = sycl::malloc_device(required_size, queue_);
     }
 
-    tile_counter_ = sycl::malloc_device<int>(1, queue_);
-    queue_.memset(tile_counter_, 0, sizeof(int)).wait();
-
-    if (!barrier_counter_) {
-        barrier_counter_ = sycl::malloc_device<int>(1, queue_);
+    if (!sync_block_) {
+        sync_block_ = sycl::malloc_device<int>(3, queue_);
     }
-    if (!barrier_sense_) {
-        barrier_sense_ = sycl::malloc_device<int>(1, queue_);
-    }
+    tile_counter_    = sync_block_;
+    barrier_counter_ = sync_block_ + 1;
+    barrier_sense_   = sync_block_ + 2;
+    queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
 
     persistent_buffer_size_ = required_size;
 }
@@ -5232,12 +5230,12 @@ void UnifiedKernel::free_persistent_buffers() {
             persistent_buffers_[i] = nullptr;
         }
     }
-    if (tile_counter_) {
-        sycl::free(tile_counter_, queue_);
-        tile_counter_ = nullptr;
-    }
-    if (barrier_counter_) { sycl::free(barrier_counter_, queue_); barrier_counter_ = nullptr; }
-    if (barrier_sense_)   { sycl::free(barrier_sense_, queue_);   barrier_sense_   = nullptr; }
+    if (sync_block_) { sycl::free(sync_block_, queue_); sync_block_ = nullptr; }
+    tile_counter_    = nullptr;
+    barrier_counter_ = nullptr;
+    barrier_sense_   = nullptr;
+    if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
+    if (get_rows_pool_) { sycl::free(get_rows_pool_, queue_); get_rows_pool_ = nullptr; get_rows_pool_size_ = 0; }
     persistent_buffer_size_ = 0;
 }
 
@@ -5643,6 +5641,109 @@ void UnifiedKernel::cancel_persistent() {
 }
 
 // -----------------------------------------------------------------------------
+// Plan Caching Methods
+// -----------------------------------------------------------------------------
+
+bool UnifiedKernel::has_cached_plan() const {
+    return plan_cache_valid_;
+}
+
+void UnifiedKernel::begin_plan_update() {
+    // Cancel any in-flight plan but DON'T free cached data
+    if (current_plan_) {
+        for (void * ptr : current_plan_->temp_device_allocs) {
+            sycl::free(ptr, queue_);
+        }
+        current_plan_.reset();
+    }
+
+    // Clone from cached template
+    current_plan_ = std::make_unique<PersistentPlan>();
+    current_plan_->n_layers          = cached_plan_template_.n_layers;
+    current_plan_->batch_size        = cached_plan_template_.batch_size;
+    current_plan_->hidden_dim        = cached_plan_template_.hidden_dim;
+    current_plan_->intermediate_dim  = cached_plan_template_.intermediate_dim;
+    current_plan_->n_heads           = cached_plan_template_.n_heads;
+    current_plan_->n_kv_heads        = cached_plan_template_.n_kv_heads;
+    current_plan_->head_dim          = cached_plan_template_.head_dim;
+    current_plan_->quant_type        = cached_plan_template_.quant_type;
+    current_plan_->operations        = cached_ops_;  // copy the vector
+}
+
+void UnifiedKernel::update_op_pointers(int op_idx, const void * input, void * output,
+                                        const void * aux, const void * mask) {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return;
+    }
+    auto & op = current_plan_->operations[op_idx];
+    if (input)  op.input  = input;
+    if (output) op.output = output;
+    if (aux)    op.aux    = const_cast<void *>(aux);
+    if (mask)   op.mask   = mask;
+}
+
+void UnifiedKernel::update_op_attention(int op_idx, const void * q, const void * k_cache,
+                                         const void * v_cache, const void * mask,
+                                         void * output,
+                                         int64_t q_nb0, int64_t q_nb1, int64_t q_nb2, int64_t q_nb3,
+                                         int64_t k_nb0, int64_t k_nb1, int64_t k_nb2, int64_t k_nb3,
+                                         int64_t v_nb0, int64_t v_nb1, int64_t v_nb2, int64_t v_nb3,
+                                         int seq_len) {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return;
+    }
+    auto & op  = current_plan_->operations[op_idx];
+    op.input   = q;
+    op.weights = k_cache;
+    op.aux     = const_cast<void *>(static_cast<const void *>(v_cache));
+    op.mask    = mask;
+    op.output  = output;
+    op.q_nb0   = q_nb0;  op.q_nb1 = q_nb1;  op.q_nb2 = q_nb2;  op.q_nb3 = q_nb3;
+    op.k_nb0   = k_nb0;  op.k_nb1 = k_nb1;  op.k_nb2 = k_nb2;  op.k_nb3 = k_nb3;
+    op.v_nb0   = v_nb0;  op.v_nb1 = v_nb1;  op.v_nb2 = v_nb2;  op.v_nb3 = v_nb3;
+    op.N       = seq_len;
+}
+
+void UnifiedKernel::update_op_rope(int op_idx, void * q, void * k, void * rope_dst,
+                                    const float * cos_cache, const float * sin_cache,
+                                    int position) {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return;
+    }
+    auto & op = current_plan_->operations[op_idx];
+    op.input  = q;
+    op.output = k;  // K pointer stored in output for dual-tensor RoPE
+    op.aux    = const_cast<float *>(sin_cache);
+    op.weights = cos_cache;
+    op.M       = position;
+    // rope_dst used for single-tensor mode
+    if (rope_dst) {
+        op.output = rope_dst;
+    }
+}
+
+void UnifiedKernel::finish_plan_update() {
+    // Plan is already populated with updated pointers, nothing else needed
+}
+
+void UnifiedKernel::invalidate_plan_cache() {
+    plan_cache_valid_ = false;
+    cached_ops_.clear();
+}
+
+void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
+    if (bytes <= get_rows_pool_size_ && get_rows_pool_) {
+        return get_rows_pool_;
+    }
+    if (get_rows_pool_) {
+        sycl::free(get_rows_pool_, queue_);
+    }
+    get_rows_pool_ = sycl::malloc_device(bytes, queue_);
+    get_rows_pool_size_ = get_rows_pool_ ? bytes : 0;
+    return get_rows_pool_;
+}
+
+// -----------------------------------------------------------------------------
 // Persistent Execution
 // -----------------------------------------------------------------------------
 
@@ -5655,13 +5756,28 @@ void UnifiedKernel::execute_persistent() {
     // Launch the persistent kernel
     launch_persistent_kernel();
 
+    // Cache plan template after first successful execution
+    if (!plan_cache_valid_) {
+        cached_plan_template_.n_layers         = current_plan_->n_layers;
+        cached_plan_template_.batch_size       = current_plan_->batch_size;
+        cached_plan_template_.hidden_dim       = current_plan_->hidden_dim;
+        cached_plan_template_.intermediate_dim = current_plan_->intermediate_dim;
+        cached_plan_template_.n_heads          = current_plan_->n_heads;
+        cached_plan_template_.n_kv_heads       = current_plan_->n_kv_heads;
+        cached_plan_template_.head_dim         = current_plan_->head_dim;
+        cached_plan_template_.quant_type       = current_plan_->quant_type;
+        cached_ops_ = current_plan_->operations;
+        plan_cache_valid_ = true;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
+    }
+
     // Free temporary device allocations (e.g. RoPE cos/sin caches)
     for (void * ptr : current_plan_->temp_device_allocs) {
         sycl::free(ptr, queue_);
     }
     current_plan_->temp_device_allocs.clear();
 
-    // Clear the plan after execution
+    // Clear the plan after execution (cached copy remains)
     current_plan_.reset();
 }
 
@@ -5804,9 +5920,14 @@ void UnifiedKernel::launch_persistent_kernel() {
         host_ops.push_back(dst);
     }
 
-    // Copy operation table to device
+    // Copy operation table to device (reuse pooled allocation when capacity is sufficient)
     const int n_ops_device = static_cast<int>(host_ops.size());
-    DeviceOperation * d_ops = sycl::malloc_device<DeviceOperation>(n_ops_device, queue_);
+    if (n_ops_device > d_ops_pool_size_) {
+        if (d_ops_pool_) sycl::free(d_ops_pool_, queue_);
+        d_ops_pool_ = static_cast<void *>(sycl::malloc_device<DeviceOperation>(n_ops_device, queue_));
+        d_ops_pool_size_ = d_ops_pool_ ? n_ops_device : 0;
+    }
+    DeviceOperation * d_ops = static_cast<DeviceOperation *>(d_ops_pool_);
     queue_.memcpy(d_ops, host_ops.data(), host_ops.size() * sizeof(DeviceOperation)).wait();
 
     // Kernel configuration
@@ -5831,11 +5952,8 @@ void UnifiedKernel::launch_persistent_kernel() {
     }
 
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
-        // Reset tile counter
-        queue_.memset(tile_counter_, 0, sizeof(int)).wait();
-        // Reset barrier state (counter=0, sense=0)
-        queue_.memset(barrier_counter_, 0, sizeof(int)).wait();
-        queue_.memset(barrier_sense_, 0, sizeof(int)).wait();
+        // Reset tile counter + barrier state (counter=0, sense=0) in single memset
+        queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
 
         PersistentKernelArgs args = {};
         args.operations           = operations;
@@ -5933,8 +6051,7 @@ void UnifiedKernel::launch_persistent_kernel() {
     last_stats_.total_tiles          = total_tiles;
     last_stats_.kernel_time_ms       = elapsed_ms;
 
-    // Cleanup device operation table
-    sycl::free(d_ops, queue_);
+    // Device ops table is pooled — no per-call free needed
 }
 
 // -----------------------------------------------------------------------------

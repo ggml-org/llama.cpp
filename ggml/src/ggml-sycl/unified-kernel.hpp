@@ -2591,6 +2591,24 @@ public:
     void execute_persistent();
     void cancel_persistent();
 
+    // Plan caching: reuse operation sequence between TG tokens
+    bool has_cached_plan() const;
+    void begin_plan_update();
+    void update_op_pointers(int op_idx, const void * input, void * output,
+                            const void * aux = nullptr, const void * mask = nullptr);
+    void update_op_attention(int op_idx, const void * q, const void * k_cache,
+                             const void * v_cache, const void * mask,
+                             void * output,
+                             int64_t q_nb0, int64_t q_nb1, int64_t q_nb2, int64_t q_nb3,
+                             int64_t k_nb0, int64_t k_nb1, int64_t k_nb2, int64_t k_nb3,
+                             int64_t v_nb0, int64_t v_nb1, int64_t v_nb2, int64_t v_nb3,
+                             int seq_len);
+    void update_op_rope(int op_idx, void * q, void * k, void * rope_dst,
+                        const float * cos_cache, const float * sin_cache, int position);
+    void finish_plan_update();
+    void invalidate_plan_cache();
+    void * get_rows_stable_ptr(size_t bytes);
+
     bool            supports_persistent() const;
     bool            is_building_plan() const;
     PersistentStats get_last_stats() const;
@@ -2602,6 +2620,22 @@ private:
 
     std::unique_ptr<PersistentPlan>  current_plan_;
     PersistentStats                  last_stats_;
+
+    // Plan caching
+    std::vector<OperationDescriptor> cached_ops_;
+    PersistentPlan                   cached_plan_template_;
+    bool                             plan_cache_valid_ = false;
+
+    // Device ops table pool (DeviceOperation * — defined in unified-kernel.cpp)
+    void * d_ops_pool_      = nullptr;
+    int    d_ops_pool_size_ = 0;
+
+    // Batched sync counter (tile_counter + barrier_counter + barrier_sense)
+    int *  sync_block_      = nullptr;
+
+    // GET_ROWS stable copy pool
+    void * get_rows_pool_      = nullptr;
+    size_t get_rows_pool_size_ = 0;
 
     void *  persistent_buffers_[4] = {nullptr, nullptr, nullptr, nullptr};
     int *   tile_counter_          = nullptr;
