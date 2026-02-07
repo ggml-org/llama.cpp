@@ -2768,7 +2768,7 @@ static uint32_t get_fa_scalar_num_rows(uint32_t hsk, uint32_t hsv, FaRows rows, 
     if (rows == FA_ROWS_1) {
         return 1;
     } else if (rows == FA_ROWS_SMALL) {
-        return 4;
+        return 8;
     }
 
     if (hsv >= 192) {
