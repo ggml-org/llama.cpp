@@ -2,6 +2,9 @@
 
 llm_build_paddleocr::llm_build_paddleocr(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
+
+    // NOTE: same with qwen2vl.cpp, but bias tensors are optional
+
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -71,8 +74,8 @@ llm_build_paddleocr::llm_build_paddleocr(const llama_model & model, const llm_gr
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
         if (il == n_layer - 1) {
             // skip computing output for unused tokens

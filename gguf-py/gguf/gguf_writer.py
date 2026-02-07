@@ -1107,12 +1107,6 @@ class GGUFWriter:
     def add_vision_embedding_length(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.EMBEDDING_LENGTH, value)
 
-    def add_vision_max_pixels(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.IMAGE_MAX_PIXELS, value)
-
-    def add_vision_min_pixels(self, value: int) -> None:
-        self.add_uint32(Keys.ClipVision.IMAGE_MIN_PIXELS, value)
-
     def add_vision_feed_forward_length(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.FEED_FORWARD_LENGTH, value)
 

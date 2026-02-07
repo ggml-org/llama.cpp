@@ -3533,6 +3533,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 const int ph = image_size_height / patch_size;
                 std::vector<int> positions(n_pos * 4);
                 int ptr = 0;
+                // NOTE: same as Qwen-VL, but x and y are swapped
                 for (int y = 0; y < ph; y += merge_ratio) {
                     for (int dy = 0; dy < 2; dy++) {
                         for (int x = 0; x < pw; x += merge_ratio) {
