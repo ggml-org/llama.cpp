@@ -1600,13 +1600,13 @@ static bool show_statistics(const common_params & params) {
             w_lay, "Layer", sep,
             "∑ E[A²]", "Gain", sep,
             "CosSim", "PCC", "Cov");
-        LOG_INF("%s\n", std::string(61, '-').c_str());
+        LOG_INF("%s\n", std::string(64, '-').c_str());
     } else {
         LOG_INF("%*s%s%17s%8s%s%12s%9s%9s%12s\n",
             w_lay, "Layer", sep,
             "∑ E[A²]", "Gain", sep,
             "L2 Dist", "CosSim", "PCC", "Cov");
-        LOG_INF("%s\n", std::string(73, '-').c_str());
+        LOG_INF("%s\n", std::string(76, '-').c_str());
     }
 
     for (const auto & [layer, stats] : ls) {
