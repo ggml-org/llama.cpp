@@ -25630,6 +25630,64 @@ static bool persistent_tg_prefer_soa_layout() {
     return prefer != 0;
 }
 
+// One-time initialization of persistent TG debug configuration.
+// Env vars are read-once; mutable per-call state is separate.
+struct PersistentTGDebugConfig {
+    bool trace_hash;
+    bool set_rows_check;
+    bool attn_validate;
+    bool rms_validate;
+    bool matmul_validate;
+    bool add_dump;
+    bool mul_dump;
+    bool profile_build;
+    bool log_ops;
+    bool stage_host_ptrs;
+    int  max_ops_limit;
+    int  rms_dump_instance;
+
+    static const PersistentTGDebugConfig & get() {
+        static const PersistentTGDebugConfig cfg = init();
+        return cfg;
+    }
+
+private:
+    static PersistentTGDebugConfig init() {
+        PersistentTGDebugConfig c = {};
+        c.trace_hash     = false;  // Set by init_sycl_tg_trace() separately
+        c.set_rows_check = (std::getenv("GGML_SYCL_PERSISTENT_TG_CHECK_SET_ROWS") != nullptr) ||
+                           (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS") != nullptr);
+        c.attn_validate  = (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN") != nullptr);
+        c.rms_validate   = (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_RMS_NORM") != nullptr);
+        c.matmul_validate = (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_MATMUL") != nullptr);
+        {
+            const char * env = std::getenv("GGML_SYCL_TG_DUMP_ADD");
+            c.add_dump = (env && std::atoi(env) != 0);
+        }
+        {
+            const char * env = std::getenv("GGML_SYCL_TG_DUMP_MUL");
+            c.mul_dump = (env && std::atoi(env) != 0);
+        }
+        c.profile_build  = (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_BUILD") != nullptr);
+        c.log_ops        = (std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_OPS") != nullptr);
+        c.stage_host_ptrs = (std::getenv("GGML_SYCL_PERSISTENT_TG_STAGE_HOST_PTRS") != nullptr);
+        c.max_ops_limit  = -1;
+        if (const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_MAX_OPS")) {
+            const int val = std::atoi(env);
+            if (val > 0) c.max_ops_limit = val;
+        }
+        c.rms_dump_instance = -1;
+        if (const char * env = std::getenv("GGML_SYCL_TG_DUMP_RMS_INSTANCE")) {
+            if (*env) {
+                char * end = nullptr;
+                const long val = std::strtol(env, &end, 10);
+                if (end && end != env) c.rms_dump_instance = (int) val;
+            }
+        }
+        return c;
+    }
+};
+
 /**
  * Build a persistent execution plan from the compute graph using UnifiedKernel API.
  *
@@ -25645,26 +25703,33 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                     ggml_backend_sycl_context & ctx,
                                     ggml_cgraph * cgraph) {
     init_sycl_tg_trace();
+    const auto & dbg_cfg = PersistentTGDebugConfig::get();
+
     if (g_sycl_tg_trace_hash) {
         g_persistent_trace_ops.clear();
         g_sycl_trace_op_index = 0;
     }
     g_persistent_debug_hash_ptr = nullptr;
-    g_persistent_set_rows_dbg.enabled =
-        (std::getenv("GGML_SYCL_PERSISTENT_TG_CHECK_SET_ROWS") != nullptr) ||
-        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_SET_ROWS") != nullptr);
+
+    g_persistent_set_rows_dbg.enabled  = dbg_cfg.set_rows_check;
     g_persistent_set_rows_dbg.captured = false;
     g_persistent_set_rows_dbg.debug_ptr = nullptr;
     g_persistent_set_rows_dbg.debug_count = 0;
-    const char * attn_env = std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_ATTN");
-    g_persistent_attn_dbg.enabled = (attn_env != nullptr);
+
+    g_persistent_attn_dbg.enabled  = dbg_cfg.attn_validate;
     g_persistent_attn_dbg.captured = false;
     g_persistent_attn_dbg.node = nullptr;
     g_persistent_attn_dbg.debug_ptr = nullptr;
     g_persistent_attn_dbg.debug_floats = 0;
     g_persistent_attn_dbg.layer = -1;
-    g_persistent_rms_dbg.enabled =
-        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_RMS_NORM") != nullptr);
+    static bool logged_attn_env = false;
+    if (!logged_attn_env) {
+        logged_attn_env = true;
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN validate env=%s\n",
+                        dbg_cfg.attn_validate ? "enabled" : "(null)");
+    }
+
+    g_persistent_rms_dbg.enabled  = dbg_cfg.rms_validate;
     g_persistent_rms_dbg.captured = false;
     g_persistent_rms_dbg.node = nullptr;
     g_persistent_rms_dbg.debug_ptr = nullptr;
@@ -25672,8 +25737,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     g_persistent_rms_dbg.hidden_dim = 0;
     g_persistent_rms_dbg.eps = 0.0f;
     g_persistent_rms_dbg.layer = -1;
-    g_persistent_matmul_dbg.enabled =
-        (std::getenv("GGML_SYCL_PERSISTENT_TG_VALIDATE_MATMUL") != nullptr);
+
+    g_persistent_matmul_dbg.enabled  = dbg_cfg.matmul_validate;
     g_persistent_matmul_dbg.captured = false;
     g_persistent_matmul_dbg.node = nullptr;
     g_persistent_matmul_dbg.debug_ptr = nullptr;
@@ -25681,24 +25746,18 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     g_persistent_matmul_dbg.out_dim = 0;
     g_persistent_matmul_dbg.layer = -1;
     g_persistent_matmul_dbg.mtype = MatmulType::GENERIC;
-    const char * add_env = std::getenv("GGML_SYCL_TG_DUMP_ADD");
-    g_persistent_add_dbg.enabled = (add_env && std::atoi(add_env) != 0);
+
+    g_persistent_add_dbg.enabled  = dbg_cfg.add_dump;
     g_persistent_add_dbg.captured = false;
     g_persistent_add_dbg.node = nullptr;
     g_persistent_add_dbg.out_dim = 0;
     g_persistent_add_dbg.layer = -1;
-    const char * mul_env = std::getenv("GGML_SYCL_TG_DUMP_MUL");
-    g_persistent_mul_dbg.enabled = (mul_env && std::atoi(mul_env) != 0);
+
+    g_persistent_mul_dbg.enabled  = dbg_cfg.mul_dump;
     g_persistent_mul_dbg.captured = false;
     g_persistent_mul_dbg.node = nullptr;
     g_persistent_mul_dbg.out_dim = 0;
     g_persistent_mul_dbg.layer = -1;
-    static bool logged_attn_env = false;
-    if (!logged_attn_env) {
-        logged_attn_env = true;
-        GGML_SYCL_DEBUG("[PERSISTENT-TG] ATTN validate env=%s\n",
-                        attn_env ? attn_env : "(null)");
-    }
 
     std::array<int, GGML_OP_COUNT> graph_op_counts{};
     std::array<int, GGML_OP_COUNT> plan_op_counts{};
@@ -25709,28 +25768,13 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
     int executed_cpy      = 0;
     int64_t decode_kv_pos_hint = -1;
     int ops_added = 0;
-    const bool profile_build = (std::getenv("GGML_SYCL_PERSISTENT_TG_PROFILE_BUILD") != nullptr);
+    const bool profile_build = dbg_cfg.profile_build;
     using clock_t = std::chrono::high_resolution_clock;
     const auto build_start = profile_build ? clock_t::now() : clock_t::time_point{};
     std::array<double, GGML_OP_COUNT> build_ms_by_op{};
-    int max_ops_limit = -1;
-    const bool log_ops = (std::getenv("GGML_SYCL_PERSISTENT_TG_LOG_OPS") != nullptr);
-    if (const char * max_ops_env = std::getenv("GGML_SYCL_PERSISTENT_TG_MAX_OPS")) {
-        const int val = std::atoi(max_ops_env);
-        if (val > 0) {
-            max_ops_limit = val;
-        }
-    }
-    int rms_dump_instance = -1;
-    if (const char * inst_env = std::getenv("GGML_SYCL_TG_DUMP_RMS_INSTANCE")) {
-        if (*inst_env) {
-            char * end = nullptr;
-            const long val = std::strtol(inst_env, &end, 10);
-            if (end && end != inst_env) {
-                rms_dump_instance = (int) val;
-            }
-        }
-    }
+    const int max_ops_limit = dbg_cfg.max_ops_limit;
+    const bool log_ops = dbg_cfg.log_ops;
+    const int rms_dump_instance = dbg_cfg.rms_dump_instance;
 
     // 1. Extract model dimensions
     int n_layers, hidden_dim, intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type;
@@ -28380,29 +28424,39 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
     };
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Lambda created\n");
+
+    // Check persistent TG eligibility BEFORE finalize_layouts to skip the
+    // O(n_nodes) graph scans when persistent TG handles its own pointer resolution.
+    const bool persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
+
     // Finalize tensor layouts (convert to optimal layout based on usage)
-    // This must happen after tensor uploads and before graph recording
-    GGML_SYCL_DEBUG("[DEBUG] About to call finalize_layouts cgraph=%p n_nodes=%d\n", (void *) cgraph,
-                    cgraph ? cgraph->n_nodes : -1);
-    if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
-        try {
-            queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-            stream->wait_and_throw();
-            GGML_SYCL_DEBUG("[DEBUG] pre-finalize sync complete\n");
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] pre-finalize sync failed: %s\n", e.what());
+    // Skip when persistent TG will handle this graph AND layouts are already finalized
+    // (persistent TG resolves pointers via get_tensor_ptr_fast, not finalize_layouts)
+    if (!(persistent_eligible && sycl_ctx->layouts_finalized)) {
+        GGML_SYCL_DEBUG("[DEBUG] About to call finalize_layouts cgraph=%p n_nodes=%d\n", (void *) cgraph,
+                        cgraph ? cgraph->n_nodes : -1);
+        if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
+            try {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                stream->wait_and_throw();
+                GGML_SYCL_DEBUG("[DEBUG] pre-finalize sync complete\n");
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] pre-finalize sync failed: %s\n", e.what());
+            }
         }
-    }
-    finalize_layouts(*sycl_ctx, cgraph);
-    GGML_SYCL_DEBUG("[DEBUG] finalize_layouts returned, now checking graph compatibility\n");
-    if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
-        try {
-            queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-            stream->wait_and_throw();
-            GGML_SYCL_DEBUG("[DEBUG] post-finalize sync complete\n");
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] post-finalize sync failed: %s\n", e.what());
+        finalize_layouts(*sycl_ctx, cgraph);
+        GGML_SYCL_DEBUG("[DEBUG] finalize_layouts returned, now checking graph compatibility\n");
+        if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
+            try {
+                queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                stream->wait_and_throw();
+                GGML_SYCL_DEBUG("[DEBUG] post-finalize sync complete\n");
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] post-finalize sync failed: %s\n", e.what());
+            }
         }
+    } else {
+        GGML_SYCL_DEBUG("[DEBUG] Skipping finalize_layouts (persistent TG + layouts already finalized)\n");
     }
 
     // =========================================================================
@@ -28413,12 +28467,12 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // reducing kernel dispatch overhead for token generation (M=1) workloads.
     //
     // Requirements:
-    // - GGML_SYCL_PERSISTENT_TG=1 environment variable
+    // - Persistent TG enabled (default; GGML_SYCL_PERSISTENT_TG=0 to disable)
     // - Decode phase (batch size == 1)
     // - Supported model architecture and quantization
     // - XMX hardware support
     //
-    if (should_use_persistent_tg(*sycl_ctx, cgraph)) {
+    if (persistent_eligible) {
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Using persistent TG kernel dispatch\n");
 
         // Lazy-initialize UnifiedKernel on first use, then reuse across calls.
