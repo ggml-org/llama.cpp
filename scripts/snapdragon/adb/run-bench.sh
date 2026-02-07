@@ -10,6 +10,9 @@ branch=.
 adbserial=
 [ "$S" != "" ] && adbserial="-s $S"
 
+adbhost=
+[ "$H" != "" ] && adbhost="-H $H"
+
 model="Llama-3.2-3B-Instruct-Q4_0.gguf"
 [ "$M" != "" ] && model="$M"
 
@@ -34,13 +37,16 @@ nhvx=
 ndev=
 [ "$NDEV" != "" ] && ndev="GGML_HEXAGON_NDEV=$NDEV"
 
+hb=
+[ "$HB" != "" ] && hb="GGML_HEXAGON_HOSTBUF=$HB"
+
 set -x
 
-adb $adbserial shell " \
+adb $adbserial $adbhost shell " \
   cd $basedir;         \
   LD_LIBRARY_PATH=$basedir/$branch/lib   \
   ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $ndev $nhvx $opmask $verbose $experimental $profile ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
+    $ndev $nhvx $opmask $verbose $experimental $profile $hb ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
         --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 \
         --batch-size 128 -ngl 99 $cli_opts $@ \
 "

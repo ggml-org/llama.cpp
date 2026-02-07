@@ -32,26 +32,27 @@ function(llama_add_compile_flags)
             set(CXX_FLAGS "" PARENT_SCOPE)
         endif()
     endif()
-endfunction()
 
-function(llama_download_model NAME HASH)
-    set(DEST "${CMAKE_BINARY_DIR}/${NAME}")
-    get_filename_component(DEST_DIR "${DEST}" DIRECTORY)
-    file(MAKE_DIRECTORY "${DEST_DIR}")
-    if(NOT EXISTS "${DEST}")
-        message(STATUS "Downloading ${NAME} from ggml-org/models...")
+    if (NOT MSVC)
+        if (LLAMA_SANITIZE_THREAD)
+            message(STATUS "Using -fsanitize=thread")
+
+            add_compile_options(-fsanitize=thread)
+            link_libraries     (-fsanitize=thread)
+        endif()
+
+        if (LLAMA_SANITIZE_ADDRESS)
+            message(STATUS "Using -fsanitize=address")
+
+            add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+            link_libraries     (-fsanitize=address)
+        endif()
+
+        if (LLAMA_SANITIZE_UNDEFINED)
+            message(STATUS "Using -fsanitize=undefined")
+
+            add_compile_options(-fsanitize=undefined)
+            link_libraries     (-fsanitize=undefined)
+        endif()
     endif()
-    file(DOWNLOAD
-        "https://huggingface.co/ggml-org/models/resolve/main/${NAME}?download=true"
-        "${DEST}"
-        TLS_VERIFY ON
-        EXPECTED_HASH ${HASH}
-        STATUS status
-    )
-    list(GET status 0 code)
-    if(NOT code EQUAL 0)
-        list(GET status 1 msg)
-        message(FATAL_ERROR "Failed to download ${NAME}: ${msg}")
-    endif()
-    set(LLAMA_DOWNLOAD_MODEL "${DEST}" PARENT_SCOPE)
 endfunction()

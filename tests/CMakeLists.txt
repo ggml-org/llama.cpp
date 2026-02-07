@@ -186,6 +186,8 @@ endif()
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-template.cpp)
+llama_build_and_test(test-jinja.cpp)
+llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
@@ -196,17 +198,29 @@ llama_build_and_test(
     peg-parser/test-json-parser.cpp
     peg-parser/test-json-serialization.cpp
     peg-parser/test-unicode.cpp
-    peg-parser/testing.h
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    llama_download_model("tinyllamas/stories15M-q4_0.gguf" SHA256=66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739)
+    set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
+    set(MODEL_HASH "SHA256=66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739")
 else()
-    llama_download_model("tinyllamas/stories15M-be.Q4_0.gguf" SHA256=9aec857937849d976f30397e97eb1cabb53eb9dcb1ce4611ba8247fb5f44c65d)
+    set(MODEL_NAME "tinyllamas/stories15M-be.Q4_0.gguf")
+    set(MODEL_HASH "SHA256=9aec857937849d976f30397e97eb1cabb53eb9dcb1ce4611ba8247fb5f44c65d")
 endif()
-llama_build_and_test(test-thread-safety.cpp ARGS -m "${LLAMA_DOWNLOAD_MODEL}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
+set(MODEL_DEST "${CMAKE_BINARY_DIR}/${MODEL_NAME}")
+
+add_test(NAME test-download-model COMMAND ${CMAKE_COMMAND}
+    -DDEST=${MODEL_DEST}
+    -DNAME=${MODEL_NAME}
+    -DHASH=${MODEL_HASH}
+    -P ${CMAKE_SOURCE_DIR}/cmake/download-models.cmake
+)
+set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download-model)
+
+llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
+set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-arg-parser.cpp)
 
@@ -223,7 +237,8 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
-llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${LLAMA_DOWNLOAD_MODEL}")
+llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading

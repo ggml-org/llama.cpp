@@ -237,6 +237,24 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
     sumf += __riscv_vfmv_f_s_f32m1_f32(redsum);
 
 #endif
+#if defined(__POWER9_VECTOR__)
+    const int np = (n & ~(GGML_BF16_STEP - 1));
+    if (np > 0) {
+        GGML_F32_VEC sum[4] = {GGML_F32_VEC_ZERO};
+        for (; i < np; i += GGML_BF16_STEP) {
+            GGML_BF16_VEC vx0 = GGML_BF16_VEC_LOAD(x + i);
+            GGML_BF16_VEC vx1 = GGML_BF16_VEC_LOAD(x + i + 8);
+            GGML_BF16_VEC vy0 = GGML_BF16_VEC_LOAD(y + i);
+            GGML_BF16_VEC vy1 = GGML_BF16_VEC_LOAD(y + i + 8);
+            GGML_BF16_FMA_LO(sum[0], vx0, vy0);
+            GGML_BF16_FMA_HI(sum[1], vx0, vy0);
+            GGML_BF16_FMA_LO(sum[2], vx1, vy1);
+            GGML_BF16_FMA_HI(sum[3], vx1, vy1);
+        }
+        GGML_F32x4_REDUCE_4(sumf, sum[0], sum[1], sum[2], sum[3]);
+    }
+#endif
+
     for (; i < n; ++i) {
         sumf += (ggml_float)(GGML_BF16_TO_FP32(x[i]) *
                              GGML_BF16_TO_FP32(y[i]));

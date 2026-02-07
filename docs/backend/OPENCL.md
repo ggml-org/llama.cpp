@@ -8,6 +8,7 @@
 - [CMake Options](#cmake-options)
 - [Android](#android)
 - [Windows 11 Arm64](#windows-11-arm64)
+- [Linux](#Linux)
 - [Known Issue](#known-issues)
 - [TODO](#todo)
 

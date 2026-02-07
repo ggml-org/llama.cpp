@@ -44,7 +44,8 @@ public:
     int get_new_id();
 
     // Call when the state of one slot is changed, it will move one task from deferred to main queue
-    void pop_deferred_task();
+    // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
+    void pop_deferred_task(int id_slot);
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
@@ -124,7 +125,7 @@ public:
     // add the id_task to the list of tasks waiting for response
     void add_waiting_task_id(int id_task);
 
-    void add_waiting_tasks(const std::vector<server_task> & tasks);
+    void add_waiting_task_ids(const std::unordered_set<int> & id_tasks);
 
     // when the request is finished, we can remove task associated with it
     void remove_waiting_task_id(int id_task);

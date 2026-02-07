@@ -3,9 +3,14 @@ license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
+llama_add_compile_flags()
+
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
-if (NOT MSVC)
-    # disable warnings in 3rd party code
+
+# disable warnings in 3rd party code
+if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(${TARGET} PRIVATE /w)
+else()
     target_compile_options(${TARGET} PRIVATE -w)
 endif()
 
@@ -34,7 +39,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20251002.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260204.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 
@@ -142,7 +147,24 @@ elseif (LLAMA_OPENSSL)
             target_link_libraries(${TARGET} PUBLIC OpenSSL::SSL OpenSSL::Crypto)
         endif()
     else()
-        message(STATUS "OpenSSL not found, SSL support disabled")
+        message(WARNING "OpenSSL not found, HTTPS support disabled")
+    endif()
+endif()
+
+# disable warnings in 3rd party code
+if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+        target_compile_options(ssl PRIVATE /w)
+        target_compile_options(crypto PRIVATE /w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE /w)
+        endif()
+    else()
+        target_compile_options(ssl PRIVATE -w)
+        target_compile_options(crypto PRIVATE -w)
+        if(LLAMA_BUILD_BORINGSSL)
+            target_compile_options(fipsmodule PRIVATE -w)
+        endif()
     endif()
 endif()
 
