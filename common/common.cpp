@@ -41,6 +41,7 @@
 #   define NOMINMAX
 #endif
 #include <locale>
+#include <winapifamily.h>
 #include <windows.h>
 #include <string.h>
 #include <fcntl.h>
@@ -101,7 +102,7 @@ int32_t cpu_get_num_physical_cores() {
     if (result == 0) {
         return num_physical_cores;
     }
-#elif defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+#elif defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) && WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP) && !defined(LLAMA_UWP) // windows 7 and later
     // TODO: windows + arm64 + mingw64
     unsigned int n_threads_win = std::thread::hardware_concurrency();
     unsigned int default_threads = n_threads_win > 0 ? (n_threads_win <= 4 ? n_threads_win : n_threads_win / 2) : 4;
