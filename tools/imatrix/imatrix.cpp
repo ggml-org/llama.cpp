@@ -49,18 +49,19 @@ struct tensor_statistics {
     Stats stats;
     float sum_val = 0.0f;
     float mean_val = 0.0f;
-    float min_val = 0.0f;
-    float max_val = 0.0f;
-    int elements = 0;
+    int64_t elements = 0;
     float std_deviation = 0.0f;
     float skewness = 0.0f;
     float kurtosis = 0.0f;
-    float gain = 0.0f;
+    float gain = std::numeric_limits<float>::quiet_NaN();
     float entropy = 0.0f;
-    float l2_dist = 0.0f;
-    float cossim = 0.0f;
-    float pearson = 0.0f;
-    float covariance = 0.0f;
+    float l2_dist = std::numeric_limits<float>::quiet_NaN();
+    float cossim = std::numeric_limits<float>::quiet_NaN();
+    float pearson = std::numeric_limits<float>::quiet_NaN();
+    float covariance = std::numeric_limits<float>::quiet_NaN();
+    double cov_sum = 0.0;
+    double var_c_sum = 0.0;
+    double var_p_sum = 0.0;
     double dot_prod = 0.0;
     double norm1_sq = 0.0;
     double norm2_sq = 0.0;
@@ -123,7 +124,14 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
     for (size_t i = 0; i < name.size(); ++i) {
         if (name[i] == "weight" && i > 0) {
-            tensor = name[i - 1];
+            for (size_t j = 0; j < name.size(); ++j) {
+                if (name[j] == "blk") {
+                    j+=2;
+                    continue; }
+                if (j == i) { break; }
+                if (!tensor.empty()) { tensor += "."; }
+                tensor += name[j];
+            }
             break;
         }
     }
@@ -165,6 +173,7 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
 }
 
 static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, bool & legacy) {
+    constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     legacy = e.activations.empty();
     const size_t n_mat = e.counts.size();
     const size_t len = legacy ? e.values.size() : e.activations.size();
@@ -181,15 +190,13 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     const size_t row_size = len / n_mat;
     double sum = 0.0;
     double mean = 0.0;
-    float min = std::numeric_limits<float>::max();
-    float max = -std::numeric_limits<float>::max();
     double sum_sq_diff = 0.0;
     double sum_cu_diff = 0.0;
     double sum_qd_diff = 0.0;
     double sum_energy = 0.0;
     size_t valid_n = 0;
 
-    // Pass 1: Mean, Min, Max
+    // Mean
     for (size_t i = 0; i < n_mat; ++i) {
         const auto c = (float)e.counts[i];
         if (c <= 0.0f) { continue; }
@@ -203,9 +210,6 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
             const double v = legacy ? v_val : v_act; // Use activation average for non-legacy
 
             sum += v_val;
-            if ((float)v < min) { min = (float)v; }
-            if ((float)v > max) { max = (float)v; }
-
             valid_n++;
             const double delta = v - mean;
             mean += delta / (double)valid_n;
@@ -219,9 +223,9 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     float std_deviation = 0.0f;
     float entropy = 0.0f;
 
-    // Pass 2: Std Dev, Skew, Kurtosis, Entropy
+    // Std Dev, Skew, Kurtosis, Entropy
     const double inv_sum_energy = sum_energy > 0.0 ? 1.0 / sum_energy : 0.0;
-    const float log2_val = 1 / std::log2f(2);
+    const double log2_inv = 1.0 / std::log(2.0);
 
     for (size_t i = 0; i < n_mat; ++i) {
         const auto c = (float)e.counts[i];
@@ -243,18 +247,19 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
             if (inv_sum_energy > 0.0) {
                 const double v_energy = (double)e.values[off + j] * inv_c;
                 const double p = std::max(0.0, v_energy) * inv_sum_energy;
-                if (p > 1e-9) { entropy -= (float)(p * std::log(p) * log2_val); }
+                if (p > 1e-10) { entropy -= (float)(p * std::log(p) * log2_inv); }
             }
         }
     }
 
-    const double variance = valid_n > 1 ? sum_sq_diff / ((double)valid_n - 1) : 0.0;
+    const double variance = valid_n > 1 ? sum_sq_diff / (double)valid_n : 0.0;
     std_deviation = std::sqrt((float)std::max(variance, 0.0));
     float skewness = 0.0f;
     float kurtosis = 0.0f;
-    if (std_deviation > 1e-9f) {
-        skewness = (float)(sum_cu_diff / ((float)valid_n * std_deviation * std_deviation * std_deviation));
-        kurtosis = (float)(sum_qd_diff / ((float)valid_n * variance * variance)) - 3.0f;
+    if (std_deviation > 1e-10f) {
+        const double m2 = sum_sq_diff / (double)valid_n;
+        skewness = (float)(sum_cu_diff / (double)valid_n / (m2 * std::sqrt(m2)));
+        kurtosis = (float)(sum_qd_diff / (double)valid_n / (m2 * m2) - 3.0);
     }
 
     auto & ts = tstats.emplace_back();
@@ -262,23 +267,22 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.stats = e;
     ts.sum_val = (float)sum;
     ts.mean_val = (float)mean;
-    ts.min_val = min;
-    ts.max_val = max;
-    ts.elements = (int)valid_n;
+    ts.elements = (int64_t)valid_n;
     ts.std_deviation = std_deviation;
     ts.skewness = skewness;
     ts.kurtosis = kurtosis;
-    ts.gain = std::numeric_limits<float>::quiet_NaN();
+    ts.gain = fnan;
     ts.entropy = std::abs(entropy);
-    ts.l2_dist = std::numeric_limits<float>::quiet_NaN();
-    ts.cossim = std::numeric_limits<float>::quiet_NaN();
-    ts.pearson = std::numeric_limits<float>::quiet_NaN();
-    ts.covariance = std::numeric_limits<float>::quiet_NaN();
+    ts.l2_dist = fnan;
+    ts.cossim = fnan;
+    ts.pearson = fnan;
+    ts.covariance = fnan;
 
     return true;
 }
 
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
+    constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     std::unordered_map<std::string, size_t> tensor_map;
     tensor_map.reserve(tstats.size());
     for (size_t i = 0; i < tstats.size(); ++i) { tensor_map[tstats[i].tensor] = i; }
@@ -318,7 +322,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         double sum_p = 0.0;
         const size_t n = curr_avg.size();
 
-        // Pass 1: Sums for Means
+        // Sums for Means
         for (size_t i = 0; i < n; ++i) {
             sum_c += curr_avg[i];
             sum_p += prev_avg[i];
@@ -330,7 +334,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         double var_c_sum = 0.0;
         double var_p_sum = 0.0;
 
-        // Pass 2: Metrics
+        // Metrics
         for (size_t i = 0; i < n; ++i) {
             const double c_val = curr_avg[i];
             const double p_val = prev_avg[i];
@@ -353,6 +357,9 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         ts.dot_prod = dot_prod;
         ts.norm1_sq = norm1_sq;
         ts.norm2_sq = norm2_sq;
+        ts.cov_sum = cov_sum;
+        ts.var_c_sum = var_c_sum;
+        ts.var_p_sum = var_p_sum;
         ts.l2_dist_sq = l2_dist_sq;
         ts.l2_dist = (float)std::sqrt(l2_dist_sq);
 
@@ -360,19 +367,24 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             ts.covariance = (float)(cov_sum / (double)(n - 1));
         }
 
-        if (norm1_sq > 0.0 && norm2_sq > 0.0) {
+        if (norm1_sq > 1e-12 && norm2_sq > 1e-12) {
             ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
             ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
-            ts.gain  = (float)(std::sqrt(norm1_sq) / std::sqrt(norm2_sq));
         } else {
-            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
+            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? fnan : 0.0f;
         }
 
-        if (var_c_sum > 0.0 && var_p_sum > 0.0) {
+        if (var_c_sum > 1e-12 && var_p_sum > 1e-12) {
             ts.pearson = (float)(cov_sum / (std::sqrt(var_c_sum) * std::sqrt(var_p_sum)));
             ts.pearson = std::clamp(ts.pearson, -1.0f, 1.0f);
         } else {
-            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
+            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? fnan : 0.0f;
+        }
+
+        if (prev_ts.sum_val > 1e-10f) {
+            ts.gain = std::sqrt(ts.sum_val) / std::sqrt(prev_ts.sum_val);
+        } else {
+            ts.gain = ts.sum_val <= 1e-10f ? 1.0f : fnan;
         }
     }
 }
@@ -387,13 +399,17 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         double sum_dot_prod = 0.0;
         double sum_norm1_sq = 0.0;
         double sum_norm2_sq = 0.0;
-        double sum_gain = 0.0;
         double sum_l2_dist_sq = 0.0;
-        double sum_pearson = 0.0;
-        double sum_covariance = 0.0;
+        double sum_cov = 0.0;
+        double sum_var_c = 0.0;
+        double sum_var_p = 0.0;
+        double sum_covariance_n = 0.0;
+        double sum_total_energy_curr = 0.0;
+        double sum_total_energy_prev = 0.0;
         int n_tensors = 0;
     };
 
+    constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     std::map<int, layer_aggregation> laggr;
 
     for (const auto & ts : tstats) {
@@ -401,20 +417,31 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         std::string dummy;
         process_tensor_name(ts.tensor, layer_str, dummy);
         int blk = -1;
-        try { blk = std::stoi(layer_str); } catch(...) { continue; }
+        try {
+            blk = std::stoi(layer_str);
+        } catch(...) {
+            if (layer_str == "-") { blk = -1; }
+        }
+
         if (blk <= 0) { continue; }
 
         if (ts.norm1_sq == 0.0 && ts.norm2_sq == 0.0 && ts.l2_dist_sq == 0.0) { continue; }
-
         auto & entry = laggr[blk];
         entry.sum_dot_prod += ts.dot_prod;
         entry.sum_norm1_sq += ts.norm1_sq;
         entry.sum_norm2_sq += ts.norm2_sq;
-        entry.sum_gain += ts.gain;
         entry.sum_l2_dist_sq += ts.l2_dist_sq;
-        entry.sum_pearson += ts.pearson;
-        entry.sum_covariance += ts.covariance;
+        entry.sum_cov += ts.cov_sum;
+        entry.sum_var_c += ts.var_c_sum;
+        entry.sum_var_p += ts.var_p_sum;
+        entry.sum_covariance_n += ts.cov_sum;
         entry.n_tensors++;
+
+        // Accumulate Energy for correct Layer Gain calculation
+        entry.sum_total_energy_curr += ts.sum_val;
+        if (std::isfinite(ts.gain) && ts.gain > 0.0f) {
+            entry.sum_total_energy_prev += ts.sum_val / (ts.gain * ts.gain);
+        }
     }
 
     for (const auto & [layer, agg] : laggr) {
@@ -425,20 +452,28 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
             cossim = (float)(agg.sum_dot_prod / (std::sqrt(agg.sum_norm1_sq) * std::sqrt(agg.sum_norm2_sq)));
             cossim = std::clamp(cossim, -1.0f, 1.0f);
         } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
-            cossim = std::numeric_limits<float>::quiet_NaN();
+            cossim = fnan;
         }
 
         float gain = 0.0f;
-        if (agg.sum_norm1_sq > 0.0 && agg.sum_norm2_sq > 0.0) {
-            gain = (float)(std::sqrt(agg.sum_norm1_sq) / std::sqrt(agg.sum_norm2_sq));
-        } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
-            gain = std::numeric_limits<float>::quiet_NaN();
+        if (agg.sum_total_energy_prev > 0.0) {
+            gain = (float)(std::sqrt(agg.sum_total_energy_curr) / std::sqrt(agg.sum_total_energy_prev));
+        } else {
+            gain = fnan;
+        }
+
+        if (agg.sum_var_c > 0.0 && agg.sum_var_p > 0.0) {
+            auto pearson = (float)(agg.sum_cov / (std::sqrt(agg.sum_var_c) * std::sqrt(agg.sum_var_p)));
+            layer_pearson[layer] = std::clamp(pearson, -1.0f, 1.0f);
+        } else if (agg.sum_var_c == 0.0 && agg.sum_var_p == 0.0) {
+            layer_pearson[layer] = fnan;
+        } else {
+            layer_pearson[layer] = 0.0f;
         }
 
         layer_cossim[layer] = cossim;
         layer_l2_dist[layer] = (float)std::sqrt(agg.sum_l2_dist_sq);
-        layer_pearson[layer] = (float)(agg.sum_pearson / agg.n_tensors);
-        layer_covariance[layer] = (float)(agg.sum_covariance / agg.n_tensors);
+        layer_covariance[layer] = agg.n_tensors > 0 ? (float)(agg.sum_covariance_n / agg.n_tensors) : fnan;
         layer_gain[layer] = gain;
     }
 }
@@ -866,8 +901,6 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             float nan = std::numeric_limits<float>::quiet_NaN();
             float sum_sq = 0.0f;
             float mean = 0.0f;
-            float min = 0.0f;
-            float max = 0.0f;
             float std_deviation = 0.0f;
             float skewness = 0.0f;
             float kurtosis = 0.0f;
@@ -881,8 +914,6 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             if (ts != tstat_index.end() && ts->second != nullptr) {
                 sum_sq = ts->second->sum_val;
                 mean = ts->second->mean_val;
-                min = ts->second->min_val;
-                max = ts->second->max_val;
                 std_deviation = ts->second->std_deviation;
                 skewness = ts->second->skewness;
                 kurtosis = ts->second->kurtosis;
@@ -894,21 +925,19 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 covariance = ts->second->covariance;
             }
 
-            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 13);
+            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 11);
             ggml_format_name(stats, "%s.stats", name.c_str());
             ((float *)stats->data)[0] = sum_sq;
             ((float *) stats->data)[1] = mean;
-            ((float *) stats->data)[2] = min;
-            ((float *) stats->data)[3] = max;
-            ((float *) stats->data)[4] = std_deviation;
-            ((float *) stats->data)[5] = skewness;
-            ((float *) stats->data)[6] = kurtosis;
-            ((float *) stats->data)[7] = gain;
-            ((float *)stats->data)[8] = h_norm;
-            ((float *) stats->data)[9] = l2_dist;
-            ((float *) stats->data)[10] = cossim;
-            ((float *) stats->data)[11] = pearson;
-            ((float *) stats->data)[12] = covariance;
+            ((float *) stats->data)[2] = std_deviation;
+            ((float *) stats->data)[3] = skewness;
+            ((float *) stats->data)[4] = kurtosis;
+            ((float *) stats->data)[5] = gain;
+            ((float *)stats->data)[6] = h_norm;
+            ((float *) stats->data)[7] = l2_dist;
+            ((float *) stats->data)[8] = cossim;
+            ((float *) stats->data)[9] = pearson;
+            ((float *) stats->data)[10] = covariance;
             gguf_add_tensor(ctx_gguf, stats);
         }
     }
@@ -1407,6 +1436,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 }
 
 static bool show_statistics(const common_params & params) {
+    constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     g_collector.set_params(params);
     std::vector<tensor_statistics> ts;
 
@@ -1444,12 +1474,12 @@ static bool show_statistics(const common_params & params) {
             try {
                 blk_a = std::stoi(lay_a);
             } catch(...) {
-                if (lay_a == "output") { blk_a = 10000; }
+                if (a.tensor.find("output") != std::string::npos) { blk_a = 10000; }
             }
             try {
                 blk_b = std::stoi(lay_b);
             } catch(...) {
-                if (lay_b == "output") { blk_b = 10000; }
+                if (b.tensor.find("output") != std::string::npos) { blk_b = 10000; }
             }
 
             if (blk_a != blk_b) { return blk_a < blk_b; }
@@ -1500,10 +1530,15 @@ static bool show_statistics(const common_params & params) {
         std::string name;
 
         process_tensor_name(tstat.tensor, layer, name);
-        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2f((float)tstat.elements)) : std::numeric_limits<float>::quiet_NaN();
+        const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2f((float)tstat.elements)) : fnan;
 
         int blk;
-        try { blk = std::stoi(layer); } catch (...) { blk = -1; }
+        try {
+            blk = std::stoi(layer);
+        } catch (...) {
+            if (tstat.tensor.find("output") != std::string::npos) { blk = 10000; }
+            else { blk = -1; }
+        }
 
         if (legacy) {
             LOG_INF("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%9.4f%9.4f\n",
@@ -1542,7 +1577,7 @@ static bool show_statistics(const common_params & params) {
     int max = -1;
 
     for (const auto & [layer, stats] : ls) {
-        if (layer >= 0 && stats.n > 0) {
+        if (layer >= 0 && layer < 9999 && stats.n > 0) {
             layers++;
             min = std::min(layer, min);
             max = std::max(layer, max);
@@ -1577,24 +1612,27 @@ static bool show_statistics(const common_params & params) {
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) { continue; }
 
-        float lgn = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_gain[layer];
-        float ll2 = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_l2_dist[layer];
-        float lcs = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_cossim[layer];
-        float lpc = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_pearson[layer];
-        float lcv = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_covariance[layer];
+        float lgn = layer == 0 || layer == 10000 ? fnan : layer_gain[layer];
+        float ll2 = layer == 0 || layer == 10000 ? fnan : layer_l2_dist[layer];
+        float lcs = layer == 0 || layer == 10000 ? fnan : layer_cossim[layer];
+        float lpc = layer == 0 || layer == 10000 ? fnan : layer_pearson[layer];
+        float lcv = layer == 0 || layer == 10000 ? fnan : layer_covariance[layer];
+        auto str = std::to_string(layer);
+        const auto *lyr = layer == 10000 ? "-" : str.c_str();
 
         if (legacy) {
-            LOG_INF("%*d%s%14.4f%8.2f%s%9.4f%9.4f%9.4f\n",
-                w_lay, layer, sep,
+            LOG_INF("%*s%s%14.4f%8.2f%s%9.4f%9.4f%9.4f\n",
+                w_lay, lyr, sep,
                 stats.layer_sum, lgn, sep,
                 lcs, lpc, lcv);
         } else {
-            LOG_INF("%*d%s%14.4f%8.2f%s%12.4f%9.4f%9.4f%9.4f\n",
-                w_lay, layer, sep,
+            LOG_INF("%*s%s%14.4f%8.2f%s%12.4f%9.4f%9.4f%9.4f\n",
+                w_lay, lyr, sep,
                 stats.layer_sum, lgn, sep,
                 ll2, lcs, lpc, lcv);
         }
     }
+
     LOG_INF("\n");
     return true;
 }
