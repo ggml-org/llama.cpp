@@ -102,6 +102,14 @@ jobs:
           export ${{ matrix.extra_args }}
           pytest -v -x -m "not slow"
 
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        run: |
+          cd tools/server/tests
+          export ${{ matrix.extra_args }}
+          SLOW_TESTS=1 pytest -v -x
+
   server-windows:
     runs-on: windows-2022
 
