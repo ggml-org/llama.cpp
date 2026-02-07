@@ -295,7 +295,10 @@ jobs:
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+          J=$(( $(nproc) / 2 ))
+          if [ $J -lt 1 ]; then J=1; fi
+          echo "Using -j $J"
+          cmake --build build --config ${{ matrix.build_type }} -j $J
 
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp
@@ -307,7 +310,10 @@ jobs:
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
-          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+          J=$(( $(nproc) / 2 ))
+          if [ $J -lt 1 ]; then J=1; fi
+          echo "Using -j $J"
+          cmake --build build --config ${{ matrix.build_type }} -j $J
 
       - name: Test
         id: cmake_test
