@@ -498,9 +498,7 @@ struct llama_dist_rng_mt19937 : llama_dist_rng {
     }
 
     std::unique_ptr<llama_dist_rng> clone() const override {
-        auto c = std::make_unique<llama_dist_rng_mt19937>(0);
-        c->rng = rng;
-        return c;
+        return std::make_unique<llama_dist_rng_mt19937>(*this);
     }
 };
 
@@ -527,9 +525,7 @@ struct llama_dist_rng_blue : llama_dist_rng {
     }
 
     std::unique_ptr<llama_dist_rng> clone() const override {
-        auto c = std::make_unique<llama_dist_rng_blue>(0);
-        c->bn_rng = bn_rng;
-        return c;
+        return std::make_unique<llama_dist_rng_blue>(*this);
     }
 };
 
