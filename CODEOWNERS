@@ -27,6 +27,7 @@
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
 /examples/convert-llama2c-to-ggml/      @ggerganov
+/examples/debug/                        @danbev @pwilkin
 /examples/deprecation-warning/          @ggerganov
 /examples/diffusion/                    @am17an
 /examples/embedding/                    @ggerganov
