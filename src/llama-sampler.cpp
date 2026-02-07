@@ -337,7 +337,7 @@ static void llama_sampler_top_k_impl(llama_token_data_array * cur_p, int32_t k) 
 // generative error diffusion for sequential blue noise
 // pseudo-random number generator with ~6db/octave blue noise
 // this generator produces a uniform distribution
-// important: blue noise properties cannot be preserved when 
+// important: blue noise properties cannot be preserved when
 // the generator is used for multiple purposes simultaneously
 // nor when multiple next calls are used to construct a larger value
 // nor when integer outputs are used with the modulo operator
@@ -449,7 +449,7 @@ struct llama_dist_rng {
     virtual ~llama_dist_rng() = default;
 
     virtual bool                            requires_sorted()  = 0; // whether the RNG requires sorted input for proper properties
-    
+
     // for compatilibility with std::discrete_distribution
     // nly used in a disabled branch of llama_sampler_dist_apply
     virtual uint32_t                        rng_min()          = 0;
