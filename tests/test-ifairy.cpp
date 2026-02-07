@@ -13,6 +13,22 @@ extern "C" {
 #include "../ggml/src/ggml-quants.h"
 
 void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+void ggml_vec_dot_ifairy_q16_K(int                        n,
+                               float * GGML_RESTRICT      s,
+                               size_t                     bs,
+                               const void * GGML_RESTRICT vx,
+                               size_t                     bx,
+                               const void * GGML_RESTRICT vy,
+                               size_t                     by,
+                               int                        nrc);
+void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
+                                       float * GGML_RESTRICT      s,
+                                       size_t                     bs,
+                                       const void * GGML_RESTRICT vx,
+                                       size_t                     bx,
+                                       const void * GGML_RESTRICT vy,
+                                       size_t                     by,
+                                       int                        nrc);
 }
 
 #ifndef GGML_FP16_TO_FP32
@@ -759,6 +775,132 @@ static bool test_ifairy_q16_tensor_quantization() {
 }
 
 // ============================================================================
+// 测试 1.2: vec_dot 直接对拍（generic vs optimized）
+// ============================================================================
+
+static bool run_ifairy_vecdot_compare_case(int k, uint32_t seed, bool tensor_scale) {
+    if (k <= 0 || (k % QK_IFAIRY) != 0) {
+        fprintf(stderr, "Invalid vecdot K: %d\n", k);
+        return false;
+    }
+
+    const int nb   = k / QK_IFAIRY;
+    const int rows = 3;
+
+    std::mt19937                          rng(seed);
+    std::uniform_int_distribution<int>    code_dist(0, 3);
+    std::uniform_int_distribution<int>    act_dist(-42, 42);
+    std::uniform_real_distribution<float> scale_dist(0.05f, 1.25f);
+
+    std::vector<block_ifairy> w((size_t) rows * (size_t) nb);
+    for (int r = 0; r < rows; ++r) {
+        for (int ib = 0; ib < nb; ++ib) {
+            block_ifairy blk{};
+            blk.d_real = GGML_FP32_TO_FP16(1.0f);
+            blk.d_imag = GGML_FP32_TO_FP16(1.0f);
+            for (int j = 0; j < QK_IFAIRY; ++j) {
+                set_ifairy_code(blk, j, (uint8_t) code_dist(rng));
+            }
+            w[(size_t) r * (size_t) nb + (size_t) ib] = blk;
+        }
+    }
+
+    std::vector<block_ifairy_q16> x((size_t) nb);
+    const float                   d_real_uniform = 0.125f;
+    const float                   d_imag_uniform = 0.175f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d_real = tensor_scale ? d_real_uniform : scale_dist(rng);
+        const float d_imag = tensor_scale ? d_imag_uniform : scale_dist(rng);
+        x[ib].d_real       = GGML_FP32_TO_FP16(d_real);
+        x[ib].d_imag       = GGML_FP32_TO_FP16(d_imag);
+
+        int8_t * xr = (int8_t *) x[ib].x_real;
+        int8_t * xi = (int8_t *) x[ib].x_imag;
+        for (int j = 0; j < QK_IFAIRY; ++j) {
+            xr[j] = (int8_t) act_dist(rng);
+            xi[j] = (int8_t) act_dist(rng);
+        }
+    }
+
+    bool ok = true;
+    for (int r = 0; r < rows; ++r) {
+        alignas(4) uint32_t out_ref = 0;
+        alignas(4) uint32_t out_opt = 0;
+
+        ggml_vec_dot_ifairy_q16_K_generic(k, reinterpret_cast<float *>(&out_ref), 0,
+                                          w.data() + (size_t) r * (size_t) nb, 0, x.data(), 0, 1);
+        ggml_vec_dot_ifairy_q16_K(k, reinterpret_cast<float *>(&out_opt), 0, w.data() + (size_t) r * (size_t) nb, 0,
+                                  x.data(), 0, 1);
+
+        if (out_ref != out_opt) {
+            const ggml_bf16_t rr{ (uint16_t) (out_ref & 0xFFFFu) };
+            const ggml_bf16_t ri{ (uint16_t) (out_ref >> 16) };
+            const ggml_bf16_t orr{ (uint16_t) (out_opt & 0xFFFFu) };
+            const ggml_bf16_t ori{ (uint16_t) (out_opt >> 16) };
+
+            fprintf(stderr,
+                    "vecdot mismatch: k=%d tensor_scale=%d row=%d ref=(%.7g, %.7g) opt=(%.7g, %.7g) ref_word=0x%08x "
+                    "opt_word=0x%08x\n",
+                    k, (int) tensor_scale, r, GGML_BF16_TO_FP32(rr), GGML_BF16_TO_FP32(ri), GGML_BF16_TO_FP32(orr),
+                    GGML_BF16_TO_FP32(ori), out_ref, out_opt);
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
+static bool test_ifairy_vecdot_compare_mode(bool tensor_mode) {
+    scoped_env_var env_vecdot("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
+    if (tensor_mode) {
+        env_vecdot.set("1");
+    } else {
+        env_vecdot.unset();
+    }
+
+    printf("\n=== Test 1.2 (%s): iFairy vec_dot direct compare ===\n", tensor_mode ? "tensor-scale" : "per-block");
+
+    bool ok = true;
+    ok &= run_ifairy_vecdot_compare_case(QK_IFAIRY, 1001u, tensor_mode);
+    ok &= run_ifairy_vecdot_compare_case(1536, 2027u, tensor_mode);
+
+    printf("  vec_dot compare (%s) - %s\n", tensor_mode ? "tensor-scale" : "per-block", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+static bool test_ifairy_vecdot_direct_compare(const char * argv0) {
+    printf("\n=== Test 1.2: iFairy vec_dot direct compare ===\n");
+
+    auto run_subprocess = [&](const char * mode, const char * env_value) -> bool {
+        scoped_env_var env_vecdot("GGML_IFAIRY_VEC_DOT_ACT_TENSOR");
+        if (env_value) {
+            env_vecdot.set(env_value);
+        } else {
+            env_vecdot.unset();
+        }
+
+        std::string cmd = "\"";
+        cmd += argv0;
+        cmd += "\" --ifairy-vecdot-mode ";
+        cmd += mode;
+
+        const int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            fprintf(stderr, "Subprocess failed for vec_dot mode '%s' (rc=%d)\n", mode, rc);
+            return false;
+        }
+        return true;
+    };
+
+    bool ok = true;
+    ok &= run_subprocess("block", NULL);
+    ok &= run_subprocess("tensor", "1");
+
+    printf("  vec_dot direct compare - %s\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+// ============================================================================
 // 测试 3: ROPE 算子
 // ============================================================================
 
@@ -1353,10 +1495,16 @@ int main(int argc, char ** argv) {
         printf("iFairy Model Unit Tests\n");
         printf("========================================\n");
 
-        bool verbose = false;
+        bool         verbose     = false;
+        const char * vecdot_mode = NULL;
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
                 verbose = true;
+                continue;
+            }
+            if (strcmp(argv[i], "--ifairy-vecdot-mode") == 0 && i + 1 < argc) {
+                vecdot_mode = argv[++i];
+                continue;
             }
         }
         if (verbose) {
@@ -1365,6 +1513,17 @@ int main(int argc, char ** argv) {
 
         // 初始化 GGML CPU
         ggml_cpu_init();
+
+        if (vecdot_mode) {
+            if (strcmp(vecdot_mode, "block") == 0) {
+                return test_ifairy_vecdot_compare_mode(false) ? 0 : 1;
+            }
+            if (strcmp(vecdot_mode, "tensor") == 0) {
+                return test_ifairy_vecdot_compare_mode(true) ? 0 : 1;
+            }
+            fprintf(stderr, "Unknown --ifairy-vecdot-mode value: %s\n", vecdot_mode);
+            return 2;
+        }
 
         int num_failed = 0;
 
@@ -1376,6 +1535,11 @@ int main(int argc, char ** argv) {
 
         if (!test_ifairy_q16_tensor_quantization()) {
             fprintf(stderr, "Test 1.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_vecdot_direct_compare(argv[0])) {
+            fprintf(stderr, "Test 1.2 FAILED\n");
             num_failed++;
         }
 
