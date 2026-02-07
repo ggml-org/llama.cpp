@@ -296,7 +296,7 @@ jobs:
             -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
-          J=$(( $(nproc) / 2 ))
+          J=$(( ($(nproc) + 1) / 2 ))
           if [ $J -lt 1 ]; then J=1; fi
           echo "Using -j $J"
 
@@ -313,7 +313,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
 
-          J=$(( $(nproc) / 2 ))
+          J=$(( ($(nproc) + 1) / 2 ))
           if [ $J -lt 1 ]; then J=1; fi
           echo "Using -j $J"
 
