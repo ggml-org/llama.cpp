@@ -794,19 +794,44 @@ struct ggml_backend_cann_buffer_context {
     ~ggml_backend_cann_buffer_context() { ACL_CHECK(aclrtFree(dev_ptr)); }
 };
 
+// cann buffer type
 /**
- * @brief Check if a buffer is a CANN buffer.
- *
- * This function checks if a given buffer is a CANN buffer by comparing its
- * `get_name` function pointer to `ggml_backend_cann_buffer_get_name`.
- *
- * @param buffer The buffer to check.
- * @return true if the buffer is a CANN buffer, false otherwise.
+ * @brief Structure representing context information for a specific backend
+ * buffer type.
  */
-static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft);
+struct ggml_backend_cann_buffer_type_context {
+    int32_t     device; /**< Device identifier associated with the buffer context. */
+    std::string name;   /**< Name associated with the buffer context. */
+};
 
-static bool ggml_backend_buffer_is_cann(ggml_backend_buffer_t buffer) {
-    return ggml_backend_buft_is_cann(buffer->buft);
+/**
+ * @brief Retrieves the name associated with a CANN buffer type.
+ *
+ * This function returns the descriptive name associated with the specified
+ * CANN buffer type context.
+ *
+ * @param buft Pointer to the buffer type context.
+ * @return Const pointer to the C-style string containing the name.
+ */
+static const char * ggml_backend_cann_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
+
+    return buft_ctx->name.c_str();
+}
+
+/**
+ * @brief Checks if the backend buffer type is associated with the CANN backend.
+ *
+ * This function checks whether the provided backend buffer type is associated
+ * with the CANN backend based on the comparison of its name retrieval function
+ * pointer.
+ *
+ * @param buft Pointer to the backend buffer type to check.
+ * @return bool Returns true if the buffer type is associated with the CANN
+ * backend, otherwise false.
+ */
+static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cann_buffer_type_name;
 }
 
 /**
@@ -1271,7 +1296,7 @@ static void ggml_backend_cann_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_backend_cann_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   src,
                                                 ggml_tensor *         dst) {
-    if (ggml_backend_buffer_is_cann(src->buffer)) {
+    if (ggml_backend_buft_is_cann(src->buffer->buft)) {
         ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
         ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
 
@@ -1334,31 +1359,6 @@ static const ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .clear           = */ ggml_backend_cann_buffer_clear,
     /* .reset           = */ NULL,
 };
-
-// cann buffer type
-/**
- * @brief Structure representing context information for a specific backend
- * buffer type.
- */
-struct ggml_backend_cann_buffer_type_context {
-    int32_t     device; /**< Device identifier associated with the buffer context. */
-    std::string name;   /**< Name associated with the buffer context. */
-};
-
-/**
- * @brief Retrieves the name associated with a CANN buffer type.
- *
- * This function returns the descriptive name associated with the specified
- * CANN buffer type context.
- *
- * @param buft Pointer to the buffer type context.
- * @return Const pointer to the C-style string containing the name.
- */
-static const char * ggml_backend_cann_buffer_type_name(ggml_backend_buffer_type_t buft) {
-    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
-
-    return buft_ctx->name.c_str();
-}
 
 /**
  * @brief Allocates a new CANN buffer of the specified type and size.
@@ -1997,7 +1997,7 @@ static bool ggml_backend_cann_cpy_tensor_async(ggml_backend_t      backend_src,
 
     GGML_ASSERT(!is_matmul_weight((const ggml_tensor *) src));
 
-    if (!ggml_backend_buffer_is_cann(src->buffer) || !ggml_backend_buffer_is_cann(dst->buffer)) {
+    if (!ggml_backend_buft_is_cann(src->buffer->buft) || !ggml_backend_buft_is_cann(dst->buffer->buft)) {
         return false;
     }
 
@@ -2521,21 +2521,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
     }
 
     GGML_UNUSED(dev);
-}
-
-/**
- * @brief Checks if the backend buffer type is associated with the CANN backend.
- *
- * This function checks whether the provided backend buffer type is associated
- * with the CANN backend based on the comparison of its name retrieval function
- * pointer.
- *
- * @param buft Pointer to the backend buffer type to check.
- * @return bool Returns true if the buffer type is associated with the CANN
- * backend, otherwise false.
- */
-static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_cann_buffer_type_name;
 }
 
 /**
