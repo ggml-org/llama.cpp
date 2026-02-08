@@ -145,8 +145,17 @@
 		onCopy?.(message);
 	}
 
-	function handleConfirmDelete() {
-		onDelete?.(message);
+	async function handleConfirmDelete() {
+		if (message.role === 'system') {
+			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto('/');
+			}
+		} else {
+			onDelete?.(message);
+		}
+
 		showDeleteDialog = false;
 	}
 

@@ -1081,6 +1081,28 @@ class ChatStore {
 		if (!activeConv)
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+		const messageToDelete = allMessages.find((m) => m.id === messageId);
+
+		// For system messages, don't count descendants as they will be preserved (reparented to root)
+		if (messageToDelete?.role === 'system') {
+			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
+			let userMessages = 0,
+				assistantMessages = 0;
+			const messageTypes: string[] = [];
+
+			for (const msg of messagesToDelete) {
+				if (msg.role === 'user') {
+					userMessages++;
+					if (!messageTypes.includes('user message')) messageTypes.push('user message');
+				} else if (msg.role === 'assistant') {
+					assistantMessages++;
+					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
+				}
+			}
+
+			return { totalCount: 1, userMessages, assistantMessages, messageTypes };
+		}
+
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
