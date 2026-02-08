@@ -3078,9 +3078,10 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         ctx->tensor_extras.push_back({ tensor, extra });  //used to release it when destroy ctx.
         ggml_sycl_init_layout_info(extra, tensor, ctx->device, true);
 
-        // Pre-populate data_device for single-device mode to avoid get_pointer_type()
-        // driver round-trips in ggml_sycl_get_data_ptr during dispatch.
-        if (tensor->data != nullptr && !(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
+        // Pre-populate data_device to avoid get_pointer_type() driver round-trips
+        // in ggml_sycl_get_data_ptr during dispatch.
+        // Note: TP guard is unnecessary here — we're in the else-if of the TP check at line 3039.
+        if (tensor->data != nullptr) {
             extra->data_device[ctx->device] = tensor->data;
         }
 
