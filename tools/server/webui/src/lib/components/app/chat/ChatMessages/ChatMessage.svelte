@@ -133,8 +133,17 @@
 		chatActions.copy(message);
 	}
 
-	function handleConfirmDelete() {
-		chatActions.delete(message);
+	async function handleConfirmDelete() {
+		if (message.role === MessageRole.SYSTEM) {
+			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto(`${base}/`);
+			}
+		} else {
+			chatActions.delete(message);
+		}
+
 		showDeleteDialog = false;
 	}
 
