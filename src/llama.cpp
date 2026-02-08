@@ -21,7 +21,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <regex>
 #include <stdexcept>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -160,6 +162,9 @@ static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+    if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        throw llama_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
+    }
     constexpr int64_t MiB = 1024*1024;
     typedef std::vector<llama_device_memory_data> dmds_t;
     const llama_model_params default_mparams = llama_model_default_params();
@@ -879,6 +884,63 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     return 0;
 }
 
+static enum ggml_backend_meta_split_state llama_meta_device_get_tensor_split(const struct ggml_tensor * tensor, void * userdata) {
+    // attention
+    const std::regex pattern_qkv_weight("blk\\.\\d*\\.attn_(q|k|v).weight");
+    if (std::regex_match(tensor->name, pattern_qkv_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+    const std::regex pattern_qkv_bias("blk\\.\\d*\\.attn_(q|k|v)\\.bias");
+    if (std::regex_match(tensor->name, pattern_qkv_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_qk_norm("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
+    if (std::regex_match(tensor->name, pattern_qk_norm)) {
+        return tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_STATE_MIRRORED : GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+    const std::regex pattern_kv_cache("cache_(k|v)_l\\d*");
+    const std::regex pattern_attn_sinks("blk\\.\\d*\\.attn_sinks.weight");
+    if (std::regex_match(tensor->name, pattern_kv_cache) || std::regex_match(tensor->name, pattern_attn_sinks)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_attn_out_weight("blk\\.\\d*\\.attn_output.weight");
+    if (std::regex_match(tensor->name, pattern_attn_out_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_attn_out_bias("blk\\.\\d*\\.attn_output.bias");
+    if (std::regex_match(tensor->name, pattern_attn_out_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
+    }
+
+    // FFN
+    const std::regex pattern_ffn_up_gate_weight("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.weight");
+    if (std::regex_match(tensor->name, pattern_ffn_up_gate_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+    const std::regex pattern_ffn_up_gate_bias("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.bias");
+    if (std::regex_match(tensor->name, pattern_ffn_up_gate_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_ffn_down_weight("blk\\.\\d*\\.ffn_down(_exps)?.weight");
+    if (std::regex_match(tensor->name, pattern_ffn_down_weight)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
+    }
+    const std::regex pattern_ffn_down_bias("blk\\.\\d*\\.ffn_down(_exps)?.bias");
+    if (std::regex_match(tensor->name, pattern_ffn_down_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
+    }
+
+    // output
+    const std::regex pattern_output("output");
+    if (std::regex_match(tensor->name, pattern_output)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+
+    // everything else
+    return GGML_BACKEND_SPLIT_STATE_MIRRORED;
+    GGML_UNUSED(userdata);
+}
+
 static struct llama_model * llama_model_load_from_file_impl(
         const std::string & path_model,
         std::vector<std::string> & splits,
@@ -911,8 +973,16 @@ static struct llama_model * llama_model_load_from_file_impl(
 
     // create list of devices to use with this model
     if (params.devices) {
-        for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
-            model->devices.push_back(*dev);
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+            size_t n_devs = 0;
+            while (params.devices[n_devs]) {
+                n_devs++;
+            }
+            model->devices.push_back(ggml_backend_meta_device(params.devices, n_devs, llama_meta_device_get_tensor_split, nullptr));
+        } else {
+            for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
+                model->devices.push_back(*dev);
+            }
         }
     } else {
         // default device selection
@@ -922,47 +992,61 @@ static struct llama_model * llama_model_load_from_file_impl(
         std::vector<ggml_backend_dev_t> igpus;
         std::vector<ggml_backend_dev_t> rpc_servers;
 
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            switch (ggml_backend_dev_type(dev)) {
-                case GGML_BACKEND_DEVICE_TYPE_CPU:
-                case GGML_BACKEND_DEVICE_TYPE_ACCEL:
-                    // skip CPU backends since they are handled separately
-                    break;
+        if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+            std::vector<ggml_backend_dev_t> devs;
+            devs.reserve(ggml_backend_dev_count());
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                devs.push_back(ggml_backend_dev_get(i));
+            }
+            GGML_ASSERT(devs.size() >= 2);
+            GGML_ASSERT(ggml_backend_dev_buffer_type(devs.back()) == ggml_backend_cpu_buffer_type());
+            gpus.push_back(ggml_backend_meta_device(devs.data(), devs.size() - 1, llama_meta_device_get_tensor_split, nullptr));
+        } else {
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                switch (ggml_backend_dev_type(dev)) {
+                    case GGML_BACKEND_DEVICE_TYPE_CPU:
+                    case GGML_BACKEND_DEVICE_TYPE_ACCEL:
+                        // skip CPU backends since they are handled separately
+                        break;
 
-                case GGML_BACKEND_DEVICE_TYPE_GPU: {
-                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
-                        rpc_servers.push_back(dev);
-                    } else {
-                        // check if there is already a GPU with the same device id
-                        ggml_backend_dev_props props;
-                        ggml_backend_dev_get_props(dev, &props);
-                        auto it = std::find_if(gpus.begin(), gpus.end(), [&props](ggml_backend_dev_t d) {
-                            ggml_backend_dev_props d_props;
-                            ggml_backend_dev_get_props(d, &d_props);
-                            if (props.device_id && d_props.device_id) {
-                                return strcmp(props.device_id, d_props.device_id) == 0;
-                            }
-                            return false;
-                        });
-
-                        if (it != gpus.end()) {
-                            LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
-                                    __func__,
-                                    ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
-                                    props.device_id ? props.device_id : "unknown id",
-                                    ggml_backend_dev_name(*it), ggml_backend_dev_description(*it));
+                    case GGML_BACKEND_DEVICE_TYPE_GPU: {
+                        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                        if (ggml_backend_reg_name(reg) == std::string("RPC")) {
+                            rpc_servers.push_back(dev);
                         } else {
-                            gpus.push_back(dev);
-                        }
-                    }
-                    break;
-                }
+                            // check if there is already a GPU with the same device id
+                            ggml_backend_dev_props props;
+                            ggml_backend_dev_get_props(dev, &props);
+                            auto it = std::find_if(gpus.begin(), gpus.end(), [&props](ggml_backend_dev_t d) {
+                                ggml_backend_dev_props d_props;
+                                ggml_backend_dev_get_props(d, &d_props);
+                                if (props.device_id && d_props.device_id) {
+                                    return strcmp(props.device_id, d_props.device_id) == 0;
+                                }
+                                return false;
+                            });
 
-                case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                    igpus.push_back(dev);
-                    break;
+                            if (it != gpus.end()) {
+                                LLAMA_LOG_INFO("%s: skipping device %s (%s) with id %s - already using device %s (%s) with the same id\n",
+                                        __func__,
+                                        ggml_backend_dev_name(dev), ggml_backend_dev_description(dev),
+                                        props.device_id ? props.device_id : "unknown id",
+                                        ggml_backend_dev_name(*it), ggml_backend_dev_description(*it));
+                            } else {
+                                gpus.push_back(dev);
+                            }
+                        }
+                        break;
+                    }
+
+                    case GGML_BACKEND_DEVICE_TYPE_IGPU:
+                        igpus.push_back(dev);
+                        break;
+                    case GGML_BACKEND_DEVICE_TYPE_META:
+                        GGML_ABORT("fatal error");
+                        break;
+                }
             }
         }
 

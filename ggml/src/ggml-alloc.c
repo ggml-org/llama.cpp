@@ -1,5 +1,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "ggml-impl.h"
 #include <assert.h>
@@ -1240,6 +1241,9 @@ size_t ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, 
 }
 
 ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    if (ggml_backend_buft_is_meta(buft)) {
+        return ggml_backend_meta_alloc_ctx_tensors_from_buft(ctx, buft);
+    }
     size_t nbytes_total = 0;
     return ggml_backend_alloc_ctx_tensors_from_buft_impl(ctx, buft, &nbytes_total, /*no_alloc =*/ false);
 }
