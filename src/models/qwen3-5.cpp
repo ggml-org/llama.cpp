@@ -186,7 +186,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3_5::build_qkvz(
 
         return { qkv_mixed, z };
 
-    }          
+    }
     // legacy path for combined in_proj_qkvz
     ggml_tensor * mixed_qkvz = build_lora_mm(model.layers[il].ssm_in, input);
     cb(mixed_qkvz, "linear_attn_mixed_qkvz", il);
