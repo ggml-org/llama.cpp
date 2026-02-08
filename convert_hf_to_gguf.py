@@ -11107,11 +11107,10 @@ class KimiK25Model(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(self.merge_kernel_size[0])
 
         # Image size limits
-        # These are used to set token limits: tokens = pixels / (patch_size ^ 2)
-        in_patch_limit = self.preprocessor_config.get("in_patch_limit_each_frame",
-                         self.preprocessor_config.get("in_patch_limit", 4096))
+        # Note: in_patch_limit is for images, in_patch_limit_each_frame is for video (not supported yet)
+        in_patch_limit = self.preprocessor_config.get("in_patch_limit", 16384)
         min_patches = 8  # reasonable minimum
-        pixels_per_patch = self.patch_size * self.patch_size
+        pixels_per_patch = self.patch_size ** 2
         self.gguf_writer.add_vision_min_pixels(min_patches * pixels_per_patch)
         self.gguf_writer.add_vision_max_pixels(in_patch_limit * pixels_per_patch)
 
