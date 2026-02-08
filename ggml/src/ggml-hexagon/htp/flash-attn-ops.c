@@ -58,8 +58,7 @@ static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
                                           const void * restrict y,
                                           const uint8_t * restrict x,
                                           const size_t stride_x,
-                                          const size_t n,
-                                          float        s) {
+                                          const size_t n) {
     const HVX_Vector * restrict vx0 = (const HVX_Vector * restrict) x;  // fp16
     const HVX_Vector * restrict vx1 = (const HVX_Vector * restrict) (x + stride_x);  // fp16
     const HVX_Vector * restrict vx2 = (const HVX_Vector * restrict) (x + stride_x * 2);  // fp16
@@ -123,23 +122,23 @@ static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
     }
 
     HVX_Vector_x4 rsum0123 = { .v = { rsum0, rsum1, rsum2, rsum3 } };
-    HVX_Vector rsum = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), hvx_vec_reduce_sum_f32x4(rsum0123));
-    hvx_vec_store_u(r, 4 * sizeof(float), Q6_Vsf_equals_Vqf32(rsum));
+    hvx_vec_store_u(r, 4 * sizeof(float), hvx_vec_reduce_sum_f32x4(rsum0123));
 }
 
 static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
                                                  const uint8_t * restrict x,
                                                  const size_t stride_x,
                                                  const size_t n,
-                                                 float        scale) {
+                                                 float        s) {
     float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
     const size_t stride_x_4 = stride_x * 4;
     for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
-        hvx_dot_f16_f16_aa_rx4(&scores_arr[j], y, x, stride_x, n, scale);
+        hvx_dot_f16_f16_aa_rx4(&scores_arr[j], y, x, stride_x, n);
         x += stride_x_4;
     }
 
-    return *(HVX_Vector *) scores_arr;
+    HVX_Vector sums = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), *(HVX_Vector *) scores_arr);
+    return Q6_Vsf_equals_Vqf32(sums);
 }
 
 // MAD: y (F32) += x (F16) * s (F32)
@@ -441,7 +440,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
-                HVX_Vector scores = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + ic * factx->size_k_row_padded, factx->size_q_row_padded, DK, scale);
+                HVX_Vector scores = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + ic * factx->size_k_row_padded, factx->size_k_row_padded, DK, scale);
 
                 // 2. Softcap
                 if (factx->logit_softcap != 0.0f) {
