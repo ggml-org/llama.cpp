@@ -655,6 +655,11 @@ ggml_tensor * clip_graph::build_rope_2d(
     const int64_t n_head = cur->ne[1];
     const int64_t n_pos  = cur->ne[2];
 
+    // Ensure input is contiguous (needed when using merged QKV with ggml_view)
+    if (!ggml_is_contiguous(cur)) {
+        cur = ggml_cont(ctx0, cur);
+    }
+
     // for example, if we have cur tensor of shape (n_dim=8, n_head, n_pos)
     // we will have a list of 4 inv_freq: 1e-0, 1e-1, 1e-2, 1e-3
     // first half of cur will use 1e-0, 1e-2 (even)
@@ -1229,7 +1234,20 @@ struct clip_model_loader {
                     {
                         hparams.rope_theta = 10000.0f;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+
+                        // Read min/max pixels from GGUF and convert to token limits
+                        int min_pixels = 0, max_pixels = 0;
+                        get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels, false);
+                        if (min_pixels > 0 && max_pixels > 0) {
+                            const int pixels_per_patch = hparams.patch_size * hparams.patch_size;
+                            const int min_tokens = min_pixels / pixels_per_patch;
+                            const int max_tokens = max_pixels / pixels_per_patch;
+                            hparams.set_limit_image_tokens(min_tokens, max_tokens);
+                        } else {
+                            // Fallback to hardcoded defaults
                         hparams.set_limit_image_tokens(8, 4096);
+                        }
                         hparams.set_warmup_n_tokens(256);
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
