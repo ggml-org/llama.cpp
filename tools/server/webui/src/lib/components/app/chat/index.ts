@@ -634,7 +634,7 @@ export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProc
  * - **Sampling**: Temperature, top_p, top_k, min_p, repeat_penalty, etc.
  * - **Penalties**: Frequency penalty, presence penalty, repeat last N
  * - **Import/Export**: Conversation backup and restore
- * - **MCP**: MCP server management (opens DialogMcpServersSettings)
+ * - **MCP**: MCP server management (opens DialogChatSettings with MCP tab)
  * - **Developer**: Debug options, disable auto-scroll
  *
  * **Parameter Sync:**

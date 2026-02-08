@@ -8,7 +8,8 @@
 		McpServersSelector,
 		ModelsSelector
 	} from '$lib/components/app';
-	import { DialogMcpServersSettings } from '$lib/components/app/dialogs';
+	import { DialogChatSettings } from '$lib/components/app/dialogs';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
@@ -230,7 +231,8 @@
 	{/if}
 </div>
 
-<DialogMcpServersSettings
-	bind:open={showMcpDialog}
+<DialogChatSettings
+	open={showMcpDialog}
 	onOpenChange={(open) => (showMcpDialog = open)}
+	initialSection={SETTINGS_SECTION_TITLES.MCP}
 />

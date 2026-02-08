@@ -16,7 +16,7 @@
  *
  * Settings section for configuring MCP server connections.
  * Displays server cards with status, tools, and management actions.
- * Used within DialogMcpServersSettings.
+ * Used within the MCP tab of ChatSettings.
  *
  * **Architecture:**
  * - Manages add server form state locally
