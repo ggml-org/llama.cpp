@@ -5852,6 +5852,63 @@ struct test_acc : public test_case {
     }
 };
 
+// GGML_OP_ACC - block accumulation test
+struct test_acc_block: public test_case {
+    const ggml_type type;
+    const int64_t block_size;
+    const int64_t n_blocks;
+    const int64_t ne2;
+    const int64_t ne3;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, block_size, n_blocks, ne2, ne3);
+    }
+
+    test_acc_block(ggml_type type = GGML_TYPE_F32,
+            int64_t block_size = 16,
+            int64_t n_blocks = 4,
+            int64_t ne2 = 1,
+            int64_t ne3 = 1)
+        : type(type), block_size(block_size), n_blocks(n_blocks), ne2(ne2), ne3(ne3) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t chunk_size = block_size * n_blocks;
+
+        // Base tensor initialized to zero using ggml_clamp
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, chunk_size, chunk_size, ne2, ne3);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+        ggml_tensor * acc = ggml_clamp(ctx, a, 0.0f, 0.0f);
+
+        // Source blocks that will be accumulated at different offsets
+        // Mimics the lower-triangular block pattern from the original code
+        for (int64_t j = 0; j < n_blocks; ++j) {
+            for (int64_t i = 0; i <= j; ++i) {
+                ggml_tensor * block = ggml_new_tensor_4d(ctx, type,
+                    block_size, block_size, ne2, ne3);
+                ggml_set_param(block);
+
+                char name[64];
+                snprintf(name, sizeof(name), "block_%ld_%ld", (long)j, (long)i);
+                ggml_set_name(block, name);
+
+                // Accumulate block at position [i*block_size, j*block_size]
+                // This is the same pattern as the original code:
+                //   offset = i_start * nb[0] + j_start * nb[1]
+                size_t offset = (i * block_size) * ggml_type_size(type)
+                              + (j * block_size) * (chunk_size * ggml_type_size(type));
+
+                acc = ggml_acc(ctx, acc, block,
+                    acc->nb[1], acc->nb[2], acc->nb[3],
+                    offset);
+            }
+        }
+
+        ggml_set_name(acc, "out");
+        return acc;
+    }
+};
+
 // GGML_OP_PAD
 struct test_pad : public test_case {
     const ggml_type type;
@@ -8130,6 +8187,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
+    test_cases.emplace_back(new test_acc_block(GGML_TYPE_F32, 16, 4, 3, 2));
+    test_cases.emplace_back(new test_acc_block(GGML_TYPE_F32, 32, 4, 2, 2));
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
