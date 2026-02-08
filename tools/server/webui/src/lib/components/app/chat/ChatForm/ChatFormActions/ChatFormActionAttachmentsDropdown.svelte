@@ -1,12 +1,18 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { Plus, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { Plus, MessageSquare, Settings, Zap, FolderOpen } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Switch } from '$lib/components/ui/switch';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
-	import { McpLogo } from '$lib/components/app';
+	import { McpLogo, SearchInput } from '$lib/components/app';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { getFaviconUrl } from '$lib/utils';
+	import { HealthCheckStatus } from '$lib/enums';
+	import type { MCPServerSettingsEntry } from '$lib/types';
 
 	interface Props {
 		class?: string;
@@ -18,7 +24,7 @@
 		onFileUpload?: () => void;
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpServersClick?: () => void;
+		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
 	}
 
@@ -32,7 +38,7 @@
 		onFileUpload,
 		onSystemPromptClick,
 		onMcpPromptClick,
-		onMcpServersClick,
+		onMcpSettingsClick,
 		onMcpResourcesClick
 	}: Props = $props();
 
@@ -46,14 +52,46 @@
 
 	let dropdownOpen = $state(false);
 
+	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
+	let hasMcpServers = $derived(mcpServers.length > 0);
+	let mcpSearchQuery = $state('');
+	let filteredMcpServers = $derived.by(() => {
+		const query = mcpSearchQuery.toLowerCase().trim();
+		if (!query) return mcpServers;
+		return mcpServers.filter((s) => {
+			const name = getServerLabel(s).toLowerCase();
+			const url = s.url.toLowerCase();
+			return name.includes(query) || url.includes(query);
+		});
+	});
+
+	function getServerLabel(server: MCPServerSettingsEntry): string {
+		return mcpStore.getServerLabel(server);
+	}
+
+	function isServerEnabledForChat(serverId: string): boolean {
+		return conversationsStore.isMcpServerEnabledForChat(serverId);
+	}
+
+	async function toggleServerForChat(serverId: string) {
+		await conversationsStore.toggleMcpServerForChat(serverId);
+	}
+
+	function handleMcpSubMenuOpen(open: boolean) {
+		if (open) {
+			mcpSearchQuery = '';
+			mcpStore.runHealthChecksForServers(mcpServers);
+		}
+	}
+
 	function handleMcpPromptClick() {
 		dropdownOpen = false;
 		onMcpPromptClick?.();
 	}
 
-	function handleMcpServersClick() {
+	function handleMcpSettingsClick() {
 		dropdownOpen = false;
-		onMcpServersClick?.();
+		onMcpSettingsClick?.();
 	}
 
 	function handleMcpResourcesClick() {
@@ -197,14 +235,85 @@
 
 			<DropdownMenu.Separator />
 
-			<DropdownMenu.Item
-				class="flex cursor-pointer items-center gap-2"
-				onclick={handleMcpServersClick}
-			>
-				<McpLogo class="h-4 w-4" />
+			<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
+				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
+					<McpLogo class="h-4 w-4" />
 
-				<span>MCP Servers</span>
-			</DropdownMenu.Item>
+					<span>MCP Servers</span>
+				</DropdownMenu.SubTrigger>
+
+				<DropdownMenu.SubContent class="w-72 pt-0">
+					<div class="sticky top-0 z-10 mb-2 bg-popover p-1 pt-2">
+						<SearchInput placeholder="Search servers..." bind:value={mcpSearchQuery} />
+					</div>
+
+					<div class="max-h-64 overflow-y-auto">
+						{#if filteredMcpServers.length > 0}
+							{#each filteredMcpServers as server (server.id)}
+								{@const healthState = mcpStore.getHealthCheckState(server.id)}
+								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
+								{@const isEnabledForChat = isServerEnabledForChat(server.id)}
+
+								<button
+									type="button"
+									class="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+									onclick={() => !hasError && toggleServerForChat(server.id)}
+									disabled={hasError}
+								>
+									<div class="flex min-w-0 flex-1 items-center gap-2">
+										{#if getFaviconUrl(server.url)}
+											<img
+												src={getFaviconUrl(server.url)}
+												alt=""
+												class="h-4 w-4 shrink-0 rounded-sm"
+												onerror={(e) => {
+													(e.currentTarget as HTMLImageElement).style.display = 'none';
+												}}
+											/>
+										{/if}
+
+										<span class="truncate text-sm">{getServerLabel(server)}</span>
+
+										{#if hasError}
+											<span
+												class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
+											>
+												Error
+											</span>
+										{/if}
+									</div>
+
+									<Switch
+										checked={isEnabledForChat}
+										disabled={hasError}
+										onclick={(e: MouseEvent) => e.stopPropagation()}
+										onCheckedChange={() => toggleServerForChat(server.id)}
+									/>
+								</button>
+							{/each}
+						{:else if hasMcpServers}
+							<div class="px-2 py-3 text-center text-sm text-muted-foreground">
+								No servers found
+							</div>
+						{:else}
+							<div class="px-2 py-3 text-center text-sm text-muted-foreground">
+								No MCP servers configured
+							</div>
+						{/if}
+					</div>
+
+					<DropdownMenu.Separator />
+
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={handleMcpSettingsClick}
+					>
+						<Settings class="h-4 w-4" />
+
+						<span>Manage MCP Servers</span>
+					</DropdownMenu.Item>
+				</DropdownMenu.SubContent>
+			</DropdownMenu.Sub>
 
 			{#if hasMcpPromptsSupport}
 				<DropdownMenu.Item

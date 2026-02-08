@@ -189,7 +189,7 @@
 			{onSystemPromptClick}
 			{onMcpPromptClick}
 			{onMcpResourcesClick}
-			onMcpServersClick={() => (showMcpDialog = true)}
+			onMcpSettingsClick={() => (showMcpDialog = true)}
 		/>
 
 		<McpServersSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
