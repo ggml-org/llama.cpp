@@ -459,6 +459,7 @@ ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 ggml_add_backend(Hexagon)
+ggml_add_backend(QNN)
 ggml_add_backend(ZenDNN)
 
 foreach (target ggml-base ggml)
