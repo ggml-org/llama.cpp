@@ -5,8 +5,6 @@
 		AlertTriangle,
 		Code,
 		Monitor,
-		Sun,
-		Moon,
 		ChevronLeft,
 		ChevronRight,
 		Database
@@ -14,12 +12,19 @@
 	import {
 		ChatSettingsFooter,
 		ChatSettingsImportExportTab,
-		ChatSettingsFields
+		ChatSettingsFields,
+		McpLogo,
+		McpServersSettings
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
+	import { ColorMode } from '$lib/enums/ui';
 	import type { Component } from 'svelte';
+	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
+	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
+	import type { SettingsSectionTitle } from '$lib/constants/settings-sections';
 
 	interface Props {
 		onSave?: () => void;
@@ -30,21 +35,17 @@
 	const settingSections: Array<{
 		fields: SettingsFieldConfig[];
 		icon: Component;
-		title: string;
+		title: SettingsSectionTitle;
 	}> = [
 		{
-			title: 'General',
+			title: SETTINGS_SECTION_TITLES.GENERAL,
 			icon: Settings,
 			fields: [
 				{
 					key: 'theme',
 					label: 'Theme',
 					type: 'select',
-					options: [
-						{ value: 'system', label: 'System', icon: Monitor },
-						{ value: 'light', label: 'Light', icon: Sun },
-						{ value: 'dark', label: 'Dark', icon: Moon }
-					]
+					options: SETTINGS_COLOR_MODES_CONFIG
 				},
 				{ key: 'apiKey', label: 'API Key', type: 'input' },
 				{
@@ -81,7 +82,7 @@
 			]
 		},
 		{
-			title: 'Display',
+			title: SETTINGS_SECTION_TITLES.DISPLAY,
 			icon: Monitor,
 			fields: [
 				{
@@ -128,7 +129,7 @@
 			]
 		},
 		{
-			title: 'Sampling',
+			title: SETTINGS_SECTION_TITLES.SAMPLING,
 			icon: Funnel,
 			fields: [
 				{
@@ -194,7 +195,7 @@
 			]
 		},
 		{
-			title: 'Penalties',
+			title: SETTINGS_SECTION_TITLES.PENALTIES,
 			icon: AlertTriangle,
 			fields: [
 				{
@@ -240,22 +241,43 @@
 			]
 		},
 		{
-			title: 'Import/Export',
+			title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
 			icon: Database,
 			fields: []
 		},
 		{
-			title: 'Developer',
+			title: SETTINGS_SECTION_TITLES.MCP,
+			icon: McpLogo,
+			fields: [
+				{
+					key: 'agenticMaxTurns',
+					label: 'Agentic loop max turns',
+					type: 'input'
+				},
+				{
+					key: 'agenticMaxToolPreviewLines',
+					label: 'Max lines per tool preview',
+					type: 'input'
+				},
+				{
+					key: 'showToolCallInProgress',
+					label: 'Show tool call in progress',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.DEVELOPER,
 			icon: Code,
 			fields: [
 				{
-					key: 'showToolCalls',
-					label: 'Show tool call labels',
+					key: 'disableReasoningParsing',
+					label: 'Disable reasoning content parsing',
 					type: 'checkbox'
 				},
 				{
-					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
+					key: 'showRawOutputSwitch',
+					label: 'Enable raw output toggle',
 					type: 'checkbox'
 				},
 				{
@@ -280,7 +302,7 @@
 		// }
 	];
 
-	let activeSection = $state('General');
+	let activeSection = $state<SettingsSectionTitle>(SETTINGS_SECTION_TITLES.GENERAL);
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
@@ -293,7 +315,7 @@
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;
 
-		setMode(newTheme as 'light' | 'dark' | 'system');
+		setMode(newTheme as ColorMode);
 	}
 
 	function handleConfigChange(key: string, value: string | boolean) {
@@ -303,7 +325,7 @@
 	function handleReset() {
 		localConfig = { ...config() };
 
-		setMode(localConfig.theme as 'light' | 'dark' | 'system');
+		setMode(localConfig.theme as ColorMode);
 	}
 
 	function handleSave() {
@@ -319,33 +341,16 @@
 
 		// Convert numeric strings to numbers for numeric fields
 		const processedConfig = { ...localConfig };
-		const numericFields = [
-			'temperature',
-			'top_k',
-			'top_p',
-			'min_p',
-			'max_tokens',
-			'pasteLongTextToFileLen',
-			'dynatemp_range',
-			'dynatemp_exponent',
-			'typ_p',
-			'xtc_probability',
-			'xtc_threshold',
-			'repeat_last_n',
-			'repeat_penalty',
-			'presence_penalty',
-			'frequency_penalty',
-			'dry_multiplier',
-			'dry_base',
-			'dry_allowed_length',
-			'dry_penalty_last_n'
-		];
 
-		for (const field of numericFields) {
+		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
 				if (!isNaN(numValue)) {
-					processedConfig[field] = numValue;
+					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
+						processedConfig[field] = Math.max(1, Math.round(numValue));
+					} else {
+						processedConfig[field] = numValue;
+					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
 					return;
@@ -484,8 +489,21 @@
 					<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 				</div>
 
-				{#if currentSection.title === 'Import/Export'}
+				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
+					<div class="space-y-6">
+						<ChatSettingsFields
+							fields={currentSection.fields}
+							{localConfig}
+							onConfigChange={handleConfigChange}
+							onThemeChange={handleThemeChange}
+						/>
+
+						<div class="border-t border-border/30 pt-6">
+							<McpServersSettings />
+						</div>
+					</div>
 				{:else}
 					<div class="space-y-6">
 						<ChatSettingsFields
