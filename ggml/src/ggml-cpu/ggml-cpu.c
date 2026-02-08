@@ -1341,13 +1341,11 @@ void ggml_compute_forward_mul_mat(
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
         src0->ne[0] % QK_IFAIRY == 0 && src1->ne[0] == src0->ne[0]) {
-        enum ggml_ifairy_lut_impl impl = cfg->impl;
-        if (src1->type == GGML_TYPE_F32 && ggml_ifairy_lut_is_fairy2i_weight(src0) &&
-            impl != GGML_IFAIRY_LUT_IMPL_LUT_C) {
-            if (cfg->dbg) {
-                GGML_LOG_WARN("ifairy_lut: forcing lut_c for fairy2i tensor %s (impl=%d)\n", src0->name, (int) impl);
-            }
-            impl = GGML_IFAIRY_LUT_IMPL_LUT_C;
+        enum ggml_ifairy_lut_impl impl        = cfg->impl;
+        const bool                fairy2i_f32 = src1->type == GGML_TYPE_F32 && ggml_ifairy_lut_is_fairy2i_weight(src0);
+        if (impl == GGML_IFAIRY_LUT_IMPL_AUTO) {
+            // Keep auto mode conservative for Fairy2i decode quality while still allowing explicit lut16 selection.
+            impl = fairy2i_f32 ? GGML_IFAIRY_LUT_IMPL_LUT_C : GGML_IFAIRY_LUT_IMPL_LUT16;
         }
         if (impl == GGML_IFAIRY_LUT_IMPL_LUT_C && src1->type != GGML_TYPE_F32) {
             if (cfg->dbg) {
