@@ -54,19 +54,18 @@ static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict 
     hvx_vec_store_u(r, 4, Q6_Vsf_equals_Vqf32(rsum));
 }
 
-static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
-                                          const void * restrict y,
-                                          const uint8_t * restrict x,
-                                          const size_t stride_x,
-                                          const size_t n) {
-    const HVX_Vector * restrict vx0 = (const HVX_Vector * restrict) x;  // fp16
-    const HVX_Vector * restrict vx1 = (const HVX_Vector * restrict) (x + stride_x);  // fp16
+static inline HVX_Vector hvx_dot_f16_f16_aa_rx4(const void * restrict y,
+                                                const uint8_t * restrict x,
+                                                const size_t stride_x,
+                                                const size_t n) {
+    const HVX_Vector * restrict vx0 = (const HVX_Vector * restrict) x;                   // fp16
+    const HVX_Vector * restrict vx1 = (const HVX_Vector * restrict) (x + stride_x);      // fp16
     const HVX_Vector * restrict vx2 = (const HVX_Vector * restrict) (x + stride_x * 2);  // fp16
     const HVX_Vector * restrict vx3 = (const HVX_Vector * restrict) (x + stride_x * 3);  // fp16
-    const HVX_Vector * restrict vy  = (const HVX_Vector * restrict) y;   // fp16
+    const HVX_Vector * restrict vy  = (const HVX_Vector * restrict) y;                   // fp16
 
-    uint32_t nvec = n / VLEN_FP16;  // num full fp16 hvx vectors
-    uint32_t nloe = n % VLEN_FP16;  // leftover elements
+    uint32_t nvec = n / VLEN_FP16;                                                       // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16;                                                       // leftover elements
 
     HVX_Vector       rsum0 = Q6_V_vsplat_R(0);
     HVX_Vector       rsum1 = Q6_V_vsplat_R(0);
@@ -121,8 +120,10 @@ static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
             Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy3_qf), Q6_V_hi_W(xy3_qf)), rsum3));
     }
 
-    HVX_Vector_x4 rsum0123 = { .v = { rsum0, rsum1, rsum2, rsum3 } };
-    hvx_vec_store_u(r, 4 * sizeof(float), hvx_vec_reduce_sum_f32x4(rsum0123));
+    HVX_Vector_x4 rsum0123 = {
+        .v = { rsum0, rsum1, rsum2, rsum3 }
+    };
+    return hvx_vec_reduce_sum_f32x4(rsum0123);
 }
 
 static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
@@ -130,14 +131,16 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
                                                  const size_t stride_x,
                                                  const size_t n,
                                                  float        s) {
-    float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
+    HVX_Vector   sums       = Q6_V_vsplat_R(0);
     const size_t stride_x_4 = stride_x * 4;
     for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
-        hvx_dot_f16_f16_aa_rx4(&scores_arr[j], y, x, stride_x, n);
+        HVX_Vector     sums_x4 = hvx_dot_f16_f16_aa_rx4(y, x, stride_x, n);
+        HVX_VectorPred pred    = Q6_Q_vsetq_R(j * SIZEOF_FP32);
+        sums                   = Q6_V_vmux_QVV(pred, sums, sums_x4);
         x += stride_x_4;
     }
 
-    HVX_Vector sums = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), *(HVX_Vector *) scores_arr);
+    sums = Q6_Vqf32_vmpy_VsfVsf(hvx_vec_splat_f32(s), sums);
     return Q6_Vsf_equals_Vqf32(sums);
 }
 
