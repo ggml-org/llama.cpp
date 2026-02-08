@@ -3080,7 +3080,7 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
 
         // Pre-populate data_device for single-device mode to avoid get_pointer_type()
         // driver round-trips in ggml_sycl_get_data_ptr during dispatch.
-        if (!(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
+        if (tensor->data != nullptr && !(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
             extra->data_device[ctx->device] = tensor->data;
         }
 
@@ -29463,9 +29463,11 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     const bool persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
 
     // Finalize tensor layouts (convert to optimal layout based on usage)
-    // Skip when persistent TG will handle this graph AND layouts are already finalized
-    // (persistent TG resolves pointers via get_tensor_ptr_fast, not finalize_layouts)
-    if (!(persistent_eligible && sycl_ctx->layouts_finalized)) {
+    // Skip when layouts are already finalized and no weights have been dirtied since.
+    // Also skip for persistent TG which resolves pointers via get_tensor_ptr_fast.
+    const bool layouts_stable = sycl_ctx->layouts_finalized &&
+        (persistent_eligible || g_sycl_layouts_dirty_count.load(std::memory_order_acquire) == 0);
+    if (!layouts_stable) {
         GGML_SYCL_DEBUG("[DEBUG] About to call finalize_layouts cgraph=%p n_nodes=%d\n", (void *) cgraph,
                         cgraph ? cgraph->n_nodes : -1);
         if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
@@ -29494,7 +29496,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             }
         }
     } else {
-        GGML_SYCL_DEBUG("[DEBUG] Skipping finalize_layouts (persistent TG + layouts already finalized)\n");
+        GGML_SYCL_DEBUG("[DEBUG] Skipping finalize_layouts (layouts stable, dirty_count=0)\n");
     }
 
     // =========================================================================
