@@ -298,6 +298,9 @@ int main(int argc, char ** argv) {
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
+    console::init(params.simple_io, params.use_color);
+    atexit([]() { console::cleanup(); });
+
     // Ctrl+C handling
     {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
