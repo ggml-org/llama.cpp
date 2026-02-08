@@ -4344,6 +4344,73 @@ class Qwen3NextModel(Qwen2MoeModel):
             yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Qwen3_5ForCausalLM", "Qwen3_5TextForCausalLM")
+class Qwen3_5Model(Qwen3NextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3_5
+
+    # Stores whichever of in_proj_a/in_proj_b is seen first, keyed by layer
+    _pending_ba: dict[int | None, tuple[str, Tensor]] = {}
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp"):
+            return  # ignore MTP layers
+        if name.endswith(".A_log"):
+            data_torch = -torch.exp(data_torch)
+        elif name.endswith(".dt_bias"):
+            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+        elif "conv1d" in name:
+            data_torch = data_torch.squeeze()
+        elif name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
+            data_torch = data_torch + 1
+
+        # Handle split in_proj_b + in_proj_a → concatenated SSM_BETA_ALPHA
+        # safetensors sorts alphabetically so in_proj_a arrives before in_proj_b
+        if "in_proj_a.weight" in name or "in_proj_b.weight" in name:
+            which = "a" if "in_proj_a" in name else "b"
+            if bid not in self._pending_ba:
+                self._pending_ba[bid] = (which, data_torch)
+                return
+            prev_which, prev_tensor = self._pending_ba.pop(bid)
+            assert prev_which != which, f"duplicate in_proj_{which} for layer {bid}"
+            b_tensor = prev_tensor if prev_which == "b" else data_torch
+            a_tensor = prev_tensor if prev_which == "a" else data_torch
+            ba_combined = torch.cat([b_tensor, a_tensor], dim=0)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_BETA_ALPHA, bid, ".weight"), ba_combined)
+            return
+
+        # Handle packed expert tensors (Qwen3.5 MoE uses nn.Linear convention)
+        # HF stores [n_expert, out_features, in_features] which already matches GGML
+        # expectations, so we skip Qwen2MoeModel's permute(0,2,1) and handle directly.
+        if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
+            mapped = f"{name}.weight" if not name.endswith(".weight") else name
+            # HF: [n_expert, n_embd, n_ff_exp] → GGML: {n_ff_exp, n_embd, n_expert} ✓
+            yield from super(Qwen2MoeModel, self).modify_tensors(data_torch, mapped, bid)
+            return
+
+        if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
+            # HF: [n_expert, 2*n_ff_exp, n_embd] → split dim=1 → [n_expert, n_ff_exp, n_embd]
+            # GGML expects {n_embd, n_ff_exp, n_expert} which is PyTorch [n_expert, n_ff_exp, n_embd] ✓
+            n_ff = data_torch.shape[1] // 2
+            gate = data_torch[:, :n_ff, :].contiguous()
+            up = data_torch[:, n_ff:, :].contiguous()
+            base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
+            mapped_gate = f"{base_name}.gate_proj.weight"
+            mapped_up = f"{base_name}.up_proj.weight"
+            yield from super(Qwen2MoeModel, self).modify_tensors(gate, mapped_gate, bid)
+            yield from super(Qwen2MoeModel, self).modify_tensors(up, mapped_up, bid)
+            return
+
+        # in_proj_qkv → ATTN_QKV and in_proj_z → ATTN_GATE are handled by
+        # tensor_mapping.py, so we just delegate to Qwen2MoeModel (grandparent)
+        # to skip Qwen3NextModel's in_proj_qkvz splitting logic
+        yield from super(Qwen3NextModel, self).modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3_5MoeForCausalLM", "Qwen3_5MoeTextForCausalLM")
+class Qwen3_5MoeModel(Qwen3_5Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3_5_MOE
+
+
 @ModelBase.register("RND1")
 class RND1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.RND1
