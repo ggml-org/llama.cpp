@@ -29462,11 +29462,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // O(n_nodes) graph scans when persistent TG handles its own pointer resolution.
     const bool persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
 
-    // Finalize tensor layouts (convert to optimal layout based on usage)
-    // Skip when layouts are already finalized and no weights have been dirtied since.
-    // Also skip for persistent TG which resolves pointers via get_tensor_ptr_fast.
+    // Skip finalize_layouts when layouts are stable (no dirty weights, no epoch change).
+    // This applies to ALL dispatch modes, not just persistent TG.
+    // finalize_layouts itself has an O(1) fast-path via dirty counter,
+    // but this avoids even the function call overhead + debug sync checks.
     const bool layouts_stable = sycl_ctx->layouts_finalized &&
-        (persistent_eligible || g_sycl_layouts_dirty_count.load(std::memory_order_acquire) == 0);
+                                g_sycl_layouts_dirty_count.load(std::memory_order_acquire) == 0 &&
+                                sycl_ctx->layouts_finalized_epoch == g_sycl_layouts_epoch.load(std::memory_order_acquire);
     if (!layouts_stable) {
         GGML_SYCL_DEBUG("[DEBUG] About to call finalize_layouts cgraph=%p n_nodes=%d\n", (void *) cgraph,
                         cgraph ? cgraph->n_nodes : -1);
