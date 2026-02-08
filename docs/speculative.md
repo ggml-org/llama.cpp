@@ -6,7 +6,7 @@ llama.cpp supports speculative decoding, a technique that can significantly acce
 
 ## Implementations
 
-The `llama-server` application supports several implementations of speculative decoding:
+The `llama-server` application supports several implementations of speculative decoding. An implementation with draft model can be mixed with an implementation without draft model.
 
 ### Draft Model (`draft`)
 
@@ -32,11 +32,20 @@ An example to use this approach can be the rewriting of source code by a LLM.
 
 This implementation looks for the last n-gram in history that matches the current n-gram and creates a draft using the m tokens following the matched n-gram. It is the simplest self-speculative approach with minimal overhead.
 
+```
+llama-server [...] --spec-type ngram-simple --draft-max 64
+```
+
 #### n-gram Map Key (`ngram-map-k`)
 
-This implementation looks for the current n-gram of size n (called the _key_) in the token history. If the key n-gram is followed by the same m tokens (called the _mgram_) multiple times, it creates a draft using these m tokens. This approach requires a minimum number of occurrences (argument `--spec-ngram-min-hits`) before generating drafts.
+This implementation looks for the current n-gram of size n (called the _key_) in the token history. If the key n-gram is followed by the same m tokens (called the _mgram_) multiple times, it creates a draft using these m tokens. This approach requires a minimum number of occurrences (argument `--spec-ngram-min-hits`, default is 1) before generating drafts.
 
 The number of accepted tokens is stored for each used n-gram.
+
+**Example:**
+```
+llama-server [...] --spec-type ngram-map-k --draft-max 64
+```
 
 #### n-gram Map Key-4-Values (`ngram-map-k4v`)
 
@@ -45,17 +54,65 @@ This experimental implementation looks for the current n-gram of size n (called 
 The number of accepted tokens is stored for each used n-gram.
 
 **Example:** Server options to be used if there are a lot of longer repetitions.
-```bash
-llama-server [...] --spec-type ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2
+```
+llama-server [...] --spec-type ngram-map-k4v --spec-ngram-size-n 8 --spec-ngram-size-m 8 --spec-ngram-min-hits 2 --draft-max 64
 ```
 
+### n-gram Mod (`ngram-mod`)
+
+Add basic ngram hasher for speculative decoding:
+
+- For each ngram, compute a hash using LCG
+- For each computed hash, store the next token
+- During speculation, iteratively compute the rolling hash of the last n tokens and pick the next token from the storage
+
+Some characteristics:
+
+- Lightweight (~16 MB)
+- Constant memory and complexity
+- Can generate variable draft lengths (i.e. m is not fixed)
+
+Currently, a single hash pool is shared across all server slots, so different requests can benefit from each other.
+
+**Sample usage:**
+
+```
+# notes:
+# - small `n` are not recommended
+# - MoEs require long drafts
+# - dense models: can reduce `--draft-min` and `--draft-max`
+
+llama-server ... --spec-type ngram-mod --spec-ngram-size-n 24 --draft-min 48 --draft-max 64
+```
+
+Applications:
+
+- Iterating over a block of text/code (e.g. in llama.vim)
+- Reasoning models (when they have to repeat their thinking in the final answer)
+- Summarization
+
+Example Video:
+
+- See #19164
+
+### Differences between ngram-simple, ngram-map and ngram-mod
+
+- ngram-simple looks for a previous matching n-gram and inserts the following m-gram.
+- ngram-map-k looks for a previous matching n-gram and inserts the following m-gram but uses an internal hash-map of n-grams in the current context window.
+- ngram-mod uses a hash pool which is shared across all server slots. The hash pool is a map from n-gram hash to the next token (not the next m-gram as in ngram-map).
 
 ## Command-Line Options
 
 If a draft model is combined with a draftless decoding the draftless decoding has higher precedence.
 
 ```
---spec-type [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v]
+--draft, --draft-n, --draft-max N       number of tokens to draft for speculative decoding (default: 16)
+                                        (env: LLAMA_ARG_DRAFT_MAX)
+--draft-min, --draft-n-min N            minimum number of draft tokens to use for speculative decoding
+                                        (default: 0)
+                                        (env: LLAMA_ARG_DRAFT_MIN)
+[...]
+--spec-type [none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         type of speculative decoding to use when no draft model is provided
                                         (default: none)
 --spec-ngram-size-n N                   ngram size N for ngram-simple/ngram-map speculative decoding, length
@@ -78,6 +135,7 @@ Specifies a type of speculative decoding without draft model.
 | `ngram-simple` | Use simple n-gram pattern matching |
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
 | `ngram-map-k4v` | Use n-gram pattern matching with n-gram-keys and up to four m-gram values (experimental) |
+| `ngram-mod` | Use basic ngram hasher for speculative decoding with shared pool |
 
 **Example:** Server-instance used to refactor source code.
 ```bash
@@ -112,9 +170,15 @@ statistics ngram_simple: #calls = 15, #gen drafts = 5, #acc drafts = 5, #gen tok
 statistics draft: #calls = 10, #gen drafts = 10, #acc drafts = 10, #gen tokens = 110, #acc tokens = 98
 ```
 
+```
+draft acceptance rate = 0.70312 (   90 accepted /   128 generated)
+statistics ngram_mod: #calls = 810, #gen drafts = 15, #acc drafts = 15, #gen tokens = 960, #acc tokens = 730, dur(b,g,a) = 0.149, 0.347, 0.005 ms
+```
+
 - `#calls`: number of calls of this implementations
 - `#gen drafts`: number of drafts generated by this implementation
 - `#acc drafts`: number of drafts accepted (partially) by the main model
 - `#gen tokens`: number of tokens generated by this implementation (including rejected tokens)
 - `#acc tokens`: number of tokens accepted by the main model
+- `dur(b,g,a): durations of begin (new prompt), generation and accumulation (process acceptance).
 

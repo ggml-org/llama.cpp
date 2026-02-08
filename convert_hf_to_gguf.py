@@ -586,6 +586,10 @@ class ModelBase:
                             gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                             gguf.MODEL_TENSOR.ALTUP_CORRECT_COEF,
                             gguf.MODEL_TENSOR.ALTUP_PREDICT_COEF,
+                            # Kimi KDA conv weights should be F32
+                            gguf.MODEL_TENSOR.SSM_CONV1D_Q,
+                            gguf.MODEL_TENSOR.SSM_CONV1D_K,
+                            gguf.MODEL_TENSOR.SSM_CONV1D_V,
                         )
                     )
                     or new_name[-7:] not in (".weight", ".lora_a", ".lora_b")
@@ -903,10 +907,10 @@ class TextModel(ModelBase):
         if (f_norm_eps := self.find_hparam(["layer_norm_eps", "layer_norm_epsilon", "norm_epsilon"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_eps(f_norm_eps)
             logger.info(f"gguf: layer norm epsilon = {f_norm_eps}")
-        if (n_experts := self.hparams.get("num_local_experts")) is not None:
+        if (n_experts := self.find_hparam(["num_local_experts", "num_experts"], optional=True)) is not None:
             self.gguf_writer.add_expert_count(n_experts)
             logger.info(f"gguf: expert count = {n_experts}")
-        if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+        if (n_experts_used := self.find_hparam(["num_experts_per_tok", "num_experts_per_token"], optional=True)) is not None:
             self.gguf_writer.add_expert_used_count(n_experts_used)
             logger.info(f"gguf: experts used count = {n_experts_used}")
         if (n_expert_groups := self.hparams.get("n_group")) is not None:
@@ -916,7 +920,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -5021,6 +5025,221 @@ class CodeShellModel(TextModel):
         self.gguf_writer.add_rope_scaling_factor(1.0)
 
 
+@ModelBase.register("KimiLinearModel", "KimiLinearForCausalLM")
+class KimiLinearModel(TextModel):
+    """Kimi-Linear model with hybrid MLA+KDA architecture"""
+    model_arch = gguf.MODEL_ARCH.KIMI_LINEAR
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_gpt2()
+            return
+        except Exception:
+            pass
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        if tokpre == "kimi-k2":
+            # Build merges list using the approach similar to HunYuanMoE
+            merges = []
+            vocab = {}
+            mergeable_ranks = tokenizer.model._mergeable_ranks
+            for token, rank in mergeable_ranks.items():
+                vocab[QwenModel.token_bytes_to_string(token)] = rank
+                if len(token) == 1:
+                    continue
+                merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
+                if len(merged) == 2:
+                    merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
+            # Build token list
+            vocab_size = self.hparams["vocab_size"]
+            special_tokens = tokenizer.special_tokens
+            reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
+            tokens: list[str] = []
+            toktypes: list[int] = []
+
+            for i in range(vocab_size):
+                if i not in reverse_vocab:
+                    tokens.append(f"[PAD{i}]")
+                    toktypes.append(gguf.TokenType.UNUSED)
+                else:
+                    token = reverse_vocab[i]
+                    tokens.append(token)
+                    if i in special_tokens.values():
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.NORMAL)
+
+            self.gguf_writer.add_tokenizer_model("gpt2")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+            self.gguf_writer.add_token_merges(merges)
+
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
+            special_vocab.add_to_gguf(self.gguf_writer)
+            # override eos id in config.json with tiktoken eos id
+            self.gguf_writer.add_eos_token_id(tokenizer.eos_id)
+        else:
+            raise NotImplementedError(f"Deepseek pre-tokenizer {tokpre!r} is not supported yet!")
+
+    def set_gguf_parameters(self):
+        # note: To enable MLA KV cache, attention needs to be converted into MQA (ie: GQA with 1 group)
+        self.hparams["num_key_value_heads"] = 1
+
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+
+        # KDA & MLA params
+        # Get ssm_d_conv from linear_attn_config.short_conv_kernel_size or ssm_d_conv
+        linear_attn_config = self.hparams["linear_attn_config"]
+        # n_head == 0 for KDA layers, n_head > 0 for MLA layers
+        # full_attention_layers list will be used to distingush layer type
+        _num_kv_heads = list()
+        _full_attn_layers = linear_attn_config["full_attn_layers"]
+        for il in range(self.hparams["num_hidden_layers"]):
+            if il + 1 in _full_attn_layers:
+                _num_kv_heads.append(self.hparams["num_key_value_heads"])
+            else:
+                _num_kv_heads.append(0)
+        assert len(_num_kv_heads) == self.hparams["num_hidden_layers"]
+        self.gguf_writer.add_head_count_kv(_num_kv_heads)
+
+        if (ssm_d_conv := linear_attn_config.get("short_conv_kernel_size")) is not None:
+            self.gguf_writer.add_ssm_conv_kernel(ssm_d_conv)
+        if (kda_head_dim := linear_attn_config.get("head_dim")) is not None:
+            self.gguf_writer.add_kda_head_dim(kda_head_dim)
+
+        # MLA params - use add_* methods that handle arch substitution
+        # Support both HuggingFace naming (q_lora_rank, kv_lora_rank) and internal naming (n_lora_q, n_lora_kv)
+        if (q_lora_rank := self.find_hparam(["q_lora_rank", "n_lora_q"], optional=True)) is not None:
+            self.gguf_writer.add_q_lora_rank(q_lora_rank)
+        # To enable MLA KV cache, MLA needs to be converted into MQA with larger heads, then decompresses to MHA
+        kv_lora_rank = self.find_hparam(["kv_lora_rank", "n_lora_kv"], optional=False)
+        self.gguf_writer.add_kv_lora_rank(kv_lora_rank)
+
+        # MLA head dimensions
+        # Support HuggingFace naming: qk_nope_head_dim, qk_rope_head_dim, v_head_dim
+        qk_nope_head_dim = self.hparams.get("qk_nope_head_dim")
+        # Rotation - use qk_rope_head_dim for Kimi
+        qk_rope_head_dim = self.find_hparam(["qk_rope_head_dim", "n_rot"], optional=False)
+        self.gguf_writer.add_rope_dimension_count(qk_rope_head_dim)
+        self.gguf_writer.add_key_length(kv_lora_rank + qk_rope_head_dim)
+        v_head_dim = self.hparams.get("v_head_dim")
+
+        # Calculate n_embd_head_k_mla = qk_nope_head_dim + qk_rope_head_dim
+        if (n_embd_head_k_mla := self.find_hparam(["n_embd_head_k_mla"], optional=True)) is not None:
+            self.gguf_writer.add_key_length_mla(n_embd_head_k_mla)
+        elif qk_nope_head_dim is not None:
+            n_embd_head_k_mla = qk_nope_head_dim + qk_rope_head_dim
+            self.gguf_writer.add_key_length_mla(n_embd_head_k_mla)
+
+        # n_embd_head_v_mla = v_head_dim
+        if (n_embd_head_v_mla := self.hparams.get("n_embd_head_v_mla")) is not None:
+            self.gguf_writer.add_value_length_mla(n_embd_head_v_mla)
+        elif v_head_dim is not None:
+            self.gguf_writer.add_value_length_mla(v_head_dim)
+
+        # moe_intermediate_size (1024 for Kimi)
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        # num_shared_experts (1 for Kimi)
+        self.gguf_writer.add_expert_shared_count(self.hparams["num_shared_experts"])
+        # first_k_dense_replace (1 for Kimi - first layer uses dense MLP)
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["first_k_dense_replace"])
+        # Routed scaling factor (expert_weights_scale = 2.446 for Kimi)
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        logger.info(f"Processing {name}: shape before = {tuple(data_torch.shape)}")
+
+        # Handle KDA conv1d weights
+        # HuggingFace/vLLM stores as [d_inner, d_conv] (2D), memory layout: conv_step changes fastest
+        # llama.cpp expects ggml ne = [d_conv, 1, d_inner, 1], memory layout: ne[0]=d_conv changes fastest
+        # GGUF reverses numpy shape when writing, so numpy (1, d_inner, 1, d_conv) -> ggml ne = [d_conv, 1, d_inner, 1]
+        # Memory layouts match: both have conv_step (d_conv) changing fastest
+        if name.endswith((".q_conv1d.weight", ".k_conv1d.weight", ".v_conv1d.weight")):
+            # HF shape: [d_inner, d_conv] e.g. [4096, 4]
+            # Target numpy shape: (1, d_inner, 1, d_conv) -> ggml ne = [d_conv, 1, d_inner, 1]
+            if data_torch.ndim == 2:
+                d_inner, d_conv = data_torch.shape
+                # Reshape to (1, d_inner, 1, d_conv) - memory layout preserved (d_conv fastest)
+                data_torch = data_torch.reshape(1, d_inner, 1, d_conv)
+                logger.info(f"Reshaped conv1d weight {name}: [d_inner={d_inner}, d_conv={d_conv}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[{d_conv}, 1, {d_inner}, 1]")
+            elif data_torch.ndim == 3:
+                # Already 3D [d_inner, 1, d_conv] from unsqueeze
+                d_inner, _, d_conv = data_torch.shape
+                data_torch = data_torch.reshape(1, d_inner, 1, d_conv)
+                logger.info(f"Reshaped conv1d weight {name}: [d_inner={d_inner}, 1, d_conv={d_conv}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[{d_conv}, 1, {d_inner}, 1]")
+
+        # Kimi specific bias
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+
+        # Handle A_log: iHF stores as [1, 1, num_heads, 1]
+        # llama.cpp expects ggml ne = [1, num_heads, 1, 1]
+        # GGUF reverses numpy shape: numpy (1, 1, num_heads, 1) -> ggml ne = [1, num_heads, 1, 1]
+        if name.endswith(".A_log"):
+            data_torch = -torch.exp(data_torch)
+        if name.endswith(".dt_bias"):
+            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
+            logger.info("Changed dt_bias to dt_proj.bias")
+
+        # process the experts separately
+        if name.find("block_sparse_moe.experts") != -1:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"], optional=False)
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                # w1: gate, w2: down, w3: up
+                for wid, tname in [("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP),
+                                   ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP),
+                                   ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)]:
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+                    data_torch = torch.stack(datas, dim=0)
+                    new_name = self.format_tensor_name(tname, bid)
+                    yield from super().modify_tensors(data_torch, new_name, bid)
+            return
+
+        # note: MLA with the absorption optimization, needs these two split and k_b_proj transposed
+        if name.endswith("kv_b_proj.weight"):
+            name_kb = name.replace("kv_b_proj", "k_b_proj")
+            name_vb = name.replace("kv_b_proj", "v_b_proj")
+            n_head_kv = self.hparams["num_key_value_heads"]
+            v_head_dim = self.find_hparam(["n_embd_head_v_mla", "v_head_dim"], optional=False)
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+            logger.info("Split kv_b n_head_kv %d\n" % n_head_kv)
+            assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
+            kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
+            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
+            k_b = k_b.transpose(1, 2)
+            yield from super().modify_tensors(k_b, name_kb, bid)
+            yield from super().modify_tensors(v_b, name_vb, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("InternLM2ForCausalLM")
 class InternLM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INTERNLM2
@@ -7700,6 +7919,135 @@ class MimoV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Step3p5ForCausalLM")
+class Step35Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.STEP35
+
+    def set_gguf_parameters(self):
+        rope_theta = self.hparams.get("rope_theta")
+        if isinstance(rope_theta, list):
+            self.hparams["rope_theta"] = float(rope_theta[0])
+            self.hparams["local_rope_theta"] = float(rope_theta[1])
+            self.rope_parameters["rope_theta"] = self.hparams["rope_theta"]
+            self.rope_parameters["sliding_attention"] = {"rope_theta": self.hparams["local_rope_theta"]}
+
+        super().set_gguf_parameters()
+
+        layer_types = self.hparams.get("layer_types") or []
+        partial_rotary_factors = self.hparams.get("partial_rotary_factors") or []
+        attn_other = self.hparams.get("attention_other_setting") or {}
+
+        n_head_base = self.hparams["num_attention_heads"]
+        n_kv_base = self.hparams["num_attention_groups"]
+
+        n_head_swa = attn_other.get("num_attention_heads", n_head_base)
+        n_kv_swa = attn_other.get("num_attention_groups", n_kv_base)
+
+        layer_types = layer_types[: self.block_count]
+        partial_rotary_factors = partial_rotary_factors[: self.block_count]
+        assert [1.0 if lt == "sliding_attention" else 0.5 for lt in layer_types] == partial_rotary_factors
+        head_arr = [n_head_swa if lt == "sliding_attention" else n_head_base for lt in layer_types]
+        kv_arr = [n_kv_swa if lt == "sliding_attention" else n_kv_base for lt in layer_types]
+        swa_pat = [lt == "sliding_attention" for lt in layer_types]
+
+        self.gguf_writer.add_head_count(head_arr)
+        self.gguf_writer.add_head_count_kv(kv_arr)
+
+        self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
+        self.gguf_writer.add_sliding_window_pattern(swa_pat)
+
+        self.gguf_writer.add_value_length(self.hparams["head_dim"])
+
+        # MoE params
+        self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["moe_top_k"])
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["share_expert_dim"])
+
+        if (moe_router_scaling_factor := self.hparams.get("moe_router_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(moe_router_scaling_factor)
+        if (norm_expert_weight := self.hparams.get("norm_expert_weight")) is not None:
+            self.gguf_writer.add_expert_weights_norm(norm_expert_weight)
+
+        # leading dense blocks
+        leading_dense = 0
+        moe_layers_enum = self.hparams.get("moe_layers_enum")
+        if isinstance(moe_layers_enum, str) and moe_layers_enum.strip():
+            moe_layers = sorted(int(i) for i in moe_layers_enum.strip().split(","))
+            if moe_layers:
+                leading_dense = max(0, moe_layers[0])
+        self.gguf_writer.add_leading_dense_block_count(leading_dense)
+        self.gguf_writer.add_moe_every_n_layers(int(self.hparams.get("moe_every_n_layer", 1)))
+
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("rms_norm_eps", 1e-5))
+
+        # Optional per-layer SwiGLU clamps.
+        if (limits := self.hparams.get("swiglu_limits")) is not None:
+            limits_f = [0.0 if v is None else float(v) for v in limits[: self.block_count]]
+            self.gguf_writer.add_swiglu_clamp_exp(limits_f)
+        if (limits_shared := self.hparams.get("swiglu_limits_shared")) is not None:
+            limits_shared_f = [0.0 if v is None else float(v) for v in limits_shared[: self.block_count]]
+            self.gguf_writer.add_swiglu_clamp_shexp(limits_shared_f)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # remove mtp layers
+        if (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None:
+            il = int(m.group(1))
+            n_main = int(self.hparams.get("num_hidden_layers", self.block_count))
+            if il >= n_main:
+                return
+        if name.endswith("norm.weight"):
+            data_torch += 1.0
+        # Map router bias (expert selection bias) to a GGUF bias tensor
+        if name.endswith(".moe.router_bias"):
+            name += ".bias"
+
+        if name.endswith((".self_attn.g_proj.weight", ".moe.gate.weight", ".moe.up_proj.weight", ".moe.gate_proj.weight", ".moe.down_proj.weight")):
+            data_torch = data_torch.squeeze().contiguous()
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # Step35 can optionally use Llama-3 style RoPE scaling (HF: rope_scaling.rope_type == "llama3").
+        # llama.cpp represents this via a single extra tensor: "rope_freqs.weight" (aka MODEL_TENSOR.ROPE_FREQS).
+        rope_params = self.rope_parameters.get("full_attention", self.rope_parameters)
+        rope_type = rope_params.get("rope_type") or ""
+        if rope_type.lower() != "llama3":
+            return
+
+        # Step35 configs can carry per-layer rope_theta as a list; for llama3 rope factors we use the base value.
+        rope_theta = self.hparams.get("rope_theta", 10000.0)
+        if isinstance(rope_theta, list):
+            rope_theta = rope_theta[0]
+        base = float(rope_theta)
+        if (dim := self.hparams.get("head_dim")) is None:
+            dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+        dim = int(dim)
+
+        freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+        factor = float(rope_params.get("factor", 8.0))
+        low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
+        high_freq_factor = float(rope_params.get("high_freq_factor", 4.0))
+        old_context_len = int(rope_params.get("original_max_position_embeddings", self.hparams.get("original_max_position_embeddings", 8192)))
+
+        low_freq_wavelen = old_context_len / low_freq_factor
+        high_freq_wavelen = old_context_len / high_freq_factor
+
+        rope_factors: list[float] = []
+        for freq in freqs:
+            wavelen = 2 * math.pi / float(freq)
+            if wavelen < high_freq_wavelen:
+                rope_factors.append(1.0)
+            elif wavelen > low_freq_wavelen:
+                rope_factors.append(factor)
+            else:
+                smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+                rope_factors.append(1.0 / ((1.0 - smooth) / factor + smooth))
+
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
 
 @ModelBase.register("PanguEmbeddedForCausalLM")
