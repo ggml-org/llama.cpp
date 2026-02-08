@@ -115,46 +115,51 @@ class ChatStore {
 			}
 		}
 	}
-	registerMessageUpdateCallback(
-		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
-	): void {
-		this.messageUpdateCallback = callback;
-	}
+
 	clearUIState(): void {
 		this.isLoading = false;
 		this.currentResponse = '';
 		this.isStreamingActive = false;
 	}
+
 	setActiveProcessingConversation(conversationId: string | null): void {
 		this.activeConversationId = conversationId;
 		this.activeProcessingState = conversationId
 			? this.processingStates.get(conversationId) || null
 			: null;
 	}
+
 	getProcessingState(conversationId: string): ApiProcessingState | null {
 		return this.processingStates.get(conversationId) || null;
 	}
+
 	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
 		if (state === null) this.processingStates.delete(conversationId);
 		else this.processingStates.set(conversationId, state);
 		if (conversationId === this.activeConversationId) this.activeProcessingState = state;
 	}
+
 	clearProcessingState(conversationId: string): void {
 		this.processingStates.delete(conversationId);
 		if (conversationId === this.activeConversationId) this.activeProcessingState = null;
 	}
+
 	getActiveProcessingState(): ApiProcessingState | null {
 		return this.activeProcessingState;
 	}
+
 	getCurrentProcessingStateSync(): ApiProcessingState | null {
 		return this.activeProcessingState;
 	}
+
 	private setStreamingActive(active: boolean): void {
 		this.isStreamingActive = active;
 	}
+
 	isStreaming(): boolean {
 		return this.isStreamingActive;
 	}
+
 	private getOrCreateAbortController(convId: string): AbortController {
 		let c = this.abortControllers.get(convId);
 		if (!c || c.signal.aborted) {
@@ -163,6 +168,7 @@ class ChatStore {
 		}
 		return c;
 	}
+
 	private abortRequest(convId?: string): void {
 		if (convId) {
 			const c = this.abortControllers.get(convId);
@@ -175,33 +181,42 @@ class ChatStore {
 			this.abortControllers.clear();
 		}
 	}
+
 	private showErrorDialog(state: ErrorDialogState | null): void {
 		this.errorDialogState = state;
 	}
+
 	dismissErrorDialog(): void {
 		this.errorDialogState = null;
 	}
+
 	clearEditMode(): void {
 		this.isEditModeActive = false;
 		this.addFilesHandler = null;
 	}
+
 	isEditing(): boolean {
 		return this.isEditModeActive;
 	}
+
 	setEditModeActive(handler: (files: File[]) => void): void {
 		this.isEditModeActive = true;
 		this.addFilesHandler = handler;
 	}
+
 	getAddFilesHandler(): ((files: File[]) => void) | null {
 		return this.addFilesHandler;
 	}
+
 	clearPendingEditMessageId(): void {
 		this.pendingEditMessageId = null;
 	}
+
 	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
 		this._pendingDraftMessage = message;
 		this._pendingDraftFiles = [...files];
 	}
+
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
 		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) return null;
 		const d = { message: this._pendingDraftMessage, files: [...this._pendingDraftFiles] };
@@ -209,24 +224,31 @@ class ChatStore {
 		this._pendingDraftFiles = [];
 		return d;
 	}
+
 	hasPendingDraft(): boolean {
 		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
 	}
+
 	getAllLoadingChats(): string[] {
 		return Array.from(this.chatLoadingStates.keys());
 	}
+
 	getAllStreamingChats(): string[] {
 		return Array.from(this.chatStreamingStates.keys());
 	}
+
 	getChatStreamingPublic(convId: string): { response: string; messageId: string } | undefined {
 		return this.getChatStreaming(convId);
 	}
+
 	isChatLoadingPublic(convId: string): boolean {
 		return this.chatLoadingStates.get(convId) || false;
 	}
+
 	private isChatLoadingInternal(convId: string): boolean {
 		return this.chatStreamingStates.has(convId);
 	}
+
 	private touchConversationState(convId: string): void {
 		this.conversationStateTimestamps.set(convId, { lastAccessed: Date.now() });
 	}
@@ -940,6 +962,7 @@ class ChatStore {
 				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
 			}
 		}
+
 		return { totalCount: allToDelete.length, userMessages, assistantMessages, messageTypes };
 	}
 
@@ -986,31 +1009,40 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
+
 		if (!result) return;
+
 		const { message: msg, index: idx } = result;
+
 		try {
 			this.showErrorDialog(null);
 			this.setChatLoading(activeConv.id, true);
 			this.clearChatStreaming(activeConv.id);
+
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const dbMessage = allMessages.find((m) => m.id === messageId);
+
 			if (!dbMessage) {
 				this.setChatLoading(activeConv.id, false);
 				return;
 			}
+
 			const originalContent = dbMessage.content;
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
 				...conversationContext,
 				{ role: MessageRole.ASSISTANT as const, content: originalContent }
 			];
+
 			let appendedContent = '',
 				hasReceivedContent = false,
 				isReasoningOpen = hasUnclosedReasoningTag(originalContent);
+				
 			const updateStreamingContent = (fullContent: string) => {
 				this.setChatStreaming(msg.convId, fullContent, msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
 			};
+
 			const appendContentChunk = (chunk: string) => {
 				if (isReasoningOpen) {
 					appendedContent += REASONING_TAGS.END;
@@ -1020,6 +1052,7 @@ class ChatStore {
 				hasReceivedContent = true;
 				updateStreamingContent(originalContent + appendedContent);
 			};
+
 			const appendReasoningChunk = (chunk: string) => {
 				if (!isReasoningOpen) {
 					appendedContent += REASONING_TAGS.START;
@@ -1029,13 +1062,16 @@ class ChatStore {
 				hasReceivedContent = true;
 				updateStreamingContent(originalContent + appendedContent);
 			};
+
 			const finalizeReasoning = () => {
 				if (isReasoningOpen) {
 					appendedContent += REASONING_TAGS.END;
 					isReasoningOpen = false;
 				}
 			};
+
 			const abortController = this.getOrCreateAbortController(msg.convId);
+
 			await ChatService.sendMessage(
 				contextWithContinue,
 				{
@@ -1065,21 +1101,26 @@ class ChatStore {
 						timings?: ChatMessageTimings
 					) => {
 						finalizeReasoning();
+
 						const appendedFromCompletion = hasReceivedContent
 							? appendedContent
 							: wrapReasoningContent(finalContent || '', reasoningContent);
 						const fullContent = originalContent + appendedFromCompletion;
+
 						await DatabaseService.updateMessage(msg.id, {
 							content: fullContent,
 							timestamp: Date.now(),
 							timings
 						});
+
 						conversationsStore.updateMessageAtIndex(idx, {
 							content: fullContent,
 							timestamp: Date.now(),
 							timings
 						});
+
 						conversationsStore.updateConversationTimestamp();
+
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
@@ -1091,19 +1132,25 @@ class ChatStore {
 									content: originalContent + appendedContent,
 									timestamp: Date.now()
 								});
+
 								conversationsStore.updateMessageAtIndex(idx, {
 									content: originalContent + appendedContent,
 									timestamp: Date.now()
 								});
 							}
+
 							this.setChatLoading(msg.convId, false);
 							this.clearChatStreaming(msg.convId);
 							this.setProcessingState(msg.convId, null);
+
 							return;
 						}
+
 						console.error('Continue generation error:', error);
 						conversationsStore.updateMessageAtIndex(idx, { content: originalContent });
+
 						await DatabaseService.updateMessage(msg.id, { content: originalContent });
+
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
 						this.setProcessingState(msg.convId, null);
@@ -1114,6 +1161,7 @@ class ChatStore {
 						});
 					}
 				},
+
 				msg.convId,
 				abortController.signal
 			);
@@ -1130,9 +1178,12 @@ class ChatStore {
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
+
 		const { message: msg, index: idx } = result;
+
 		try {
 			if (shouldBranch) {
 				const newMessage = await DatabaseService.createMessageBranch(
@@ -1148,13 +1199,16 @@ class ChatStore {
 					},
 					msg.parent!
 				);
+
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
 				await DatabaseService.updateMessage(msg.id, { content: newContent });
 				await conversationsStore.updateCurrentNode(msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: newContent });
 			}
+
 			conversationsStore.updateConversationTimestamp();
+
 			await conversationsStore.refreshActiveMessages();
 		} catch (error) {
 			console.error('Failed to edit assistant message:', error);
@@ -1168,21 +1222,30 @@ class ChatStore {
 	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
+
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 		if (!result) return;
+
 		const { message: msg, index: idx } = result;
 		try {
 			const updateData: Partial<DatabaseMessage> = { content: newContent };
+
 			if (newExtras !== undefined) updateData.extra = JSON.parse(JSON.stringify(newExtras));
+
 			await DatabaseService.updateMessage(messageId, updateData);
+
 			conversationsStore.updateMessageAtIndex(idx, updateData);
+
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-			if (rootMessage && msg.parent === rootMessage.id && newContent.trim())
+
+			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationTitleWithConfirmation(
 					activeConv.id,
 					newContent.trim()
 				);
+			}
+
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to edit user message:', error);
@@ -1244,9 +1307,11 @@ class ChatStore {
 	private async generateResponseForMessage(userMessageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
+
 		this.showErrorDialog(null);
 		this.setChatLoading(activeConv.id, true);
 		this.clearChatStreaming(activeConv.id);
+
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const conversationPath = filterByLeafNodeId(
@@ -1267,7 +1332,9 @@ class ChatStore {
 				},
 				userMessageId
 			);
+
 			conversationsStore.addMessageToActive(assistantMessage);
+
 			await this.streamChatCompletion(conversationPath, assistantMessage);
 		} catch (error) {
 			console.error('Failed to generate response:', error);
@@ -1284,10 +1351,16 @@ class ChatStore {
 
 		if (isRouterMode()) {
 			const modelContextSize = selectedModelContextSize();
-			if (typeof modelContextSize === 'number' && modelContextSize > 0) return modelContextSize;
+	
+			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
+				return modelContextSize;
+			}
 		} else {
 			const propsContextSize = contextSize();
-			if (typeof propsContextSize === 'number' && propsContextSize > 0) return propsContextSize;
+	
+			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
+				return propsContextSize;
+			}
 		}
 
 		return null;
@@ -1305,12 +1378,16 @@ class ChatStore {
 		conversationId?: string
 	): void {
 		const processingState = this.parseTimingData(timingData);
+
 		if (processingState === null) {
 			console.warn('Failed to parse timing data - skipping update');
 			return;
 		}
+
 		const targetId = conversationId || this.activeConversationId;
-		if (targetId) this.setProcessingState(targetId, processingState);
+		if (targetId) {
+			this.setProcessingState(targetId, processingState);
+		}
 	}
 
 	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
@@ -1389,47 +1466,72 @@ class ChatStore {
 		const hasValue = (value: unknown): boolean =>
 			value !== undefined && value !== null && value !== '';
 		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
+
 		if (isRouterMode()) {
 			const modelName = selectedModelName();
 			if (modelName) apiOptions.model = modelName;
 		}
+
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
+
 		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
+
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
+
 		if (hasValue(currentConfig.max_tokens))
 			apiOptions.max_tokens = Number(currentConfig.max_tokens);
+
 		if (hasValue(currentConfig.dynatemp_range))
 			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
+
 		if (hasValue(currentConfig.dynatemp_exponent))
 			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
+
 		if (hasValue(currentConfig.top_k)) apiOptions.top_k = Number(currentConfig.top_k);
+
 		if (hasValue(currentConfig.top_p)) apiOptions.top_p = Number(currentConfig.top_p);
+
 		if (hasValue(currentConfig.min_p)) apiOptions.min_p = Number(currentConfig.min_p);
+
 		if (hasValue(currentConfig.xtc_probability))
 			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
+
 		if (hasValue(currentConfig.xtc_threshold))
 			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
+
 		if (hasValue(currentConfig.typ_p)) apiOptions.typ_p = Number(currentConfig.typ_p);
+
 		if (hasValue(currentConfig.repeat_last_n))
 			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
+
 		if (hasValue(currentConfig.repeat_penalty))
 			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
+
 		if (hasValue(currentConfig.presence_penalty))
 			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
+
 		if (hasValue(currentConfig.frequency_penalty))
 			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
+
 		if (hasValue(currentConfig.dry_multiplier))
 			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
+
 		if (hasValue(currentConfig.dry_base)) apiOptions.dry_base = Number(currentConfig.dry_base);
+
 		if (hasValue(currentConfig.dry_allowed_length))
 			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
+
 		if (hasValue(currentConfig.dry_penalty_last_n))
 			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
+
 		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
+
 		if (currentConfig.backend_sampling)
 			apiOptions.backend_sampling = currentConfig.backend_sampling;
+
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
+
 		return apiOptions;
 	}
 }
