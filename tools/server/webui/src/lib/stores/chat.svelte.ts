@@ -902,12 +902,35 @@ class ChatStore {
 		if (!activeConv)
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+		const messageToDelete = allMessages.find((m) => m.id === messageId);
+
+		// For system messages, don't count descendants as they will be preserved (reparented to root)
+		if (messageToDelete?.role === MessageRole.SYSTEM) {
+			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
+			let userMessages = 0,
+				assistantMessages = 0;
+			const messageTypes: string[] = [];
+
+			for (const msg of messagesToDelete) {
+				if (msg.role === MessageRole.USER) {
+					userMessages++;
+					if (!messageTypes.includes('user message')) messageTypes.push('user message');
+				} else if (msg.role === MessageRole.ASSISTANT) {
+					assistantMessages++;
+					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
+				}
+			}
+
+			return { totalCount: 1, userMessages, assistantMessages, messageTypes };
+		}
+
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
 		let userMessages = 0,
 			assistantMessages = 0;
 		const messageTypes: string[] = [];
+
 		for (const msg of messagesToDelete) {
 			if (msg.role === MessageRole.USER) {
 				userMessages++;
@@ -926,25 +949,33 @@ class ChatStore {
 		try {
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const messageToDelete = allMessages.find((m) => m.id === messageId);
+
 			if (!messageToDelete) return;
+
 			const currentPath = filterByLeafNodeId(allMessages, activeConv.currNode || '', false);
 			const isInCurrentPath = currentPath.some((m) => m.id === messageId);
+
 			if (isInCurrentPath && messageToDelete.parent) {
 				const siblings = allMessages.filter(
 					(m) => m.parent === messageToDelete.parent && m.id !== messageId
 				);
+
 				if (siblings.length > 0) {
 					const latestSibling = siblings.reduce((latest, sibling) =>
 						sibling.timestamp > latest.timestamp ? sibling : latest
 					);
+
 					await conversationsStore.updateCurrentNode(findLeafNode(allMessages, latestSibling.id));
-				} else if (messageToDelete.parent)
+				} else if (messageToDelete.parent) {
 					await conversationsStore.updateCurrentNode(
 						findLeafNode(allMessages, messageToDelete.parent)
 					);
+				}
 			}
+
 			await DatabaseService.deleteMessageCascading(activeConv.id, messageId);
 			await conversationsStore.refreshActiveMessages();
+
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to delete message:', error);
