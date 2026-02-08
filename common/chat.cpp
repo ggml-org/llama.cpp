@@ -1882,8 +1882,21 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
-    data.prompt = apply(tmpl, params);
+    json additional_context = {
+        {"thinking", params.enable_thinking},
+    };
+
+    data.prompt = apply(tmpl, params, /* messages_override= */ std::nullopt, /* tools_override= */ std::nullopt, additional_context);
     data.format = COMMON_CHAT_FORMAT_KIMI_K2;
+
+    // Handle thinking tags based on prompt ending
+    if (string_ends_with(data.prompt, "<think>\n") || string_ends_with(data.prompt, "<think>")) {
+        if (!params.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
 
     data.preserved_tokens = {
         "<think>",
