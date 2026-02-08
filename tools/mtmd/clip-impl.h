@@ -46,6 +46,7 @@
 #define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
 #define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
+#define KEY_VISION_ROPE_THETA   "clip.vision.rope_theta"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
@@ -77,6 +78,7 @@
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
 #define TN_ATTN_OUTPUT     "%s.blk.%d.attn_out.%s"
+#define TN_ATTN_LN         "%s.blk.%d.attn_ln.%s"
 #define TN_ATTN_K_NORM     "%s.blk.%d.attn_k_norm.%s"
 #define TN_ATTN_Q_NORM     "%s.blk.%d.attn_q_norm.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
@@ -227,6 +229,7 @@ enum projector_type {
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
     PROJECTOR_TYPE_MUSIC_FLAMINGO,
+    PROJECTOR_TYPE_JINACLIP2, // JinaCLIP v2
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
@@ -263,6 +266,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
+    { PROJECTOR_TYPE_JINACLIP2, "jinaclip2"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
