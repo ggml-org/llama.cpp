@@ -516,6 +516,118 @@ jobs:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
+  ubuntu-22-rocm:
+    runs-on: ubuntu-22.04
+    container: rocm/dev-ubuntu-22.04:7.2
+
+    env:
+      ROCM_VERSION: "7.2"
+
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            name: "rocm"
+            gpu_targets: "gfx1151;gfx1150;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev rocwmma-dev
+
+      - name: Free disk space
+        run: |
+          # Remove preinstalled SDKs and caches not needed for this job
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf /opt/hostedtoolcache || true
+
+          # Build case pattern from GPU_TARGETS
+          PATTERN=$(printf '%s' "$GPU_TARGETS" | sed 's/;/\*|\*/g')
+          PATTERN="*${PATTERN}*"
+
+          # Remove library files for architectures we're not building for to save disk space
+          echo "Cleaning up unneeded architecture files..."
+          cd /opt/rocm/lib/rocblas/library
+          # Keep only our target architectures
+          for file in *; do
+            case "$file" in
+            $PATTERN)
+              ;;
+            *)
+              sudo rm -f "$file" ;;
+            esac;
+          done
+
+          cd /opt/rocm/lib/hipblaslt/library
+          for file in *; do
+            case "$file" in
+              $PATTERN)
+                ;;
+              *)
+                sudo rm -f "$file" ;;
+            esac;
+          done
+
+          # Remove old package lists and caches
+          sudo rm -rf /var/lib/apt/lists/* || true
+          sudo apt clean
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: linux-latest-cmake-rocm-${{ env.ROCM_VERSION }}-${{ matrix.name }}-x64
+          evict-old-files: 1d
+
+      - name: Build with native CMake HIP support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU=OFF \
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGGML_HIP=ON \
+            -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release -j $(nproc)
+          # Create directories for ROCm libraries
+          mkdir -p ./build/bin/rocblas/library
+          mkdir -p ./build/bin/hipblaslt/library
+
+          # Copy ROCm runtime libraries
+          cp /opt/rocm/lib/librocsparse.so* ./build/bin/
+          cp /opt/rocm/lib/libhsa-runtime64.so* ./build/bin/
+          cp /opt/rocm/lib/libamdhip64.so* ./build/bin/
+          cp /opt/rocm/lib/libhipblas.so* ./build/bin/
+          cp /opt/rocm/lib/libhipblaslt.so* ./build/bin/
+          cp /opt/rocm/lib/librocblas.so* ./build/bin/
+          cp /opt/rocm/lib/rocblas/library/* ./build/bin/rocblas/library/
+          cp /opt/rocm/lib/hipblaslt/library/* ./build/bin/hipblaslt/library/
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          tar -czvf llama-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-ubuntu-rocm-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-rocm-${{ matrix.build }}.tar.gz
+
   windows-hip:
     runs-on: windows-2022
 
@@ -784,6 +896,7 @@ jobs:
       - windows-cuda
       - windows-sycl
       - windows-hip
+      - ubuntu-22-rocm
       - ubuntu-22-cpu
       - ubuntu-22-vulkan
       - macOS-arm64
@@ -868,6 +981,7 @@ jobs:
             **Linux:**
             - [Ubuntu x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
+            - [Ubuntu x64 (ROCm)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-x64.tar.gz)
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
 
             **Windows:**
