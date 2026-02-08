@@ -313,7 +313,11 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
             // default: sample from distribution
-            samplers.push_back(llama_sampler_init_dist(params.seed));
+            if (params.blue_noise) {
+                samplers.push_back(llama_sampler_init_dist_blue_noise(params.seed));
+            } else {
+                samplers.push_back(llama_sampler_init_dist(params.seed));
+            }
         }
     } else if (params.mirostat == 1) {
         samplers.push_back(llama_sampler_init_temp(params.temp));

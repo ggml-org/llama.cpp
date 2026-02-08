@@ -1295,7 +1295,8 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_init_greedy(void);
 
     /// seed == LLAMA_DEFAULT_SEED to use a random seed.
-    LLAMA_API struct llama_sampler * llama_sampler_init_dist(uint32_t seed);
+    LLAMA_API struct llama_sampler * llama_sampler_init_dist           (uint32_t seed);
+    LLAMA_API struct llama_sampler * llama_sampler_init_dist_blue_noise(uint32_t seed);
 
     /// @details Top-K sampling described in academic paper "The Curious Case of Neural Text Degeneration" https://arxiv.org/abs/1904.09751
     /// Setting k <= 0 makes this a noop
