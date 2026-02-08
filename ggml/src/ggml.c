@@ -7405,6 +7405,6 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->strict_cpu     != p1->strict_cpu )    return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
 }
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
 #    include "ggml-ifairy-lut.h"
 #endif

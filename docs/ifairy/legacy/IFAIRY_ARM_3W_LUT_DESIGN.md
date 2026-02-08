@@ -18,7 +18,7 @@
 
 ### 1.2 约束（当前实现）
 
-- 编译期开关：`GGML_IFAIRY_ARM_LUT`（开启时 CMake 强制关闭各类加速后端以保证 CPU-only）。
+- 编译期开关：`GGML_IFAIRY_LUT_CPU`（开启时 CMake 强制关闭各类加速后端以保证 CPU-only）。
 - 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时回退到非 LUT 路径（不会走 ARM32 标量 LUT）。
 - 形状约束：`K % QK_K == 0`（当前 `QK_K=256`），否则 LUT 路由不生效。
 - 激活输入支持两种形式：
@@ -150,7 +150,7 @@ NEON 内核里对每个 group 只需要：
 
 ## 5. 调度与线程模型（摘要）
 
-集成点在 `ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`（`#if defined(GGML_IFAIRY_ARM_LUT)`）。
+集成点在 `ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`（`#if defined(GGML_IFAIRY_LUT_CPU)`）。
 
 - 索引生成：`ggml_graph_compute()` 在启动 worker 线程前预扫描 `cgraph`，对命中的 iFairy `MUL_MAT` 确保 `src0->extra/indexes` 已生成（因此 mul_mat 内无需为 indexes 再做 barrier）。
 - 非 tiling：

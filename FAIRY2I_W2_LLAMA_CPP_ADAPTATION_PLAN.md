@@ -506,7 +506,7 @@ cmake --build build-rel -j $(sysctl -n hw.ncpu)
 
 如果要试 LUT（可选）：
 
-- 参考现有 `build-rel-lut/` 的构建方式（通常带 `GGML_IFAIRY_ARM_LUT`）。
+- 参考现有 `build-rel-lut/` 的构建方式（通常带 `GGML_IFAIRY_LUT_CPU`）。
 
 ### 8.2 转换
 

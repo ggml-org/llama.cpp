@@ -21,9 +21,9 @@ Status: Draft (2026-01-25)
   - `pp128`: `151.50 ± 3.87 tok/s`
   - `tg256`: `80.30 ± 2.92 tok/s`
 
-### lut16（GGML_IFAIRY_ARM_LUT=ON, GGML_IFAIRY_LUT=1）
+### lut16（GGML_IFAIRY_LUT_CPU=ON, GGML_IFAIRY_LUT=1）
 - Build:
-  - `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
+  - `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_LUT_CPU=ON`
   - `cmake --build build-rel-lut`
 - Command:
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
@@ -38,13 +38,13 @@ Status: Draft (2026-01-25)
   - `pp128`: `101.21 ± 1.19 tok/s`
   - `tg256`: `68.98 ± 2.18 tok/s`
 
-### microbench（GGML_IFAIRY_ARM_LUT=ON）
+### microbench（GGML_IFAIRY_LUT_CPU=ON）
 - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=623.10`
 - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=45.42`
 - `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=170151.2`
 
 ### lut16（当前 V2 核心路径）
-- microbench（GGML_IFAIRY_ARM_LUT=ON）:
+- microbench（GGML_IFAIRY_LUT_CPU=ON）:
   - `./build-rel-lut/bin/ifairy-microbench` (lut16 N==1, m=256 k=4096): `ns/iter=42004.8`
 
 ---
@@ -55,7 +55,7 @@ Status: Draft (2026-01-25)
 
 ### 2026-01-28 (build `35a9928b`)
 - Correctness:
-  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_LUT_CPU disabled)
   - `./build-rel-lut/bin/test-ifairy`: PASS
 - `llama-cli` (lut_c sanity, no-cnv):
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_IMPL=lut_c ./build-rel-lut/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
@@ -68,24 +68,24 @@ Status: Draft (2026-01-25)
 
 ### 2026-01-24 (working tree)
 - `test-ifairy`:
-  - `./build-rel/bin/test-ifairy`: PASS (LUT tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel/bin/test-ifairy`: PASS (LUT tests skipped, GGML_IFAIRY_LUT_CPU disabled)
   - `./build-rel-lut/bin/test-ifairy`: PASS
 - `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256):
   - `./build-rel/bin/llama-bench ...`: `pp128=169.09 tok/s`, `tg256=91.25 tok/s`
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=35.36 tok/s`, `tg256=31.10 tok/s`
-- microbench (`GGML_IFAIRY_ARM_LUT=ON` build):
+- microbench (`GGML_IFAIRY_LUT_CPU=ON` build):
   - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=634.91`
   - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=58.49`
   - `./build-rel-lut/bin/ifairy-microbench` (merged64 N==1, m=256 k=4096): `ns/iter=179699.4`
 
 ### 2026-01-25 (working tree)
 - Correctness:
-  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_ARM_LUT disabled)
+  - `./build-rel/bin/test-ifairy`: PASS (LUT backend tests skipped, GGML_IFAIRY_LUT_CPU disabled)
   - `./build-rel-lut/bin/test-ifairy`: PASS
 - `llama-bench` (model: `models/Fairy-plus-minus-i-700M/ifairy.gguf`, threads=4, pp128+tg256, repetitions=3):
   - `./build-rel/bin/llama-bench ...`: `pp128=151.50 ± 3.87 tok/s`, `tg256=80.30 ± 2.92 tok/s` (raw: `tmp/bench/bench_build-rel.txt`)
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench ...`: `pp128=94.69 ± 0.65 tok/s`, `tg256=61.36 ± 1.81 tok/s` (raw: `tmp/bench/bench_build-rel-lut.txt`)
-- microbench（GGML_IFAIRY_ARM_LUT=ON）:
+- microbench（GGML_IFAIRY_LUT_CPU=ON）:
   - `./build-rel-lut/bin/ifairy-actq-microbench`: `ns/iter=605.49`
   - `./build-rel-lut/bin/ifairy-vecdot-microbench`: `ns/vecdot=44.38`
   - `./build-rel-lut/bin/ifairy-microbench` (lut16 N==1, m=256 k=4096): `ns/iter=42004.8`

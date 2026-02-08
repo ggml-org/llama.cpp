@@ -218,8 +218,8 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
-if (GGML_IFAIRY_ARM_LUT)
-    target_compile_definitions(ggml-base PUBLIC GGML_IFAIRY_ARM_LUT)
+if (GGML_IFAIRY_LUT_CPU)
+    target_compile_definitions(ggml-base PUBLIC GGML_IFAIRY_LUT_CPU)
 endif()
 
 add_library(ggml

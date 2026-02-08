@@ -86,7 +86,7 @@ struct GGML_IFAIRY_LUT_ALIGN(GGML_IFAIRY_LUT_WTILE_ALIGNMENT) ifairy_lut_wtile_1
 // iFairy 3-weight LUT API
 //
 // Current state:
-// - CPU-only iFairy LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_ARM_LUT + GGML_IFAIRY_LUT env).
+// - CPU-only iFairy LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_LUT_CPU + GGML_IFAIRY_LUT env).
 // - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
 // - Index encoding is 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
 // - V2 core path keeps a single production layout/kernel:

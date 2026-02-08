@@ -55,7 +55,7 @@ Status: Draft (2026-01-24)
 ## 3. V2 目标与非目标
 
 ### 3.1 目标（必须满足）
-- **性能不回退**：以当前默认 auto 策略的最快路径为基线（Apple Silicon / `__aarch64__` + `__ARM_NEON__`），tok/s 目标 **±1% 以内**（以固定命令/固定 seed 复现）。
+- **性能不回退**：以当前默认 auto 策略的最快路径为基线（Apple Silicon / `__aarch64__` + `__ARM_NEON`），tok/s 目标 **±1% 以内**（以固定命令/固定 seed 复现）。
 - **语义不变**：严格保持 `w * conj(x)`。
 - **接口稳定**：不破坏 ggml 对外 API；尽量保持 `ggml_ifairy_lut_*.h` 对调用方不变。
 - **配置收敛**：运行时 env 变量只保留极少数“开关级”选项（enable/debug/impl 选择），其余变为内部固定策略（或仅在测试中启用验证）。
@@ -115,7 +115,7 @@ V2 建议保留（或新增）最小 env 集合：
 - `ggml-cpu.c` 的 dispatch 保持原样，但 V2 入口先旁路（或只在 debug build 开启）以便 A/B。
 
 ### Phase 1：默认切到 V2 merged64（功能等价）
-- 在 `GGML_IFAIRY_ARM_LUT` 开启时，默认走 `GGML_IFAIRY_LUT_IMPL=auto` → `merged64` backend。
+- 在 `GGML_IFAIRY_LUT_CPU` 开启时，默认走 `GGML_IFAIRY_LUT_IMPL=auto` → `merged64` backend。
 - 把“layout/kernel auto policy”与“qgemm 内部 env gating”集中到一个地方（backend init/config），避免重复解析 env。
 
 ### Phase 2：删掉非 baseline 的 layout/kernel（最小化）

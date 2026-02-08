@@ -8,8 +8,8 @@ Must match the ggml baseline exactly: compute `w * conj(x)` (NOT `w * x`). See `
 
 ## Current routing constraints (as implemented)
 
-- Compile-time: `GGML_IFAIRY_ARM_LUT` (CPU-only; CMake disables other backends when enabled)
-- Platform: LUT route requires `__aarch64__` + `__ARM_NEON__` (otherwise fall back)
+- Compile-time: `GGML_IFAIRY_LUT_CPU` (CPU-only; CMake disables other backends when enabled)
+- Platform: LUT route requires `__aarch64__` + `__ARM_NEON` (otherwise fall back)
 - Shape gate: `K % QK_K == 0` with `QK_K=256`
 - Supported activations: `GGML_TYPE_F32` (bf16-pair complex container) or `GGML_TYPE_IFAIRY_Q16`
 - Output type: `GGML_TYPE_F32` (written as bf16-pair when `pack_bf16=true`)

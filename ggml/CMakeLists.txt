@@ -85,7 +85,7 @@ option(GGML_CCACHE "ggml: use ccache if available"                   ON)
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
 option(GGML_ALL_WARNINGS_3RD_PARTY "ggml: enable all compiler warnings in 3rd party libs" OFF)
 option(GGML_GPROF                  "ggml: enable gprof"                                   OFF)
-option(GGML_IFAIRY_ARM_LUT         "ggml: enable iFairy 3-weight LUT (ARM skeleton)"      ON)
+option(GGML_IFAIRY_LUT_CPU         "ggml: enable iFairy 3-weight LUT (CPU-only route)"     ON)
 
 # build
 option(GGML_FATAL_WARNINGS    "ggml: enable -Werror flag"    OFF)
@@ -215,15 +215,15 @@ option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adr
 set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "gmml: OpenCL API version to target")
 
-if (GGML_IFAIRY_ARM_LUT)
-    message(STATUS "GGML_IFAIRY_ARM_LUT=ON: enforcing CPU-only build (disabling accelerator backends)")
+if (GGML_IFAIRY_LUT_CPU)
+    message(STATUS "GGML_IFAIRY_LUT_CPU=ON: enforcing CPU-only build (disabling accelerator backends)")
 
     function(_ggml_ifairy_force_backend_off opt)
         if (NOT DEFINED ${opt})
             return()
         endif()
         if (NOT "${${opt}}" STREQUAL "OFF")
-            message(WARNING "GGML_IFAIRY_ARM_LUT=ON: forcing ${opt}=OFF for the CPU-only iFairy LUT path")
+            message(WARNING "GGML_IFAIRY_LUT_CPU=ON: forcing ${opt}=OFF for the CPU-only iFairy LUT path")
         endif()
         set(${opt} OFF CACHE BOOL "" FORCE)
     endfunction()

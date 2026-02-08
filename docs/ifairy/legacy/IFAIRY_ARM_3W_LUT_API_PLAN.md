@@ -6,7 +6,7 @@
 
 ## 1. 范围与前提
 
-- 编译期开关：`GGML_IFAIRY_ARM_LUT`（见 `ggml/CMakeLists.txt`）。开启时 CMake 会强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，保证 CPU-only。
+- 编译期开关：`GGML_IFAIRY_LUT_CPU`（见 `ggml/CMakeLists.txt`）。开启时 CMake 会强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，保证 CPU-only。
 - 运行时开关：`GGML_IFAIRY_LUT=0` 禁用 LUT（默认启用：未设置或非 `0`）。
 - 权重：`src0->type == GGML_TYPE_IFAIRY`（2‑bit 复数权重，压缩存储）。
 - 激活：`src1->type == GGML_TYPE_F32`（复数 bf16-pair 容器）或 `src1->type == GGML_TYPE_IFAIRY_Q16`（`block_ifairy_q16`）。
@@ -77,7 +77,7 @@ struct ifairy_lut_extra {
 
 ## 4. ggml 路由与线程模型（以现实现为准）
 
-集成点：`ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`（在 `#if defined(GGML_IFAIRY_ARM_LUT)` 下）。
+集成点：`ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`（在 `#if defined(GGML_IFAIRY_LUT_CPU)` 下）。
 
 执行流程要点（简化）：
 

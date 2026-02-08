@@ -14,7 +14,7 @@
 #include "vec.h"
 #include "ops.h"
 #include "ggml.h"
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
 #    include "ggml-ifairy-lut-impl.h"
 #    include "ggml-ifairy-lut.h"
 #endif
@@ -456,7 +456,7 @@ typedef pthread_mutex_t    ggml_mutex_t;
 #endif
 
 // Threadpool def
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
 enum ggml_ifairy_lut_impl {
     GGML_IFAIRY_LUT_IMPL_AUTO  = 0,
     GGML_IFAIRY_LUT_IMPL_LUT16 = 1,
@@ -497,7 +497,7 @@ struct ggml_threadpool {
 
     enum ggml_status ec;
 
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
     struct ggml_ifairy_lut_threadpool_config ifairy_lut_cfg;
 #endif
 };
@@ -600,7 +600,7 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 #endif
 }
 
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
 static bool ggml_ifairy_lut_is_fairy2i_weight(const struct ggml_tensor * src0) {
     if (src0 == NULL || src0->name[0] == '\0') {
         return false;
@@ -1336,7 +1336,7 @@ void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#if defined(GGML_IFAIRY_LUT_CPU)
     const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
@@ -3370,7 +3370,7 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->prio             = tpp->prio;
         threadpool->ec               = GGML_STATUS_SUCCESS;
 
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
         threadpool->ifairy_lut_cfg.dbg         = false;
         threadpool->ifairy_lut_cfg.lut_enabled = true;
         threadpool->ifairy_lut_cfg.impl        = GGML_IFAIRY_LUT_IMPL_AUTO;
@@ -3451,7 +3451,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
 
-#ifdef GGML_IFAIRY_ARM_LUT
+#ifdef GGML_IFAIRY_LUT_CPU
     ggml_ifairy_lut_threadpool_config_update(threadpool);
 
     const struct ggml_ifairy_lut_threadpool_config * cfg = &threadpool->ifairy_lut_cfg;

@@ -23,12 +23,12 @@ Status: Draft (2026-01-25)
 - Xcode / Instruments 可用（`xcrun xctrace`）
 - 已编译：
   - baseline: `build-rel`
-  - LUT build: `build-rel-lut`（`-DGGML_IFAIRY_ARM_LUT=ON`）
+  - LUT build: `build-rel-lut`（`-DGGML_IFAIRY_LUT_CPU=ON`）
 
 推荐命令（Release CPU）：
 - `cmake -B build-rel -DCMAKE_BUILD_TYPE=Release`
 - `cmake --build build-rel`
-- `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_ARM_LUT=ON`
+- `cmake -B build-rel-lut -DCMAKE_BUILD_TYPE=Release -DGGML_IFAIRY_LUT_CPU=ON`
 - `cmake --build build-rel-lut`
 
 ---

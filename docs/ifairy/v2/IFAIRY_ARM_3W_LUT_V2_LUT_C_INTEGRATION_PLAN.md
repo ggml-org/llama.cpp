@@ -142,7 +142,7 @@ Status: Draft (2026-01-24)
 推荐的端到端 benchmark（统一用 `--repetitions 3`）：
 - baseline（无 LUT backend）：
   - `./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
-- LUT backend（`GGML_IFAIRY_ARM_LUT=ON` build + `GGML_IFAIRY_LUT=1`）：
+- LUT backend（`GGML_IFAIRY_LUT_CPU=ON` build + `GGML_IFAIRY_LUT=1`）：
   - `GGML_IFAIRY_LUT=1 ./build-rel-lut/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 3`
 
 ---

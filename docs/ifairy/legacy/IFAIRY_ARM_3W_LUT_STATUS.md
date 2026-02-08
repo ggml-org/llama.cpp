@@ -1,6 +1,6 @@
 # iFairy ARM 3‑Weight LUT · 现状与后续工作（NEON 标量混合版）
 
-本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`。
+本文记录当前 `GGML_IFAIRY_LUT_CPU`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`。
 
 候选布局/内核（例如 `tbl64`）的落地路线图见 `IFAIRY_ARM_3W_LUT_ROADMAP.md`；跑分记录仍统一只写在本文的 `0.1 tok/s 记录`。
 
@@ -8,7 +8,7 @@
 
 ## 0. 快速使用（建议默认）
 
-- 前提：构建时启用了 `GGML_IFAIRY_ARM_LUT`（`ggml/CMakeLists.txt` 会在 configure 阶段强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，以保证 CPU-only）。
+- 前提：构建时启用了 `GGML_IFAIRY_LUT_CPU`（`ggml/CMakeLists.txt` 会在 configure 阶段强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，以保证 CPU-only）。
 - 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时会回退（ARM32/无 NEON 不走 LUT）。
 - 推荐性能基准：`./build-rel/bin/llama-bench`（tok/s 记录统一走 bench；`llama-cli` 仅用于 sanity-check）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（llama-bench 版；见脚本内 `TEST_MODE/N_PROMPT/N_GEN`）
@@ -368,7 +368,7 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 备注：`GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 时会自动禁用 tiling（strict 目前假设 full-K 单次计算）。
 
 6) 回归（decode/布局/tiling 一致性）  
-`./build-rel/bin/test-ifairy` 内置 `Test 5: iFairy LUT backend tiling regression`（会在测试内部设置 `GGML_IFAIRY_LUT=1`：先对比 `BK/BM` tiling 与非 tiling 的输出 bitwise 一致性；再对比 `N==1`（decode-like）下 `GGML_IFAIRY_LUT_LAYOUT=legacy` vs `compact` 的输出 bitwise 一致性；若 `GGML_IFAIRY_ARM_LUT` 未启用则自动跳过）。
+`./build-rel/bin/test-ifairy` 内置 `Test 5: iFairy LUT backend tiling regression`（会在测试内部设置 `GGML_IFAIRY_LUT=1`：先对比 `BK/BM` tiling 与非 tiling 的输出 bitwise 一致性；再对比 `N==1`（decode-like）下 `GGML_IFAIRY_LUT_LAYOUT=legacy` vs `compact` 的输出 bitwise 一致性；若 `GGML_IFAIRY_LUT_CPU` 未启用则自动跳过）。
 
 7) 性能跑分/扫参（推荐）  
 优先使用仓库脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序，兼容 `tokens per second`/`tok/s` 两种日志格式）。  
