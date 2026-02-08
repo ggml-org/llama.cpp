@@ -19,8 +19,8 @@
 
 typedef void (*hvx_elemwise_f32_func)(uint8_t * data_dst, const uint8_t * src0, const uint8_t * src1, const uint32_t num_elems);
 
-static hvx_elemwise_f32_func func_table_HVX[]     = { hvx_mul_f32, hvx_add_f32, hvx_sub_f32 };
-static hvx_elemwise_f32_func func_table_HVX_opt[] = { hvx_mul_f32_aa, hvx_add_f32_aa, hvx_sub_f32_aa };
+static hvx_elemwise_f32_func func_table_HVX[]     = { hvx_mul_f32, hvx_add_f32, hvx_sub_f32, hvx_div_f32 };
+static hvx_elemwise_f32_func func_table_HVX_opt[] = { hvx_mul_f32_aa, hvx_add_f32_aa, hvx_sub_f32_aa, hvx_div_f32_aa };
 
 #define htp_binary_preamble            \
     const struct htp_tensor * src0 = &octx->src0; \
@@ -88,7 +88,7 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
     int is_aligned = 1;
     int opt_path   = 0;
     if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
-        (0 == hex_is_aligned((void *) dst->data, VLEN))) {
+        (0 == hex_is_aligned((void *) dst->data, VLEN)) || (0 == hex_is_aligned((void *)src0_row_size, VLEN))) {
         is_aligned = 0;
     }
     if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
@@ -225,6 +225,7 @@ static void binary_job_dispatcher_f32(unsigned int n, unsigned int i, void * dat
         case HTP_OP_MUL:
         case HTP_OP_ADD:
         case HTP_OP_SUB:
+        case HTP_OP_DIV:
             binary_job_f32_per_thread(octx, octx->src1_spad.data, n, i, octx->op);
             break;
 
@@ -262,6 +263,11 @@ static int execute_op_binary_f32(struct htp_ops_context * octx) {
         case HTP_OP_SUB:
             binary_op_func = binary_job_dispatcher_f32;
             op_type        = "sub-f32";
+            break;
+
+        case HTP_OP_DIV:
+            binary_op_func = binary_job_dispatcher_f32;
+            op_type        = "div-f32";
             break;
 
         case HTP_OP_ADD_ID:
