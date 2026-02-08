@@ -3220,7 +3220,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         // Nvidia prefers shared memory use to load large tiles of K.
         // Switch to loading from global memory when it would use too much shared memory.
         // AMD prefers loading K directly from global memory
-        const uint32_t k_load_shmem = 1; // device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 ? 1 : 0;
+        const uint32_t k_load_shmem = device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256 ? 1 : 0;
 
         return {wg_size, rows_cols[0], rows_cols[1], hsk, hsv, clamp, D_split, device->subgroup_size, k_load_shmem, flags};
     };
