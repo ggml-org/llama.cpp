@@ -4383,21 +4383,21 @@ class Qwen3_5Model(Qwen3NextModel):
         # expectations, so we skip Qwen2MoeModel's permute(0,2,1) and handle directly.
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            # HF: [n_expert, n_embd, n_ff_exp] → GGML: {n_ff_exp, n_embd, n_expert} ✓
+            # HF: [n_expert, n_embd, n_ff_exp] -> GGML: {n_ff_exp, n_embd, n_expert}
             yield from super(Qwen2MoeModel, self).modify_tensors(data_torch, mapped, bid)
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            # HF: [n_expert, 2*n_ff_exp, n_embd] → split dim=1 → [n_expert, n_ff_exp, n_embd]
-            # GGML expects {n_embd, n_ff_exp, n_expert} which is PyTorch [n_expert, n_ff_exp, n_embd] ✓
+            # HF: [n_expert, 2*n_ff_exp, n_embd] -> split dim=1 -> [n_expert, n_ff_exp, n_embd]
+            # GGML expects {n_embd, n_ff_exp, n_expert} which is PyTorch [n_expert, n_ff_exp, n_embd]
             n_ff = data_torch.shape[1] // 2
             gate = data_torch[:, :n_ff, :].contiguous()
             up = data_torch[:, n_ff:, :].contiguous()
             base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
             mapped_gate = f"{base_name}.gate_proj.weight"
             mapped_up = f"{base_name}.up_proj.weight"
-            yield from super(Qwen2MoeModel, self).modify_tensors(gate, mapped_gate, bid)
-            yield from super(Qwen2MoeModel, self).modify_tensors(up, mapped_up, bid)
+            yield from Qwen2MoeModel.modify_tensors(self, gate, mapped_gate, bid)
+            yield from Qwen2MoeModel.modify_tensors(self, up, mapped_up, bid)
             return
 
         # in_proj_qkv → ATTN_QKV and in_proj_z → ATTN_GATE are handled by

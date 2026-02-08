@@ -228,7 +228,7 @@ class TensorNameMap:
             "transformer_encoder.{bid}.qkv",                                       # neobert
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
-            "model.layers.{bid}.linear_attn.in_proj_qkv",                            # qwen3.5
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
         ),
 
         # Attention query
@@ -359,8 +359,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_GATE: (
-            "model.layers.{bid}.self_attn.gate_proj",  # afmoe
-            "model.layers.{bid}.self_attn.g_proj",     # step3.5 head-wise attention gate
+            "model.layers.{bid}.self_attn.gate_proj",   # afmoe
+            "model.layers.{bid}.self_attn.g_proj",      # step3.5 head-wise attention gate
             "model.layers.{bid}.linear_attn.in_proj_z", # qwen3.5
         ),
 
