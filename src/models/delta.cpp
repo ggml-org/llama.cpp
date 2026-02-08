@@ -351,7 +351,16 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_graph_context_delta::build_delta_net
     cb(g_last, "g_last", il);
     cb(g_last_exp, "g_last_exp", il);
 
-    ggml_tensor * key_gdiff = ggml_mul(ctx0, k, g_diff_exp);
+    ggml_tensor * key_gdiff;
+    ggml_tensor * key_gdiff_t = nullptr;
+    if (is_kda) {
+        key_gdiff = ggml_mul(ctx0, k, g_diff_exp);
+    } else {
+        ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp, 1, chunk_size, n_chunks, g_diff_exp->ne[3]);
+        key_gdiff = ggml_mul(ctx0, k, g_diff_exp_t);
+        key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
+        cb(key_gdiff_t, "key_gdiff_t", il); // shape: (chunk_size, S_k, n_chunks, H_v * n_seqs)
+    }
     cb(key_gdiff, "key_gdiff", il);
 
     // Process chunks
@@ -395,9 +404,15 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_graph_context_delta::build_delta_net
             ? core_attn_out_chunk
             : ggml_concat(ctx0, core_attn_out, core_attn_out_chunk, 2);
 
-        // State update: state = state * g_last_exp + key_gdiff^T @ v_new
-        ggml_tensor * k_gdiff = ggml_cont(ctx0, get_slice_2d(ctx0, key_gdiff, chunk));
-        ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, ggml_cont(ctx0, ggml_transpose(ctx0, k_gdiff)));
+        ggml_tensor * kgdmulvnew;
+        if (is_kda) {
+            // State update: state = state * g_last_exp + key_gdiff^T @ v_new
+            ggml_tensor * k_gdiff = ggml_cont(ctx0, get_slice_2d(ctx0, key_gdiff, chunk));
+            kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, ggml_cont(ctx0, ggml_transpose(ctx0, k_gdiff)));
+        } else {
+            ggml_tensor * k_gdiff_t = get_slice_2d(ctx0, key_gdiff_t, chunk);
+            kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, k_gdiff_t);
+        }
 
         ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(ctx0, g_last_exp, chunk));
 
