@@ -7,6 +7,11 @@ llm_build_qwen3_5::llm_build_qwen3_5(const llama_model & model, const llm_graph_
     build_graph();
 }
 
+// virtual call in constructor fix
+llm_build_qwen3_5::llm_build_qwen3_5(const llama_model & model, const llm_graph_params & params, defer_graph_build_t /*tag*/) :
+    llm_graph_context_delta(params), model(model) {
+}
+
 void llm_build_qwen3_5::build_graph() {
     ggml_tensor * cur;
     ggml_tensor * inpL;

@@ -1,7 +1,8 @@
 #include "models.h"
 
 llm_build_qwen3_5_moe::llm_build_qwen3_5_moe(const llama_model & model, const llm_graph_params & params) :
-    llm_build_qwen3_5(model, params) {
+    llm_build_qwen3_5(model, params, defer_graph_build_t{}) {
+    build_graph();
 }
 
 ggml_tensor * llm_build_qwen3_5_moe::build_layer_ffn(ggml_tensor * cur, const int il) {

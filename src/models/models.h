@@ -585,6 +585,12 @@ struct llm_build_qwen3_5 : public llm_graph_context_delta {
     llm_build_qwen3_5(const llama_model & model, const llm_graph_params & params);
 
 protected:
+    // Tag type for subclass constructors that need to call build_graph() themselves
+    // (to ensure virtual dispatch works correctly)
+    struct defer_graph_build_t {};
+
+    llm_build_qwen3_5(const llama_model & model, const llm_graph_params & params, defer_graph_build_t);
+
     void build_graph();
 
     virtual ggml_tensor * build_layer_ffn(
