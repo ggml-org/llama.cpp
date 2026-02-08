@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, X } from '@lucide/svelte';
+	import { Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { getFaviconUrl } from '$lib/utils';
@@ -94,19 +94,7 @@
 	{#if isAddingServer}
 		<Card.Root class="bg-muted/30 p-4">
 			<div class="space-y-4">
-				<div class="flex items-center justify-between">
-					<p class="font-medium">Add New Server</p>
-
-					<Button
-						variant="ghost"
-						size="icon"
-						class="h-7 w-7"
-						onclick={cancelAddServer}
-						aria-label="Cancel"
-					>
-						<X class="h-3.5 w-3.5" />
-					</Button>
-				</div>
+				<p class="font-medium">Add New Server</p>
 
 				<McpServerForm
 					url={newServerUrl}
@@ -117,7 +105,11 @@
 					id="new-server"
 				/>
 
-				<div class="flex items-center justify-end">
+				<div class="flex items-center justify-end gap-2">
+					<Button variant="secondary" size="sm" onclick={cancelAddServer}>
+						Cancel
+					</Button>
+
 					<Button
 						variant="default"
 						size="sm"

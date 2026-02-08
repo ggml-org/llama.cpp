@@ -92,7 +92,7 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="flex justify-end gap-1">
+		<div class="flex items-center justify-end gap-1">
 			<ActionIconCopyToClipboard
 				text={extra.content}
 				canCopy={!!extra.content}
