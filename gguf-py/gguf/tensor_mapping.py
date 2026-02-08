@@ -1358,6 +1358,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (

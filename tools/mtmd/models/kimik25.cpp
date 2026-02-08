@@ -42,33 +42,13 @@ ggml_cgraph * clip_graph_kimik25::build() {
 
     ggml_tensor * learned_pos_embd = resize_position_embeddings_3d(GGML_SCALE_MODE_BICUBIC);
 
-    // Kimi-K2.5 uses interleaved 2D RoPE pattern: [x0_re, x0_im, y0_re, y0_im, x1_re, x1_im, ...]
-    // Q/K weights are permuted during conversion from interleaved to split format.
-    // build_rope_2d expects split format and outputs split format.
-    // We need to convert the output back to interleaved format for the attention mechanism.
+    // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but all attention weights
+    // (Q, K, V, O) are permuted during conversion to use split format throughout.
+    // This allows using build_rope_2d without any runtime format conversion.
+    // The dot product in attention is order-independent, so keeping everything in
+    // split format produces mathematically equivalent results.
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-        const int64_t n_dim  = cur->ne[0];
-        const int64_t n_head = cur->ne[1];
-        const int64_t n_pos  = cur->ne[2];
-
-        // Apply RoPE in split format
         cur = build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
-
-        // Convert output from split format back to interleaved format
-        // Split:       [x0_re, x0_im, x1_re, x1_im, ..., y0_re, y0_im, y1_re, y1_im, ...]
-        // Interleaved: [x0_re, x0_im, y0_re, y0_im, x1_re, x1_im, y1_re, y1_im, ...]
-        //
-        // Reshape to [2, n_dim/4, 2, n_head, n_pos] where:
-        //   - first dim 2 = re/im pair
-        //   - n_dim/4 = number of frequency pairs per axis
-        //   - second dim 2 = X half (0) vs Y half (1)
-        // Then permute to interleave X and Y
-        // Finally reshape back to [n_dim, n_head, n_pos]
-        cur = ggml_reshape_4d(ctx0, cur, 2, n_dim/4, 2, n_head * n_pos);
-        cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);  // [2, 2, n_dim/4, n_head*n_pos]
-        cur = ggml_cont(ctx0, cur);
-        cur = ggml_reshape_3d(ctx0, cur, n_dim, n_head, n_pos);
-
         return cur;
     };
 

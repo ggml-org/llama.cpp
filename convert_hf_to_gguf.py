@@ -11106,8 +11106,8 @@ class KimiK25Model(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("projector_ln_eps", 1e-5))
         self.gguf_writer.add_vision_projector_scale_factor(self.merge_kernel_size[0])
 
-        # Image size limits (from preprocessor_config.json media_proc_cfg)
-        # These are used to set token limits: tokens = pixels / (patch_size²)
+        # Image size limits
+        # These are used to set token limits: tokens = pixels / (patch_size ^ 2)
         in_patch_limit = self.preprocessor_config.get("in_patch_limit_each_frame",
                          self.preprocessor_config.get("in_patch_limit", 4096))
         min_patches = 8  # reasonable minimum
@@ -11116,31 +11116,19 @@ class KimiK25Model(MmprojModel):
         self.gguf_writer.add_vision_max_pixels(in_patch_limit * pixels_per_patch)
 
     @staticmethod
-    def _permute_rope_interleaved_to_split(weights: Tensor, n_head: int) -> Tensor:
-        """Permute Q/K weights from interleaved to split RoPE format.
-
-        Kimi-K2.5 uses interleaved 2D RoPE pattern (per head):
-            [x0_re, x0_im, y0_re, y0_im, x1_re, x1_im, y1_re, y1_im, ...]
-            i.e., groups of 4: (x_pair, y_pair) repeated
-
-        llama.cpp build_rope_2d expects split format (per head):
-            [x0_re, x0_im, x1_re, x1_im, ..., y0_re, y0_im, y1_re, y1_im, ...]
-            i.e., first half is all X pairs, second half is all Y pairs
-
-        This permutation is applied at conversion time so we can use build_rope_2d at runtime.
-        """
+    def _permute_kqv(weights: Tensor, n_head: int) -> Tensor:
         out_dim, in_dim = weights.shape
         head_dim = out_dim // n_head
-        # Reshape to expose the interleaved structure:
-        # [n_head, head_dim//4, 2, 2, in_dim]
-        # where: head_dim//4 = number of (x,y) frequency pairs
-        #        first 2 = x_or_y (0=x, 1=y)
-        #        second 2 = re_or_im (real, imaginary parts of complex rotation)
         w = weights.reshape(n_head, head_dim // 4, 2, 2, in_dim)
-        # Permute to split format: [n_head, 2, head_dim//4, 2, in_dim]
-        # Now dim 1 separates X (index 0) from Y (index 1)
         w = w.permute(0, 2, 1, 3, 4)
-        # Reshape back: [out_dim, in_dim]
+        return w.reshape(out_dim, in_dim)
+
+    @staticmethod
+    def _permute_output_proj(weights: Tensor, n_head: int) -> Tensor:
+        out_dim, in_dim = weights.shape
+        head_dim = in_dim // n_head
+        w = weights.reshape(out_dim, n_head, head_dim // 4, 2, 2)
+        w = w.permute(0, 1, 3, 2, 4)
         return w.reshape(out_dim, in_dim)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -11153,8 +11141,10 @@ class KimiK25Model(MmprojModel):
         assert self.hparams_vision is not None
         n_head = self.hparams_vision.get("num_attention_heads", 16)
 
-        # Permute Q/K weights/biases from interleaved to split RoPE format
-        # This allows using the build_rope_2d at runtime
+        # Permute Q/K/V weights/biases from interleaved to split RoPE format
+        # This allows using build_rope_2d at runtime without post-permutation.
+        # V is also permuted so the attention output is in split format,
+        # which is then handled by the permuted output projection.
         if "wqkv" in name:
             out_dim = data_torch.shape[0]
             qkv_dim = out_dim // 3
@@ -11162,15 +11152,20 @@ class KimiK25Model(MmprojModel):
 
             if "weight" in name:
                 wq, wk, wv = data_torch[:qkv_dim, :], data_torch[qkv_dim:2*qkv_dim, :], data_torch[2*qkv_dim:, :]
-                wq = self._permute_rope_interleaved_to_split(wq, n_head)
-                wk = self._permute_rope_interleaved_to_split(wk, n_head)
+                wq = self._permute_kqv(wq, n_head)
+                wk = self._permute_kqv(wk, n_head)
+                wv = self._permute_kqv(wv, n_head)
                 data_torch = torch.cat([wq, wk, wv], dim=0)
             elif "bias" in name:
                 bq, bk, bv = data_torch[:qkv_dim], data_torch[qkv_dim:2*qkv_dim], data_torch[2*qkv_dim:]
-                # Same permutation as weights: [n_head, head_dim//4, 2, 2] -> [n_head, 2, head_dim//4, 2]
                 bq = bq.reshape(n_head, head_dim // 4, 2, 2).permute(0, 2, 1, 3).reshape(-1)
                 bk = bk.reshape(n_head, head_dim // 4, 2, 2).permute(0, 2, 1, 3).reshape(-1)
+                bv = bv.reshape(n_head, head_dim // 4, 2, 2).permute(0, 2, 1, 3).reshape(-1)
                 data_torch = torch.cat([bq, bk, bv], dim=0)
+
+        # Permute output projection from interleaved to split RoPE format
+        if "wo.weight" in name:
+            data_torch = self._permute_output_proj(data_torch, n_head)
 
         # Temporal embeddings: (T, 1, C) → (T, C)
         if "pos_emb.time_weight" in name:

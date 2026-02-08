@@ -107,17 +107,6 @@ struct clip_graph {
         const bool interleave_freq
     );
 
-    // 2D RoPE with interleaved frequency
-    // Pattern: [x_freq0, y_freq0, x_freq1, y_freq1, ...]
-    // build_rope_2d uses split pattern: [x_freq0, x_freq1, ..., y_freq0, y_freq1, ...]
-    ggml_tensor * build_rope_2d_interleaved(
-        ggml_context * ctx0,
-        ggml_tensor * cur,      // [n_dim, n_head, n_pos]
-        ggml_tensor * pos_w,    // [n_pos] - X/width positions
-        ggml_tensor * pos_h,    // [n_pos] - Y/height positions
-        const float freq_base
-    );
-
     // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
     // support dynamic resolution
     ggml_tensor * build_patch_merge_permute(ggml_tensor * cur, int scale_factor);
