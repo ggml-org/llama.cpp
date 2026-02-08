@@ -919,6 +919,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             float fnan = std::numeric_limits<float>::quiet_NaN();
             double sum_sq = 0.0f;
             float mean = 0.0f;
+            float elements = 0.0f;
             float std_deviation = 0.0f;
             float skewness = 0.0f;
             float kurtosis = 0.0f;
@@ -932,6 +933,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             if (ts != tstat_index.end() && ts->second != nullptr) {
                 sum_sq = ts->second->sum;
                 mean = ts->second->mean;
+                elements = (float)ts->second->elements;
                 std_deviation = ts->second->std_deviation;
                 skewness = ts->second->skewness;
                 kurtosis = ts->second->kurtosis;
@@ -943,19 +945,20 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 covariance = ts->second->covariance;
             }
 
-            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 11);
+            struct ggml_tensor * stats = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 12);
             ggml_format_name(stats, "%s.stats", name.c_str());
             ((float *)stats->data)[0] = (float)sum_sq;
             ((float *)stats->data)[1] = mean;
-            ((float *)stats->data)[2] = std_deviation;
-            ((float *)stats->data)[3] = skewness;
-            ((float *)stats->data)[4] = kurtosis;
-            ((float *)stats->data)[5] = gain;
-            ((float *)stats->data)[6] = h_norm;
-            ((float *)stats->data)[7] = l2_dist;
-            ((float *)stats->data)[8] = cossim;
-            ((float *)stats->data)[9] = pearson;
-            ((float *)stats->data)[10] = covariance;
+            ((float *)stats->data)[2] = elements;
+            ((float *)stats->data)[3] = std_deviation;
+            ((float *)stats->data)[4] = skewness;
+            ((float *)stats->data)[5] = kurtosis;
+            ((float *)stats->data)[6] = gain;
+            ((float *)stats->data)[7] = h_norm;
+            ((float *)stats->data)[8] = l2_dist;
+            ((float *)stats->data)[9] = cossim;
+            ((float *)stats->data)[10] = pearson;
+            ((float *)stats->data)[11] = covariance;
             gguf_add_tensor(ctx_gguf, stats);
         }
     }
