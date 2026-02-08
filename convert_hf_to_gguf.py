@@ -4352,17 +4352,6 @@ class Qwen3_5Model(Qwen3NextModel):
     _pending_ba: dict[int | None, tuple[str, Tensor]] = {}
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("mtp"):
-            return  # ignore MTP layers
-        if name.endswith(".A_log"):
-            data_torch = -torch.exp(data_torch)
-        elif name.endswith(".dt_bias"):
-            name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
-        elif "conv1d" in name:
-            data_torch = data_torch.squeeze()
-        elif name.endswith("norm.weight") and not name.endswith("linear_attn.norm.weight"):
-            data_torch = data_torch + 1
-
         # Handle split in_proj_b + in_proj_a → concatenated SSM_BETA_ALPHA
         # safetensors sorts alphabetically so in_proj_a arrives before in_proj_b
         if "in_proj_a.weight" in name or "in_proj_b.weight" in name:
@@ -4396,14 +4385,13 @@ class Qwen3_5Model(Qwen3NextModel):
             base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
             mapped_gate = f"{base_name}.gate_proj.weight"
             mapped_up = f"{base_name}.up_proj.weight"
-            yield from Qwen2MoeModel.modify_tensors(self, gate, mapped_gate, bid)
-            yield from Qwen2MoeModel.modify_tensors(self, up, mapped_up, bid)
+            yield from super(Qwen2MoeModel, self).modify_tensors(gate, mapped_gate, bid)
+            yield from super(Qwen2MoeModel, self).modify_tensors(up, mapped_up, bid)
             return
-
-        # in_proj_qkv → ATTN_QKV and in_proj_z → ATTN_GATE are handled by
-        # tensor_mapping.py, so we just delegate to Qwen2MoeModel (grandparent)
-        # to skip Qwen3NextModel's in_proj_qkvz splitting logic
-        yield from super(Qwen3NextModel, self).modify_tensors(data_torch, name, bid)
+        else:
+            # Qwen3Next uses .qkvz tensor, so we use the super to get the other functionalities
+            # (norm correction, A_log to A etc.) for free
+            yield from super(Qwen3_5Model, self).modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3_5MoeForCausalLM", "Qwen3_5MoeTextForCausalLM")
