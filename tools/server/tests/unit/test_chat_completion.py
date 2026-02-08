@@ -176,12 +176,18 @@ def test_apply_chat_template():
     ({"type": "json_object", "schema": {"const": "42"}}, 6, "\"42\""),
     ({"type": "json_object", "schema": {"items": [{"type": "integer"}]}}, 10, "[ -3000 ]"),
     ({"type": "json_schema", "json_schema": {"schema": {"const": "foooooo"}}}, 10, "\"foooooo\""),
+    # json_schema with name field (OpenAI-style)
+    ({"type": "json_schema", "json_schema": {"name": "test", "schema": {"const": "bar"}, "strict": True}}, 6, "\"bar\""),
     ({"type": "json_object"}, 10, "(\\{|John)+"),
     ({"type": "sound"}, 0, None),
     # invalid response format (expected to fail)
     ({"type": "json_object", "schema": 123}, 0, None),
     ({"type": "json_object", "schema": {"type": 123}}, 0, None),
     ({"type": "json_object", "schema": {"type": "hiccup"}}, 0, None),
+    # json_schema missing required json_schema.schema field (should fail)
+    ({"type": "json_schema", "json_schema": {"name": "test"}}, 0, None),
+    ({"type": "json_schema", "json_schema": {}}, 0, None),
+    ({"type": "json_schema"}, 0, None),
 ])
 def test_completion_with_response_format(response_format: dict, n_predicted: int, re_content: str | None):
     global server
@@ -201,6 +207,31 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
     else:
         assert res.status_code == 400
         assert "error" in res.body
+
+
+@pytest.mark.parametrize("response_format,expected_error_message", [
+    # json_schema type requires json_schema.schema to be set
+    ({"type": "json_schema", "json_schema": {"name": "test"}}, "json_schema.schema"),
+    ({"type": "json_schema", "json_schema": {}}, "json_schema.schema"),
+    ({"type": "json_schema"}, "json_schema.schema"),
+    # invalid response_format type should mention valid options
+    ({"type": "invalid_type"}, "json_schema"),
+])
+def test_response_format_error_messages(response_format: dict, expected_error_message: str):
+    """Test that invalid response_format configurations return helpful error messages."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": "test"},
+        ],
+        "response_format": response_format,
+    })
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert expected_error_message in res.body["error"]["message"], \
+        f"Expected '{expected_error_message}' in error message, got: {res.body['error']['message']}"
 
 
 @pytest.mark.parametrize("jinja,json_schema,n_predicted,re_content", [
