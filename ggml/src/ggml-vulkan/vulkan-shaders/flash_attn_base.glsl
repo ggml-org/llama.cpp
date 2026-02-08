@@ -66,6 +66,8 @@ layout (push_constant) uniform parameter {
 #define SINK_ENABLE_BIT (1<<24)
 #define N_LOG2_MASK 0xFFFF
 
+#define SUBGROUPS_DISABLED 0xFFFFFFFF
+
 layout (binding = 4) readonly buffer S {float data_s[];};
 
 layout (binding = 5) writeonly buffer O {D_TYPE data_o[];};

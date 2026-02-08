@@ -43,7 +43,8 @@ D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in ACC_
     return elem;
 }
 
-const uint32_t tmpsh_size = row_split == 1 ? num_subgroups * D_split : 1;
+// If SubGroupSize is set to 0xFFFFFFFF then only use shmem reductions
+const uint32_t tmpsh_size = (SubGroupSize != SUBGROUPS_DISABLED) ? (row_split == 1 ? num_subgroups * D_split : 1) : WorkGroupSize;
 shared float tmpsh[tmpsh_size];
 shared ACC_TYPEV4 tmpsh_accv4[tmpsh_size];
 
@@ -67,6 +68,7 @@ void main() {
     const uint32_t tid = gl_LocalInvocationIndex;
     const uint32_t threads_per_rowgroup = gl_WorkGroupSize.x / row_split;
     const uint32_t row_tid = gl_LocalInvocationIndex / threads_per_rowgroup;
+    const uint32_t rowgroup_tid = gl_LocalInvocationIndex % threads_per_rowgroup;
     const uint32_t d_tid = gl_LocalInvocationIndex % D_split;
     const uint32_t col_tid = (gl_LocalInvocationIndex % threads_per_rowgroup) / D_split;
 
@@ -359,20 +361,33 @@ void main() {
         float rowmaxf = Mf[r];
 
         // Compute max across the row
-        [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-            rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
-        }
-        if (row_split == 1) {
-            // Reduce inside workgroup with shmem
-            barrier();
-            if (gl_SubgroupInvocationID == d_tid) {
-                tmpsh[gl_SubgroupID * D_split + d_tid] = rowmaxf;
+        if (SubGroupSize != SUBGROUPS_DISABLED) {
+            [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+                rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
             }
-            barrier();
-            rowmaxf = tmpsh[d_tid];
-            [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
-                rowmaxf = max(rowmaxf, tmpsh[s * D_split + d_tid]);
+            if (row_split == 1) {
+                // Reduce inside workgroup with shmem
+                barrier();
+                if (gl_SubgroupInvocationID == d_tid) {
+                    tmpsh[gl_SubgroupID * D_split + d_tid] = rowmaxf;
+                }
+                barrier();
+                rowmaxf = tmpsh[d_tid];
+                [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                    rowmaxf = max(rowmaxf, tmpsh[s * D_split + d_tid]);
+                }
             }
+        } else {
+            barrier();
+            tmpsh[tid] = rowmaxf;
+            barrier();
+            [[unroll]] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
+                if (rowgroup_tid < s) {
+                    tmpsh[tid] = max(tmpsh[tid], tmpsh[tid ^ s]);
+                }
+                barrier();
+            }
+            rowmaxf = tmpsh[row_tid * threads_per_rowgroup + d_tid];
         }
 
         float Moldf = Mf[r];
@@ -385,37 +400,64 @@ void main() {
         Lf[r] = eMf*Lf[r];
 
         // Compute sum across the row
-        [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-            Lf[r] += subgroupShuffleXor(Lf[r], s);
-        }
-        if (row_split == 1) {
-            barrier();
-            if (gl_SubgroupInvocationID == d_tid) {
-                tmpsh[gl_SubgroupID * D_split + d_tid] = Lf[r];
+        if (SubGroupSize != SUBGROUPS_DISABLED) {
+            [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+                Lf[r] += subgroupShuffleXor(Lf[r], s);
             }
-            barrier();
-            Lf[r] = tmpsh[d_tid];
-            [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
-                Lf[r] += tmpsh[s * D_split + d_tid];
+            if (row_split == 1) {
+                barrier();
+                if (gl_SubgroupInvocationID == d_tid) {
+                    tmpsh[gl_SubgroupID * D_split + d_tid] = Lf[r];
+                }
+                barrier();
+                Lf[r] = tmpsh[d_tid];
+                [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                    Lf[r] += tmpsh[s * D_split + d_tid];
+                }
             }
+        } else {
+            barrier();
+            tmpsh[tid] = Lf[r];
+            barrier();
+            [[unroll]] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
+                if (rowgroup_tid < s) {
+                    tmpsh[tid] = tmpsh[tid] + tmpsh[tid ^ s];
+                }
+                barrier();
+            }
+            Lf[r] = tmpsh[row_tid * threads_per_rowgroup + d_tid];
         }
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
             Of[r][d] = ACC_TYPE(eMf) * Of[r][d];
 
-            [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
-                Of[r][d] += subgroupShuffleXor(Of[r][d], s);
-            }
-            if (row_split == 1) {
-                barrier();
-                if (gl_SubgroupInvocationID == d_tid) {
-                    tmpsh_accv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
+            if (SubGroupSize != SUBGROUPS_DISABLED) {
+                [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
+                    Of[r][d] += subgroupShuffleXor(Of[r][d], s);
                 }
-                barrier();
-                Of[r][d] = tmpsh_accv4[d_tid];
-                [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
-                    Of[r][d] += tmpsh_accv4[s * D_split + d_tid];
+                if (row_split == 1) {
+                    barrier();
+                    if (gl_SubgroupInvocationID == d_tid) {
+                        tmpsh_accv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
+                    }
+                    barrier();
+                    Of[r][d] = tmpsh_accv4[d_tid];
+                    [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
+                        Of[r][d] += tmpsh_accv4[s * D_split + d_tid];
+                    }
                 }
+            } else {
+                barrier();
+                tmpsh_accv4[tid] = Of[r][d];
+                barrier();
+                [[unroll]] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
+                    if (rowgroup_tid < s) {
+                        Of[r][d] += tmpsh_accv4[tid ^ s];
+                        tmpsh_accv4[tid] = Of[r][d];
+                    }
+                    barrier();
+                }
+                Of[r][d] = tmpsh_accv4[row_tid * threads_per_rowgroup + d_tid];
             }
         }
     }
