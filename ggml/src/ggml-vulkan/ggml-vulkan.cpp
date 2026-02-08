@@ -2791,7 +2791,14 @@ static std::array<uint32_t, 2> fa_rows_cols(FaCodePath path, uint32_t hsk, uint3
     GGML_UNUSED(clamp);
 
     if (path == FA_SCALAR) {
-        return {get_fa_scalar_num_rows(hsk, hsv, rows, small_cache), 64};
+        if (rows == FA_ROWS_1 && ((hsk|hsv) & 8)) {
+            // HSV/HSK not being a multiple of 16 makes D_split smaller, which makes cols_per_iter
+            // larger, and Bc needs to be >= cols_per_thread. 64 is large enough, 32 is not.
+            // But this only applies to row_split=1, meaning FA_ROWS_1
+            return {get_fa_scalar_num_rows(hsk, hsv, rows, small_cache), 64};
+        } else {
+            return {get_fa_scalar_num_rows(hsk, hsv, rows, small_cache), 32};
+        }
     }
 
     if (path == FA_COOPMAT1) {
