@@ -199,6 +199,10 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    // used by ngram embeddings
+    // output order: token with higher pos first
+    std::vector<llama_token> get_last_n_tokens(size_t n, llama_pos pos, llama_seq_id seq_id) const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
@@ -352,6 +356,9 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // used by ngram embeddings
+    std::vector<llama_token> get_last_n_tokens(size_t n, llama_pos pos, llama_seq_id seq_id) const;
 
 private:
     llama_memory_status status;
