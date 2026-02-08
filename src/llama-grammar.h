@@ -102,13 +102,15 @@ struct llama_grammar_parser {
             const char        * src,
             const std::string & rule_name,
             uint32_t            rule_id,
-            bool                is_nested);
+            bool                is_nested,
+            int                 depth = 0);
 
     const char * parse_sequence(
             const char         * src,
             const std::string  & rule_name,
             llama_grammar_rule & rule,
-            bool               is_nested);
+            bool               is_nested,
+            int                depth = 0);
 
     const char * parse_rule(const char * src);
 
