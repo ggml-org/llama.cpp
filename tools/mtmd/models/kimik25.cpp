@@ -42,11 +42,8 @@ ggml_cgraph * clip_graph_kimik25::build() {
 
     ggml_tensor * learned_pos_embd = resize_position_embeddings_3d(GGML_SCALE_MODE_BICUBIC);
 
-    // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but all attention weights
-    // (Q, K, V, O) are permuted during conversion to use split format throughout.
-    // This allows using build_rope_2d without any runtime format conversion.
-    // The dot product in attention is order-independent, so keeping everything in
-    // split format produces mathematically equivalent results.
+    // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but
+    // Q / K are permuted during conversion to use split format.
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
         cur = build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
         return cur;
