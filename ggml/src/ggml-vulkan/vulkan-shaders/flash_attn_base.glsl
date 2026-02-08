@@ -9,7 +9,7 @@ layout (constant_id = 4) const uint32_t HSV = 32;
 layout (constant_id = 5) const uint32_t Clamp = 0;
 layout (constant_id = 6) const uint32_t D_split = 16;
 layout (constant_id = 7) const uint32_t SubGroupSize = 32;
-layout (constant_id = 8) const uint32_t K_LOAD_SHMEM = 0;
+layout (constant_id = 8) const uint32_t SHMEM_STAGING = 0;
 layout (constant_id = 9) const uint32_t Flags = 0;
 
 const bool USE_MASK_OPT  = (Flags & 1) != 0;
