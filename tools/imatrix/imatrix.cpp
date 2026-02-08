@@ -68,6 +68,7 @@ struct tensor_statistics {
     double l2_dist_sq = 0.0;
     double sum_prev = 0.0;
     int64_t elements_prev = 0;
+    int64_t n_features = 0;
 };
 
 class IMatrixCollector {
@@ -366,6 +367,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             var_p_sum += dp * dp;
         }
 
+        ts.n_features = (int64_t)n;
         ts.dot_prod = dot_prod;
         ts.norm1_sq = norm1_sq;
         ts.norm2_sq = norm2_sq;
@@ -420,6 +422,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         double sum_total_energy_curr = 0.0;
         double sum_total_energy_prev = 0.0;
         int64_t sum_valid_n = 0;
+        int64_t sum_n_features = 0;
         int n_tensors = 0;
     };
 
@@ -450,6 +453,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         entry.sum_var_p += ts.var_p_sum;
         entry.n_tensors++;
         if (ts.elements > 0) { entry.sum_valid_n += ts.elements; }
+        if (ts.n_features > 0) { entry.sum_n_features += ts.n_features; }
 
         // Accumulate Energy for correct Layer Gain calculation
         entry.sum_total_energy_curr += ts.sum;
@@ -478,7 +482,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         layer_l2_dist[layer] = (float)std::sqrt(agg.sum_l2_dist_sq);
         layer_gain[layer] = gain;
 
-        if (agg.sum_valid_n > 0) { layer_covariance[layer] = (float)(agg.sum_cov / (double)agg.sum_valid_n); }
+        if (agg.sum_n_features > 0) { layer_covariance[layer] = (float)(agg.sum_cov / (double)agg.sum_n_features); }
         else { layer_covariance[layer] = fnan; }
 
         if (agg.sum_var_c > 1e-12 && agg.sum_var_p > 1e-12) {
@@ -1623,14 +1627,19 @@ static bool show_statistics(const common_params & params) {
         LOG_INF("%s\n", std::string(76, '-').c_str());
     }
 
+    auto get_layer_stat = [](const std::map<int, float>& map, int layer) -> float {
+        const auto it = map.find(layer);
+        return it != map.end() ? it->second : fnan;
+    };
+
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) { continue; }
 
-        float lgn = layer == 0 || layer == 10000 ? fnan : layer_gain[layer];
-        float ll2 = layer == 0 || layer == 10000 ? fnan : layer_l2_dist[layer];
-        float lcs = layer == 0 || layer == 10000 ? fnan : layer_cossim[layer];
-        float lpc = layer == 0 || layer == 10000 ? fnan : layer_pearson[layer];
-        float lcv = layer == 0 || layer == 10000 ? fnan : layer_covariance[layer];
+        float lgn = layer == 0 || layer == 10000 ? fnan : get_layer_stat(layer_gain, layer);
+        float ll2 = layer == 0 || layer == 10000 ? fnan : get_layer_stat(layer_l2_dist, layer);
+        float lcs = layer == 0 || layer == 10000 ? fnan : get_layer_stat(layer_cossim, layer);
+        float lpc = layer == 0 || layer == 10000 ? fnan : get_layer_stat(layer_pearson, layer);
+        float lcv = layer == 0 || layer == 10000 ? fnan : get_layer_stat(layer_covariance, layer);
         auto str = std::to_string(layer);
         const auto *lyr = layer == 10000 ? "-" : str.c_str();
 
