@@ -3074,6 +3074,11 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         ctx->tensor_extras.push_back({ tensor, extra });  //used to release it when destroy ctx.
         ggml_sycl_init_layout_info(extra, tensor, ctx->device, true);
 
+        // Cache device pointer to skip sycl::get_pointer_type() in ggml_sycl_get_data_ptr
+        if (tensor->data != nullptr) {
+            extra->data_device[ctx->device] = tensor->data;
+        }
+
         GGML_SYCL_DEBUG("[SOA-DEBUG] init_tensor: %s type=%d allocated extra=%p reorder_mode=%d (total=%zu)\n",
                         tensor->name, tensor->type, (void *) extra, (int) extra->optimized_feature.get_reorder(),
                         ctx->tensor_extras.size());
