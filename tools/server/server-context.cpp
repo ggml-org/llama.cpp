@@ -2507,7 +2507,8 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        if (do_checkpoint && slot.task->n_tokens() - slot.prompt.n_tokens() == 64) {
+                        const int n_last = std::min(n_batch, 512);
+                        if (do_checkpoint && slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
                             break;
                         }
                     }
