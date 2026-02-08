@@ -925,10 +925,15 @@ struct vk_event {
     vk::Fence fence;
 };
 
-struct vk_semaphore {
-    vk::Semaphore s;
-    uint64_t value;
+struct vk_semaphore_struct {
+    vk::Semaphore s;        // Underlying semaphore object
+    uint64_t value;         // The value used when signaling/waiting (only for timeline semaphores)
+    const vk_device device; // The device this semaphore was created on (needed for cleanup)
+
+    vk_semaphore_struct(vk::Semaphore semaphore, uint64_t initial_value, vk_device dev)
+        : s(semaphore), value(initial_value), device(dev) {}
 };
+typedef std::shared_ptr<vk_semaphore_struct> vk_semaphore;
 
 struct vk_submission {
     vk::CommandBuffer buffer;
@@ -2309,12 +2314,12 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
             tl_signal_semaphores.push_back({});
             for (size_t i = 0; i < submission.wait_semaphores.size(); i++) {
                 stage_flags[idx].push_back(ctx->p->q->stage_flags);
-                tl_wait_vals[idx].push_back(submission.wait_semaphores[i].value);
-                tl_wait_semaphores[idx].push_back(submission.wait_semaphores[i].s);
+                tl_wait_vals[idx].push_back(submission.wait_semaphores[i]->value);
+                tl_wait_semaphores[idx].push_back(submission.wait_semaphores[i]->s);
             }
             for (size_t i = 0; i < submission.signal_semaphores.size(); i++) {
-                tl_signal_vals[idx].push_back(submission.signal_semaphores[i].value);
-                tl_signal_semaphores[idx].push_back(submission.signal_semaphores[i].s);
+                tl_signal_vals[idx].push_back(submission.signal_semaphores[i]->value);
+                tl_signal_semaphores[idx].push_back(submission.signal_semaphores[i]->s);
             }
             tl_submit_infos.push_back({
                 (uint32_t) submission.wait_semaphores.size(),
@@ -2419,26 +2424,46 @@ static vk_context ggml_vk_create_temporary_context(vk_command_pool& p) {
     return result;
 }
 
-static vk_semaphore * ggml_vk_create_binary_semaphore(ggml_backend_vk_context * ctx) {
-    VK_LOG_DEBUG("ggml_vk_create_timeline_semaphore()");
+static vk_semaphore ggml_vk_create_binary_semaphore(ggml_backend_vk_context * ctx) {
+    VK_LOG_DEBUG("ggml_vk_create_binary_semaphore()");
     vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eBinary, 0 };
     vk::SemaphoreCreateInfo ci{};
     ci.setPNext(&tci);
     vk::Semaphore semaphore = ctx->device->device.createSemaphore(ci);
-    ctx->gc.semaphores.push_back({ semaphore, 0 });
-    return &ctx->gc.semaphores[ctx->gc.semaphores.size() - 1];
+    vk_semaphore sem = std::make_shared<vk_semaphore_struct>(semaphore, 0, ctx->device);
+    ctx->gc.semaphores.push_back(sem);
+    return sem;
 }
 
-static vk_semaphore * ggml_vk_create_timeline_semaphore(ggml_backend_vk_context * ctx) {
+static vk_semaphore ggml_vk_create_timeline_semaphore(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_create_timeline_semaphore()");
     if (ctx->semaphore_idx >= ctx->gc.tl_semaphores.size()) {
         vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
         vk::SemaphoreCreateInfo ci{};
         ci.setPNext(&tci);
         vk::Semaphore semaphore = ctx->device->device.createSemaphore(ci);
-        ctx->gc.tl_semaphores.push_back({ semaphore, 0 });
+        vk_semaphore sem = std::make_shared<vk_semaphore_struct>(semaphore, 0, ctx->device);
+        ctx->gc.tl_semaphores.push_back(sem);
     }
-    return &ctx->gc.tl_semaphores[ctx->semaphore_idx++];
+    return ctx->gc.tl_semaphores[ctx->semaphore_idx++];
+}
+
+// Record that the given semaphore should be waited on in the next submission of the given context.
+// For timeline semaphores, set the value of the vk_semaphore before calling this method to define which value to await.
+static void ggml_vk_semaphore_await(vk_context& subctx, const vk_semaphore& semaphore) {
+    VK_LOG_DEBUG("ggml_vk_semaphore_await(" << subctx << ", " << semaphore << ")");
+    GGML_ASSERT(!subctx->seqs.empty() && !subctx->seqs.back().empty() && "ggml_vk_semaphore_await called on context without active submission - call ggml_vk_ctx_begin first");
+
+    subctx->seqs.back().back().wait_semaphores.push_back(semaphore);
+}
+
+// Record that the given semaphore should be signaled at the end of the execution of the given context.
+// For timeline semaphores, set the value of the vk_semaphore before calling this method to define which value to set.
+static void ggml_vk_semaphore_signal(vk_context& subctx, const vk_semaphore& semaphore) {
+    VK_LOG_DEBUG("ggml_vk_semaphore_signal(" << subctx << ", " << semaphore << ")");
+    GGML_ASSERT(!subctx->seqs.empty() && !subctx->seqs.back().empty() && "ggml_vk_semaphore_signal called on context without active submission - call ggml_vk_ctx_begin first");
+
+    subctx->seqs.back().back().signal_semaphores.push_back(semaphore);
 }
 
 static vk::Event ggml_vk_create_event(ggml_backend_vk_context * ctx) {
@@ -12905,12 +12930,12 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
     ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
 
     for (size_t i = 0; i < ctx->gc.semaphores.size(); i++) {
-        ctx->device->device.destroySemaphore({ ctx->gc.semaphores[i].s });
+        ctx->gc.semaphores[i]->device->device.destroySemaphore({ ctx->gc.semaphores[i]->s });
     }
     ctx->gc.semaphores.clear();
 
     for (size_t i = 0; i < ctx->gc.tl_semaphores.size(); i++) {
-        ctx->device->device.destroySemaphore({ ctx->gc.tl_semaphores[i].s });
+        ctx->gc.tl_semaphores[i]->device->device.destroySemaphore({ ctx->gc.tl_semaphores[i]->s });
     }
     ctx->gc.tl_semaphores.clear();
     ctx->semaphore_idx = 0;
