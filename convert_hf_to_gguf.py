@@ -11115,7 +11115,7 @@ class KimiK25Model(MmprojModel):
         self.gguf_writer.add_vision_max_pixels(in_patch_limit * pixels_per_patch)
 
     @staticmethod
-    def _permute_kqv(weights: Tensor, n_head: int) -> Tensor:
+    def permute(weights: Tensor, n_head: int) -> Tensor:
         out_dim, in_dim = weights.shape
         head_dim = out_dim // n_head
         w = weights.reshape(n_head, head_dim // 4, 2, 2, in_dim)
@@ -11141,8 +11141,8 @@ class KimiK25Model(MmprojModel):
 
             if "weight" in name:
                 wq, wk, wv = data_torch[:qkv_dim, :], data_torch[qkv_dim:2*qkv_dim, :], data_torch[2*qkv_dim:, :]
-                wq = self._permute_kqv(wq, n_head)
-                wk = self._permute_kqv(wk, n_head)
+                wq = self.permute(wq, n_head)
+                wk = self.permute(wk, n_head)
                 data_torch = torch.cat([wq, wk, wv], dim=0)
             elif "bias" in name:
                 bq, bk, bv = data_torch[:qkv_dim], data_torch[qkv_dim:2*qkv_dim], data_torch[2*qkv_dim:]
