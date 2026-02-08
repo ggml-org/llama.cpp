@@ -583,6 +583,16 @@ private:
 
 struct llm_build_qwen3_5 : public llm_graph_context_delta {
     llm_build_qwen3_5(const llama_model & model, const llm_graph_params & params);
+
+protected:
+    void build_graph();
+
+    virtual ggml_tensor * build_layer_ffn(
+                ggml_tensor * cur,
+                        int   il);
+
+    const llama_model & model;
+
 private:
     ggml_tensor * build_layer_attn(
     llm_graph_input_attn_kv * inp_attn,
@@ -598,10 +608,6 @@ private:
                 ggml_tensor * diag_mask,
                         int   il);
 
-    ggml_tensor * build_layer_ffn(
-                ggml_tensor * cur,
-                        int   il);
-
     ggml_tensor * build_norm_gated(
                 ggml_tensor * input,
                 ggml_tensor * weights,
@@ -611,42 +617,15 @@ private:
     std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
                 ggml_tensor * input,
                         int   il);
-
-    const llama_model & model;
 };
 
-struct llm_build_qwen3_5_moe : public llm_graph_context_delta {
+struct llm_build_qwen3_5_moe : public llm_build_qwen3_5 {
     llm_build_qwen3_5_moe(const llama_model & model, const llm_graph_params & params);
-private:
-    ggml_tensor * build_layer_attn(
-    llm_graph_input_attn_kv * inp_attn,
-                ggml_tensor * cur,
-                ggml_tensor * inp_pos,
-                        int   il);
 
-    ggml_tensor * build_layer_attn_linear(
-         llm_graph_input_rs * inp,
-                ggml_tensor * cur,
-                ggml_tensor * causal_mask,
-                ggml_tensor * identity,
-                ggml_tensor * diag_mask,
-                        int   il);
-
+protected:
     ggml_tensor * build_layer_ffn(
                 ggml_tensor * cur,
-                        int   il);
-
-    ggml_tensor * build_norm_gated(
-                ggml_tensor * input,
-                ggml_tensor * weights,
-                ggml_tensor * gate,
-                        int   layer);
-
-    std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
-                ggml_tensor * input,
-                        int   il);
-
-    const llama_model & model;
+                        int   il) override;
 };
 
 struct llm_build_qwen : public llm_graph_context {

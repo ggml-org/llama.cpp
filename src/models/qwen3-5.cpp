@@ -5,6 +5,10 @@
 
 llm_build_qwen3_5::llm_build_qwen3_5(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context_delta(params), model(model) {
+    build_graph();
+}
+
+void llm_build_qwen3_5::build_graph() {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -107,7 +111,7 @@ ggml_tensor * llm_build_qwen3_5::build_layer_attn(
     cb(Qcur, "Qcur", il);
     cb(gate, "gate", il);
 
-    Qcur = ggml_cont_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+    Qcur = ggml_view_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens, Qcur->nb[1], Qcur->nb[2], 0);
     cb(Qcur, "Qcur_reshaped", il);
 
     Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
@@ -123,7 +127,7 @@ ggml_tensor * llm_build_qwen3_5::build_layer_attn(
     Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(Kcur, "Kcur_normed", il);
 
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+    gate = ggml_view_2d(ctx0, gate, n_embd_head * n_head, n_tokens, gate->nb[1], 0);
     cb(gate, "gate_reshaped", il);
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
@@ -182,58 +186,57 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3_5::build_qkvz(
 
         return { qkv_mixed, z };
 
-    } else {
-        // legacy path for combined in_proj_qkvz
-        ggml_tensor * mixed_qkvz = build_lora_mm(model.layers[il].ssm_in, input);
-        cb(mixed_qkvz, "linear_attn_mixed_qkvz", il);
+    }          
+    // legacy path for combined in_proj_qkvz
+    ggml_tensor * mixed_qkvz = build_lora_mm(model.layers[il].ssm_in, input);
+    cb(mixed_qkvz, "linear_attn_mixed_qkvz", il);
 
-        int64_t       qkvz_new_dim        = 2 * head_k_dim + 2 * head_v_dim * (num_v_heads / num_k_heads);
-        ggml_tensor * mixed_qkvz_reshaped = ggml_reshape_4d(ctx0, mixed_qkvz, qkvz_new_dim, num_k_heads, n_seq_tokens, n_seqs);
+    int64_t       qkvz_new_dim        = 2 * head_k_dim + 2 * head_v_dim * (num_v_heads / num_k_heads);
+    ggml_tensor * mixed_qkvz_reshaped = ggml_reshape_4d(ctx0, mixed_qkvz, qkvz_new_dim, num_k_heads, n_seq_tokens, n_seqs);
 
-        int64_t split_sizes_qkvz[4] = {
-            head_k_dim,
-            head_k_dim,
-            head_v_dim * num_v_heads / num_k_heads,
-            head_v_dim * num_v_heads / num_k_heads
-        };
+    int64_t split_sizes_qkvz[4] = {
+        head_k_dim,
+        head_k_dim,
+        head_v_dim * num_v_heads / num_k_heads,
+        head_v_dim * num_v_heads / num_k_heads
+    };
 
-        ggml_tensor * query =
-            ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[0], num_k_heads, n_seq_tokens, n_seqs,
-                        mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3], 0);
-        cb(query, "q", il);
+    ggml_tensor * query =
+        ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[0], num_k_heads, n_seq_tokens, n_seqs,
+                    mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3], 0);
+    cb(query, "q", il);
 
-        ggml_tensor * key = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[1], num_k_heads, n_seq_tokens, n_seqs,
-                                        mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3],
-                                        split_sizes_qkvz[0] * ggml_element_size(mixed_qkvz_reshaped));
-        cb(key, "k", il);
-
-        ggml_tensor * value =
-            ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[2], num_k_heads, n_seq_tokens, n_seqs,
-                        mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3],
-                        (split_sizes_qkvz[0] + split_sizes_qkvz[1]) * ggml_element_size(mixed_qkvz_reshaped));
-        cb(value, "v", il);
-
-        ggml_tensor * z = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[3], num_k_heads, n_seq_tokens, n_seqs,
+    ggml_tensor * key = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[1], num_k_heads, n_seq_tokens, n_seqs,
                                     mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3],
-                                    (split_sizes_qkvz[0] + split_sizes_qkvz[1] + split_sizes_qkvz[2]) * ggml_element_size(mixed_qkvz_reshaped));
-        z = ggml_cont(ctx0, z);
-        cb(z, "z", il);
+                                    split_sizes_qkvz[0] * ggml_element_size(mixed_qkvz_reshaped));
+    cb(key, "k", il);
 
-        ggml_tensor * query_flat = ggml_cont_3d(ctx0, query, head_k_dim * num_k_heads, n_seq_tokens, n_seqs);
-        cb(query_flat, "query_flat", il);
+    ggml_tensor * value =
+        ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[2], num_k_heads, n_seq_tokens, n_seqs,
+                    mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3],
+                    (split_sizes_qkvz[0] + split_sizes_qkvz[1]) * ggml_element_size(mixed_qkvz_reshaped));
+    cb(value, "v", il);
 
-        ggml_tensor * key_flat = ggml_cont_3d(ctx0, key, head_k_dim * num_k_heads, n_seq_tokens, n_seqs);
-        cb(key_flat, "key_flat", il);
+    ggml_tensor * z = ggml_view_4d(ctx0, mixed_qkvz_reshaped, split_sizes_qkvz[3], num_k_heads, n_seq_tokens, n_seqs,
+                                mixed_qkvz_reshaped->nb[1], mixed_qkvz_reshaped->nb[2], mixed_qkvz_reshaped->nb[3],
+                                (split_sizes_qkvz[0] + split_sizes_qkvz[1] + split_sizes_qkvz[2]) * ggml_element_size(mixed_qkvz_reshaped));
+    z = ggml_cont(ctx0, z);
+    cb(z, "z", il);
 
-        ggml_tensor * value_flat = ggml_cont_3d(ctx0, value, head_v_dim * num_v_heads, n_seq_tokens, n_seqs);
-        cb(value_flat, "value_flat", il);
+    ggml_tensor * query_flat = ggml_reshape_3d(ctx0, query, head_k_dim * num_k_heads, n_seq_tokens, n_seqs);
+    cb(query_flat, "query_flat", il);
 
-        ggml_tensor * qkv_mixed = ggml_concat(ctx0, query_flat, key_flat, 0);
-        qkv_mixed               = ggml_concat(ctx0, qkv_mixed, value_flat, 0);
-        cb(qkv_mixed, "qkv_mixed", il);
+    ggml_tensor * key_flat = ggml_reshape_3d(ctx0, key, head_k_dim * num_k_heads, n_seq_tokens, n_seqs);
+    cb(key_flat, "key_flat", il);
 
-        return { qkv_mixed, z };
-    }
+    ggml_tensor * value_flat = ggml_reshape_3d(ctx0, value, head_v_dim * num_v_heads, n_seq_tokens, n_seqs);
+    cb(value_flat, "value_flat", il);
+
+    ggml_tensor * qkv_mixed = ggml_concat(ctx0, query_flat, key_flat, 0);
+    qkv_mixed               = ggml_concat(ctx0, qkv_mixed, value_flat, 0);
+    cb(qkv_mixed, "qkv_mixed", il);
+
+    return { qkv_mixed, z };
 }
 
 ggml_tensor * llm_build_qwen3_5::build_layer_attn_linear(
