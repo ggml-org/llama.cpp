@@ -62,6 +62,13 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
 #    pragma warning(disable : 4244 4267)  // possible loss of data
 #endif
 
+#if defined(GGML_IFAIRY_ARM_LUT) && \
+    ((defined(__aarch64__) && defined(__ARM_NEON__)) || defined(__x86_64__) || defined(_M_X64))
+#    define GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED 1
+#else
+#    define GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED 0
+#endif
+
 // ============================================================================
 // JSON 解析辅助函数（简单实现，避免引入第三方库）
 // ============================================================================
@@ -580,7 +587,7 @@ static bool test_ifairy_lut_index_encode_failure() {
 // ============================================================================
 
 static bool test_ifairy_lut_env_semantics() {
-#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
+#if !GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED
     printf("\n=== Test 2.6: iFairy LUT env semantics (SKIP) ===\n");
     return true;
 #else
@@ -1320,8 +1327,8 @@ static void quantize_ifairy_backend_act_q16_lut_c(std::vector<block_ifairy_q16> 
 }
 
 static bool test_ifairy_lut_backend_smoke() {
-#ifndef GGML_IFAIRY_ARM_LUT
-    printf("\n=== Test 5: iFairy LUT backend smoke (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+#if !GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED
+    printf("\n=== Test 5: iFairy LUT backend smoke (SKIP: backend not enabled on this platform) ===\n");
     return true;
 #else
     printf("\n=== Test 5: iFairy LUT backend smoke ===\n");
@@ -1352,8 +1359,8 @@ static bool test_ifairy_lut_backend_smoke() {
 }
 
 static bool test_ifairy_lut_backend_f32_vs_q16() {
-#ifndef GGML_IFAIRY_ARM_LUT
-    printf("\n=== Test 5.1: iFairy LUT backend F32 vs Q16 (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+#if !GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED
+    printf("\n=== Test 5.1: iFairy LUT backend F32 vs Q16 (SKIP: backend not enabled on this platform) ===\n");
     return true;
 #else
     printf("\n=== Test 5.1: iFairy LUT backend F32 vs Q16 ===\n");
@@ -1388,8 +1395,8 @@ static bool test_ifairy_lut_backend_f32_vs_q16() {
 }
 
 static bool test_ifairy_lut_backend_lut_c_f32_vs_q16() {
-#ifndef GGML_IFAIRY_ARM_LUT
-    printf("\n=== Test 5.2: iFairy LUT backend lut_c F32 vs Q16 (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
+#if !GGML_IFAIRY_LUT_TEST_BACKEND_ENABLED
+    printf("\n=== Test 5.2: iFairy LUT backend lut_c F32 vs Q16 (SKIP: backend not enabled on this platform) ===\n");
     return true;
 #else
     printf("\n=== Test 5.2: iFairy LUT backend lut_c F32 vs Q16 ===\n");

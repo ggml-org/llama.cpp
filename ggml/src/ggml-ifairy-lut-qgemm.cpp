@@ -25,6 +25,9 @@
 #if defined(__ARM_NEON) && defined(__aarch64__)
 #    include <arm_neon.h>
 #endif
+#if defined(__AVX2__)
+#    include <immintrin.h>
+#endif
 
 // iFairy LUT V2: lut_c-style 16-entry LUT + packed 16-row weight tiles.
 
@@ -81,6 +84,51 @@ static inline int8x16x4_t ggml_ifairy_lut_decode_16x3_3x1_with_lut(uint8x16_t  i
 
 static inline float32x4_t ggml_ifairy_s16x4_to_f32(int16x4_t v) {
     return vcvtq_f32_s32(vmovl_s16(v));
+}
+#endif
+
+#if defined(__AVX2__)
+static inline __m128i ggml_ifairy_blendv_epi8(__m128i mask, __m128i t, __m128i f) {
+    return _mm_or_si128(_mm_and_si128(mask, t), _mm_andnot_si128(mask, f));
+}
+
+static inline __m128i ggml_ifairy_neg_if_epi8(__m128i mask, __m128i v) {
+    const __m128i neg = _mm_sub_epi8(_mm_setzero_si128(), v);
+    return ggml_ifairy_blendv_epi8(mask, neg, v);
+}
+
+static inline void ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(const __m128i  code,
+                                                                 const int8_t * tbl,
+                                                                 __m128i *      out0,
+                                                                 __m128i *      out1,
+                                                                 __m128i *      out2,
+                                                                 __m128i *      out3) {
+    const __m128i mask_idx = _mm_set1_epi8(0x0f);
+    const __m128i mask_b6  = _mm_set1_epi8((char) 0x40);
+    const __m128i mask_b7  = _mm_set1_epi8((char) 0x80);
+    const __m128i all_ones = _mm_set1_epi8((char) 0xff);
+
+    const __m128i idx = _mm_and_si128(code, mask_idx);
+    const __m128i fl0 = _mm_cmpeq_epi8(_mm_and_si128(code, mask_b6), mask_b6);
+    const __m128i fl1 = _mm_cmpeq_epi8(_mm_and_si128(code, mask_b7), mask_b7);
+
+    const __m128i fl0_xor_fl1 = _mm_xor_si128(fl0, fl1);
+    const __m128i not_fl0     = _mm_xor_si128(fl0, all_ones);
+
+    const __m128i ilut0 = _mm_loadu_si128((const __m128i *) (tbl + 0 * 16));
+    const __m128i ilut1 = _mm_loadu_si128((const __m128i *) (tbl + 1 * 16));
+    const __m128i ilut2 = _mm_loadu_si128((const __m128i *) (tbl + 2 * 16));
+    const __m128i ilut3 = _mm_loadu_si128((const __m128i *) (tbl + 3 * 16));
+
+    const __m128i ac_00 = _mm_shuffle_epi8(ilut0, idx);
+    const __m128i bd_01 = _mm_shuffle_epi8(ilut1, idx);
+    const __m128i ac_11 = _mm_shuffle_epi8(ilut2, idx);
+    const __m128i bd_11 = _mm_shuffle_epi8(ilut3, idx);
+
+    *out0 = ggml_ifairy_neg_if_epi8(fl0_xor_fl1, ggml_ifairy_blendv_epi8(fl1, ac_11, ac_00));
+    *out1 = ggml_ifairy_neg_if_epi8(fl0, ggml_ifairy_blendv_epi8(fl1, ac_00, ac_11));
+    *out2 = ggml_ifairy_neg_if_epi8(fl0_xor_fl1, ggml_ifairy_blendv_epi8(fl1, bd_01, bd_11));
+    *out3 = ggml_ifairy_neg_if_epi8(not_fl0, ggml_ifairy_blendv_epi8(fl1, bd_11, bd_01));
 }
 #endif
 
@@ -143,7 +191,9 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
     const int64_t groups           = blocks * groups_per_block;
 
     const struct ifairy_lut_wtile_16 * wtiles = (const struct ifairy_lut_wtile_16 *) packed_wtiles;
-    const int                          tiles  = (m + 15) / 16;
+#if (defined(__ARM_NEON) && defined(__aarch64__)) || defined(__AVX2__)
+    const int tiles = (m + 15) / 16;
+#endif
 
     // `add` is not used by the current ggml-cpu LUT route. Keep it correct but out of the hot path.
     if (add) {
@@ -217,6 +267,124 @@ void ggml_ifairy_lut_qgemm_lut16(int          m,
         }
         return;
     }
+
+#if defined(__AVX2__)
+    for (int col = 0; col < n; ++col) {
+        const int8_t * lut_col =
+            (const int8_t *) lut + (size_t) col * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
+        const float * scales = (const float *) lut_scales + (size_t) col * (size_t) blocks * 2u;
+
+        for (int t = 0; t < tiles; ++t) {
+            const int rows_left = m - (t << 4);
+            if (rows_left <= 0) {
+                break;
+            }
+            const int rows_in_tile = rows_left >= 16 ? 16 : rows_left;
+
+            __m256 acc_r_lo = _mm256_setzero_ps();
+            __m256 acc_r_hi = _mm256_setzero_ps();
+            __m256 acc_i_lo = _mm256_setzero_ps();
+            __m256 acc_i_hi = _mm256_setzero_ps();
+
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                const struct ifairy_lut_wtile_16 * wt = wtiles + (size_t) t * (size_t) blocks + (size_t) blk;
+
+                __m256i sum_ac = _mm256_setzero_si256();
+                __m256i sum_bc = _mm256_setzero_si256();
+                __m256i sum_ad = _mm256_setzero_si256();
+                __m256i sum_bd = _mm256_setzero_si256();
+
+                const int8_t * lut_blk =
+                    lut_col + (size_t) blk * (size_t) groups_per_block * (size_t) k_ifairy_lut_group_bytes;
+
+                for (int gi = 0; gi < groups_per_block; ++gi) {
+                    const __m128i  code = _mm_loadu_si128((const __m128i *) wt->qs[gi]);
+                    const int8_t * tbl  = lut_blk + (size_t) gi * (size_t) k_ifairy_lut_group_bytes;
+
+                    __m128i v0;
+                    __m128i v1;
+                    __m128i v2;
+                    __m128i v3;
+                    ggml_ifairy_lut_decode_16x3_3x1_with_lut_avx2(code, tbl, &v0, &v1, &v2, &v3);
+
+                    sum_ac = _mm256_add_epi16(sum_ac, _mm256_cvtepi8_epi16(v0));
+                    sum_bc = _mm256_add_epi16(sum_bc, _mm256_cvtepi8_epi16(v1));
+                    sum_ad = _mm256_add_epi16(sum_ad, _mm256_cvtepi8_epi16(v2));
+                    sum_bd = _mm256_add_epi16(sum_bd, _mm256_cvtepi8_epi16(v3));
+                }
+
+                const __m128i sum_ac_lo_s16 = _mm256_castsi256_si128(sum_ac);
+                const __m128i sum_ac_hi_s16 = _mm256_extracti128_si256(sum_ac, 1);
+                const __m128i sum_bc_lo_s16 = _mm256_castsi256_si128(sum_bc);
+                const __m128i sum_bc_hi_s16 = _mm256_extracti128_si256(sum_bc, 1);
+                const __m128i sum_ad_lo_s16 = _mm256_castsi256_si128(sum_ad);
+                const __m128i sum_ad_hi_s16 = _mm256_extracti128_si256(sum_ad, 1);
+                const __m128i sum_bd_lo_s16 = _mm256_castsi256_si128(sum_bd);
+                const __m128i sum_bd_hi_s16 = _mm256_extracti128_si256(sum_bd, 1);
+
+                const __m256 v_ac_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_lo_s16));
+                const __m256 v_ac_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ac_hi_s16));
+                const __m256 v_bc_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_lo_s16));
+                const __m256 v_bc_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bc_hi_s16));
+                const __m256 v_ad_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_lo_s16));
+                const __m256 v_ad_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_ad_hi_s16));
+                const __m256 v_bd_lo = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_lo_s16));
+                const __m256 v_bd_hi = _mm256_cvtepi32_ps(_mm256_cvtepi16_epi32(sum_bd_hi_s16));
+
+                const float lr = scales[blk * 2 + 0];
+                const float li = scales[blk * 2 + 1];
+
+                const __m256 v_lr = _mm256_set1_ps(lr);
+                const __m256 v_li = _mm256_set1_ps(li);
+
+                const __m256 wr_lo = _mm256_loadu_ps(wt->d_real + 0);
+                const __m256 wr_hi = _mm256_loadu_ps(wt->d_real + 8);
+                const __m256 wi_lo = _mm256_loadu_ps(wt->d_imag + 0);
+                const __m256 wi_hi = _mm256_loadu_ps(wt->d_imag + 8);
+
+                const __m256 lr_wr_lo = _mm256_mul_ps(v_lr, wr_lo);
+                const __m256 lr_wr_hi = _mm256_mul_ps(v_lr, wr_hi);
+                const __m256 li_wi_lo = _mm256_mul_ps(v_li, wi_lo);
+                const __m256 li_wi_hi = _mm256_mul_ps(v_li, wi_hi);
+                const __m256 lr_wi_lo = _mm256_mul_ps(v_lr, wi_lo);
+                const __m256 lr_wi_hi = _mm256_mul_ps(v_lr, wi_hi);
+                const __m256 li_wr_lo = _mm256_mul_ps(v_li, wr_lo);
+                const __m256 li_wr_hi = _mm256_mul_ps(v_li, wr_hi);
+
+                acc_r_lo = _mm256_add_ps(acc_r_lo, _mm256_mul_ps(v_ac_lo, lr_wr_lo));
+                acc_r_lo = _mm256_add_ps(acc_r_lo, _mm256_mul_ps(v_bd_lo, li_wi_lo));
+                acc_r_hi = _mm256_add_ps(acc_r_hi, _mm256_mul_ps(v_ac_hi, lr_wr_hi));
+                acc_r_hi = _mm256_add_ps(acc_r_hi, _mm256_mul_ps(v_bd_hi, li_wi_hi));
+
+                acc_i_lo = _mm256_add_ps(acc_i_lo, _mm256_mul_ps(v_bc_lo, lr_wi_lo));
+                acc_i_lo = _mm256_add_ps(acc_i_lo, _mm256_mul_ps(v_ad_lo, li_wr_lo));
+                acc_i_hi = _mm256_add_ps(acc_i_hi, _mm256_mul_ps(v_bc_hi, lr_wi_hi));
+                acc_i_hi = _mm256_add_ps(acc_i_hi, _mm256_mul_ps(v_ad_hi, li_wr_hi));
+            }
+
+            alignas(32) float out_r[16];
+            alignas(32) float out_i[16];
+
+            _mm256_store_ps(out_r + 0, acc_r_lo);
+            _mm256_store_ps(out_r + 8, acc_r_hi);
+            _mm256_store_ps(out_i + 0, acc_i_lo);
+            _mm256_store_ps(out_i + 8, acc_i_hi);
+
+            uint8_t * dst_col = (uint8_t *) dst + (size_t) col * dst_col_stride;
+            for (int lane = 0; lane < rows_in_tile; ++lane) {
+                uint8_t * out_base = dst_col + (size_t) ((t << 4) + lane) * dst_row_stride;
+                if (pack_bf16) {
+                    ((ggml_bf16_t *) out_base)[0] = GGML_FP32_TO_BF16(out_r[lane]);
+                    ((ggml_bf16_t *) out_base)[1] = GGML_FP32_TO_BF16(out_i[lane]);
+                } else {
+                    ((float *) out_base)[0] = out_r[lane];
+                    ((float *) out_base)[1] = out_i[lane];
+                }
+            }
+        }
+    }
+    return;
+#endif
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
     for (int col = 0; col < n; ++col) {
