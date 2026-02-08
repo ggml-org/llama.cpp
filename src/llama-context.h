@@ -111,6 +111,10 @@ struct llama_context {
     bool rm_adapter_lora(
             llama_adapter_lora * adapter);
 
+    void put_adapter_loras(size_t num_adapters, llama_adapter_lora ** adapters, float * scales);
+
+    bool are_adapter_loras_same(size_t num_adapters, llama_adapter_lora ** adapters, float * scales);
+
     void clear_adapter_lora();
 
     bool apply_adapter_cvec(
