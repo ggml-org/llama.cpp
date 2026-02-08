@@ -7,6 +7,7 @@
 #include <climits>
 #include <cstdarg>
 #include <cinttypes>
+#include <cstring>
 #include <string>
 #include <map>
 #include <sstream>
@@ -55,7 +56,9 @@
 #define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
-
+#define KEY_SAM_N_HEAD             "clip.vision.sam.head_count"
+#define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
+#define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
@@ -97,12 +100,13 @@
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
-#define TN_IMAGE_NEWLINE   "model.image_newline"
+#define TN_IMAGE_NEWLINE   "v.image_newline"
+#define TN_IMAGE_SEPERATOR "v.view_seperator"
 #define TN_MM_INP_NORM     "mm.input_norm.weight"
 #define TN_MM_INP_NORM_B   "mm.input_norm.bias"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
-#define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
+#define TN_MM_PROJECTOR    "mm.model.fc.%s"             // idefics3, deepseekocr
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
@@ -141,6 +145,19 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
+// deepseek-ocr
+#define TN_SAM_POS_EMBD   "v.sam.pos_embd"
+#define TN_SAM_PATCH_EMBD "v.sam.patch_embd.%s"
+#define TN_SAM_PRE_NORM   "v.sam.blk.%d.pre_ln.%s"
+#define TN_SAM_POST_NORM  "v.sam.blk.%d.post_ln.%s"
+#define TN_SAM_ATTN_POS_H "v.sam.blk.%d.attn.pos_h"
+#define TN_SAM_ATTN_POS_W "v.sam.blk.%d.attn.pos_w"
+#define TN_SAM_ATTN_QKV   "v.sam.blk.%d.attn.qkv.%s"
+#define TN_SAM_ATTN_OUT   "v.sam.blk.%d.attn.out.%s"
+#define TN_SAM_FFN_UP     "v.sam.blk.%d.mlp.lin1.%s"
+#define TN_SAM_FFN_DOWN   "v.sam.blk.%d.mlp.lin2.%s"
+#define TN_SAM_NECK       "v.sam.neck.%d.%s"
+#define TN_SAM_NET        "v.sam.net_%d.%s"
 // (conformer) lfm2
 #define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
 #define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
@@ -232,6 +249,7 @@ enum projector_type {
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
@@ -265,6 +283,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_DEEPSEEKOCR,"deepseekocr"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
@@ -511,6 +530,32 @@ static std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
 // debugging
 //
 
+static std::string to_ne_string(const ggml_tensor * t) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(t->ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ", ";
+        }
+    }
+    return str;
+}
+
+static void print_tensor_info(ggml_tensor * t) {
+    const struct ggml_tensor * src0 = t->src[0];
+    const struct ggml_tensor * src1 = t->src[1];
+
+    char src1_str[128] = {0};
+    if (src1) {
+        snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, to_ne_string(src1).c_str());
+    }
+
+    printf("%s: %s = %s(%s{%s}, %s)\n",
+        t->name, ggml_type_name(t->type), ggml_op_desc(t),
+        src0->name, to_ne_string(src0).c_str(),
+        src1 ? src1_str : "");
+}
+
 static void print_tensor_shape(ggml_tensor * t) {
     printf("%s.shape = [", t->name);
     for (int i = 0; i < ggml_n_dims(t); ++i) {
@@ -522,12 +567,50 @@ static void print_tensor_shape(ggml_tensor * t) {
     printf("]\n");
 }
 
+static void print_tensor_sum(ggml_tensor * t, uint8_t * data, int64_t n) {
+    (void) n; // unused parameter
+    ggml_type type = t->type;
+    int64_t * ne = t->ne;
+    size_t * nb = t->nb;
+    double sum = 0.0;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+                    float v;
+                    if (type == GGML_TYPE_F16) {
+                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+                    } else if (type == GGML_TYPE_F32) {
+                        v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I32) {
+                        v = (float) *(int32_t *) &data[i];
+                    } else if (type == GGML_TYPE_I16) {
+                        v = (float) *(int16_t *) &data[i];
+                    } else if (type == GGML_TYPE_I8) {
+                        v = (float) *(int8_t *) &data[i];
+                    } else {
+                        GGML_ABORT("fatal error");
+                    }
+                    sum += v;
+                }
+            }
+        }
+    }
+    printf("%s.sum = %.6f\n", t->name, sum);
+}
+
 static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
     ggml_type type = t->type;
     int64_t * ne = t->ne;
     size_t * nb = t->nb;
+    printf("%s.data: [\n", t->name);
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        printf("%s.data: [\n", t->name);
+        if (i3 == n && ne[3] > 2*n) {
+            printf("    ..., \n");
+            i3 = ne[3] - n;
+        }
+        printf("    [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             if (i2 == n && ne[2] > 2*n) {
                 printf("     ..., \n");
@@ -569,6 +652,122 @@ static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
         }
         printf("    ]\n");
     }
+    printf("   ]\n");
+}
+
+static void save_tensor_to_file(const struct ggml_tensor * tensor, const uint8_t * data_ptr) {
+    char filename[512];
+    snprintf(filename, sizeof(filename), "%s_cpp.txt", tensor->name);
+
+    FILE * f = fopen(filename, "w");
+    if (!f) {
+        fprintf(stderr, "Failed to open %s\n", filename);
+        return;
+    }
+
+    // Check tensor size and warn if too large
+    int64_t total_elements = ggml_nelements(tensor);
+    fprintf(stderr, "Saving tensor %s (%lld elements) to %s\n",
+            tensor->name, (long long)total_elements, filename);
+
+    if (total_elements > 10000000) { // 10M elements
+        fprintf(stderr, "Warning: tensor is very large (%lld elements), this may take time\n",
+                (long long)total_elements);
+    }
+
+    const uint8_t * data = (data_ptr) ? data_ptr : (uint8_t *) tensor->data;
+    ggml_type type = tensor->type;
+    const int64_t * ne = tensor->ne;
+    const size_t * nb = tensor->nb;
+
+    // Use a buffer to reduce I/O calls
+    const size_t BUF_SIZE = 8192;
+    char * buf = (char *) malloc(BUF_SIZE);
+    if (!buf) {
+        fprintf(stderr, "Failed to allocate buffer\n");
+        fclose(f);
+        return;
+    }
+    size_t buf_pos = 0;
+
+    // Helper lambda to flush buffer
+    auto flush_buf = [&]() {
+        if (buf_pos > 0) {
+            fwrite(buf, 1, buf_pos, f);
+            buf_pos = 0;
+        }
+    };
+
+    // Helper to append to buffer
+    auto append = [&](const char * str, size_t len) {
+        if (buf_pos + len >= BUF_SIZE) {
+            flush_buf();
+        }
+        if (len >= BUF_SIZE) {
+            // String too large for buffer, write directly
+            fwrite(str, 1, len, f);
+        } else {
+            memcpy(buf + buf_pos, str, len);
+            buf_pos += len;
+        }
+    };
+
+    auto append_str = [&](const char * str) {
+        append(str, strlen(str));
+    };
+
+    char num_buf[32];
+
+    // Write header once for all batches
+    append_str(tensor->name);
+    append_str(".data: [\n");
+
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        append_str("    [\n");  // Start of batch
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            append_str("     [\n");
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                append_str("      [");
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+                    float  v;
+                    if (type == GGML_TYPE_F16) {
+                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+                    } else if (type == GGML_TYPE_F32) {
+                        v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I32) {
+                        v = (float) *(int32_t *) &data[i];
+                    } else if (type == GGML_TYPE_I16) {
+                        v = (float) *(int16_t *) &data[i];
+                    } else if (type == GGML_TYPE_I8) {
+                        v = (float) *(int8_t *) &data[i];
+                    } else {
+                        GGML_ABORT("fatal error");
+                    }
+                    int len = snprintf(num_buf, sizeof(num_buf), "%8.4f", v);
+                    append(num_buf, len);
+                    if (i0 < ne[0] - 1) {
+                        append_str(", ");
+                    }
+                }
+                append_str("],\n");
+            }
+            append_str("     ],\n");
+        }
+        append_str("    ]");    // End of batch
+        if (i3 < ne[3] - 1) {
+            append_str(",\n");  // Comma between batches
+        } else {
+            append_str("\n");
+        }
+    }
+
+    append_str("]\n");  // Close the top-level array
+
+    flush_buf();
+    free(buf);
+    fclose(f);
+    fprintf(stderr, "Tensor saved successfully\n");
 }
 
 void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value);
