@@ -691,6 +691,9 @@ constexpr int64_t GGML_SYCL_FUSED_MOE_MAX_BATCH = 32;
 static std::atomic<bool>     g_sycl_in_model_load{ false };
 // Incremented per model load to invalidate layout finalization state.
 static std::atomic<uint64_t> g_sycl_layouts_epoch{ 0 };
+// Dirty counter: incremented when any tensor layout is marked dirty.
+// Used by finalize_layouts fast-path to skip O(n) graph scans.
+static std::atomic<int>      g_sycl_layouts_dirty_count{ 0 };
 
 // Track backend lifetime for shared host-weight extras cleanup.
 static std::atomic<int> g_sycl_backend_refcount{ 0 };
@@ -1564,6 +1567,7 @@ void ggml_backend_sycl_set_onednn_pack_m(ggml_tensor * tensor, int64_t pack_m) {
     }
     extra->layout.onednn_pack_m = pack_m;
     extra->layout_dirty         = true;
+    g_sycl_layouts_dirty_count.fetch_add(1, std::memory_order_release);
 }
 
 void ggml_backend_sycl_register_host_weight_tensor(ggml_backend_dev_t dev, ggml_tensor * tensor) {
@@ -3074,14 +3078,25 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         ctx->tensor_extras.push_back({ tensor, extra });  //used to release it when destroy ctx.
         ggml_sycl_init_layout_info(extra, tensor, ctx->device, true);
 
-        // Cache device pointer to skip sycl::get_pointer_type() in ggml_sycl_get_data_ptr
-        if (tensor->data != nullptr) {
+        // Pre-populate data_device for single-device mode to avoid get_pointer_type()
+        // driver round-trips in ggml_sycl_get_data_ptr during dispatch.
+        if (!(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
             extra->data_device[ctx->device] = tensor->data;
         }
 
         GGML_SYCL_DEBUG("[SOA-DEBUG] init_tensor: %s type=%d allocated extra=%p reorder_mode=%d (total=%zu)\n",
                         tensor->name, tensor->type, (void *) extra, (int) extra->optimized_feature.get_reorder(),
                         ctx->tensor_extras.size());
+    }
+    // For non-quantized weight tensors that already have extra but no data_device set,
+    // populate data_device to avoid get_pointer_type() in dispatch.
+    if (tensor->extra != nullptr) {
+        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+        if (extra->data_device[ctx->device] == nullptr && tensor->data != nullptr) {
+            if (!(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
+                extra->data_device[ctx->device] = tensor->data;
+            }
+        }
     }
     if (ggml_is_quantized(tensor->type)) {
         // initialize padding to 0 to avoid possible NaN values
@@ -5007,7 +5022,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         ggml_sycl_init_layout_info(extra, tensor, ctx->device, true);
         if (is_weight_buffer) {
             extra->layout_dirty = true;
-
+            g_sycl_layouts_dirty_count.fetch_add(1, std::memory_order_release);
         }
     }
     if (is_weight_buffer && ggml_sycl::unified_cache_enabled()) {
@@ -16793,12 +16808,21 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
         ctx.layouts_finalized       = false;
     }
     if (ctx.layouts_finalized) {
-        if (!ggml_sycl_graph_has_missing_layout_choices(cgraph, ctx.device) &&
-            !ggml_sycl_graph_has_dirty_weights(cgraph)) {
-            GGML_SYCL_DEBUG("[DEBUG-FINALIZE] layouts already finalized, returning\n");
-            return;
+        static const bool force_scan = (std::getenv("GGML_SYCL_FORCE_LAYOUT_SCAN") != nullptr);
+        if (force_scan) {
+            if (!ggml_sycl_graph_has_missing_layout_choices(cgraph, ctx.device) &&
+                !ggml_sycl_graph_has_dirty_weights(cgraph)) {
+                GGML_SYCL_DEBUG("[DEBUG-FINALIZE] layouts already finalized (scan), returning\n");
+                return;
+            }
+        } else {
+            if (g_sycl_layouts_dirty_count.load(std::memory_order_acquire) == 0) {
+                GGML_SYCL_DEBUG("[DEBUG-FINALIZE] layouts already finalized (dirty_count=0), returning\n");
+                return;
+            }
         }
-        GGML_SYCL_DEBUG("[DEBUG-FINALIZE] missing layout choices detected, re-finalizing\n");
+        GGML_SYCL_DEBUG("[DEBUG-FINALIZE] dirty layouts detected (dirty_count=%d), re-finalizing\n",
+                        g_sycl_layouts_dirty_count.load(std::memory_order_relaxed));
         ctx.layouts_finalized = false;
     }
     GGML_SYCL_DEBUG("[DEBUG-FINALIZE] Creating target_layouts map, n_nodes=%d\n", cgraph->n_nodes);
@@ -17109,6 +17133,7 @@ static void finalize_layouts(ggml_backend_sycl_context & ctx, ggml_cgraph * cgra
                 budget_fallback ? 1 : 0);
     }
     ctx.layouts_finalized = eager_materialize ? all_ok : true;
+    g_sycl_layouts_dirty_count.store(0, std::memory_order_release);
     if (!chosen_layouts.empty() || !moe_layouts.empty()) {
         ggml_sycl_set_layout_choices_finalized(ctx.device, true);
     }

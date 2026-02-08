@@ -1758,9 +1758,12 @@ inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
 
             // DEVICE memory - directly accessible, no staging needed
             if (ptr_type == sycl::usm::alloc::device) {
-                // Cache in extra->data_device to skip get_pointer_type() on future calls
+                // Cache in extra for fast-path on subsequent calls
                 if (tensor->extra != nullptr) {
-                    static_cast<ggml_tensor_extra_gpu *>(tensor->extra)->data_device[device] = tensor->data;
+                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+                    if (extra->data_device[device] == nullptr) {
+                        extra->data_device[device] = tensor->data;
+                    }
                 }
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
                                 tensor->name, device, tensor->data);
