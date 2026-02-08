@@ -1336,7 +1336,7 @@ void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-#if defined(GGML_IFAIRY_ARM_LUT) && defined(__aarch64__) && defined(__ARM_NEON__)
+#if defined(GGML_IFAIRY_ARM_LUT)
     const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
     if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
         (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
