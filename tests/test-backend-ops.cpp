@@ -5878,7 +5878,6 @@ struct test_acc_block: public test_case {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, chunk_size, chunk_size, ne2, ne3);
         ggml_set_param(a);
         ggml_set_name(a, "a");
-        ggml_tensor * acc = ggml_clamp(ctx, a, 0.0f, 0.0f);
 
         // Source blocks that will be accumulated at different offsets
         // Mimics the lower-triangular block pattern from the original code
@@ -5898,14 +5897,14 @@ struct test_acc_block: public test_case {
                 size_t offset = (i * block_size) * ggml_type_size(type)
                               + (j * block_size) * (chunk_size * ggml_type_size(type));
 
-                acc = ggml_acc(ctx, acc, block,
-                    acc->nb[1], acc->nb[2], acc->nb[3],
+                a = ggml_acc(ctx, a, block,
+                    a->nb[1], a->nb[2], a->nb[3],
                     offset);
             }
         }
 
-        ggml_set_name(acc, "out");
-        return acc;
+        ggml_set_name(a, "out");
+        return a;
     }
 };
 
