@@ -127,6 +127,21 @@ static inline void hvx_dot_f16_f16_aa_rx4(float * restrict r,
     hvx_vec_store_u(r, 4 * sizeof(float), Q6_Vsf_equals_Vqf32(rsum));
 }
 
+static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
+                                                 const uint8_t * restrict x,
+                                                 const size_t stride_x,
+                                                 const size_t n,
+                                                 float        scale) {
+    float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
+    const size_t stride_x_4 = stride_x * 4;
+    for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
+        hvx_dot_f16_f16_aa_rx4(&scores_arr[j], y, x, stride_x, n, scale);
+        x += stride_x_4;
+    }
+
+    return *(HVX_Vector *) scores_arr;
+}
+
 // MAD: y (F32) += x (F16) * s (F32)
 static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
     const HVX_Vector * restrict ptr_x = (const HVX_Vector *) x;
@@ -426,14 +441,7 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             HVX_Vector v_max = hvx_vec_splat_f32(-INFINITY);
             for (uint32_t iv = 0; ic + VLEN_FP32 <= current_block_size; ic += VLEN_FP32, ++iv) {
                 // 1. Compute scores
-                float __attribute__((aligned(VLEN))) scores_arr[VLEN_FP32];
-                for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
-                    const uint32_t cur_ic = ic + j;
-                    const uint8_t * k_ptr = k_base + cur_ic * factx->size_k_row_padded;
-                    hvx_dot_f16_f16_aa_rx4(&scores_arr[j], q_ptr_vtcm, k_ptr, size_k_row_padded, DK, scale);
-                }
-
-                HVX_Vector scores = *(HVX_Vector *) scores_arr;
+                HVX_Vector scores = hvx_dot_f16_f16_aa_rx32(q_ptr_vtcm, k_base + ic * factx->size_k_row_padded, factx->size_q_row_padded, DK, scale);
 
                 // 2. Softcap
                 if (factx->logit_softcap != 0.0f) {
