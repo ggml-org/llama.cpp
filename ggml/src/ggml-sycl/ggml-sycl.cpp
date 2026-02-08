@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -25812,10 +25813,6 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         return false;
     }
 
-    // 2. Begin building the persistent plan
-    kernel.begin_persistent(n_layers, 1 /* batch_size */, hidden_dim,
-                            intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type);
-
     sycl::queue * q = ctx.stream();
     std::unordered_map<const ggml_tensor *, void *> materialized_ptrs;
     std::vector<int> rms_seen_per_layer(n_layers, 0);
@@ -25981,6 +25978,37 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         return dst_ptr;
     };
 
+    // Fast-path pointer resolver: never materialize via STRIDED_COPY.
+    // If a tensor needs materialization, return nullptr so caller can fall back.
+    auto resolve_input_ptr_no_materialize = [&](const ggml_tensor * tensor) -> const void * {
+        if (!tensor) {
+            return nullptr;
+        }
+        auto it = materialized_ptrs.find(tensor);
+        if (it != materialized_ptrs.end()) {
+            return it->second;
+        }
+
+        size_t view_offs = 0;
+        const ggml_tensor * view_root = ggml_sycl_get_view_root(tensor, view_offs);
+        if (view_root && view_root != tensor) {
+            auto root_it = materialized_ptrs.find(view_root);
+            if (root_it != materialized_ptrs.end()) {
+                const void * ptr = static_cast<const char *>(root_it->second) + view_offs;
+                materialized_ptrs.emplace(tensor, const_cast<void *>(ptr));
+                return ptr;
+            }
+        }
+
+        if (ggml_is_contiguous(tensor) && !ggml_is_permuted(tensor)) {
+            void * ptr = get_tensor_ptr_view_fast(tensor);
+            materialized_ptrs.emplace(tensor, ptr);
+            return ptr;
+        }
+
+        return nullptr;
+    };
+
     auto resolve_input_ptr_with_nb = [&](const ggml_tensor * tensor, int layer, int64_t nb[4],
                                          bool allow_strided) -> const void * {
         if (!tensor) {
@@ -26085,12 +26113,863 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         g_persistent_trace_ops.push_back(entry);
     };
 
+    // Fast path: reuse cached plan and refresh mutable pointers only.
+    if (kernel.has_cached_plan()) {
+        const bool fast_path_debug_disabled =
+            g_sycl_tg_trace_hash ||
+            profile_build ||
+            log_ops ||
+            (max_ops_limit > 0) ||
+            g_persistent_set_rows_dbg.enabled ||
+            g_persistent_attn_dbg.enabled ||
+            g_persistent_rms_dbg.enabled ||
+            g_persistent_matmul_dbg.enabled ||
+            g_persistent_add_dbg.enabled ||
+            g_persistent_mul_dbg.enabled;
+
+        if (!fast_path_debug_disabled) {
+            kernel.begin_plan_update();
+
+            auto is_matmul_type = [](OperationType type) -> bool {
+                switch (type) {
+                    case OperationType::MATMUL_Q_PROJ:
+                    case OperationType::MATMUL_K_PROJ:
+                    case OperationType::MATMUL_V_PROJ:
+                    case OperationType::MATMUL_OUT_PROJ:
+                    case OperationType::MATMUL_GATE:
+                    case OperationType::MATMUL_UP:
+                    case OperationType::MATMUL_DOWN:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
+            bool fast_path_ok = true;
+            int op_idx = 0;
+            int last_layer_fast = -1;
+
+            for (int i = 0; i < cgraph->n_nodes && fast_path_ok; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (!node) {
+                    continue;
+                }
+
+                int layer = -1;
+                if (node->name[0] != '\0') {
+                    layer = extract_layer_index(node->name);
+                }
+                for (int s = 0; s < GGML_MAX_SRC && layer < 0; s++) {
+                    if (!node->src[s]) break;
+                    if (node->src[s]->name[0] != '\0') {
+                        layer = extract_layer_index(node->src[s]->name);
+                    }
+                    if (layer < 0 && node->src[s]->src[0] && node->src[s]->src[0]->name[0] != '\0') {
+                        layer = extract_layer_index(node->src[s]->src[0]->name);
+                    }
+                }
+                if (layer < 0) {
+                    layer = (last_layer_fast >= 0) ? last_layer_fast : 0;
+                } else {
+                    last_layer_fast = layer;
+                }
+
+                OperationDescriptor op_desc = {};
+
+                switch (node->op) {
+                    case GGML_OP_GET_ROWS: {
+                        if (!node->src[0] || !node->src[1]) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (node->src[1]->type != GGML_TYPE_I32 || node->type != GGML_TYPE_F32) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        ggml_sycl_op_get_rows(ctx, node);
+                        q->wait_and_throw();
+                        if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
+                            const size_t bytes = ggml_nbytes(node);
+                            void * stable_ptr = kernel.get_rows_stable_ptr(bytes);
+                            const void * out_ptr = get_tensor_ptr_view_fast(node);
+                            if (!stable_ptr || !out_ptr) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            q->memcpy(stable_ptr, out_ptr, bytes).wait();
+                            materialized_ptrs[node] = stable_ptr;
+                        }
+                        break;
+                    }
+
+                    case GGML_OP_RMS_NORM: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_RMS_NORM") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * input = resolve_input_ptr_no_materialize(node->src[0]);
+                        void * output = get_tensor_ptr_view_fast(node);
+                        if (!input || !output || !ggml_is_contiguous(node)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        input = ensure_device_access_ptr(node->src[0], input, "RMS_NORM input");
+                        output = const_cast<void *>(ensure_device_access_ptr(node, output, "RMS_NORM output", ggml_nbytes(node)));
+                        if (!input || !output) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::RMS_NORM) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        float eps = 1e-5f;
+                        memcpy(&eps, node->op_params, sizeof(float));
+                        op_desc.input = input;
+                        op_desc.output = output;
+                        op_desc.eps = eps;
+                        op_desc.hidden_dim = node->src[0] ? (int) node->src[0]->ne[0] : op_desc.hidden_dim;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = output;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_MUL_MAT: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL") != nullptr ||
+                            std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL_NAME") != nullptr ||
+                            std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MATMUL_LAYER") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const ggml_tensor * weight_tensor = node->src[0];
+                        if (!weight_tensor || !node->src[1]) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const int weight_type = weight_tensor->type;
+                        const bool is_quantized_weight = (weight_type == GGML_TYPE_Q4_0 || weight_type == GGML_TYPE_Q6_K);
+                        const bool is_f16_weight = (weight_type == GGML_TYPE_F16);
+                        if (!is_quantized_weight && !is_f16_weight) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        const void * input = nullptr;
+                        int64_t input_nb[4] = {0, 0, 0, 0};
+                        int64_t output_nb[4] = {
+                            (int64_t) node->nb[0], (int64_t) node->nb[1],
+                            (int64_t) node->nb[2], (int64_t) node->nb[3],
+                        };
+                        void * output = get_tensor_ptr_view_fast(node);
+                        if (is_quantized_weight) {
+                            input = resolve_input_ptr_no_materialize(node->src[1]);
+                            if (!input || !output || !ggml_is_contiguous(node)) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                        } else {
+                            input = resolve_input_ptr_with_nb(node->src[1], layer, input_nb, true);
+                            if (!input || !output) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                        }
+
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) || !is_matmul_type(op_desc.type)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = input;
+                        op_desc.output = output;
+                        op_desc.M = (int) node->src[1]->ne[1];
+                        if (is_f16_weight) {
+                            op_desc.k_nb0 = input_nb[0]; op_desc.k_nb1 = input_nb[1];
+                            op_desc.k_nb2 = input_nb[2]; op_desc.k_nb3 = input_nb[3];
+                            op_desc.v_nb0 = output_nb[0]; op_desc.v_nb1 = output_nb[1];
+                            op_desc.v_nb2 = output_nb[2]; op_desc.v_nb3 = output_nb[3];
+                        }
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = output;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_MUL: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_MUL") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * src0 = resolve_input_ptr_no_materialize(node->src[0]);
+                        const void * src1 = resolve_input_ptr_no_materialize(node->src[1]);
+                        void * mul_out = get_tensor_ptr_view_fast(node);
+                        const int64_t n_elements = ggml_nelements(node);
+                        if (!src0 || !src1 || !mul_out ||
+                            n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::MUL) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = src0;
+                        op_desc.aux = const_cast<void *>(src1);
+                        op_desc.output = mul_out;
+                        op_desc.M = (int) n_elements;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = mul_out;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_ADD: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ADD") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * src0 = resolve_input_ptr_no_materialize(node->src[0]);
+                        const void * src1 = resolve_input_ptr_no_materialize(node->src[1]);
+                        void * add_out = get_tensor_ptr_view_fast(node);
+                        const int64_t n_elements = ggml_nelements(node);
+                        if (!src0 || !src1 || !add_out ||
+                            n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::ADD) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = src0;
+                        op_desc.aux = const_cast<void *>(src1);
+                        op_desc.output = add_out;
+                        op_desc.M = (int) n_elements;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = add_out;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_GLU: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_GLU") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * gate = resolve_input_ptr_no_materialize(node->src[0]);
+                        const void * up   = resolve_input_ptr_no_materialize(node->src[1]);
+                        void * glu_out = get_tensor_ptr_view_fast(node);
+                        if (!gate || !up || !glu_out) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::SILU_MUL) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = gate;
+                        op_desc.aux = const_cast<void *>(up);
+                        op_desc.output = glu_out;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = glu_out;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_ROPE: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ROPE") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const int n_dims = ((int32_t *) node->op_params)[1];
+                        const int mode   = ((int32_t *) node->op_params)[2];
+                        const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
+                        const bool is_normal = (mode == GGML_ROPE_TYPE_NORMAL);
+                        if (!is_neox && !is_normal) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        float freq_base;
+                        float freq_scale;
+                        float ext_factor;
+                        float attn_factor;
+                        memcpy(&freq_base,  (int32_t *) node->op_params + 5, sizeof(float));
+                        memcpy(&freq_scale, (int32_t *) node->op_params + 6, sizeof(float));
+                        memcpy(&ext_factor, (int32_t *) node->op_params + 7, sizeof(float));
+                        memcpy(&attn_factor,(int32_t *) node->op_params + 8, sizeof(float));
+                        if (freq_scale != 1.0f || ext_factor != 0.0f || attn_factor != 1.0f || node->src[2] != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        const int head_dim_rope = (int) node->src[0]->ne[0];
+                        const int n_heads_rope  = (int) node->src[0]->ne[1];
+                        if (n_dims != head_dim_rope) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const int half_dim = n_dims / 2;
+                        int32_t position = rope_position_cached;
+                        if (position < 0) {
+                            const int32_t * pos_device = (const int32_t *) get_tensor_ptr_view_fast(node->src[1]);
+                            if (!pos_device) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            q->memcpy(&position, pos_device, sizeof(int32_t)).wait();
+                            rope_position_cached = position;
+                        }
+
+                        const uint64_t rope_cache_key =
+                            (static_cast<uint64_t>(static_cast<uint32_t>(position)) << 32) |
+                            static_cast<uint64_t>(static_cast<uint32_t>(n_dims));
+                        float * d_cos = nullptr;
+                        float * d_sin = nullptr;
+                        auto rope_it = rope_cache_by_pos.find(rope_cache_key);
+                        if (rope_it != rope_cache_by_pos.end()) {
+                            d_cos = rope_it->second.first;
+                            d_sin = rope_it->second.second;
+                        } else {
+                            std::vector<float> cos_cache(half_dim);
+                            std::vector<float> sin_cache(half_dim);
+                            for (int j = 0; j < half_dim; j++) {
+                                const float theta = (float) position * powf(freq_base, -2.0f * (float) j / (float) n_dims);
+                                cos_cache[j] = cosf(theta);
+                                sin_cache[j] = sinf(theta);
+                            }
+                            d_cos = sycl::malloc_device<float>(half_dim, *q);
+                            d_sin = sycl::malloc_device<float>(half_dim, *q);
+                            if (!d_cos || !d_sin) {
+                                if (d_cos) sycl::free(d_cos, *q);
+                                if (d_sin) sycl::free(d_sin, *q);
+                                fast_path_ok = false;
+                                break;
+                            }
+                            q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
+                            q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
+                            kernel.add_temp_device_alloc(d_cos);
+                            kernel.add_temp_device_alloc(d_sin);
+                            rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
+                        }
+
+                        void * input_rope  = const_cast<void *>(resolve_input_ptr_no_materialize(node->src[0]));
+                        void * output_rope = get_tensor_ptr_view_fast(node);
+                        if (!input_rope || !output_rope || !ggml_is_contiguous(node)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::ROPE) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = input_rope;
+                        op_desc.output = output_rope;
+                        op_desc.weights = d_cos;
+                        op_desc.aux = d_sin;
+                        op_desc.M = position;
+                        op_desc.N = n_heads_rope;
+                        op_desc.K = head_dim_rope;
+                        op_desc.scale = is_neox ? 1.0f : 0.0f;
+                        op_desc.n_kv_heads = 0;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = output_rope;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_SOFT_MAX: {
+                        const ggml_tensor * src0  = node->src[0];
+                        const ggml_tensor * mask  = node->src[1];
+                        const ggml_tensor * sinks = node->src[2];
+                        if (!src0 || sinks != nullptr || src0->type != GGML_TYPE_F32 || node->type != GGML_TYPE_F32) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        float scale = 1.0f;
+                        float max_bias = 0.0f;
+                        std::memcpy(&scale,    (const float *) node->op_params + 0, sizeof(float));
+                        std::memcpy(&max_bias, (const float *) node->op_params + 1, sizeof(float));
+                        if (max_bias != 0.0f) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        const void * input = resolve_input_ptr_no_materialize(src0);
+                        void * output = get_tensor_ptr_view_fast(node);
+                        if (!input || !output || !ggml_is_contiguous(node)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        int mask_type = -1;
+                        int64_t mask_nb0 = 0, mask_nb1 = 0, mask_nb2 = 0, mask_nb3 = 0;
+                        int mask_ne2 = 1, mask_ne3 = 1;
+                        const void * mask_ptr = nullptr;
+                        if (mask) {
+                            if (mask->type != GGML_TYPE_F16 && mask->type != GGML_TYPE_F32) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            int64_t mask_nb[GGML_MAX_DIMS] = {};
+                            mask_ptr = resolve_input_ptr_with_nb(mask, layer, mask_nb, true);
+                            if (!mask_ptr) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            mask_ptr = ensure_device_access_ptr(mask, mask_ptr, "SOFT_MAX mask");
+                            if (!mask_ptr) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            mask_type = (mask->type == GGML_TYPE_F16) ? 1 : 0;
+                            mask_nb0 = mask_nb[0]; mask_nb1 = mask_nb[1];
+                            mask_nb2 = mask_nb[2]; mask_nb3 = mask_nb[3];
+                            mask_ne2 = (int) mask->ne[2];
+                            mask_ne3 = (int) mask->ne[3];
+                        }
+
+                        const int64_t n_rows = ggml_nrows(src0);
+                        const int64_t n_cols = src0->ne[0];
+                        if (n_rows <= 0 || n_cols <= 0 ||
+                            n_rows > std::numeric_limits<int>::max() ||
+                            n_cols > std::numeric_limits<int>::max()) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::SOFTMAX) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = input;
+                        op_desc.mask = mask_ptr;
+                        op_desc.aux = nullptr;
+                        op_desc.output = output;
+                        op_desc.M = (int) n_rows;
+                        op_desc.N = (int) n_cols;
+                        op_desc.K = (int) src0->ne[1];
+                        op_desc.q_nb0 = (int64_t) src0->ne[1];
+                        op_desc.q_nb1 = (int64_t) src0->ne[2];
+                        op_desc.q_nb2 = (int64_t) src0->ne[3];
+                        op_desc.scale = scale;
+                        op_desc.eps = max_bias;
+                        op_desc.mask_type = mask_type;
+                        op_desc.mask_nb0 = mask_nb0;
+                        op_desc.mask_nb1 = mask_nb1;
+                        op_desc.mask_nb2 = mask_nb2;
+                        op_desc.mask_nb3 = mask_nb3;
+                        op_desc.mask_ne2 = mask_ne2;
+                        op_desc.mask_ne3 = mask_ne3;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = output;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_FLASH_ATTN_EXT: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_ATTN") != nullptr ||
+                            std::getenv("GGML_SYCL_PERSISTENT_TG_SKIP_ATTN") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const ggml_tensor * Q_fa = node->src[0];
+                        const ggml_tensor * K_fa = node->src[1];
+                        const ggml_tensor * V_fa = node->src[2];
+                        const ggml_tensor * mask = node->src[3];
+                        const ggml_tensor * sinks = node->src[4];
+                        const ggml_tensor * q_seq_ids = node->src[5];
+                        const ggml_tensor * kv_seq_ids = node->src[6];
+                        const ggml_tensor * block_table = node->src[7];
+                        const ggml_tensor * seq_lens = node->src[8];
+                        const int32_t use_paged_layout = ((int32_t *) node->op_params)[4];
+                        if (!Q_fa || !K_fa || !V_fa ||
+                            sinks || q_seq_ids || kv_seq_ids || block_table || seq_lens || use_paged_layout != 0) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (Q_fa->type != GGML_TYPE_F32 || K_fa->type != V_fa->type) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        int64_t q_nb[GGML_MAX_DIMS] = {};
+                        int64_t k_nb[GGML_MAX_DIMS] = {};
+                        int64_t v_nb[GGML_MAX_DIMS] = {};
+                        const void * q_ptr = resolve_input_ptr_with_nb(Q_fa, layer, q_nb, true);
+                        const void * k_ptr = resolve_input_ptr_with_nb(K_fa, layer, k_nb, true);
+                        const void * v_ptr = resolve_input_ptr_with_nb(V_fa, layer, v_nb, true);
+                        void * out_ptr = get_tensor_ptr_view_fast(node);
+                        if (!q_ptr || !k_ptr || !v_ptr || !out_ptr || !ggml_is_contiguous(node)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        auto find_axis_for_dim = [](const ggml_tensor * t, int dim) -> int {
+                            if (!t || dim <= 0) return -1;
+                            for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                                if ((int) t->ne[d] == dim) return d;
+                            }
+                            return -1;
+                        };
+                        auto pick_seq_axis = [](const ggml_tensor * t, int head_axis) -> int {
+                            if (!t) return -1;
+                            int best_axis = -1;
+                            int64_t best_ne = -1;
+                            for (int d = 1; d < GGML_MAX_DIMS; ++d) {
+                                if (d == head_axis) continue;
+                                if (t->ne[d] > best_ne) {
+                                    best_ne = t->ne[d];
+                                    best_axis = d;
+                                }
+                            }
+                            return best_axis;
+                        };
+
+                        const int head_dim_attn = (int) Q_fa->ne[0];
+                        int q_head_axis = find_axis_for_dim(Q_fa, n_heads);
+                        if (q_head_axis < 0) q_head_axis = 2;
+                        int k_head_axis = find_axis_for_dim(K_fa, n_kv_heads);
+                        if (k_head_axis < 0) k_head_axis = 2;
+                        int v_head_axis = find_axis_for_dim(V_fa, n_kv_heads);
+                        if (v_head_axis < 0) v_head_axis = k_head_axis;
+                        int k_seq_axis = pick_seq_axis(K_fa, k_head_axis);
+                        if (k_seq_axis < 0) k_seq_axis = 1;
+                        int v_seq_axis = pick_seq_axis(V_fa, v_head_axis);
+                        if (v_seq_axis < 0) v_seq_axis = k_seq_axis;
+                        if (v_head_axis != k_head_axis || v_seq_axis != k_seq_axis) {
+                            v_head_axis = k_head_axis;
+                            v_seq_axis = k_seq_axis;
+                        }
+
+                        const int n_heads_attn = (int) Q_fa->ne[q_head_axis];
+                        const int n_kv_heads_attn = (int) K_fa->ne[k_head_axis];
+                        int seq_len_attn = (int) K_fa->ne[k_seq_axis];
+                        if (decode_kv_pos_hint >= 0 && decode_kv_pos_hint + 1 < (int64_t) seq_len_attn) {
+                            seq_len_attn = (int) (decode_kv_pos_hint + 1);
+                        }
+
+                        float scale_attn = 1.0f;
+                        float max_bias = 0.0f;
+                        float logit_softcap = 0.0f;
+                        memcpy(&scale_attn, (const float *) node->op_params + 0, sizeof(float));
+                        memcpy(&max_bias, (const float *) node->op_params + 1, sizeof(float));
+                        memcpy(&logit_softcap, (const float *) node->op_params + 2, sizeof(float));
+                        if (max_bias != 0.0f || logit_softcap != 0.0f) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        const bool kv_f16 = (K_fa->type == GGML_TYPE_F16);
+                        const bool kv_f32 = (K_fa->type == GGML_TYPE_F32);
+                        if (!kv_f16 && !kv_f32) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        const void * mask_ptr = nullptr;
+                        int mask_type = -1;
+                        int64_t mask_nb0 = 0, mask_nb1 = 0, mask_nb2 = 0, mask_nb3 = 0;
+                        int mask_ne2 = 0, mask_ne3 = 0;
+                        if (mask) {
+                            if (mask->type == GGML_TYPE_F16) {
+                                mask_type = 1;
+                            } else if (mask->type == GGML_TYPE_F32) {
+                                mask_type = 0;
+                            } else {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            int64_t mask_nb[GGML_MAX_DIMS] = {};
+                            mask_ptr = resolve_input_ptr_with_nb(mask, layer, mask_nb, true);
+                            if (!mask_ptr) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            mask_ptr = ensure_device_access_ptr(mask, mask_ptr, "FLASH_ATTN mask");
+                            if (!mask_ptr) {
+                                fast_path_ok = false;
+                                break;
+                            }
+                            mask_nb0 = mask_nb[0];
+                            mask_nb1 = mask_nb[1];
+                            mask_nb2 = mask_nb[2];
+                            mask_nb3 = mask_nb[3];
+                            mask_ne2 = (int) mask->ne[2];
+                            mask_ne3 = (int) mask->ne[3];
+                        }
+
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            (op_desc.type != OperationType::ATTENTION_F16 &&
+                             op_desc.type != OperationType::ATTENTION_F32)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = q_ptr;
+                        op_desc.weights = k_ptr;
+                        op_desc.aux = const_cast<void *>(v_ptr);
+                        op_desc.mask = mask_ptr;
+                        op_desc.output = out_ptr;
+                        op_desc.M = seq_len_attn;
+                        op_desc.N = n_heads_attn;
+                        op_desc.K = head_dim_attn;
+                        op_desc.n_kv_heads = n_kv_heads_attn;
+                        op_desc.scale = scale_attn;
+                        op_desc.q_nb0 = q_nb[0];
+                        op_desc.q_nb1 = q_nb[1];
+                        op_desc.q_nb2 = q_nb[q_head_axis];
+                        op_desc.q_nb3 = q_nb[3];
+                        op_desc.k_nb0 = k_nb[0];
+                        op_desc.k_nb1 = k_nb[k_seq_axis];
+                        op_desc.k_nb2 = k_nb[k_head_axis];
+                        op_desc.k_nb3 = k_nb[3];
+                        op_desc.v_nb0 = v_nb[0];
+                        op_desc.v_nb1 = v_nb[v_seq_axis];
+                        op_desc.v_nb2 = v_nb[v_head_axis];
+                        op_desc.v_nb3 = v_nb[3];
+                        op_desc.mask_type = mask_type;
+                        op_desc.mask_nb0 = mask_nb0;
+                        op_desc.mask_nb1 = mask_nb1;
+                        op_desc.mask_nb2 = mask_nb2;
+                        op_desc.mask_nb3 = mask_nb3;
+                        op_desc.mask_ne2 = mask_ne2;
+                        op_desc.mask_ne3 = mask_ne3;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        materialized_ptrs[node] = out_ptr;
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_SET_ROWS: {
+                        if (std::getenv("GGML_SYCL_PERSISTENT_TG_USE_BASE_SET_ROWS") != nullptr ||
+                            std::getenv("GGML_SYCL_PERSISTENT_TG_SKIP_SET_ROWS") != nullptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const ggml_tensor * src0 = node->src[0];
+                        const ggml_tensor * src1 = node->src[1];
+                        if (!src0 || !src1 || !ggml_is_contiguous_rows(src0)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const int32_t src_type = (src0->type == GGML_TYPE_F16) ? 1 :
+                                                 (src0->type == GGML_TYPE_F32 ? 0 : -1);
+                        const int32_t dst_type = (node->type == GGML_TYPE_F16) ? 1 :
+                                                 (node->type == GGML_TYPE_F32 ? 0 : -1);
+                        const int32_t idx_type = (src1->type == GGML_TYPE_I64) ? 1 :
+                                                 (src1->type == GGML_TYPE_I32 ? 0 : -1);
+                        if (src_type < 0 || dst_type < 0 || idx_type < 0) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * src_ptr = get_tensor_ptr_view_fast(src0);
+                        const void * idx_ptr = get_tensor_ptr_view_fast(src1);
+                        void * dst_ptr = get_tensor_ptr_view_fast(node);
+                        if (!dst_ptr && node->src[2]) {
+                            dst_ptr = get_tensor_ptr_view_fast(node->src[2]);
+                        }
+                        if (!src_ptr || !idx_ptr || !dst_ptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        idx_ptr = ensure_device_access_ptr(src1, idx_ptr, "SET_ROWS indices");
+                        if (!idx_ptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (decode_kv_pos_hint < 0) {
+                            if (idx_type == 1) {
+                                int64_t idx0 = -1;
+                                q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                if (idx0 >= 0) decode_kv_pos_hint = idx0;
+                            } else {
+                                int32_t idx0 = -1;
+                                q->memcpy(&idx0, idx_ptr, sizeof(idx0)).wait();
+                                if (idx0 >= 0) decode_kv_pos_hint = idx0;
+                            }
+                        }
+
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::SET_ROWS ||
+                            !op_desc.weights) {
+                            fast_path_ok = false;
+                            break;
+                        }
+
+                        SetRowsMeta meta = {};
+                        meta.nc    = src0->ne[0];
+                        meta.nr    = src0->ne[1];
+                        meta.ne1   = node->ne[1];
+                        meta.ne02  = src0->ne[2];
+                        meta.ne03  = src0->ne[3];
+                        meta.ne11  = src1->ne[1];
+                        meta.ne12  = src1->ne[2];
+                        meta.nb00  = (int64_t) src0->nb[0];
+                        meta.nb01  = (int64_t) src0->nb[1];
+                        meta.nb02  = (int64_t) src0->nb[2];
+                        meta.nb03  = (int64_t) src0->nb[3];
+                        meta.nb0   = (int64_t) node->nb[0];
+                        meta.nb1   = (int64_t) node->nb[1];
+                        meta.nb2   = (int64_t) node->nb[2];
+                        meta.nb3   = (int64_t) node->nb[3];
+                        meta.nb10  = (int64_t) src1->nb[0];
+                        meta.nb11  = (int64_t) src1->nb[1];
+                        meta.nb12  = (int64_t) src1->nb[2];
+                        meta.src_type = src_type;
+                        meta.dst_type = dst_type;
+                        meta.idx_type = idx_type;
+                        meta.pad = 0;
+                        q->memcpy(const_cast<void *>(op_desc.weights), &meta, sizeof(meta)).wait();
+
+                        const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
+                        if (n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const int elem_size = (meta.dst_type == 1) ? (int) sizeof(sycl::half) : (int) sizeof(float);
+                        const int64_t last = (meta.nc  > 0 ? (meta.nc  - 1) * meta.nb0  : 0) +
+                                             (meta.ne1 > 0 ? (meta.ne1 - 1) * meta.nb1  : 0) +
+                                             (meta.ne02> 0 ? (meta.ne02- 1) * meta.nb2  : 0) +
+                                             (meta.ne03> 0 ? (meta.ne03- 1) * meta.nb3  : 0);
+                        op_desc.input = src_ptr;
+                        op_desc.aux = const_cast<void *>(idx_ptr);
+                        op_desc.output = dst_ptr;
+                        op_desc.mask = nullptr;
+                        op_desc.M = (int) n_elements;
+                        op_desc.output_bytes = last + elem_size;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_VIEW:
+                    case GGML_OP_RESHAPE:
+                    case GGML_OP_PERMUTE:
+                        break;
+
+                    case GGML_OP_CONT: {
+                        if (!node->src[0] || node->type != node->src[0]->type || !ggml_is_contiguous(node)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        const void * src_ptr = get_tensor_ptr_view_fast(node->src[0]);
+                        void * dst_ptr = get_tensor_ptr_view_fast(node);
+                        if (!src_ptr || !dst_ptr) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        if (!kernel.get_op_descriptor(op_idx, op_desc) ||
+                            op_desc.type != OperationType::STRIDED_COPY ||
+                            !op_desc.weights) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        StridedCopyMeta meta = {};
+                        for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                            meta.ne[d] = node->src[0]->ne[d];
+                            meta.nb[d] = (int64_t) node->src[0]->nb[d];
+                        }
+                        meta.type_size = (int32_t) ggml_type_size(node->type);
+                        meta.pad = 0;
+                        q->memcpy(const_cast<void *>(op_desc.weights), &meta, sizeof(meta)).wait();
+
+                        const int64_t n_elements = ggml_nelements(node->src[0]);
+                        if (n_elements <= 0 || n_elements > std::numeric_limits<int>::max()) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_desc.input = src_ptr;
+                        op_desc.output = dst_ptr;
+                        op_desc.M = (int) n_elements;
+                        op_desc.output_bytes = n_elements * meta.type_size;
+                        if (!kernel.update_op_descriptor(op_idx, op_desc)) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        op_idx++;
+                        break;
+                    }
+
+                    case GGML_OP_CPY: {
+                        if (!node->src[0] || !node->src[1]) {
+                            fast_path_ok = false;
+                            break;
+                        }
+                        ggml_sycl_cpy(ctx, node->src[0], node->src[1]);
+                        break;
+                    }
+
+                    default:
+                        fast_path_ok = false;
+                        break;
+                }
+            }
+
+            if (fast_path_ok && op_idx == kernel.cached_op_count()) {
+                kernel.finish_plan_update();
+                // Reset DAG per-token scheduling state (topology is static across tokens)
+                if (kernel.has_dag()) {
+                    kernel.reset_dag_counters();
+                }
+                GGML_SYCL_DEBUG("[PERSISTENT-TG] Fast cached plan update: %d ops\n", op_idx);
+                return true;
+            }
+
+            GGML_SYCL_DEBUG("[PERSISTENT-TG] Fast update fallback to full rebuild (ok=%d op_idx=%d cached=%d)\n",
+                            fast_path_ok ? 1 : 0, op_idx, kernel.cached_op_count());
+            kernel.invalidate_plan_cache();
+            kernel.cancel_persistent();
+        }
+    }
+
+full_build:
+    // 2. Begin building the persistent plan
+    kernel.begin_persistent(n_layers, 1 /* batch_size */, hidden_dim,
+                            intermediate_dim, n_heads, n_kv_heads, head_dim, quant_type);
+
     // 3. Walk graph and add operations
     int last_layer = -1;
     int min_layer_seen = std::numeric_limits<int>::max();
     int max_layer_seen = -1;
+    // DAG construction: track which graph node produced which op index
+    std::unordered_map<const ggml_tensor *, int> tensor_to_op;
+    std::vector<int> node_to_last_op(cgraph->n_nodes, -1);
+    std::vector<int> op_to_graph_node;  // reverse: op index → graph node index
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+        const int ops_before = ops_added;  // track if this node adds an op
         const auto node_start = profile_build ? clock_t::now() : clock_t::time_point{};
         if (max_ops_limit > 0 && ops_added >= max_ops_limit) {
             if (g_ggml_sycl_debug) {
@@ -26159,12 +27038,11 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                 }
                 if (ggml_is_contiguous(node) && !ggml_is_permuted(node)) {
                     const size_t bytes = ggml_nbytes(node);
-                    void * stable_ptr = sycl::malloc_device(bytes, *q);
+                    void * stable_ptr = kernel.get_rows_stable_ptr(bytes);
                     if (!stable_ptr) {
                         GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS stable alloc failed (%zu bytes)\n", bytes);
                         return false;
                     }
-                    kernel.add_temp_device_alloc(stable_ptr);
                     const void * out_ptr = get_tensor_ptr_view_fast(node);
                     if (!out_ptr) {
                         GGML_LOG_ERROR("[PERSISTENT-TG] GET_ROWS output ptr missing\n");
@@ -27618,6 +28496,18 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                ggml_op_name(node->op), node->name ? node->name : "(null)");
                 return false;
         }
+        // DAG tracking: record which ops this graph node produced
+        if (ops_added > ops_before) {
+            node_to_last_op[i]  = ops_added - 1;
+            tensor_to_op[node]  = ops_added - 1;
+            // Record reverse mapping for all ops from this node
+            for (int o = ops_before; o < ops_added; o++) {
+                if ((int)op_to_graph_node.size() <= o) {
+                    op_to_graph_node.resize(o + 1, -1);
+                }
+                op_to_graph_node[o] = i;
+            }
+        }
         if (profile_build && node) {
             build_ms_by_op[node->op] +=
                 std::chrono::duration<double, std::milli>(clock_t::now() - node_start).count();
@@ -27697,6 +28587,101 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                         skipped_permute,
                         executed_get_rows,
                         executed_cpy);
+    }
+
+    // ─── DAG construction: build dependency edges for barrier-free scheduling ───
+    if (ops_added > 0) {
+        const int n_ops = ops_added;
+        std::vector<std::vector<int>> successors(n_ops);
+        std::vector<int> in_degree(n_ops, 0);
+
+        // 1. Intra-node chains: ops from the same graph node must execute sequentially.
+        //    E.g. STRIDED_COPY (materialization) → MUL_MAT (main op) within one node.
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (node_to_last_op[i] < 0) continue;
+            // Find the first op from this node by scanning op_to_graph_node
+            int first_op = -1;
+            for (int o = 0; o < n_ops; o++) {
+                if (o < (int)op_to_graph_node.size() && op_to_graph_node[o] == i) {
+                    if (first_op < 0) {
+                        first_op = o;
+                    } else {
+                        // Chain: previous op → this op
+                        int prev_op = o - 1;
+                        if (prev_op >= 0 && prev_op < (int)op_to_graph_node.size()
+                            && op_to_graph_node[prev_op] == i) {
+                            successors[prev_op].push_back(o);
+                            in_degree[o]++;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Inter-node edges: for each graph node that produced ops, look at its
+        //    src[] tensors and find the producing op via tensor_to_op.
+        //    Follow view_src chains for VIEW/RESHAPE/PERMUTE nodes that don't produce ops.
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (node_to_last_op[i] < 0) continue;
+            const ggml_tensor * node = cgraph->nodes[i];
+
+            // The first op from this node depends on source tensor producers
+            int first_op_of_node = -1;
+            for (int o = 0; o < n_ops && o < (int)op_to_graph_node.size(); o++) {
+                if (op_to_graph_node[o] == i) {
+                    first_op_of_node = o;
+                    break;
+                }
+            }
+            if (first_op_of_node < 0) continue;
+
+            for (int s = 0; s < GGML_MAX_SRC; s++) {
+                const ggml_tensor * src = node->src[s];
+                if (!src) continue;
+
+                // Follow view chains: VIEW/RESHAPE/PERMUTE don't produce ops,
+                // so trace through view_src to find the actual producing tensor.
+                const ggml_tensor * origin = src;
+                while (origin && tensor_to_op.find(origin) == tensor_to_op.end()) {
+                    if (origin->view_src) {
+                        origin = origin->view_src;
+                    } else {
+                        origin = nullptr;  // external input (weight, embedding)
+                    }
+                }
+                if (!origin) continue;  // no producer in graph
+
+                int pred_op = tensor_to_op[origin];
+                if (pred_op < 0 || pred_op == first_op_of_node) continue;
+
+                // For multi-op nodes, the predecessor's LAST op feeds our FIRST op.
+                // tensor_to_op already stores the last op index for the producing node.
+                // Deduplicate edges
+                auto & succ_list = successors[pred_op];
+                if (std::find(succ_list.begin(), succ_list.end(), first_op_of_node) == succ_list.end()) {
+                    succ_list.push_back(first_op_of_node);
+                    in_degree[first_op_of_node]++;
+                }
+            }
+        }
+
+        // 3. Build the device-side DAG (reads tile counts from current_plan_ internally)
+        kernel.build_dag(successors, in_degree);
+
+        if (g_ggml_sycl_debug) {
+            int total_edges = 0;
+            int max_in = 0, max_out = 0;
+            int n_roots = 0;
+            for (int o = 0; o < n_ops; o++) {
+                total_edges += (int)successors[o].size();
+                max_out = std::max(max_out, (int)successors[o].size());
+                max_in  = std::max(max_in, in_degree[o]);
+                if (in_degree[o] == 0) n_roots++;
+            }
+            GGML_SYCL_DEBUG("[PERSISTENT-TG] DAG: %d ops, %d edges, %d roots, "
+                            "max_in=%d max_out=%d\n",
+                            n_ops, total_edges, n_roots, max_in, max_out);
+        }
     }
 
     return ops_added > 0;
@@ -28398,6 +29383,21 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         g_sycl_graph_multithreaded.store(true, std::memory_order_relaxed);
     }
     bool graph_executed = false;
+
+    // Timing instrumentation for dispatch overhead analysis
+    static int timing_call_count = 0;
+    timing_call_count++;
+    struct TimingGuard {
+        int call_num;
+        double finalize_ms = 0, compat_ms = 0, replay_ms = 0, impl_ms = 0;
+        ~TimingGuard() {
+            if (g_ggml_sycl_debug && call_num % 10 == 0) {
+                GGML_SYCL_DEBUG("[TIMING] call #%d: finalize=%.2fms compat=%.2fms replay=%.2fms impl=%.2fms\n",
+                                call_num, finalize_ms, compat_ms, replay_ms, impl_ms);
+            }
+        }
+    } timing{timing_call_count};
+
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Creating lambda...\n");
 
     auto record_completion = [&](bool graph_executed_now) {
@@ -28420,6 +29420,12 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
     };
+    auto timed_compute_impl = [&]() {
+        auto t = std::chrono::high_resolution_clock::now();
+        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        timing.impl_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t).count();
+    };
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Lambda created\n");
 
     // Check persistent TG eligibility BEFORE finalize_layouts to skip the
@@ -28441,7 +29447,12 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 GGML_LOG_ERROR("[SYCL] pre-finalize sync failed: %s\n", e.what());
             }
         }
-        finalize_layouts(*sycl_ctx, cgraph);
+        {
+            auto t_fin = std::chrono::high_resolution_clock::now();
+            finalize_layouts(*sycl_ctx, cgraph);
+            timing.finalize_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - t_fin).count();
+        }
         GGML_SYCL_DEBUG("[DEBUG] finalize_layouts returned, now checking graph compatibility\n");
         if (g_ggml_sycl_debug_sync && !ggml_sycl_graph_recording_active()) {
             try {
@@ -28566,11 +29577,16 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         return GGML_STATUS_SUCCESS;
     }
 normal_dispatch:
+    // Leaving persistent TG path (e.g. PP phase): drop cached decode plan.
+    if (sycl_ctx->unified_kernel && sycl_ctx->unified_kernel->has_cached_plan()) {
+        sycl_ctx->unified_kernel->invalidate_plan_cache();
+    }
 
 #ifdef GGML_SYCL_GRAPH
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
     // check_graph_compatibility() validates that cache can hold all layer experts.
+    auto t_compat_start = std::chrono::high_resolution_clock::now();
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && !g_sycl_graph_multithreaded.load(std::memory_order_relaxed) &&
                           !sycl_ctx->graphs_disabled && check_graph_compatibility(*sycl_ctx, cgraph) &&
                           !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
@@ -28604,7 +29620,7 @@ normal_dispatch:
         if (!graph_support) {
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            timed_compute_impl();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -28635,6 +29651,9 @@ normal_dispatch:
                 break;  // Only need to check first MUL_MAT
             }
         }
+
+        timing.compat_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t_compat_start).count();
 
         // Track node counts across iterations to detect instability.
         // Variance in node counts prevents graph replay (cache miss on n_nodes).
@@ -28708,7 +29727,7 @@ normal_dispatch:
                     GGML_LOG_INFO("[SYCL-GRAPH] MoE streaming mode without unified cache: disabling graphs\n");
                     logged_once = true;
                 }
-                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                timed_compute_impl();
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
             }
@@ -28719,7 +29738,7 @@ normal_dispatch:
         if (cgraph->n_nodes < MIN_GRAPH_NODES) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - graph too small (%d < %d nodes)\n", cgraph->n_nodes,
                             MIN_GRAPH_NODES);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            timed_compute_impl();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -28790,7 +29809,7 @@ normal_dispatch:
                 GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");
                 graph_unpin_weights(sycl_ctx);  // Clean up any partial pins
                 GGML_SYCL_DEBUG("[DEBUG] About to call graph_compute_impl after weight preload failure\n");
-                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                timed_compute_impl();
                 GGML_SYCL_DEBUG("[DEBUG] graph_compute_impl returned\n");
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
@@ -28816,7 +29835,7 @@ normal_dispatch:
             GGML_LOG_WARN("[SYCL-GRAPH] MoE pointer table prep failed, disabling graphs for all splits\n");
             sycl_ctx->moe_graphs_disabled = true;
             graph_unpin_moe_experts(sycl_ctx);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            timed_compute_impl();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -28830,7 +29849,7 @@ normal_dispatch:
         if (warmup_n_nodes != cgraph->n_nodes) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup pass for %s phase (n_nodes=%d, warmed=%d)\n",
                             is_decode_phase ? "decode" : "prompt", cgraph->n_nodes, warmup_n_nodes);
-            ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            timed_compute_impl();
             warmup_n_nodes = cgraph->n_nodes;
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup complete for %s phase\n", is_decode_phase ? "decode" : "prompt");
@@ -28874,7 +29893,12 @@ normal_dispatch:
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute existing graph...\n");
             graph_refresh_input_tensors(sycl_ctx, cgraph);
             graph_executed = true;
-            sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+            {
+                auto t_replay = std::chrono::high_resolution_clock::now();
+                sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+                timing.replay_ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - t_replay).count();
+            }
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
         } else {
             // First time - record and finalize the graph
@@ -28913,7 +29937,7 @@ normal_dispatch:
                 g_ggml_sycl_graph_recording = true;  // Mark recording state
                 model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] calling compute_impl...\n");
-                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                timed_compute_impl();
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] end_recording...\n");
                 model_sycl_graph.end_recording();
                 sycl_ctx->fa_graph_ptrs_recording = false;
@@ -28933,7 +29957,12 @@ normal_dispatch:
                                 is_decode_phase ? "decode" : "prompt");
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] execute new graph...\n");
                 graph_executed = true;
-                sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+                {
+                    auto t_replay = std::chrono::high_resolution_clock::now();
+                    sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+                    timing.replay_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - t_replay).count();
+                }
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
             } catch (const sycl::exception & exc) {
                 g_ggml_sycl_graph_recording       = false;
@@ -28946,7 +29975,7 @@ normal_dispatch:
                 sycl_ctx->graphs_disabled = true;
 
                 sycl_ctx->exec_graph.reset();
-                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                timed_compute_impl();
                 record_completion(false);
 
                 return GGML_STATUS_SUCCESS;
@@ -28957,7 +29986,7 @@ normal_dispatch:
 
 #endif
     {
-        ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+        timed_compute_impl();
     }
     record_completion(graph_executed);
 
