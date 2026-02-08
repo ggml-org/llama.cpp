@@ -431,6 +431,26 @@ static bool parse_bool_value(const std::string & value) {
 // CLI argument parsing functions
 //
 
+static void check_duplicate_arg(const std::string & arg) {
+    static const std::set<std::string> multi_value_options = {
+        "--lora",
+        "--lora-scaled",
+        "--control-vector",
+        "--control-vector-scaled",
+        "-f", "--file",
+        "--context-file",
+        "--api-key",
+        "--logit-bias",
+        "--tensor-filter"
+    };
+
+    if (multi_value_options.find(arg) != multi_value_options.end()) {
+        LOG_INF("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+    } else {
+        throw std::invalid_argument(string_format("error: argument '%s' cannot be specified multiple times", arg.c_str()));
+    }
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
@@ -477,7 +497,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     };
 
     auto parse_cli_args = [&]() {
-        std::set<std::string> seen_args;
+        std::set<common_arg *> seen_options;
 
         for (int i = 1; i < argc; i++) {
             const std::string arg_prefix = "--";
@@ -489,12 +509,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             if (arg_to_options.find(arg) == arg_to_options.end()) {
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
-            if (!seen_args.insert(arg).second) {
-                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
-            }
             auto & tmp = arg_to_options[arg];
             auto opt = *tmp.first;
             bool is_positive = tmp.second;
+            if (!seen_options.insert(tmp.first).second) {
+                check_duplicate_arg(arg);
+            }
             if (opt.has_value_from_env()) {
                 fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
             }
@@ -836,7 +856,7 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
     };
 
-    std::set<std::string> seen_args;
+    std::set<common_arg *> seen_options;
 
     for (int i = 1; i < argc; i++) {
         const std::string arg_prefix = "--";
@@ -848,10 +868,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
         }
-        if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+        auto opt_ptr = arg_to_options[arg];
+        if (!seen_options.insert(opt_ptr).second) {
+            check_duplicate_arg(arg);
         }
-        auto opt = *arg_to_options[arg];
+        auto opt = *opt_ptr;
         std::string val;
         if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
             // bool arg (need to reverse the meaning for negative args)
