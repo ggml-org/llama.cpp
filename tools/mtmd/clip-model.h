@@ -53,6 +53,12 @@ struct clip_hparams {
 
     patch_merge_type mm_patch_merge_type = PATCH_MERGE_FLAT;
 
+    // cradio params
+    int min_tiles;
+    int max_tiles;
+    int max_resolution;
+    int num_skip;
+
     float eps = 1e-6;
     float rope_theta = 0.0;
 
