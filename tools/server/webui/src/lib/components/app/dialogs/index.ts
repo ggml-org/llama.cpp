@@ -37,35 +37,6 @@
 export { default as DialogChatSettings } from './DialogChatSettings.svelte';
 
 /**
- * **DialogMcpServersSettings** - MCP servers configuration dialog
- *
- * Full-screen dialog for managing MCP Server
- * connections with add/edit/delete capabilities and health monitoring.
- * Opened from McpActiveServerAvatars or ChatFormActionAttachentsDropdown.
- *
- * **Architecture:**
- * - Uses ShadCN Dialog
- * - Integrates with mcpStore for server CRUD operations
- * - Manages connection state and health checks
- *
- * **Features:**
- * - Add new MCP servers by URL with validation
- * - Edit existing server configuration (URL, headers)
- * - Delete servers with confirmation dialog
- * - Health check status indicators (connected/disconnected/error)
- * - Connection logs display for debugging
- * - Tools list per server showing available capabilities
- * - Enable/disable servers per conversation
- * - Custom HTTP headers support
- *
- * @example
- * ```svelte
- * <DialogMcpServersSettings bind:open={showMcpSettings} />
- * ```
- */
-export { default as DialogMcpServersSettings } from './DialogMcpServersSettings.svelte';
-
-/**
  *
  * CONFIRMATION DIALOGS
  *
