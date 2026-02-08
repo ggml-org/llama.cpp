@@ -726,6 +726,11 @@ ggml_tensor * clip_graph::build_rope_2d_interleaved(
 
     GGML_ASSERT(n_dim % 4 == 0);  // Must be divisible by 4 for interleaved x,y pairs
 
+    // Ensure input is contiguous (needed when using merged QKV with ggml_view)
+    if (!ggml_is_contiguous(cur)) {
+        cur = ggml_cont(ctx0, cur);
+    }
+
     // Step 1: Reshape to expose interleaved structure
     // cur: [n_dim, n_head, n_pos] -> [4, n_dim/4, n_head, n_pos]
     ggml_tensor * reshaped = ggml_reshape_4d(ctx0, cur, 4, n_dim/4, n_head, n_pos);

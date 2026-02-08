@@ -11113,15 +11113,6 @@ class KimiK25Model(MmprojModel):
         if not is_vision:
             return
 
-        # Split fused QKV tensors in vision encoder
-        if "wqkv" in name:
-            split_dim = 0 if "weight" in name else -1
-            wq, wk, wv = data_torch.chunk(3, dim=split_dim)
-            yield from super().modify_tensors(wq, name.replace("wqkv", "wq"), bid)
-            yield from super().modify_tensors(wk, name.replace("wqkv", "wk"), bid)
-            yield from super().modify_tensors(wv, name.replace("wqkv", "wv"), bid)
-            return
-
         # Temporal embeddings: (T, 1, C) → (T, C)
         if "pos_emb.time_weight" in name:
             T, _, C = data_torch.shape
