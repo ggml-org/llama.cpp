@@ -100,59 +100,61 @@
 				emptyMessage="No servers found"
 				isEmpty={filteredMcpServers.length === 0}
 			>
+				<div class="max-h-64 overflow-y-auto">
+					{#each filteredMcpServers as server (server.id)}
+						{@const healthState = mcpStore.getHealthCheckState(server.id)}
+						{@const hasError = healthState.status === HealthCheckStatus.ERROR}
+						{@const isEnabledForChat = isServerEnabledForChat(server.id)}
 
-		<div class="max-h-64 overflow-y-auto">
-			{#each filteredMcpServers as server (server.id)}
-				{@const healthState = mcpStore.getHealthCheckState(server.id)}
-				{@const hasError = healthState.status === HealthCheckStatus.ERROR}
-				{@const isEnabledForChat = isServerEnabledForChat(server.id)}
+						<button
+							type="button"
+							class="flex w-full items-center justify-between gap-2 px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
+							onclick={() => !hasError && toggleServerForChat(server.id)}
+							disabled={hasError}
+						>
+							<div class="flex min-w-0 flex-1 items-center gap-2">
+								{#if getFaviconUrl(server.url)}
+									<img
+										src={getFaviconUrl(server.url)}
+										alt=""
+										class="h-4 w-4 shrink-0 rounded-sm"
+										onerror={(e) => {
+											(e.currentTarget as HTMLImageElement).style.display = 'none';
+										}}
+									/>
+								{/if}
 
-				<button
-					type="button"
-					class="flex w-full items-center justify-between gap-2 px-2 py-2 text-left transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
-					onclick={() => !hasError && toggleServerForChat(server.id)}
-					disabled={hasError}
-				>
-					<div class="flex min-w-0 flex-1 items-center gap-2">
-						{#if getFaviconUrl(server.url)}
-							<img
-								src={getFaviconUrl(server.url)}
-								alt=""
-								class="h-4 w-4 shrink-0 rounded-sm"
-								onerror={(e) => {
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
-								}}
+								<span class="truncate text-sm">{getServerLabel(server)}</span>
+
+								{#if hasError}
+									<span
+										class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
+									>
+										Error
+									</span>
+								{/if}
+							</div>
+
+							<Switch
+								checked={isEnabledForChat}
+								disabled={hasError}
+								onclick={(e: MouseEvent) => e.stopPropagation()}
+								onCheckedChange={() => toggleServerForChat(server.id)}
 							/>
-						{/if}
+						</button>
+					{/each}
+				</div>
 
-						<span class="truncate text-sm">{getServerLabel(server)}</span>
+				{#snippet footer()}
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={onSettingsClick}
+					>
+						<Settings class="h-4 w-4" />
 
-						{#if hasError}
-							<span
-								class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-							>
-								Error
-							</span>
-						{/if}
-					</div>
-
-					<Switch
-						checked={isEnabledForChat}
-						disabled={hasError}
-						onclick={(e: MouseEvent) => e.stopPropagation()}
-						onCheckedChange={() => toggleServerForChat(server.id)}
-					/>
-				</button>
-			{/each}
-		</div>
-
-		{#snippet footer()}
-			<DropdownMenu.Item class="flex cursor-pointer items-center gap-2" onclick={onSettingsClick}>
-				<Settings class="h-4 w-4" />
-
-				<span>Manage MCP Servers</span>
-			</DropdownMenu.Item>
-		{/snippet}
+						<span>Manage MCP Servers</span>
+					</DropdownMenu.Item>
+				{/snippet}
 			</DropdownMenuSearchable>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
