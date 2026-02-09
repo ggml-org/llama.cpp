@@ -1,16 +1,11 @@
 <script lang="ts">
-	import { FileText, Loader2, AlertCircle, Database, Image, Code, File } from '@lucide/svelte';
+	import { Loader2, AlertCircle } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import type { MCPResourceAttachment, MCPResourceInfo } from '$lib/types';
-	import {
-		IMAGE_FILE_EXTENSION_REGEX,
-		CODE_FILE_EXTENSION_REGEX,
-		TEXT_FILE_EXTENSION_REGEX
-	} from '$lib/constants/mcp-resource';
-	import { MimeTypePrefix, MimeTypeIncludes, UriPattern } from '$lib/enums';
+	import type { MCPResourceAttachment } from '$lib/types';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIconRemove } from '$lib/components/app';
+	import { getResourceIcon } from '$lib/utils';
 
 	interface Props {
 		attachment: MCPResourceAttachment;
@@ -21,41 +16,15 @@
 
 	let { attachment, onRemove, onClick, class: className }: Props = $props();
 
-	function getResourceIcon(resource: MCPResourceInfo) {
-		const mimeType = resource.mimeType?.toLowerCase() || '';
-		const uri = resource.uri.toLowerCase();
-
-		if (mimeType.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(uri)) {
-			return Image;
-		}
-
-		if (
-			mimeType.includes(MimeTypeIncludes.JSON) ||
-			mimeType.includes(MimeTypeIncludes.JAVASCRIPT) ||
-			mimeType.includes(MimeTypeIncludes.TYPESCRIPT) ||
-			CODE_FILE_EXTENSION_REGEX.test(uri)
-		) {
-			return Code;
-		}
-
-		if (mimeType.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(uri)) {
-			return FileText;
-		}
-
-		if (uri.includes(UriPattern.DATABASE_KEYWORD) || uri.includes(UriPattern.DATABASE_SCHEME)) {
-			return Database;
-		}
-
-		return File;
-	}
-
 	function getStatusClass(attachment: MCPResourceAttachment): string {
 		if (attachment.error) return 'border-red-500/50 bg-red-500/10';
 		if (attachment.loading) return 'border-border/50 bg-muted/30';
 		return 'border-border/50 bg-muted/30';
 	}
 
-	const ResourceIcon = $derived(getResourceIcon(attachment.resource));
+	const ResourceIcon = $derived(
+		getResourceIcon(attachment.resource.mimeType, attachment.resource.uri)
+	);
 	const serverName = $derived(mcpStore.getServerDisplayName(attachment.resource.serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(attachment.resource.serverName));
 </script>
