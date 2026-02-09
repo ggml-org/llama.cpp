@@ -1006,19 +1006,16 @@ enum class alloc_hint : uint8_t {
     DEBUG      = 4,  // Debug/profiling allocations (env-gated, not production)
 };
 
-// Per-category classification for runtime (non-weight) VRAM accounting.
-// Used by add/sub_runtime_bytes to track where non-weight memory goes.
+// Classification of runtime (non-weight) VRAM reservations for diagnostics.
+// Used with unified_cache_add_runtime_bytes() to track where VRAM is consumed.
 enum class runtime_category : uint8_t {
-    COMPUTE    = 0,  // Compute buffers, scratch memory
-    KV         = 1,  // KV cache allocations
-    STAGING    = 2,  // DMA staging, oneDNN scratch buffers
-    PERSISTENT = 3,  // Context-lifetime persistent buffers
-    OTHER      = 4,  // Uncategorized runtime allocations
+    KV_CACHE = 0,  // KV buffer allocations
+    COMPUTE  = 1,  // Compute buffer pool + scratch
+    STAGING  = 2,  // Expert staging, DMA staging, BLAS fallback
+    GRAPH    = 3,  // Persistent TG temp allocs, get_rows_pool
+    OTHER    = 4,  // Everything else (default for backward compat)
+    COUNT    = 5
 };
-static constexpr int RUNTIME_CATEGORY_COUNT = 5;
-
-// Human-readable name for a runtime_category value.
-const char * runtime_category_name(runtime_category cat);
 
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
 void   unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);

@@ -40,7 +40,7 @@ static std::atomic<bool> g_cache_mode_locked{ false };   // Locked after first c
 static std::atomic<bool> g_sycl_shutting_down{ false };  // Set during shutdown to skip sycl::free()
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_bytes{};
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_baseline{};
-static std::array<std::array<std::atomic<size_t>, RUNTIME_CATEGORY_COUNT>, GGML_SYCL_MAX_DEVICES> g_runtime_cat_bytes{};
+static std::atomic<size_t> g_runtime_cat_bytes[GGML_SYCL_MAX_DEVICES][static_cast<int>(runtime_category::COUNT)]{};
 static std::atomic<size_t>                                   g_runtime_reserved_host_bytes{};
 static std::atomic<bool> g_atexit_registered{ false };   // Ensure atexit handler registered once
 static std::atomic<int> g_host_cache_guard_errors{ 0 };
@@ -4594,17 +4594,6 @@ void set_unified_cache_host_budget_pct(int pct) {
     g_unified_cache_host_budget_pct = pct;
 }
 
-const char * runtime_category_name(runtime_category cat) {
-    switch (cat) {
-        case runtime_category::COMPUTE:    return "compute";
-        case runtime_category::KV:         return "kv";
-        case runtime_category::STAGING:    return "staging";
-        case runtime_category::PERSISTENT: return "persistent";
-        case runtime_category::OTHER:      return "other";
-    }
-    return "unknown";
-}
-
 void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat) {
     if (bytes == 0) {
         return;
@@ -4617,10 +4606,7 @@ void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category 
     }
     const size_t new_total =
         g_runtime_reserved_bytes[effective_device].fetch_add(bytes, std::memory_order_relaxed) + bytes;
-    const int cat_idx = static_cast<int>(cat);
-    if (cat_idx >= 0 && cat_idx < RUNTIME_CATEGORY_COUNT) {
-        g_runtime_cat_bytes[effective_device][cat_idx].fetch_add(bytes, std::memory_order_relaxed);
-    }
+    g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].fetch_add(bytes, std::memory_order_relaxed);
     auto it = g_device_caches.find(effective_device);
     if (it != g_device_caches.end()) {
         const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
@@ -4642,13 +4628,9 @@ void unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category 
     size_t cur  = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
     size_t next = cur > bytes ? cur - bytes : 0;
     g_runtime_reserved_bytes[effective_device].store(next, std::memory_order_relaxed);
-    const int cat_idx = static_cast<int>(cat);
-    if (cat_idx >= 0 && cat_idx < RUNTIME_CATEGORY_COUNT) {
-        auto & cat_val = g_runtime_cat_bytes[effective_device][cat_idx];
-        size_t cat_cur = cat_val.load(std::memory_order_relaxed);
-        size_t cat_next = cat_cur > bytes ? cat_cur - bytes : 0;
-        cat_val.store(cat_next, std::memory_order_relaxed);
-    }
+    size_t cat_cur  = g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].load(std::memory_order_relaxed);
+    size_t cat_next = cat_cur > bytes ? cat_cur - bytes : 0;
+    g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].store(cat_next, std::memory_order_relaxed);
     auto it = g_device_caches.find(effective_device);
     if (it != g_device_caches.end()) {
         const size_t baseline = g_runtime_reserved_baseline[effective_device].load(std::memory_order_relaxed);
@@ -4674,11 +4656,10 @@ size_t unified_cache_get_runtime_bytes_by_category(int device, runtime_category 
     if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
         return 0;
     }
-    const int cat_idx = static_cast<int>(cat);
-    if (cat_idx < 0 || cat_idx >= RUNTIME_CATEGORY_COUNT) {
+    if (static_cast<int>(cat) >= static_cast<int>(runtime_category::COUNT)) {
         return 0;
     }
-    return g_runtime_cat_bytes[effective_device][cat_idx].load(std::memory_order_relaxed);
+    return g_runtime_cat_bytes[effective_device][static_cast<int>(cat)].load(std::memory_order_relaxed);
 }
 
 void unified_cache_add_runtime_host_bytes(size_t bytes) {
@@ -4788,21 +4769,22 @@ void unified_cache_log_budget_summary(int device) {
                   avl / (1024.0f * 1024.0f));
 
     // Per-category runtime breakdown
-    size_t cat_sum = 0;
-    for (int i = 0; i < RUNTIME_CATEGORY_COUNT; ++i) {
-        const size_t cat_bytes = g_runtime_cat_bytes[effective_device][i].load(std::memory_order_relaxed);
+    static const char * cat_names[] = {"KV_CACHE", "COMPUTE", "STAGING", "GRAPH", "OTHER"};
+    GGML_LOG_INFO("[UNIFIED-CACHE] Runtime breakdown for device %d:\n", device);
+    for (int c = 0; c < static_cast<int>(runtime_category::COUNT); c++) {
+        const size_t cat_bytes = g_runtime_cat_bytes[effective_device][c].load(std::memory_order_relaxed);
         if (cat_bytes > 0) {
-            GGML_LOG_INFO("    runtime %-10s: %8.1f MB\n",
-                          runtime_category_name(static_cast<runtime_category>(i)),
-                          cat_bytes / (1024.0f * 1024.0f));
+            GGML_LOG_INFO("  %-12s %8.1f MB\n", cat_names[c], cat_bytes / (1024.0f * 1024.0f));
         }
-        cat_sum += cat_bytes;
     }
-    if (cat_sum != rt) {
-        GGML_LOG_INFO("    runtime untagged:   %8.1f MB  (category sum %.1f != total %.1f)\n",
-                      (rt > cat_sum ? rt - cat_sum : 0) / (1024.0f * 1024.0f),
-                      cat_sum / (1024.0f * 1024.0f),
-                      rt / (1024.0f * 1024.0f));
+    // Show untagged delta (total - sum of categories)
+    size_t cat_sum = 0;
+    for (int c = 0; c < static_cast<int>(runtime_category::COUNT); c++) {
+        cat_sum += g_runtime_cat_bytes[effective_device][c].load(std::memory_order_relaxed);
+    }
+    if (rt > cat_sum + (1024 * 1024)) {  // >1 MB untagged
+        GGML_LOG_INFO("  %-12s %8.1f MB (tracked outside categories)\n",
+                      "UNTAGGED", (rt - cat_sum) / (1024.0f * 1024.0f));
     }
 
     // Validate accounting consistency:
