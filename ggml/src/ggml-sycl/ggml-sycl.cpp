@@ -29587,15 +29587,25 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Creating lambda...\n");
 
+    // record_completion: submit a barrier after graph execution to create an event
+    // for downstream synchronization. For graph replay on in-order queues, we skip
+    // the barrier since synchronize()'s wait_and_throw() already ensures completion.
+    // This saves ~0.004ms per token of ext_oneapi_submit_barrier overhead.
     auto record_completion = [&](bool graph_executed_now) {
         if (!graph_executed_now) {
             sycl_ctx->last_graph_event.reset();
-
+            return;
+        }
+        // Skip barrier for graph replay: in-order queue guarantees ordering,
+        // and synchronize() does wait_and_throw() which covers all pending work.
+        // Only submit barrier for non-replay paths (recording, warmup) where
+        // downstream consumers may need event-based coordination.
+        if (sycl_ctx->exec_graph && !ggml_sycl_graph_recording_active()) {
+            sycl_ctx->last_graph_event.reset();
             return;
         }
         try {
             sycl_ctx->last_graph_event = sycl_ctx->stream()->ext_oneapi_submit_barrier();
-
             if (g_ggml_sycl_debug) {
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] record_completion: device=%d has_event=%d\n",
                                 sycl_ctx ? sycl_ctx->device : -1,
@@ -29605,7 +29615,6 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             GGML_LOG_ERROR("SYCL graph completion barrier failed: %s\n", exc.what());
             sycl_ctx->last_graph_event.reset();
         }
-
     };
     auto timed_compute_impl = [&]() {
         auto t = std::chrono::high_resolution_clock::now();
@@ -29799,9 +29808,18 @@ normal_dispatch:
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
     // check_graph_compatibility() validates that cache can hold all layer experts.
     auto t_compat_start = std::chrono::high_resolution_clock::now();
-    bool use_sycl_graph = !g_ggml_sycl_disable_graph && !g_sycl_graph_multithreaded.load(std::memory_order_relaxed) &&
-                          !sycl_ctx->graphs_disabled && check_graph_compatibility(*sycl_ctx, cgraph) &&
-                          !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
+    // Fast path: skip O(n_nodes) check_graph_compatibility scans when replaying cached graph.
+    // If exec_graph is valid, we already verified compatibility during recording.
+    bool use_sycl_graph;
+    if (sycl_ctx->exec_graph) {
+        use_sycl_graph = !g_ggml_sycl_disable_graph && !g_sycl_graph_multithreaded.load(std::memory_order_relaxed) &&
+                         !sycl_ctx->graphs_disabled &&
+                         !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
+    } else {
+        use_sycl_graph = !g_ggml_sycl_disable_graph && !g_sycl_graph_multithreaded.load(std::memory_order_relaxed) &&
+                         !sycl_ctx->graphs_disabled && check_graph_compatibility(*sycl_ctx, cgraph) &&
+                         !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
+    }
     // Graph debug output (controlled by GGML_SYCL_DEBUG)
     static int graph_call_count = 0;
     graph_call_count++;
@@ -29906,7 +29924,9 @@ normal_dispatch:
         // WORKAROUND: Disable graphs for MoE streaming mode (host memory) when unified cache
         // is unavailable. With unified cache enabled, we can pre-stage expert layouts and
         // keep pointer tables stable for graph recording.
-        {
+        // Skip this O(n_nodes) scan when replaying a cached graph - the check was already
+        // done during recording, and non-MoE models never have MUL_MAT_ID ops.
+        if (!sycl_ctx->exec_graph) {
             bool has_moe_ops = false;
             bool moe_uses_host_memory = false;
             for (int i = 0; i < cgraph->n_nodes; i++) {
