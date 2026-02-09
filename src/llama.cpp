@@ -931,9 +931,13 @@ static enum ggml_backend_meta_split_state llama_meta_device_get_tensor_split(con
     }
 
     // output
-    const std::regex pattern_output("output");
-    if (std::regex_match(tensor->name, pattern_output)) {
+    const std::regex pattern_output_weight("output\\.weight");
+    if (std::regex_match(tensor->name, pattern_output_weight)) {
         return GGML_BACKEND_SPLIT_STATE_BY_NE1;
+    }
+    const std::regex pattern_output_bias("output\\.bias");
+    if (std::regex_match(tensor->name, pattern_output_bias)) {
+        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
     }
 
     // everything else
