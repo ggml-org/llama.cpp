@@ -9525,6 +9525,46 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
         readback_staging      = nullptr;
         readback_staging_size = 0;
     }
+
+    // Free BLAS fallback staging buffer
+    free_staging_buffer();
+}
+
+void * ggml_backend_sycl_context::get_staging_buffer(size_t required_bytes, queue_ptr q) {
+    if (staging_buffer_ && staging_buffer_size_ >= required_bytes) {
+        return staging_buffer_;
+    }
+    // Free existing undersized buffer
+    if (staging_buffer_) {
+        free_staging_buffer();
+    }
+    // Allocate new buffer on device
+    staging_buffer_ = sycl::malloc_device(required_bytes, *q);
+    if (!staging_buffer_) {
+        GGML_LOG_ERROR("[STAGING] Failed to allocate %zu bytes on device %d\n", required_bytes, device);
+        return nullptr;
+    }
+    staging_buffer_size_   = required_bytes;
+    staging_buffer_device_ = device;
+    ggml_sycl::unified_cache_add_runtime_bytes(device, required_bytes);
+    GGML_SYCL_DEBUG("[STAGING] Allocated %zu bytes on device %d\n", required_bytes, device);
+    return staging_buffer_;
+}
+
+void ggml_backend_sycl_context::free_staging_buffer() {
+    if (!staging_buffer_) {
+        return;
+    }
+    if (staging_buffer_device_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_);
+    }
+    try {
+        sycl::free(staging_buffer_, *stream());
+    } catch (...) {
+    }
+    staging_buffer_        = nullptr;
+    staging_buffer_size_   = 0;
+    staging_buffer_device_ = -1;
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
