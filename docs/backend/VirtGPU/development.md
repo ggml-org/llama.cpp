@@ -25,7 +25,7 @@ The backend requires patches that are currently under review:
 # Build the backend that runs natively on macOS
 mkdir llama.cpp
 cd llama.cpp
-git clone https://github.com/ggerganov/llama.cpp.git src
+git clone https://github.com/ggml-org/llama.cpp.git src
 cd src
 
 LLAMA_MAC_BUILD=$PWD/build/ggml-virtgpu-backend
@@ -68,7 +68,7 @@ ninja -C $VIRGL_BUILD_DIR
 ```bash
 # Inside a Linux container
 mkdir llama.cpp
-git clone https://github.com/ggerganov/llama.cpp.git src
+git clone https://github.com/ggml-org/llama.cpp.git src
 cd src
 
 LLAMA_LINUX_BUILD=$PWD//build-virtgpu
@@ -88,7 +88,7 @@ USER 0
 
 WORKDIR /app/remoting
 
-ARG LLAMA_CPP_REPO="https://github.com/ggerganov/llama.cpp.git"
+ARG LLAMA_CPP_REPO="https://github.com/ggml-org/llama.cpp.git"
 ARG LLAMA_CPP_VERSION="master"
 ARG LLAMA_CPP_CMAKE_FLAGS="-DGGML_VIRTGPU=ON"
 ARG LLAMA_CPP_CMAKE_BUILD_FLAGS="--parallel 4"
