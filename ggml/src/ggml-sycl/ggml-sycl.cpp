@@ -9527,41 +9527,69 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
     }
 
     // Free BLAS fallback staging buffer
-    free_staging_buffer();
+    try {
+        free_staging_buffer();
+    } catch (...) {
+    }
 }
 
-void * ggml_backend_sycl_context::get_staging_buffer(size_t required_bytes, queue_ptr q) {
-    if (staging_buffer_ && staging_buffer_size_ >= required_bytes) {
-        return staging_buffer_;
+std::pair<void *, size_t> ggml_backend_sycl_context::get_staging_buffer(
+        size_t needed_bytes, sycl::queue & queue) {
+    // Already have a big enough buffer?
+    if (staging_buffer_ && staging_buffer_size_ >= needed_bytes) {
+        return {staging_buffer_, staging_buffer_size_};
     }
-    // Free existing undersized buffer
-    if (staging_buffer_) {
-        free_staging_buffer();
+    // Free old buffer if too small
+    free_staging_buffer();
+
+    // Query cache for available VRAM
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device);
+    size_t avail = cache ? cache->available() : 0;
+    // Cap at 50% of available to leave room for other ops
+    size_t max_staging = avail / 2;
+    if (max_staging < needed_bytes) {
+        GGML_LOG_WARN("[STAGING] Need %zu bytes but only %zu available (50%% of %zu free)\n",
+                      needed_bytes, max_staging, avail);
+        max_staging = avail > (1 << 20) ? avail - (1 << 20) : 0;
+        if (max_staging < (1 << 20)) {
+            return {nullptr, 0};
+        }
     }
-    // Allocate new buffer on device
-    staging_buffer_ = sycl::malloc_device(required_bytes, *q);
-    if (!staging_buffer_) {
-        GGML_LOG_ERROR("[STAGING] Failed to allocate %zu bytes on device %d\n", required_bytes, device);
-        return nullptr;
+    size_t alloc_size = std::min(needed_bytes, max_staging);
+
+    // Reserve budget BEFORE allocating
+    ggml_sycl::unified_cache_add_runtime_bytes(device, alloc_size);
+
+    void * ptr = nullptr;
+    try {
+        ptr = sycl::malloc_device(alloc_size, queue);
+    } catch (const sycl::exception &) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size);
+        return {nullptr, 0};
     }
-    staging_buffer_size_   = required_bytes;
+
+    if (!ptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size);
+        return {nullptr, 0};
+    }
+
+    staging_buffer_        = ptr;
+    staging_buffer_size_   = alloc_size;
     staging_buffer_device_ = device;
-    ggml_sycl::unified_cache_add_runtime_bytes(device, required_bytes);
-    GGML_SYCL_DEBUG("[STAGING] Allocated %zu bytes on device %d\n", required_bytes, device);
-    return staging_buffer_;
+    GGML_LOG_INFO("[STAGING] Allocated %zu MB staging buffer on device %d\n",
+                  alloc_size / (1024 * 1024), device);
+    return {ptr, alloc_size};
 }
 
 void ggml_backend_sycl_context::free_staging_buffer() {
     if (!staging_buffer_) {
         return;
     }
-    if (staging_buffer_device_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_);
-    }
-    try {
-        sycl::free(staging_buffer_, *stream());
-    } catch (...) {
-    }
+    sycl::queue & q = *stream(staging_buffer_device_, 0);
+    sycl::free(staging_buffer_, q);
+    ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_);
+    GGML_LOG_INFO("[STAGING] Freed %zu MB staging buffer on device %d\n",
+                  staging_buffer_size_ / (1024 * 1024), staging_buffer_device_);
     staging_buffer_        = nullptr;
     staging_buffer_size_   = 0;
     staging_buffer_device_ = -1;

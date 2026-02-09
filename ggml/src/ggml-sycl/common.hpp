@@ -2616,17 +2616,17 @@ struct ggml_backend_sycl_context {
     void * readback_staging      = nullptr;
     size_t readback_staging_size = 0;
 
-    // Reusable device-side staging buffer for BLAS fallback path.
-    // Lazily allocated on first BLAS fallback call, registered with unified cache budget.
+    // Reusable device buffer for BLAS fallback (MXFP4 -> F16 dequantization).
+    // Allocated lazily on first BLAS fallback, registered with unified cache budget.
     void * staging_buffer_        = nullptr;
     size_t staging_buffer_size_   = 0;
     int    staging_buffer_device_ = -1;
 
-    // Lazily allocate (or grow) the staging buffer on the context's device.
-    // Returns a device pointer of at least `required_bytes`.
-    void * get_staging_buffer(size_t required_bytes, queue_ptr stream);
-    // Free the staging buffer and deregister from unified cache budget.
-    void   free_staging_buffer();
+    // Get or allocate staging buffer for BLAS fallback.
+    // Returns {pointer, size} or {nullptr, 0} if allocation fails.
+    std::pair<void *, size_t> get_staging_buffer(size_t needed_bytes, sycl::queue & queue);
+    // Free staging buffer and release budget reservation.
+    void free_staging_buffer();
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
