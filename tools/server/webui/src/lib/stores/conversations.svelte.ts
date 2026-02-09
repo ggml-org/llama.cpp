@@ -237,39 +237,11 @@ class ConversationsStore {
 				this.activeMessages = messages;
 			}
 
-			// Run MCP health checks for enabled servers in this conversation
-			this.runMcpHealthChecksForConversation(conversation.mcpServerOverrides);
-
 			return true;
 		} catch (error) {
 			console.error('Failed to load conversation:', error);
 			return false;
 		}
-	}
-
-	/**
-	 * Runs MCP health checks for servers enabled in a conversation.
-	 * Runs asynchronously in the background without blocking conversation loading.
-	 */
-	private runMcpHealthChecksForConversation(mcpServerOverrides?: McpServerOverride[]): void {
-		if (!mcpServerOverrides?.length) {
-			return;
-		}
-
-		const enabledServers = mcpStore.getEnabledServersForConversation(mcpServerOverrides);
-
-		if (enabledServers.length === 0) {
-			return;
-		}
-
-		console.log(
-			`[conversationsStore] Running health checks for ${enabledServers.length} MCP server(s)`
-		);
-
-		// Run health checks in background (don't await)
-		mcpStore.runHealthChecksForServers(enabledServers).catch((error) => {
-			console.warn('[conversationsStore] MCP health checks failed:', error);
-		});
 	}
 
 	/**
