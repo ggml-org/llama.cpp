@@ -27,40 +27,34 @@ This backend relies on the virtio-gpu, and VirglRenderer API Remoting
 
 The GGML-VirtGPU backend consists of three main components:
 
-```
-┌─────────────────────────────────────────┐
-│           GGML Application              │
-│         (llama.cpp, etc.)               │
-└─────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────┐
-│        Guest VM (Frontend)              │
-│      ggml-virtgpu library               │
-│                                         │
-│  ┌─────────────────────────────────┐    │
-│  │     GGML Backend Interface      │    │
-│  └─────────────────────────────────┘    │
-│                    ↓                    │
-│  ┌─────────────────────────────────┐    │
-│  │      VirtGPU Communication      │    │
-│  │    (hypercalls + shared mem)    │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
-                    ↓
-      virtio-gpu / virglrenderer APIR
-                    ↓
-┌─────────────────────────────────────────┐
-│          Host System (Backend)          │
-│                                         │
-│  ┌─────────────────────────────────┐    │
-│  │      Backend Dispatcher         │    │
-│  └─────────────────────────────────┘    │
-│                    ↓                    │
-│  ┌─────────────────────────────────┐    │
-│  │    GGML Backend Library         │    │
-│  │   (Metal/Vulkan/CPU/...)        │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
+```mermaid
+graph TD
+    %% Nodes
+
+ subgraph GuestVM ["Guest VM - Frontend"]
+        App([GGML Application<br/>llama.cpp, etc.])
+
+        direction TB
+        Interface[GGML Backend Interface]
+        Comm["GGML-VirtGPU<br/>(hypercalls + shared mem)"]
+
+        App --> Interface
+        Interface --> Comm
+    end
+
+    API[virtio-gpu / virglrenderer API]
+
+    subgraph HostSystem [Host System - Backend]
+        direction TB
+        Dispatcher[GGML-VirtGPU-Backend]
+        BackendLib[GGML Backend library<br/>Metal / Vulkan / CPU / ...]
+
+        Dispatcher --> BackendLib
+    end
+
+    %% Connections
+    Comm --> API
+    API --> HostSystem
 ```
 
 ### Key Components
