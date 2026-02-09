@@ -6,7 +6,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { Switch } from '$lib/components/ui/switch';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
-	import { McpLogo, SearchInput } from '$lib/components/app';
+	import { McpLogo, DropdownMenuSearchable } from '$lib/components/app';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -243,12 +243,13 @@
 				</DropdownMenu.SubTrigger>
 
 				<DropdownMenu.SubContent class="w-72 pt-0">
-					<div class="sticky top-0 z-10 mb-2 bg-popover p-1 pt-2">
-						<SearchInput placeholder="Search servers..." bind:value={mcpSearchQuery} />
-					</div>
-
-					<div class="max-h-64 overflow-y-auto">
-						{#if filteredMcpServers.length > 0}
+					<DropdownMenuSearchable
+						placeholder="Search servers..."
+						bind:searchValue={mcpSearchQuery}
+						emptyMessage={hasMcpServers ? 'No servers found' : 'No MCP servers configured'}
+						isEmpty={filteredMcpServers.length === 0}
+					>
+						<div class="max-h-64 overflow-y-auto">
 							{#each filteredMcpServers as server (server.id)}
 								{@const healthState = mcpStore.getHealthCheckState(server.id)}
 								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
@@ -291,27 +292,19 @@
 									/>
 								</button>
 							{/each}
-						{:else if hasMcpServers}
-							<div class="px-2 py-3 text-center text-sm text-muted-foreground">
-								No servers found
-							</div>
-						{:else}
-							<div class="px-2 py-3 text-center text-sm text-muted-foreground">
-								No MCP servers configured
-							</div>
-						{/if}
-					</div>
+						</div>
 
-					<DropdownMenu.Separator />
+						{#snippet footer()}
+							<DropdownMenu.Item
+								class="flex cursor-pointer items-center gap-2"
+								onclick={handleMcpSettingsClick}
+							>
+								<Settings class="h-4 w-4" />
 
-					<DropdownMenu.Item
-						class="flex cursor-pointer items-center gap-2"
-						onclick={handleMcpSettingsClick}
-					>
-						<Settings class="h-4 w-4" />
-
-						<span>Manage MCP Servers</span>
-					</DropdownMenu.Item>
+								<span>Manage MCP Servers</span>
+							</DropdownMenu.Item>
+						{/snippet}
+					</DropdownMenuSearchable>
 				</DropdownMenu.SubContent>
 			</DropdownMenu.Sub>
 
