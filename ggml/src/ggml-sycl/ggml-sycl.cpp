@@ -24831,30 +24831,30 @@ static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & 
     GGML_SYCL_DEBUG("[MMVQ-SOA-GRAPH] Pre-allocating %d Q8_1 buffers, %zu bytes each (ne10=%lld, nrows=%lld)\n",
 
                     soa_mmvq_count, buffer_size, (long long) max_ne10, (long long) max_nrows);
-    // Allocate buffers
-    ctx.mmvq_soa_buffers.src1_ddq_buffers.resize(soa_mmvq_count);
+    // Allocate all buffers as one contiguous block to reduce USM allocation count.
+    // Each sub-buffer is aligned to 256 bytes within the block.
+    const size_t aligned_buf_size = (buffer_size + 255) & ~size_t(255);
+    const size_t total_size       = static_cast<size_t>(soa_mmvq_count) * aligned_buf_size;
 
+    ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, total_size);
+    void * bulk_ptr = ggml_sycl_malloc_device(total_size, *stream, "mmvq_soa_buffer_bulk");
+    if (!bulk_ptr) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, total_size);
+        GGML_LOG_ERROR("[MMVQ-SOA-GRAPH] Failed to allocate bulk Q8_1 buffer (%.1f MB)\n",
+                       total_size / (1024.0 * 1024.0));
+        return;
+    }
+
+    ctx.mmvq_soa_buffers.src1_ddq_buffers.resize(soa_mmvq_count);
     ctx.mmvq_soa_buffers.src1_ddq_sizes.resize(soa_mmvq_count);
     for (int i = 0; i < soa_mmvq_count; i++) {
-        ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, buffer_size);
         ctx.mmvq_soa_buffers.src1_ddq_buffers[i] =
-            ggml_sycl_malloc_device(buffer_size, *stream, "mmvq_soa_buffer");
-        ctx.mmvq_soa_buffers.src1_ddq_sizes[i]   = buffer_size;
-        if (!ctx.mmvq_soa_buffers.src1_ddq_buffers[i]) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, buffer_size);
-            GGML_LOG_ERROR("[MMVQ-SOA-GRAPH] Failed to allocate Q8_1 buffer %d\n", i);
-            // Cleanup and abort
-
-            for (int j = 0; j < i; j++) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, ctx.mmvq_soa_buffers.src1_ddq_sizes[j]);
-                sycl::free(ctx.mmvq_soa_buffers.src1_ddq_buffers[j], *stream);
-            }
-
-            ctx.mmvq_soa_buffers.src1_ddq_buffers.clear();
-            ctx.mmvq_soa_buffers.src1_ddq_sizes.clear();
-            return;
-        }
+            static_cast<char *>(bulk_ptr) + static_cast<size_t>(i) * aligned_buf_size;
+        ctx.mmvq_soa_buffers.src1_ddq_sizes[i] = buffer_size;
     }
+    // Store the bulk pointer and total size for cleanup
+    ctx.mmvq_soa_buffers.bulk_ptr  = bulk_ptr;
+    ctx.mmvq_soa_buffers.bulk_size = total_size;
     ctx.mmvq_soa_buffers.max_ne10    = max_ne10;
     ctx.mmvq_soa_buffers.max_nrows   = max_nrows;
 

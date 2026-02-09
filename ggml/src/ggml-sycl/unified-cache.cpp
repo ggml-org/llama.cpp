@@ -309,6 +309,10 @@ unified_cache::unified_cache(sycl::queue & queue,
                   staging_size_ / (1024.0f * 1024.0f),
                   dma_reserved_bytes_ / (1024.0f * 1024.0f));
 
+    // Initialize layout pool for consolidating layout allocations into
+    // contiguous chunks (reduces GPU TLB misses from scattered USM mappings).
+    layout_pool_ = std::make_unique<sycl_device_pool>(queue_);
+
     // Ensure unordered_map has buckets before any find() calls.
     entries_.rehash(1);
     id_to_key_.rehash(1);
@@ -323,6 +327,10 @@ unified_cache::~unified_cache() {
     // Skip cleanup if SYCL runtime is shutting down (static destruction order issue)
     // This can happen when the program exits and static destructors run in undefined order
     if (g_sycl_shutting_down.load()) {
+        // Abandon pool chunks without calling sycl::free() (context is invalid)
+        if (layout_pool_) {
+            layout_pool_->abandon();
+        }
         return;
     }
 
@@ -334,18 +342,23 @@ unified_cache::~unified_cache() {
         (void) queue_.get_context();
     } catch (...) {
         // SYCL runtime already destroyed, skip cleanup
+        if (layout_pool_) {
+            layout_pool_->abandon();
+        }
         return;
     }
 
-    // Free all cached entries
+    // Free all cached entries (skip pool-allocated entries; the pool destructor frees those)
     for (auto & pair : entries_) {
-        if (pair.second.device_ptr) {
+        if (pair.second.device_ptr && !pair.second.pool_allocated) {
             try {
                 sycl::free(pair.second.device_ptr, queue_);
             } catch (...) {
             }
         }
     }
+    // Destroy layout pool before SYCL context goes away
+    layout_pool_.reset();
 
     // Free staging buffer
     if (staging_) {
@@ -1983,15 +1996,18 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             auto                        it = entries_.find(key);
             if (it != entries_.end()) {
                 if (!it->second.host_resident && it->second.device_ptr) {
-                    try {
-                        queue_.wait();
-                    } catch (...) {
-                    }
-                    try {
-                        sycl::free(it->second.device_ptr, queue_);
+                    if (!it->second.pool_allocated) {
+                        try {
+                            queue_.wait();
+                        } catch (...) {
+                        }
+                        try {
+                            sycl::free(it->second.device_ptr, queue_);
+                        } catch (...) {
+                        }
                         used_ -= it->second.size;
-                    } catch (...) {
                     }
+                    // Pool entries: used_ stays at chunk level
                 }
                 it->second.device_ptr      = host_ptr;
                 it->second.src_ptr         = request.src_ptr;
@@ -2119,10 +2135,14 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 void * stale_ptr      = entry.device_ptr;
                 size_t stale_size     = entry.size;
                 bool   stale_host_res = entry.host_resident;
+                bool   stale_pool     = entry.pool_allocated;
                 entries_.erase(it);
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
-                    enqueue_deferred_free(stale_ptr, stale_size);
+                    if (!stale_pool) {
+                        enqueue_deferred_free(stale_ptr, stale_size);
+                    }
+                    // Pool entries: memory stays in pool, used_ stays at chunk level
                 }
             }
         }
@@ -2171,12 +2191,15 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 // Memory was already freed and used_ decremented in the exception handler.
                 // If device_ptr is still set (shouldn't happen), try to free it.
                 if (entry.device_ptr) {
-                    try {
-                        sycl::free(entry.device_ptr, queue_);
+                    if (!entry.pool_allocated) {
+                        try {
+                            sycl::free(entry.device_ptr, queue_);
+                        } catch (...) {
+                            // Ignore - may leak memory but avoid crash
+                        }
                         used_ -= entry.size;
-                    } catch (...) {
-                        // Ignore - may leak memory but avoid crash
                     }
+                    // Pool entries: used_ stays at chunk level
                 }
                 entries_.erase(it);
                 it = entries_.end();  // Force fall-through to allocation path below
@@ -2211,10 +2234,14 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 void * stale_ptr       = entry.device_ptr;
                 size_t stale_size      = entry.size;
                 bool   stale_host_res  = entry.host_resident;
+                bool   stale_pool      = entry.pool_allocated;
                 entries_.erase(it);
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
-                    enqueue_deferred_free(stale_ptr, stale_size);
+                    if (!stale_pool) {
+                        enqueue_deferred_free(stale_ptr, stale_size);
+                    }
+                    // Pool entries: memory stays in pool, used_ stays at chunk level
                 }
             }
         }
@@ -2273,16 +2300,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             const size_t base_budget    = budget_;
             const size_t allowed_budget = base_budget;  // No overcommit; keep DMA headroom intact.
 
-            while (used_.load() + request.dst_size > base_budget) {
-                if (evict_one(request.dst_size) == 0) {
+            // Determine allocation cost: pool may need a new chunk (256 MB) or can sub-allocate (0 cost)
+            const bool   pool_can_fit = layout_pool_ && layout_pool_->can_fit(request.dst_size);
+            const size_t alloc_cost   = (layout_pool_ && !pool_can_fit)
+                                          ? layout_pool_->get_default_chunk_size()
+                                          : (pool_can_fit ? 0 : request.dst_size);
+
+            while (alloc_cost > 0 && used_.load() + alloc_cost > base_budget) {
+                if (evict_one(alloc_cost) == 0) {
                     break;
                 }
             }
 
             bool force_host = false;
-            if (used_.load() + request.dst_size > allowed_budget) {
+            if (alloc_cost > 0 && used_.load() + alloc_cost > allowed_budget) {
                 GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cannot evict for layout (used=%.1f MB, need=%.1f MB)\n",
-                              used_.load() / (1024.0f * 1024.0f), request.dst_size / (1024.0f * 1024.0f));
+                              used_.load() / (1024.0f * 1024.0f), alloc_cost / (1024.0f * 1024.0f));
                 force_host = true;
             }
             host_cache * hcache = get_host_cache(queue_);
@@ -2303,7 +2336,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     const size_t min_headroom = 256ull * 1024ull * 1024ull;
                     const size_t headroom     = std::max(min_headroom, total_mem / 10);
                     const size_t usable_free  = free_mem > headroom ? free_mem - headroom : 0;
-                    if (request.dst_size > usable_free) {
+                    if (alloc_cost > usable_free) {
                         GGML_SYCL_DEBUG(
                             "[UNIFIED-CACHE] live VRAM low (free=%.1f MB, headroom=%.1f MB, need=%.1f MB) - using host\n",
                             free_mem / (1024.0f * 1024.0f),
@@ -2316,8 +2349,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
             void *         new_device_ptr   = nullptr;
             bool           is_host_resident = false;
+            bool           is_pool_alloc   = false;
             cache_location host_location    = cache_location::HOST_MMAP;
-            if (!force_host) {
+            if (!force_host && layout_pool_) {
+                // Use layout pool for contiguous sub-allocation (reduces TLB misses)
+                auto pool_result = layout_pool_->allocate(request.dst_size);
+                new_device_ptr = pool_result.ptr;
+                if (new_device_ptr) {
+                    is_pool_alloc = true;
+                    // Account for any new physical memory consumed by new chunks
+                    if (pool_result.new_physical_bytes > 0) {
+                        used_ += pool_result.new_physical_bytes;
+                    }
+                }
+            }
+            if (!force_host && !new_device_ptr) {
+                // Pool allocation failed; fall back to individual malloc_device
                 try {
                     new_device_ptr = ggml_sycl_malloc_device(request.dst_size, queue_, "unified_cache:layout");
                 } catch (const sycl::exception & e) {
@@ -2404,12 +2451,13 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             entry.xmx_info        = request.xmx_info;
             entry.access_count    = 1;
             entry.last_access     = time_++;
-            entry.pinned          = false;
+            entry.pinned          = is_pool_alloc;  // Pool entries are immediately pinned (can't be individually freed)
             entry.hot             = false;
             entry.state           = is_host_resident ? cache_entry_state::READY : cache_entry_state::IN_PROGRESS;
             entry.has_ready_event = false;
             entry.host_resident   = is_host_resident;
             entry.location        = is_host_resident ? host_location : cache_location::DEVICE;
+            entry.pool_allocated  = is_pool_alloc;
 
             if (g_ggml_sycl_debug >= 2) {
                 GGML_SYCL_DEBUG(
@@ -2440,8 +2488,9 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     GGML_ABORT("unified_cache id_to_key mismatch");
                 }
             }
-            if (!is_host_resident) {
-                // Only count device memory against unified cache budget
+            if (!is_host_resident && !is_pool_alloc) {
+                // Only count device memory against unified cache budget.
+                // Pool entries are tracked at chunk granularity (added when chunk is allocated).
                 used_ += request.dst_size;
             }
             device_ptr = new_device_ptr;
@@ -2551,19 +2600,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             // Try to free the device memory directly rather than deferring.
             // The queue may be in a bad state, so wrap in try-catch.
             if (it->second.device_ptr) {
-                try {
-                    // Try to synchronize before freeing to avoid use-after-free
-                    queue_.wait();
-                } catch (...) {
-                    // Queue in bad state, ignore
-                }
-                try {
-                    sycl::free(it->second.device_ptr, queue_);
+                if (!it->second.pool_allocated) {
+                    try {
+                        // Try to synchronize before freeing to avoid use-after-free
+                        queue_.wait();
+                    } catch (...) {
+                        // Queue in bad state, ignore
+                    }
+                    try {
+                        sycl::free(it->second.device_ptr, queue_);
+                    } catch (...) {
+                        // Free failed - memory may leak, but avoid crash
+                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to free device memory during error recovery\n");
+                    }
                     used_ -= it->second.size;
-                } catch (...) {
-                    // Free failed - memory may leak, but avoid crash
-                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to free device memory during error recovery\n");
                 }
+                // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
                 it->second.size       = 0;
             }
@@ -2583,15 +2635,18 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             it->second.state           = cache_entry_state::FAILED;
             it->second.has_ready_event = false;
             if (it->second.device_ptr) {
-                try {
-                    queue_.wait();
-                } catch (...) {
-                }
-                try {
-                    sycl::free(it->second.device_ptr, queue_);
+                if (!it->second.pool_allocated) {
+                    try {
+                        queue_.wait();
+                    } catch (...) {
+                    }
+                    try {
+                        sycl::free(it->second.device_ptr, queue_);
+                    } catch (...) {
+                    }
                     used_ -= it->second.size;
-                } catch (...) {
                 }
+                // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
                 it->second.size       = 0;
             }
@@ -2611,15 +2666,18 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             it->second.state           = cache_entry_state::FAILED;
             it->second.has_ready_event = false;
             if (it->second.device_ptr) {
-                try {
-                    queue_.wait();
-                } catch (...) {
-                }
-                try {
-                    sycl::free(it->second.device_ptr, queue_);
+                if (!it->second.pool_allocated) {
+                    try {
+                        queue_.wait();
+                    } catch (...) {
+                    }
+                    try {
+                        sycl::free(it->second.device_ptr, queue_);
+                    } catch (...) {
+                    }
                     used_ -= it->second.size;
-                } catch (...) {
                 }
+                // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
                 it->second.size       = 0;
             }
@@ -3634,6 +3692,13 @@ void unified_cache::enqueue_deferred_free(void * ptr, size_t size) {
         return;
     }
 
+    // Pool-owned pointers cannot be individually freed; skip the deferred free
+    // entirely to avoid unnecessary barrier events and invalid sycl::free() calls.
+    if (layout_pool_ && layout_pool_->owns(ptr)) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] skipping deferred free for pool-owned ptr=%p size=%zu\n", ptr, size);
+        return;
+    }
+
     deferred_free_entry entry{};
     entry.ptr  = ptr;
     entry.size = size;
@@ -3676,18 +3741,22 @@ void unified_cache::process_deferred_frees() {
         }
 
         if (it->ptr) {
-            if (!it->has_event) {
+            const bool is_pool = layout_pool_ && layout_pool_->owns(it->ptr);
+            if (!is_pool) {
+                if (!it->has_event) {
+                    try {
+                        queue_.wait();
+                    } catch (...) {
+                    }
+                }
                 try {
-                    queue_.wait();
+                    sycl::free(it->ptr, queue_);
                 } catch (...) {
                 }
+                used_ -= it->size;
             }
-            try {
-                sycl::free(it->ptr, queue_);
-            } catch (...) {
-            }
-            used_ -= it->size;
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free done: ptr=%p size=%zu\n", it->ptr, it->size);
+            // Pool entries: used_ stays at chunk level, memory stays in pool
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free done: ptr=%p size=%zu pool=%d\n", it->ptr, it->size, is_pool ? 1 : 0);
         }
 
         it = deferred_frees_.erase(it);

@@ -9,6 +9,7 @@
 
 #include "dpct/helper.hpp"
 #include "pinned-pool.hpp"
+#include "device-pool.hpp"
 #include "ggml-sycl.h"
 
 #include <atomic>
@@ -327,6 +328,7 @@ struct unified_cache_entry {
     sycl::event           ready_event;      // Completion event for IN_PROGRESS entries
     bool                  host_resident;    // Entry lives in host memory, not device (fallback when VRAM full)
     cache_location        location;         // DEVICE/HOST_PINNED/HOST_MMAP
+    bool                  pool_allocated;   // True if device_ptr was sub-allocated from layout_pool_
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
@@ -813,6 +815,12 @@ class unified_cache {
                        detail::cache_id_hash,
                        detail::cache_id_equal_fn>
         id_to_key_;
+
+    // Layout pool: consolidates many individual layout allocations into
+    // a few large contiguous chunks to reduce GPU TLB pressure.
+    // All layout allocations in ensure_cached_layout() are sub-allocated from this pool.
+    // The pool is destroyed (freeing all chunks) in the unified_cache destructor.
+    std::unique_ptr<ggml_sycl::sycl_device_pool> layout_pool_;
 
     // Staging buffer for mmap -> device transfers
     void *     staging_      = nullptr;

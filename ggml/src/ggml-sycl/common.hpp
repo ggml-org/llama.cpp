@@ -2348,6 +2348,10 @@ struct ggml_backend_sycl_context {
         std::vector<void *> src1_ddq_buffers;
         std::vector<size_t> src1_ddq_sizes;
 
+        // Bulk allocation (single contiguous block for all sub-buffers)
+        void * bulk_ptr  = nullptr;
+        size_t bulk_size = 0;
+
         // Buffer usage tracking
         int  current_buffer_idx = 0;
         bool initialized        = false;
@@ -2370,10 +2374,19 @@ struct ggml_backend_sycl_context {
 
         void free_buffers(queue_ptr stream) {
             int device_id = ggml_sycl_get_device_id_from_queue(*stream);
-            for (size_t i = 0; i < src1_ddq_buffers.size(); i++) {
-                if (src1_ddq_buffers[i]) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(device_id, src1_ddq_sizes[i]);
-                    sycl::free(src1_ddq_buffers[i], *stream);
+            if (bulk_ptr) {
+                // Bulk allocation: free the single block
+                ggml_sycl::unified_cache_sub_runtime_bytes(device_id, bulk_size);
+                sycl::free(bulk_ptr, *stream);
+                bulk_ptr  = nullptr;
+                bulk_size = 0;
+            } else {
+                // Legacy per-buffer allocation
+                for (size_t i = 0; i < src1_ddq_buffers.size(); i++) {
+                    if (src1_ddq_buffers[i]) {
+                        ggml_sycl::unified_cache_sub_runtime_bytes(device_id, src1_ddq_sizes[i]);
+                        sycl::free(src1_ddq_buffers[i], *stream);
+                    }
                 }
             }
             src1_ddq_buffers.clear();
