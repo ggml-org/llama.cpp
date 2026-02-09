@@ -125,7 +125,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
-        case LLM_TYPE_35B_A3B:     return "35B.A3B";
+        case LLM_TYPE_35B_A3B:       return "35B.A3B";
         case LLM_TYPE_48B_A3B:       return "48B.A3B";
         case LLM_TYPE_80B_A3B:       return "80B.A3B";
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
@@ -2416,7 +2416,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_QWEN35:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers, false);
                 ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
                 // Load linear attention (gated delta net) parameters
@@ -2442,7 +2441,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
-                ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers, false);
                 ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
                 // Load linear attention (gated delta net) parameters

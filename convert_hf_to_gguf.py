@@ -4549,12 +4549,6 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 class Qwen3_5TextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        vision_config = self.hparams.get("vision_config", {})
-        deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
-        self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision tensors - they go in the mmproj file
         if name.startswith("model.visual."):

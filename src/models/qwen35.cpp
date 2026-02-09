@@ -5,8 +5,6 @@
 
 llm_build_qwen35::llm_build_qwen35(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context_mamba(params), model(model) {
-    const size_t n_deepstack_layers = hparams.n_deepstack_layers;
-    const int64_t n_embd = hparams.n_embd;
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -18,17 +16,6 @@ llm_build_qwen35::llm_build_qwen35(const llama_model & model, const llm_graph_pa
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
-
-    std::vector<ggml_tensor *> deepstack_features(n_deepstack_layers, nullptr);
-
-    if (ubatch.embd) {
-        // Image input: split main embd and deepstack embds
-        ggml_tensor * inpL_main = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], 0);
-        for (size_t i = 0; i < n_deepstack_layers; i++) {
-            deepstack_features[i] = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], (i + 1) * n_embd * ggml_element_size(inpL));
-        }
-        inpL = inpL_main;
-    }
 
     cb(inpL, "model.input_embed", -1);
 
@@ -86,11 +73,6 @@ llm_build_qwen35::llm_build_qwen35(const llama_model & model, const llm_graph_pa
         // Residual connection for FFN - add to the tensor from before post_attention_layernorm
         cur = ggml_add(ctx0, cur, ffn_residual);
         cb(cur, "post_ffn", il);
-
-        if (ubatch.embd && (size_t)il < n_deepstack_layers) {
-            cur = ggml_add(ctx0, cur, deepstack_features[il]);
-            cb(cur, "deepstack_out", il);
-        }
 
         // Input for next layer
         inpL = cur;
