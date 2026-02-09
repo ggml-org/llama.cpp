@@ -256,7 +256,7 @@ template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTR
     ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
 }
 
-template <int N, int M>
+template <int M, int N>
 static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
                                                  float * GGML_RESTRICT      s,
                                                  size_t                     bs,
@@ -264,8 +264,8 @@ static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
                                                  const void * GGML_RESTRICT vy,
                                                  int                        nr,
                                                  int                        nc) {
-    constexpr int ncols_interleaved = N;
     constexpr int blocklen          = M;
+    constexpr int ncols_interleaved = N;
     const int     qk                = QK_K;
     const int     nb                = n / qk;
     const int     blocks_per_half   = 64 / blocklen;
@@ -346,7 +346,7 @@ static void ggml_gemv_q6_K_NxM_q8_K_generic_impl(int                        n,
     }
 }
 
-template <int N, int M>
+template <int M, int N>
 static void ggml_gemm_q6_K_NxM_q8_K_generic_impl(int                        n,
                                                  float * GGML_RESTRICT      s,
                                                  size_t                     bs,
@@ -354,8 +354,8 @@ static void ggml_gemm_q6_K_NxM_q8_K_generic_impl(int                        n,
                                                  const void * GGML_RESTRICT vy,
                                                  int                        nr,
                                                  int                        nc) {
-    constexpr int ncols_interleaved = N;
     constexpr int blocklen          = M;
+    constexpr int ncols_interleaved = N;
     const int     qk                = QK_K;
     const int     nb                = n / qk;
     const int     blocks_per_half   = 64 / blocklen;
@@ -899,7 +899,7 @@ void ggml_gemv_q5_K_8x8_q8_K_generic(int                        n,
 
 
 void ggml_gemv_q6_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    ggml_gemv_q6_K_NxM_q8_K_generic_impl<8, 4>(n, s, bs, vx, vy, nr, nc);
+    ggml_gemv_q6_K_NxM_q8_K_generic_impl<4, 8>(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -1598,7 +1598,7 @@ void ggml_gemm_q5_K_8x8_q8_K_generic(int                        n,
 }
 
 void ggml_gemm_q6_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    ggml_gemm_q6_K_NxM_q8_K_generic_impl<8, 4>(n, s, bs, vx, vy, nr, nc);
+    ggml_gemm_q6_K_NxM_q8_K_generic_impl<4, 8>(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
