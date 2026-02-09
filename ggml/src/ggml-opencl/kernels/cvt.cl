@@ -467,3 +467,157 @@ kernel void kernel_restore_block_q6_K(
         b->scales[i] = s[i];
     }
 }
+
+kernel void kernel_convert_block_q6_K_nonshuffle(
+    global struct block_q6_K * src0,
+    global uchar * dst_ql,
+    global uchar * dst_qh,
+    global char  * dst_s,
+    global half  * dst_d,
+    uchar          mask_lsb_8
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
+    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = b->ql[i*2 + 0] & mask_lsb_8;
+        uchar x1   = b->ql[i*2 + 1] & mask_lsb_8;
+        ql[i +  0] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+    }
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = b->ql[i*2 + 0] & mask_lsb_8;
+        uchar x1   = b->ql[i*2 + 1] & mask_lsb_8;
+        ql[i + 32] = ((x0 & 0xF0) >> 4) | (x1 & 0xF0);
+    }
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = b->ql[i*2 + 0 + 64] & mask_lsb_8;
+        uchar x1   = b->ql[i*2 + 1 + 64] & mask_lsb_8;
+        ql[i +  64] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+    }
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = b->ql[i*2 + 0 + 64] & mask_lsb_8;
+        uchar x1   = b->ql[i*2 + 1 + 64] & mask_lsb_8;
+        ql[i + 96] = ((x0 & 0xF0) >> 4) | (x1 & 0xF0);
+    }
+
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3] & mask_lsb_8;
+        qh[i] = (x0 & 0x03) | ((x1 & 0x03) << 2) | ((x2 & 0x03) << 4) | ((x3 & 0x03) << 6);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3] & mask_lsb_8;
+        qh[i + 8] = ((x0 & 0x0C) >> 2) | (x1 & 0x0C) | ((x2 & 0x0C) << 2) | ((x3 & 0x0C) << 4);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3] & mask_lsb_8;
+        qh[i + 16] = ((x0 & 0x30) >> 4) | ((x1 & 0x30) >> 2) | (x2 & 0x30) | ((x3 & 0x30) << 2);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3] & mask_lsb_8;
+        qh[i + 24] = ((x0 & 0xC0) >> 6) | ((x1 & 0xC0) >> 4) | ((x2 & 0xC0) >> 2) | (x3 & 0xC0);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0 + 32] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1 + 32] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2 + 32] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3 + 32] & mask_lsb_8;
+        qh[i + 32] = (x0 & 0x03) | ((x1 & 0x03) << 2) | ((x2 & 0x03) << 4) | ((x3 & 0x03) << 6);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0 + 32] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1 + 32] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2 + 32] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3 + 32] & mask_lsb_8;
+        qh[i + 40] = ((x0 & 0x0C) >> 2) | (x1 & 0x0C) | ((x2 & 0x0C) << 2) | ((x3 & 0x0C) << 4);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0 + 32] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1 + 32] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2 + 32] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3 + 32] & mask_lsb_8;
+        qh[i + 48] = ((x0 & 0x30) >> 4) | ((x1 & 0x30) >> 2) | (x2 & 0x30) | ((x3 & 0x30) << 2);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = b->qh[i*4 + 0 + 32] & mask_lsb_8;
+        uchar x1 = b->qh[i*4 + 1 + 32] & mask_lsb_8;
+        uchar x2 = b->qh[i*4 + 2 + 32] & mask_lsb_8;
+        uchar x3 = b->qh[i*4 + 3 + 32] & mask_lsb_8;
+        qh[i + 56] = ((x0 & 0xC0) >> 6) | ((x1 & 0xC0) >> 4) | ((x2 & 0xC0) >> 2) | (x3 & 0xC0);
+    }
+
+    for (int i = 0; i < QK_K/16; ++i) {
+        s[i] = b->scales[i];
+    }
+}
+
+kernel void kernel_restore_block_q6_K_nonshuffle(
+    global uchar * src_ql,
+    global uchar * src_qh,
+    global char  * src_s,
+    global half  * src_d,
+    global struct block_q6_K * dst,
+    uchar          mask_lsb_8
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) dst + get_global_id(0);
+    global uchar * ql = (global uchar *) src_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) src_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) src_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) src_d  + get_global_id(0);
+
+    b->d = *d;
+
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = ql[i +  0] & mask_lsb_8;
+        uchar x1   = ql[i + 32] & mask_lsb_8;
+        b->ql[i*2 + 0] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+        b->ql[i*2 + 1] = ((x0 & 0xF0) >> 4) | (x1 & 0xF0);
+    }
+    for (int i = 0; i < QK_K/2/4; ++i) {
+        uchar x0   = ql[i + 64] & mask_lsb_8;
+        uchar x1   = ql[i + 96] & mask_lsb_8;
+        b->ql[i*2 + 0 + 64] = (x0 & 0x0F) | ((x1 & 0x0F) << 4);
+        b->ql[i*2 + 1 + 64] = ((x0 & 0xF0) >> 4) | (x1 & 0xF0);
+    }
+
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = qh[i +  0] & mask_lsb_8;
+        uchar x1 = qh[i +  8] & mask_lsb_8;
+        uchar x2 = qh[i + 16] & mask_lsb_8;
+        uchar x3 = qh[i + 24] & mask_lsb_8;
+        b->qh[i*4 + 0] = (x0 & 0x03) | ((x1 & 0x03) << 2) | ((x2 & 0x03) << 4) | ((x3 & 0x03) << 6);
+        b->qh[i*4 + 1] = ((x0 & 0x0C) >> 2) | (x1 & 0x0C) | ((x2 & 0x0C) << 2) | ((x3 & 0x0C) << 4);
+        b->qh[i*4 + 2] = ((x0 & 0x30) >> 4) | ((x1 & 0x30) >> 2) | (x2 & 0x30) | ((x3 & 0x30) << 2);
+        b->qh[i*4 + 3] = ((x0 & 0xC0) >> 6) | ((x1 & 0xC0) >> 4) | ((x2 & 0xC0) >> 2) | (x3 & 0xC0);
+    }
+    for (int i = 0; i < QK_K/4/8; ++i) {
+        uchar x0 = qh[i +  0 + 32] & mask_lsb_8;
+        uchar x1 = qh[i +  8 + 32] & mask_lsb_8;
+        uchar x2 = qh[i + 16 + 32] & mask_lsb_8;
+        uchar x3 = qh[i + 24 + 32] & mask_lsb_8;
+        b->qh[i*4 + 0 + 32] = (x0 & 0x03) | ((x1 & 0x03) << 2) | ((x2 & 0x03) << 4) | ((x3 & 0x03) << 6);
+        b->qh[i*4 + 1 + 32] = ((x0 & 0x0C) >> 2) | (x1 & 0x0C) | ((x2 & 0x0C) << 2) | ((x3 & 0x0C) << 4);
+        b->qh[i*4 + 2 + 32] = ((x0 & 0x30) >> 4) | ((x1 & 0x30) >> 2) | (x2 & 0x30) | ((x3 & 0x30) << 2);
+        b->qh[i*4 + 3 + 32] = ((x0 & 0xC0) >> 6) | ((x1 & 0xC0) >> 4) | ((x2 & 0xC0) >> 2) | (x3 & 0xC0);
+    }
+
+    for (int i = 0; i < QK_K/16; ++i) {
+        b->scales[i] = s[i];
+    }
+}
