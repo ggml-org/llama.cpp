@@ -339,7 +339,7 @@ struct llama_dist_rng {
     virtual ~llama_dist_rng() = default;
 
     // whether the RNG requires sorted input for proper properties
-    // this also indicates whether the RNG output itself must be consumed in a coherent order
+    // this also indicates whether the RNG output itself must be consumed in a sequential order
     virtual bool                            requires_sorted()  = 0;
 
     // for compatibility with std::discrete_distribution
@@ -426,7 +426,11 @@ struct blue_noise_rng {
             states[i] = {tbl[h][0], tbl[h][1]}; // random initial state
         }
 
+#if 0
+        // test against initial implementation outputs
+        // note: white noise padding in next64 is slightly different, but minimally consequential for testing
         rng->reset(); // reset position so generation starts from 0
+#endif
     }
 
     uint16_t advance(uint32_t h) {
