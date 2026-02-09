@@ -4112,7 +4112,7 @@ class Qwen2MoeModel(TextModel):
                 # Qwen3VL has transposed packed tensors
                 permuted = data_torch.permute(0, 2, 1).contiguous()
                 yield from super().modify_tensors(permuted, mapped, bid)
-                return            
+                return
             # HF: [n_expert, n_embd, n_ff] -> GGML: {n_ff, n_embd, n_expert}
             yield from super().modify_tensors(data_torch, mapped, bid)
             return
