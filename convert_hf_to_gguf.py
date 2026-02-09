@@ -4102,10 +4102,11 @@ class Qwen2MoeModel(TextModel):
         # process the experts separately
         name = name.replace("language_model.", "") # InternVL
 
-        # handle pre-packed expert tensors (e.g. Qwen3.5 MoE, Qwen3Next)
-        # HF stores these using nn.Linear convention: [n_expert, out_features, in_features]
-        # This matches the individual expert stacking path below (which stacks
-        # per-expert [out, in] weights into [n_expert, out, in]), so no permute is needed.
+        # handle aggregated expert tensors
+        # GGUF stores dimensions reversed from PyTorch, so:
+        # PyTorch (A,B,C) -> GGUF writes [C,B,A] -> GGML reads ne={C,B,A}
+        # Input shapes from HF: (n_expert, n_ff_exp, n_embd) or (n_expert, n_embd, n_ff_exp)
+        # Expected GGML ne: {n_embd, n_ff_exp, n_expert} for gate/up, {n_ff_exp, n_embd, n_expert} for down
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
             # HF: [n_expert, n_embd, n_ff] -> GGML: {n_ff, n_embd, n_expert}
@@ -4331,40 +4332,6 @@ class Qwen3NextModel(Qwen2MoeModel):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid, ".weight"), z)
         else:
             yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("Qwen3_5ForCausalLM", "Qwen3_5TextForCausalLM")
-class Qwen3_5Model(Qwen3NextModel):
-    model_arch = gguf.MODEL_ARCH.QWEN3_5
-
-    # Stores whichever of in_proj_a/in_proj_b is seen first, keyed by layer
-    _pending_ba: dict[int | None, tuple[str, Tensor]] = {}
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Handle split in_proj_b + in_proj_a → concatenated SSM_BETA_ALPHA
-        # safetensors sorts alphabetically so in_proj_a arrives before in_proj_b
-        if "in_proj_a.weight" in name or "in_proj_b.weight" in name:
-            which = "a" if "in_proj_a" in name else "b"
-            if bid not in self._pending_ba:
-                self._pending_ba[bid] = (which, data_torch)
-                return
-            prev_which, prev_tensor = self._pending_ba.pop(bid)
-            assert prev_which != which, f"duplicate in_proj_{which} for layer {bid}"
-            b_tensor = prev_tensor if prev_which == "b" else data_torch
-            a_tensor = prev_tensor if prev_which == "a" else data_torch
-            ba_combined = torch.cat([b_tensor, a_tensor], dim=0)
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_BETA_ALPHA, bid, ".weight"), ba_combined)
-            return
-        else:
-            # Qwen3Next uses .qkvz tensor, so we use the super to get the other functionalities
-            # (norm correction, A_log to A etc.) for free
-            # Qwen2Moe already does the gate_up conversion properly, just use that
-            yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("Qwen3_5MoeForCausalLM", "Qwen3_5MoeTextForCausalLM")
-class Qwen3_5MoeModel(Qwen3_5Model):
-    model_arch = gguf.MODEL_ARCH.QWEN3_5_MOE
 
 
 @ModelBase.register("RND1")

@@ -1,4 +1,5 @@
 #include "models.h"
+#include "ggml.h"
 
 #define CHUNK_SIZE 64
 
