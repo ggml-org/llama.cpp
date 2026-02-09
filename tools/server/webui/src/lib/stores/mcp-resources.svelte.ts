@@ -63,6 +63,7 @@ class MCPResourceStore {
 		for (const serverRes of this._serverResources.values()) {
 			count += serverRes.resources.length;
 		}
+
 		return count;
 	}
 
@@ -71,6 +72,7 @@ class MCPResourceStore {
 		for (const serverRes of this._serverResources.values()) {
 			count += serverRes.templates.length;
 		}
+
 		return count;
 	}
 
@@ -134,6 +136,7 @@ class MCPResourceStore {
 	 */
 	setServerError(serverName: string, error: string): void {
 		const existing = this._serverResources.get(serverName);
+
 		if (existing) {
 			this._serverResources.set(serverName, { ...existing, loading: false, error });
 		} else {
@@ -159,6 +162,7 @@ class MCPResourceStore {
 	 */
 	getAllResourceInfos(): MCPResourceInfo[] {
 		const result: MCPResourceInfo[] = [];
+
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const resource of serverRes.resources) {
 				result.push({
@@ -173,6 +177,7 @@ class MCPResourceStore {
 				});
 			}
 		}
+
 		return result;
 	}
 
@@ -181,6 +186,7 @@ class MCPResourceStore {
 	 */
 	getAllTemplateInfos(): MCPResourceTemplateInfo[] {
 		const result: MCPResourceTemplateInfo[] = [];
+
 		for (const [serverName, serverRes] of this._serverResources) {
 			for (const template of serverRes.templates) {
 				result.push({
@@ -195,6 +201,7 @@ class MCPResourceStore {
 				});
 			}
 		}
+
 		return result;
 	}
 
@@ -203,18 +210,21 @@ class MCPResourceStore {
 	 */
 	clearServerResources(serverName: string): void {
 		this._serverResources.delete(serverName);
+
 		// Also clear cached content for this server's resources
 		for (const [uri, cached] of this._cachedResources) {
 			if (cached.resource.serverName === serverName) {
 				this._cachedResources.delete(uri);
 			}
 		}
+
 		// Clear subscriptions for this server
 		for (const [uri, sub] of this._subscriptions) {
 			if (sub.serverName === serverName) {
 				this._subscriptions.delete(uri);
 			}
 		}
+
 		console.log(`[MCPResources][${serverName}] Cleared all resources`);
 	}
 
@@ -260,6 +270,7 @@ class MCPResourceStore {
 		if (age > CACHE_TTL_MS && !cached.subscribed) {
 			// Cache expired and not subscribed, remove it
 			this._cachedResources.delete(uri);
+
 			return undefined;
 		}
 
@@ -468,6 +479,7 @@ class MCPResourceStore {
 				};
 			}
 		}
+
 		return undefined;
 	}
 
@@ -480,6 +492,7 @@ class MCPResourceStore {
 				return serverName;
 			}
 		}
+
 		return undefined;
 	}
 

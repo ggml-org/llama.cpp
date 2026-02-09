@@ -160,6 +160,7 @@
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
+
 		{#if hasAgenticStats}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -234,12 +235,14 @@
 				value="{agenticTimings!.toolCallsCount} calls"
 				tooltipLabel="Tool calls executed"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
@@ -253,12 +256,14 @@
 				value="{agenticTimings!.turns} turns"
 				tooltipLabel="Agentic turns (LLM calls)"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={WholeWord}
 				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 				tooltipLabel="Total tokens generated"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}

@@ -155,6 +155,19 @@
 	/**
 	 *
 	 *
+	 * LIFECYCLE
+	 *
+	 *
+	 */
+
+	onMount(() => {
+		recordingSupported = isAudioRecordingSupported();
+		audioRecorder = new AudioRecorder();
+	});
+
+	/**
+	 *
+	 *
 	 * PUBLIC API
 	 *
 	 *
@@ -183,6 +196,14 @@
 		}
 		return true;
 	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - File Management
+	 *
+	 *
+	 */
 
 	/**
 	 *
@@ -445,19 +466,6 @@
 			}
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * LIFECYCLE
-	 *
-	 *
-	 */
-
-	onMount(() => {
-		recordingSupported = isAudioRecordingSupported();
-		audioRecorder = new AudioRecorder();
-	});
 </script>
 
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />

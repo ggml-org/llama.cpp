@@ -119,13 +119,16 @@ class AgenticStore {
 		}
 		return session;
 	}
+
 	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
 		const session = this.getSession(conversationId);
 		this._sessions.set(conversationId, { ...session, ...update });
 	}
+
 	clearSession(conversationId: string): void {
 		this._sessions.delete(conversationId);
 	}
+
 	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
 		const active: Array<{ conversationId: string; session: AgenticSession }> = [];
 		for (const [conversationId, session] of this._sessions.entries()) {
@@ -137,18 +140,23 @@ class AgenticStore {
 	isRunning(conversationId: string): boolean {
 		return this.getSession(conversationId).isRunning;
 	}
+
 	currentTurn(conversationId: string): number {
 		return this.getSession(conversationId).currentTurn;
 	}
+
 	totalToolCalls(conversationId: string): number {
 		return this.getSession(conversationId).totalToolCalls;
 	}
+
 	lastError(conversationId: string): Error | null {
 		return this.getSession(conversationId).lastError;
 	}
+
 	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
 		return this.getSession(conversationId).streamingToolCall;
 	}
+
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
 	}
@@ -412,6 +420,7 @@ class AgenticStore {
 						this.buildFinalTimings(capturedTimings, agenticTimings),
 						undefined
 					);
+
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
@@ -422,6 +431,7 @@ class AgenticStore {
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
+
 				throw normalizedError;
 			}
 
@@ -432,6 +442,7 @@ class AgenticStore {
 					this.buildFinalTimings(capturedTimings, agenticTimings),
 					undefined
 				);
+
 				return;
 			}
 
@@ -453,6 +464,7 @@ class AgenticStore {
 					function: call.function ? { ...call.function } : undefined
 				});
 			}
+
 			this.updateSession(conversationId, { totalToolCalls: allToolCalls.length });
 			onToolCallChunk?.(JSON.stringify(allToolCalls));
 
@@ -470,6 +482,7 @@ class AgenticStore {
 						this.buildFinalTimings(capturedTimings, agenticTimings),
 						undefined
 					);
+
 					return;
 				}
 
@@ -493,6 +506,7 @@ class AgenticStore {
 							this.buildFinalTimings(capturedTimings, agenticTimings),
 							undefined
 						);
+
 						return;
 					}
 					result = `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -519,6 +533,7 @@ class AgenticStore {
 						this.buildFinalTimings(capturedTimings, agenticTimings),
 						undefined
 					);
+
 					return;
 				}
 
@@ -588,10 +603,14 @@ class AgenticStore {
 		maxLines: number,
 		emit?: (chunk: string) => void
 	): void {
-		if (!emit) return;
+		if (!emit) {
+			return;
+		}
+
 		let output = `\n${AGENTIC_TAGS.TOOL_ARGS_END}`;
 		const lines = result.split('\n');
 		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
+
 		output += `\n${trimmedLines.join('\n')}\n${AGENTIC_TAGS.TOOL_CALL_END}\n`;
 		emit(output);
 	}
@@ -600,26 +619,38 @@ class AgenticStore {
 		cleanedResult: string;
 		attachments: DatabaseMessageExtra[];
 	} {
-		if (!result.trim()) return { cleanedResult: result, attachments: [] };
+		if (!result.trim()) {
+			return { cleanedResult: result, attachments: [] };
+		}
+
 		const lines = result.split('\n');
 		const attachments: DatabaseMessageExtra[] = [];
 		let attachmentIndex = 0;
 
 		const cleanedLines = lines.map((line) => {
 			const trimmedLine = line.trim();
+
 			const match = trimmedLine.match(/^data:([^;]+);base64,([A-Za-z0-9+/]+=*)$/);
-			if (!match) return line;
+			if (!match) {
+				return line;
+			}
+
 			const mimeType = match[1].toLowerCase();
 			const base64Data = match[2];
-			if (!base64Data) return line;
+
+			if (!base64Data) {
+				return line;
+			}
 
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
 			if (mimeType.startsWith('image/')) {
 				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
+
 				return `[Attachment saved: ${name}]`;
 			}
+
 			return line;
 		});
 
@@ -644,18 +675,23 @@ export const agenticStore = new AgenticStore();
 export function agenticIsRunning(conversationId: string) {
 	return agenticStore.isRunning(conversationId);
 }
+
 export function agenticCurrentTurn(conversationId: string) {
 	return agenticStore.currentTurn(conversationId);
 }
+
 export function agenticTotalToolCalls(conversationId: string) {
 	return agenticStore.totalToolCalls(conversationId);
 }
+
 export function agenticLastError(conversationId: string) {
 	return agenticStore.lastError(conversationId);
 }
+
 export function agenticStreamingToolCall(conversationId: string) {
 	return agenticStore.streamingToolCall(conversationId);
 }
+
 export function agenticIsAnyRunning() {
 	return agenticStore.isAnyRunning;
 }

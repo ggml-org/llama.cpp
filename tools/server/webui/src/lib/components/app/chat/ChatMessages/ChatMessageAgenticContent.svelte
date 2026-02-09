@@ -78,6 +78,7 @@
 		extras?: DatabaseMessage['extra']
 	): ToolResultLine[] {
 		const lines = toolResult.split('\n');
+
 		return lines.map((line) => {
 			const match = line.match(ATTACHMENT_SAVED_REGEX);
 			if (!match || !extras) return { text: line };

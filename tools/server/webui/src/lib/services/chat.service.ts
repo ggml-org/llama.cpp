@@ -140,8 +140,10 @@ export class ChatService {
 							console.info(
 								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
 							);
+
 							return false;
 						}
+
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
@@ -668,9 +670,11 @@ export class ChatService {
 				role: message.role as MessageRole,
 				content: message.content
 			};
+
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
+
 			return result;
 		}
 

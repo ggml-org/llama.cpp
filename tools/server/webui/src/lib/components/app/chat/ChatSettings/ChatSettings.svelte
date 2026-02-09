@@ -315,12 +315,6 @@
 	let activeSection = $state<SettingsSectionTitle>(
 		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
 	);
-
-	$effect(() => {
-		if (initialSection) {
-			activeSection = initialSection;
-		}
-	});
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
