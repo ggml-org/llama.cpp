@@ -1,0 +1,73 @@
+name: Server-Metal
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      sha:
+        description: 'Commit SHA1 to build'
+        required: false
+        type: string
+      slow_tests:
+        description: 'Run slow tests'
+        required: true
+        type: boolean
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/server-metal.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+
+env:
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_LOG_VERBOSITY: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  server-metal:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    name: server-metal (${{ matrix.wf_name }})
+    strategy:
+      matrix:
+        build_type: [Release]
+        wf_name: ["GPUx1"]
+        include:
+          - build_type: Release
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "GPUx1, backend-sampling"
+          - build_type: Release
+            extra_args: "GGML_METAL_DEVICES=2"
+            wf_name:    "GPUx2"
+          - build_type: Release
+            extra_args: "GGML_METAL_DEVICES=2 LLAMA_ARG_BACKEND_SAMPLING=1"
+            wf_name:    "GPUx2, backend-sampling"
+      fail-fast: false
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON
+          cmake --build build --config ${{ matrix.build_type }} -j $(sysctl -n hw.logicalcpu) --target llama-server
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
+        run: |
+          cd tools/server/tests
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
+          export ${{ matrix.extra_args }}
+          pytest -v -x -m "not slow"
