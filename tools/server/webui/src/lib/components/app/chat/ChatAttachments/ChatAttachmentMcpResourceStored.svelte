@@ -29,6 +29,7 @@
 		if (mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
 			return Image;
 		}
+
 		if (
 			mime.includes(MimeTypeIncludes.JSON) ||
 			mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
@@ -37,12 +38,15 @@
 		) {
 			return Code;
 		}
+
 		if (mime.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
 			return FileText;
 		}
+
 		if (u.includes(UriPattern.DATABASE_KEYWORD) || u.includes(UriPattern.DATABASE_SCHEME)) {
 			return Database;
 		}
+
 		return File;
 	}
 

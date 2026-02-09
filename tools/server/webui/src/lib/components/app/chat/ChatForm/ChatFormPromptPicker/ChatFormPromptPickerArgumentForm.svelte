@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { MCPPromptInfo } from '$lib/types';
 	import ChatFormPromptPickerArgumentInput from './ChatFormPromptPickerArgumentInput.svelte';
+	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
 		prompt: MCPPromptInfo;
@@ -65,20 +66,21 @@
 		</div>
 	{/if}
 
-	<div class="flex justify-end gap-2">
-		<button
+	<div class="flex justify-end mt-8 gap-2">
+		<Button
 			type="button"
+			size="sm"
 			onclick={onCancel}
-			class="rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:bg-accent"
+			variant="secondary"
 		>
 			Cancel
-		</button>
+		</Button>
 
-		<button
+		<Button
+			size="sm"
 			type="submit"
-			class="rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90"
 		>
 			Use Prompt
-		</button>
+		</Button>
 	</div>
 </form>
