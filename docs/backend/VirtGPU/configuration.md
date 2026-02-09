@@ -138,7 +138,6 @@ The configuration system works as follows:
    - `apir.load_library.path` ← `VIRGL_APIR_BACKEND_LIBRARY`
    - `ggml.library.path` ← `APIR_LLAMA_CPP_GGML_LIBRARY_PATH`
    - `ggml.library.reg` ← `APIR_LLAMA_CPP_GGML_LIBRARY_REG`
-   - `ggml.library.init` ← `APIR_LLAMA_CPP_GGML_LIBRARY_INIT`
    - this step will eventually be performed by the hypervisor itself, with command-line arguments instead of environment variables.
 
 3. **Backend Initialization**: The backend queries the configuration via callbacks:

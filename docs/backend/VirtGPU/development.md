@@ -1,8 +1,29 @@
-### Testing
+# Development and Testing
+
+## Development
+
+### Code Generation
+
+The backend uses code generation from YAML configuration:
+
+```bash
+# Regenerate protocol code
+cd ggml-virtgpu/
+python regenerate_remoting.py
+```
+
+### Adding New Operations
+
+1. Add function definition to `ggmlremoting_functions.yaml`
+2. Regenerate code with `regenerate_remoting.py`
+3. Implement guest-side forwarding in `virtgpu-forward-*.cpp`
+4. Implement host-side handling in `backend-dispatched-*.cpp`
+
+## Testing
 
 This document provides instructions for building and testing the GGML-VirtGPU backend on macOS with containers.
 
-#### Prerequisites
+### Prerequisites
 
 The testing setup requires:
 
@@ -10,16 +31,17 @@ The testing setup requires:
 - Container runtime with `libkrun` provider (podman machine)
 - Access to development patchset for VirglRenderer
 
-#### Required Patchsets
+### Required Patchsets
 
 The backend requires patches that are currently under review:
 
 - **Virglrenderer APIR upstream PR**: https://gitlab.freedesktop.org/virgl/virglrenderer/-/merge_requests/1590 (for reference)
-- **MacOS Virglrenderer for krunkit**: https://gitlab.freedesktop.org/kpouget/virglrenderer/-/tree/main-macos
+- **MacOS Virglrenderer (for krunkit)**: https://gitlab.freedesktop.org/kpouget/virglrenderer/-/tree/main-macos
+- **Linux Virglrenderer (for krun)**: https://gitlab.freedesktop.org/kpouget/virglrenderer/-/tree/main-linux
 
-#### Build Instructions
+### Build Instructions
 
-##### 1. Build ggml-virtgpu-backend (Host-side, macOS)
+#### 1. Build ggml-virtgpu-backend (Host-side, macOS)
 
 ```bash
 # Build the backend that runs natively on macOS
@@ -44,7 +66,7 @@ EXTRA_TARGETS="llama-run llama-bench"
 cmake --build $LLAMA_MAC_BUILD --parallel 8 --target $EXTRA_TARGETS
 ```
 
-##### 2. Build virglrenderer (Host-side, macOS)
+#### 2. Build virglrenderer (Host-side, macOS)
 
 ```bash
 # Build virglrenderer with APIR support
@@ -63,7 +85,9 @@ meson setup $VIRGL_BUILD_DIR \
 ninja -C $VIRGL_BUILD_DIR
 ```
 
-##### 3. Build ggml-virtgpu (Guest-side, Linux)
+#### 3. Build ggml-virtgpu (Guest-side, Linux)
+
+Option A: Build from a script:
 
 ```bash
 # Inside a Linux container
@@ -109,12 +133,12 @@ ENTRYPOINT ["/app/remoting/src/build/bin/llama-server"]
 EOF
 
 mkdir -p empty_dir
-podman build -f remoting.containerfile ./empty_dir -t localhost/remoting-frontend
+podman build -f remoting.containerfile ./empty_dir -t localhost/llama-cpp.virtgpu
 ```
 
-#### Environment Setup
+### Environment Setup
 
-##### Set krunkit Environment Variables
+#### Set krunkit Environment Variables
 
 ```bash
 # Define the base directories (adapt these paths to your system)
@@ -132,7 +156,7 @@ export APIR_LLAMA_CPP_GGML_LIBRARY_PATH="$LLAMA_MAC_BUILD/bin/libggml-metal.dyli
 export APIR_LLAMA_CPP_GGML_LIBRARY_REG=ggml_backend_metal_reg
 ```
 
-##### Launch Container Environment
+#### Launch Container Environment
 
 ```bash
 # Set container provider to libkrun
@@ -140,7 +164,7 @@ export CONTAINERS_MACHINE_PROVIDER=libkrun
 podman machine start
 ```
 
-##### Verify Environment
+#### Verify Environment
 
 Confirm that krunkit is using the correct virglrenderer library:
 
@@ -150,19 +174,19 @@ lsof -c krunkit | grep virglrenderer
 # krunkit 50574 user  txt  REG  1,14  2273912  10849442 ($VIRGL_BUILD_DIR/src)/libvirglrenderer.1.dylib
 ```
 
-#### Running Tests
+### Running Tests
 
-##### Launch Test Container
+#### Launch Test Container
 
 ```bash
 # Optional model caching
 mkdir -p models
 PODMAN_CACHE_ARGS="-v models:/models --user root:root --cgroupns host --security-opt label=disable -w /models"
 
-podman run $PODMAN_CACHE_ARGS -it --rm --device /dev/dri localhost/remoting-frontend bash
+podman run $PODMAN_CACHE_ARGS -it --rm --device /dev/dri localhost/llama-cpp.virtgpu
 ```
 
-##### Test llama.cpp in Container
+#### Test llama.cpp in Container
 
 ```bash
 
@@ -174,13 +198,13 @@ Expected output (performance may vary):
 ```
 | model                          |       size |     params | backend    | ngl |          test |                  t/s |
 | ------------------------------ | ---------: | ---------: | ---------- | --: | ------------: | -------------------: |
-| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | RemotingFrontend |  99 |         pp512 |        991.30 ± 0.66 |
-| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | RemotingFrontend |  99 |         tg128 |         85.71 ± 0.11 |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | ggml-virtgpu |  99 |         pp512 |        991.30 ± 0.66 |
+| llama 3B Q4_K - Medium         |   1.87 GiB |     3.21 B | ggml-virtgpu |  99 |         tg128 |         85.71 ± 0.11 |
 ```
 
-#### Troubleshooting
+### Troubleshooting
 
-##### SSH Environment Variable Issues
+#### SSH Environment Variable Issues
 
 ⚠️ **Warning**: Setting `DYLD_LIBRARY_PATH` from SSH doesn't work on macOS. Here is a workaround:
 

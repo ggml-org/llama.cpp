@@ -13,6 +13,16 @@ This backend relies on the virtio-gpu, and VirglRenderer API Remoting
   running in the host and interacting with Virglrenderer and an actual
   GGML device backend.
 
+## OS support
+
+| OS       | Status            | Backend     | CI testing  | Notes
+| -------- | ----------------- | ----------- | ----------- | -----
+| MacOS 14 | Supported         | ggml-metal  | X           | Working when compiled on MacOS 14
+| MacOS 15 | Supported         | ggml-metal  | X           | Working when compiled on MacOS 14 or MacOS 15
+| MacOS 26 | Not tested        |             |             |
+| Linux    | Under development | ggml-vulkan | not working | Working locally, CI running into deadlocks
+
+
 ## Architecture Overview
 
 The GGML-VirtGPU backend consists of three main components:
@@ -149,26 +159,6 @@ Commands and data are serialized using a custom binary protocol with:
 - **Host dependency**: Requires properly configured host-side backend
 - **Latency**: Small overhead from VM escaping for each operation
 
-## Development
-
-### Code Generation
-
-The backend uses code generation from YAML configuration:
-
-```bash
-# Regenerate protocol code
-cd ggml-virtgpu/
-python regenerate_remoting.py
-```
-
-### Adding New Operations
-
-1. Add function definition to `ggmlremoting_functions.yaml`
-2. Regenerate code with `regenerate_remoting.py`
-3. Implement guest-side forwarding in `virtgpu-forward-*.cpp`
-4. Implement host-side handling in `backend-dispatched-*.cpp`
-
-## Limitations
 
 * This work is pending upstream changes in the VirglRenderer
   project.
@@ -192,5 +182,5 @@ python regenerate_remoting.py
 
 ## See Also
 
-- [Backend configuration](VirtGPU/configuration.md)
 - [Development and Testing](VirtGPU/development.md)
+- [Backend configuration](VirtGPU/configuration.md)
