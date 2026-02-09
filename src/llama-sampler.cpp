@@ -463,11 +463,8 @@ struct blue_noise_rng {
     // blue noise in the upper bits, white noise in the lower bits
     uint64_t next64() {
         uint64_t r   = rng->next64();
-        uint32_t lo  = (uint32_t)r;
-        uint32_t h   = (uint32_t)(r >> 32);
-        uint32_t val = advance(h);
-        uint32_t hi  = (val << (32 - bit_depth)) | (h >> bit_depth);
-        return ((uint64_t)hi << 32) | lo;
+        uint32_t val = advance((uint32_t)r);
+        return ((uint64_t)val << (64 - bit_depth)) | (r >> bit_depth);
     }
 
     // uniform double in [0, 1) with blue noise temporal autocorrelation
@@ -561,8 +558,8 @@ struct llama_dist_rng_lowbias32 : llama_dist_rng {
     }
 
     uint64_t next64() override {
-        uint64_t lo = hash(position ^ ~hashed_seed); // secondary sequence using opposing seed
-        uint64_t hi = next();
+        uint64_t hi = hash(position ^ ~hashed_seed); // secondary sequence using opposing seed
+        uint64_t lo = next();
         return (hi << 32) | lo;
     }
 
