@@ -116,7 +116,7 @@
 			</div>
 		</div>
 
-		<div class="min-h-[200px] overflow-auto rounded-md border bg-muted/30 p-3">
+		<div class="min-h-[200px] overflow-auto rounded-md border bg-muted/30 p-3 break-all">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
 					<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
