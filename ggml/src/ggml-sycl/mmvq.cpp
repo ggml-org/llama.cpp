@@ -1341,31 +1341,18 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void *    vx,
                                                const int       row_low,
                                                dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
-    const int        block_num_y        = ceil_div(nrows, GGML_SYCL_MMV_Y);
-    constexpr size_t num_subgroups      = 16;
-    const int        block_num_y_padded = ceil_div(block_num_y, (int) num_subgroups) * (int) num_subgroups;
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
-    // Calculate SLM sizes for Y-vector caching (same as regular MMVQ)
-    const int blocks_per_row = ncols / QK4_0;
-    const int slm_y_qs_size  = blocks_per_row * QK8_1;  // Q8_1 quants per block
-    const int slm_y_ds_size  = blocks_per_row + 1;      // half2 scales + padding
-
     stream->submit([&](sycl::handler & cgh) {
-        // Allocate SLM for Y-vector (ensures proper graph recording with accessors)
-        sycl::local_accessor<int8_t, 1>      slm_y_qs(slm_y_qs_size, cgh);
-        sycl::local_accessor<sycl::half2, 1> slm_y_ds(slm_y_ds_size, cgh);
-
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q4_0>>(
             sycl::nd_range<3>(global_size, workgroup_size),
             [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>>(vx, vy, dst, ncols, nrows, total_nrows,
                                                                               row_low, nd_item);
-                // Touch SLM to ensure accessor is not optimized away
-                (void) slm_y_qs[0];
-                (void) slm_y_ds[0];
             });
     });
 }
@@ -1382,11 +1369,10 @@ static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void *    vx,
                                                const int       row_low,
                                                dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK8_0 == 0);
-    const int        block_num_y        = ceil_div(nrows, GGML_SYCL_MMV_Y);
-    constexpr size_t num_subgroups      = 16;
-    const int        block_num_y_padded = ceil_div(block_num_y, (int) num_subgroups) * (int) num_subgroups;
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -1411,11 +1397,10 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void *    vx,
                                                 const int       row_low,
                                                 dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_MXFP4 == 0);
-    const int        block_num_y        = ceil_div(nrows, GGML_SYCL_MMV_Y);
-    constexpr size_t num_subgroups      = 16;
-    const int        block_num_y_padded = ceil_div(block_num_y, (int) num_subgroups) * (int) num_subgroups;
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -2616,11 +2601,10 @@ static void reorder_mul_mat_vec_q4_k_q8_1_sycl(const void *    vx,
                                                dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
 
-    const int        block_num_y        = ceil_div(nrows, GGML_SYCL_MMV_Y);
-    constexpr size_t num_subgroups      = 16;
-    const int        block_num_y_padded = ceil_div(block_num_y, (int) num_subgroups) * (int) num_subgroups;
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y_padded * WARP_SIZE);
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -2666,11 +2650,10 @@ static void reorder_mul_mat_vec_q6_k_q8_1_sycl(const void *    vx,
                                                const int       row_low,
                                                dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int        block_num_y        = ceil_div(nrows, GGML_SYCL_MMV_Y);
-    constexpr size_t num_subgroups      = 16;
-    const int        block_num_y_padded = ceil_div(block_num_y, (int) num_subgroups) * (int) num_subgroups;
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y_padded * WARP_SIZE);
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
