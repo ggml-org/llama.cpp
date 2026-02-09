@@ -192,5 +192,5 @@ python regenerate_remoting.py
 
 ## See Also
 
-- [Backend configuration](configuration.md)
-- [Testing](testing.md)
+- [Backend configuration](VirtGPU/configuration.md)
+- [Development and Testing](VirtGPU/development.md)
