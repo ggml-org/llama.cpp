@@ -59,7 +59,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -DGGML_SCHED_NO_REALLOC=ON
-          cmake --build build --config ${{ matrix.build_type }} -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+          cmake --build build --config ${{ matrix.build_type }} -j $(sysctl -n hw.logicalcpu) --target llama-server
 
       - name: Tests
         id: server_integration_tests
