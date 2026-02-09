@@ -4361,7 +4361,7 @@ class Qwen3_5Model(Qwen3NextModel):
             yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3_5MoeForCausalLM", "Qwen3_5MoeTextForCausalLM")
+@ModelBase.register("Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeModel(Qwen3_5Model):
     model_arch = gguf.MODEL_ARCH.QWEN3_5_MOE
 
