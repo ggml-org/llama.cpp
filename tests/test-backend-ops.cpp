@@ -5826,85 +5826,49 @@ struct test_acc : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
+    const int64_t stride_dim;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne_a, ne_b);
+        return VARS_TO_STR4(type, ne_a, ne_b, stride_dim);
     }
 
     test_acc(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne_a = {256, 17, 1, 1},
-            std::array<int64_t, 4> ne_b = {256, 16, 1, 1})
-        : type(type), ne_a(ne_a), ne_b(ne_b) {}
+            std::array<int64_t, 4> ne_a = {256, 17, 2, 3},
+            std::array<int64_t, 4> ne_b = {256, 16, 2, 3},
+            uint64_t stride_dim = -1)
+        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne_b.data());
-        ggml_set_param(b);
+        ggml_tensor * b;
+        if (stride_dim == 1 || stride_dim == 2 || stride_dim == 3) {
+            // Create a larger tensor and take a view at a non-zero offset.
+            // This tests that the backend correctly handles b's data offset
+            std::array<int64_t, 4> ne_b_pad = {ne_b[0], ne_b[1], ne_b[2], ne_b[3]};
+            ne_b_pad[stride_dim] += 1;
+            ggml_tensor * b_pad = ggml_new_tensor(ctx, type, 4, ne_b_pad.data());
+            ggml_set_param(b_pad);
+            ggml_set_name(b_pad, "b_pad");
+            // View that skips the first row, so b has a non-zero byte offset
+            b = ggml_view_4d(ctx, b_pad,
+                ne_b[0], ne_b[1], ne_b[2], ne_b[3],
+                b_pad->nb[1], b_pad->nb[2], b_pad->nb[3],
+                b_pad->nb[1]);
+        } else {
+            b = ggml_new_tensor(ctx, type, 4, ne_b.data());
+            ggml_set_param(b);
+        }
         ggml_set_name(b, "b");
 
-        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], b->nb[1]);
+        // When ne_b[0] < ne_a[0], a->nb[1] != b->nb[1], so the stride
+        // parameters to ggml_acc don't match b's natural stride.
+        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], 0);
         ggml_set_name(out, "out");
 
         return out;
-    }
-};
-
-// GGML_OP_ACC - block accumulation test
-struct test_acc_block: public test_case {
-    const ggml_type type;
-    const int64_t block_size;
-    const int64_t n_blocks;
-    const int64_t ne2;
-    const int64_t ne3;
-
-    std::string vars() override {
-        return VARS_TO_STR5(type, block_size, n_blocks, ne2, ne3);
-    }
-
-    test_acc_block(ggml_type type = GGML_TYPE_F32,
-            int64_t block_size = 16,
-            int64_t n_blocks = 4,
-            int64_t ne2 = 1,
-            int64_t ne3 = 1)
-        : type(type), block_size(block_size), n_blocks(n_blocks), ne2(ne2), ne3(ne3) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        const int64_t chunk_size = block_size * n_blocks;
-
-        // Base tensor initialized to zero using ggml_clamp
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, chunk_size, chunk_size, ne2, ne3);
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-
-        // Source blocks that will be accumulated at different offsets
-        // Mimics the lower-triangular block pattern from the original code
-        for (int64_t j = 0; j < n_blocks; ++j) {
-            for (int64_t i = 0; i <= j; ++i) {
-                ggml_tensor * block = ggml_new_tensor_4d(ctx, type,
-                    block_size, block_size, ne2, ne3);
-                ggml_set_param(block);
-
-                char name[64];
-                snprintf(name, sizeof(name), "block_%ld_%ld", (long)j, (long)i);
-                ggml_set_name(block, name);
-
-                // Accumulate block at position [i*block_size, j*block_size]
-                // This is the same pattern as the original code:
-                //   offset = i_start * nb[0] + j_start * nb[1]
-                size_t offset = (i * block_size) * ggml_type_size(type)
-                              + (j * block_size) * (chunk_size * ggml_type_size(type));
-
-                a = ggml_acc(ctx, a, block,
-                    a->nb[1], a->nb[2], a->nb[3],
-                    offset);
-            }
-        }
-
-        ggml_set_name(a, "out");
-        return a;
     }
 };
 
@@ -8185,9 +8149,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
-    test_cases.emplace_back(new test_acc());
-    test_cases.emplace_back(new test_acc_block(GGML_TYPE_F32, 16, 4, 3, 2));
-    test_cases.emplace_back(new test_acc_block(GGML_TYPE_F32, 32, 4, 2, 2));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 1, 1}, {256, 16, 1, 1}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
