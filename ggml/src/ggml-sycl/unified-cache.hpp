@@ -645,10 +645,11 @@ class unified_cache {
     // Bytes currently occupied by cached weights
     size_t weight_bytes() const { return used_.load(); }
 
-    // VRAM available for non-weight allocations (compute, KV, scratch)
+    // Available VRAM for non-weight allocations (KV, compute, staging).
+    // This is the budget headroom after weights + current runtime reservations.
+    // Higher-level code uses this to size KV cache and compute buffers.
     size_t available_for_compute() const {
-        const size_t w = used_.load();
-        return base_budget_ > w ? base_budget_ - w : 0;
+        return available();  // budget_ - used_, already accounts for reserved_
     }
 
     // Force eviction to free at least bytes_needed
@@ -1014,9 +1015,13 @@ void   unified_cache_add_runtime_host_bytes(size_t bytes);
 void   unified_cache_sub_runtime_host_bytes(size_t bytes);
 size_t unified_cache_get_runtime_host_bytes();
 
-// Budget query API — high-level accessors for non-weight allocation sizing
+// Query available VRAM for non-weight allocations (KV, compute, staging).
 size_t unified_cache_available_for_compute(int device);
+
+// Raw VRAM budget before reservations (= free VRAM * budget_pct at init)
 size_t unified_cache_total_managed(int device);
+
+// Current weight bytes on device
 size_t unified_cache_weight_bytes(int device);
 
 // Host cache accessors (canonical layouts in host memory)
