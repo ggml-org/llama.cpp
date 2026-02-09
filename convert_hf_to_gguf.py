@@ -4102,27 +4102,39 @@ class Qwen2MoeModel(TextModel):
         # process the experts separately
         name = name.replace("language_model.", "") # InternVL
 
-        # handle pre-packed expert tensors (e.g. Qwen3.5 MoE, Qwen3Next)
-        # HF stores these using nn.Linear convention: [n_expert, out_features, in_features]
-        # This matches the individual expert stacking path below (which stacks
-        # per-expert [out, in] weights into [n_expert, out, in]), so no permute is needed.
+        # handle aggregated expert tensors
+        # GGUF stores dimensions reversed from PyTorch, so:
+        # PyTorch (A,B,C) -> GGUF writes [C,B,A] -> GGML reads ne={C,B,A}
+        # Input shapes from HF: (n_expert, n_ff_exp, n_embd) or (n_expert, n_embd, n_ff_exp)
+        # Expected GGML ne: {n_embd, n_ff_exp, n_expert} for gate/up, {n_ff_exp, n_embd, n_expert} for down
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            # HF: [n_expert, n_embd, n_ff] → GGML: {n_ff, n_embd, n_expert} ✓
-            yield from super().modify_tensors(data_torch, mapped, bid)
+            # Input: (n_expert=128, n_ff_exp=768, n_embd=2048)
+            # Want GGML ne: {n_ff_exp, n_embd, n_expert} = {768, 2048, 128}
+            # Need PyTorch: (128, 2048, 768) [reversed of GGML]
+            # So: permute(0, 2, 1): (128, 768, 2048) -> (128, 2048, 768)
+            permuted = data_torch.permute(0, 2, 1).contiguous()
+            yield from super().modify_tensors(permuted, mapped, bid)
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            # HF: [n_expert, 2*n_ff, n_embd] → split on dim=1
-            n_ff = data_torch.shape[1] // 2
-            gate = data_torch[:, :n_ff, :].contiguous()
-            up = data_torch[:, n_ff:, :].contiguous()
-            # gate/up: [n_expert, n_ff, n_embd] → GGML: {n_embd, n_ff, n_expert} ✓
-            base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
-            mapped_gate = f"{base_name}.gate_proj.weight"
-            mapped_up = f"{base_name}.up_proj.weight"
-            yield from super().modify_tensors(gate, mapped_gate, bid)
-            yield from super().modify_tensors(up, mapped_up, bid)
+            if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
+                raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
+            split_dim = data_torch.shape[-1] // 2
+            gate = data_torch[..., :split_dim].contiguous()
+            up = data_torch[..., split_dim:].contiguous()
+            # Input gate/up: (n_expert=128, n_embd=2048, n_ff_exp=768)
+            # Want GGML ne: {n_embd, n_ff_exp, n_expert} = {2048, 768, 128}
+            # Need PyTorch: (128, 768, 2048) [reversed of GGML]
+            # So: permute(0, 2, 1): (128, 2048, 768) -> (128, 768, 2048)
+            base_name = name.removesuffix(".weight")
+            base = base_name.rsplit('.', 1)[0]
+            mapped_gate = f"{base}.gate_proj.weight"
+            mapped_up = f"{base}.up_proj.weight"
+            perm_gate = gate.permute(0, 2, 1).contiguous()
+            perm_up = up.permute(0, 2, 1).contiguous()
+            yield from super().modify_tensors(perm_gate, mapped_gate, bid)
+            yield from super().modify_tensors(perm_up, mapped_up, bid)
             return
 
         if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") or name.startswith("model.visual"):
@@ -4330,40 +4342,6 @@ class Qwen3NextModel(Qwen2MoeModel):
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid, ".weight"), z)
         else:
             yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("Qwen3_5ForCausalLM", "Qwen3_5TextForCausalLM")
-class Qwen3_5Model(Qwen3NextModel):
-    model_arch = gguf.MODEL_ARCH.QWEN3_5
-
-    # Stores whichever of in_proj_a/in_proj_b is seen first, keyed by layer
-    _pending_ba: dict[int | None, tuple[str, Tensor]] = {}
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Handle split in_proj_b + in_proj_a → concatenated SSM_BETA_ALPHA
-        # safetensors sorts alphabetically so in_proj_a arrives before in_proj_b
-        if "in_proj_a.weight" in name or "in_proj_b.weight" in name:
-            which = "a" if "in_proj_a" in name else "b"
-            if bid not in self._pending_ba:
-                self._pending_ba[bid] = (which, data_torch)
-                return
-            prev_which, prev_tensor = self._pending_ba.pop(bid)
-            assert prev_which != which, f"duplicate in_proj_{which} for layer {bid}"
-            b_tensor = prev_tensor if prev_which == "b" else data_torch
-            a_tensor = prev_tensor if prev_which == "a" else data_torch
-            ba_combined = torch.cat([b_tensor, a_tensor], dim=0)
-            yield (self.format_tensor_name(gguf.MODEL_TENSOR.SSM_BETA_ALPHA, bid, ".weight"), ba_combined)
-            return
-        else:
-            # Qwen3Next uses .qkvz tensor, so we use the super to get the other functionalities
-            # (norm correction, A_log to A etc.) for free
-            # Qwen2Moe already does the gate_up conversion properly, just use that
-            yield from super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("Qwen3_5MoeForCausalLM", "Qwen3_5MoeTextForCausalLM")
-class Qwen3_5MoeModel(Qwen3_5Model):
-    model_arch = gguf.MODEL_ARCH.QWEN3_5_MOE
 
 
 @ModelBase.register("RND1")
