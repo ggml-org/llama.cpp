@@ -10,12 +10,6 @@
 
 	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
-	$effect(() => {
-		if (open) {
-			mcpStore.runHealthChecksForServers(mcpStore.getServers());
-		}
-	});
-
 	function handleClose() {
 		onOpenChange?.(false);
 	}
