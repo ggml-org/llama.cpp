@@ -137,6 +137,8 @@ extern std::atomic<bool> g_ggml_sycl_debug_forced_off;
 // Track when SYCL graph recording is active
 extern thread_local bool g_ggml_sycl_graph_recording;
 extern std::atomic<int>  g_ggml_sycl_graph_recording_depth;
+extern std::atomic<int>  g_sycl_submit_count_during_recording;  // DIAG: operation dispatches during recording
+extern std::atomic<int>  g_sycl_extra_submit_count_during_recording;  // DIAG: extra markers/events during recording
 int                      ggml_sycl_graph_inflight_count();
 
 inline bool ggml_sycl_graph_recording_active() {
@@ -171,6 +173,9 @@ inline bool ggml_sycl_should_add_dependency(const sycl::event & dep_event) {
 template <typename MarkerKernel>
 inline sycl::event ggml_sycl_submit_marker(sycl::queue & q,
                                            const std::vector<sycl::event> & deps = {}) {
+    if (g_ggml_sycl_graph_recording) {
+        g_sycl_extra_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
+    }
     if (q.has_property<sycl::property::queue::in_order>()) {
         return q.submit([&](sycl::handler & cgh) {
             if (!deps.empty()) {
@@ -629,7 +634,7 @@ struct layout_policy {
         }
         if (unified_soa_enabled < 0) {
             const char * env = std::getenv("GGML_SYCL_UNIFIED_SOA");
-            unified_soa_enabled = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+            unified_soa_enabled = (env && std::atoi(env) == 0) ? 0 : 1;  // Default ON
         }
         if (persistent_tg_soa_enabled < 0) {
             const char * persistent_tg = std::getenv("GGML_SYCL_PERSISTENT_TG");
@@ -1704,118 +1709,24 @@ inline void ggml_sycl_refresh_cached_input_ptr(void * dst, const void * src, siz
     std::memcpy(dst, src, bytes);
 }
 
+// Cold path: full resolution chain (tiered cache, get_pointer_type, staging).
+// Defined in ggml-sycl.cpp to avoid inlining a 100-line function.
+void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device);
+
+// Hot path: 2 dereferences + 1 null check for common case (model fits in VRAM)
+// Input tensor refresh is handled by set_tensor (scheduler) and graph_refresh_input_tensors (replay),
+// NOT here — calling refresh here would add get_pointer_type() driver round-trips to every resolution.
 inline void * ggml_sycl_get_data_ptr(const ggml_tensor * tensor, int device) {
     if (tensor == nullptr) {
         return nullptr;
     }
-    const bool is_input_tensor = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
-    const bool tp_enabled      = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
-    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
-        sycl::usm::alloc alloc      = sycl::usm::alloc::unknown;
-        void *           cached_ptr = ggml_sycl_get_cached_tensor_ptr_for(tensor, device, nullptr, nullptr, &alloc);
-        if (cached_ptr != nullptr) {
-            if (is_input_tensor && !tp_enabled && tensor->data) {
-                ggml_sycl_refresh_cached_input_ptr(cached_ptr, tensor->data, ggml_nbytes(tensor), device);
-            }
-            return cached_ptr;
-        }
-    }
     if (tensor->extra != nullptr) {
-        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        if (extra->data_device[device] != nullptr) {
-            if (is_input_tensor && !tp_enabled && tensor->data) {
-                ggml_sycl_refresh_cached_input_ptr(extra->data_device[device], tensor->data, ggml_nbytes(tensor), device);
-            }
-            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
-                            tensor->name, device, device, extra->data_device[device]);
-            return extra->data_device[device];
+        void * ptr = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)->data_device[device];
+        if (ptr != nullptr) {
+            return ptr;
         }
     }
-
-    // Check if tensor->data is mmap'd memory (non-USM) that can't be accessed by GPU kernels.
-    // This applies to BOTH TP mode and non-TP mode - mmap'd weights need staging either way.
-    // USM types: unknown=3 (mmap'd/heap), device=1, host=0, shared=2
-    // Only host(0) and shared(2) are device-accessible without staging.
-    if (tensor->data != nullptr) {
-        // Get context for USM type checking - use TP context if available, otherwise device default
-        sycl::context   ctx_storage;  // Local storage to avoid taking address of temporary
-        sycl::context * ctx = nullptr;
-        if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-            ctx = ggml_sycl_get_tp_context();
-        }
-        if (ctx == nullptr) {
-            // Use device's default queue context for non-TP mode
-            try {
-                ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
-                ctx         = &ctx_storage;
-            } catch (...) {
-                ctx = nullptr;
-            }
-        }
-
-        if (ctx != nullptr) {
-            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *ctx);
-
-            // DEVICE memory - directly accessible, no staging needed
-            if (ptr_type == sycl::usm::alloc::device) {
-                // Cache in extra for fast-path on subsequent calls
-                if (tensor->extra != nullptr) {
-                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                    if (extra->data_device[device] == nullptr) {
-                        extra->data_device[device] = tensor->data;
-                    }
-                }
-                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
-                                tensor->name, device, tensor->data);
-                return tensor->data;
-            }
-
-            // ALL non-device memory needs cache/staging due to Level Zero driver bug that reports
-            // mmap'd memory as "shared" (type=3) instead of "unknown" (type=0), causing DEVICE_LOST.
-            // Check if this is a weight tensor (inline check to avoid forward declaration)
-            const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
-                                   ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-
-            // Try to get from unified cache (already uploaded weights)
-            // Use get_or_wait() to block for IN_PROGRESS entries - prevents mmap fallback
-            if (ggml_sycl::unified_cache_enabled() && is_weight) {
-                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-                    if (cache_key.valid) {
-                        // get_or_wait waits for IN_PROGRESS entries to complete
-                        // This prevents returning mmap pointer while cache fill is in flight
-                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
-                        if (cached) {
-                            GGML_SYCL_DEBUG(
-                                "ggml_sycl_get_data_ptr: tensor=%s, device=%d, non-device fallback to cache=%p (type=%d)\n",
-                                tensor->name, device, cached, (int) ptr_type);
-                            return cached;
-                        }
-                    }
-                }
-            }
-
-            // Not cached - need to stage to device-local USM memory
-            size_t nbytes = ggml_nbytes(tensor);
-            void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
-            if (staged != nullptr) {
-                if (is_input_tensor && !tp_enabled) {
-                    // Refresh staged data for dynamic inputs on every call.
-                    std::memcpy(staged, tensor->data, nbytes);
-                }
-                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
-                                tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
-                return staged;
-            }
-            // Staging failed - fall through and return original pointer (will likely fail)
-            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, staging FAILED for non-device (type=%d), using tensor->data=%p\n",
-                            tensor->name, device, (int) ptr_type, tensor->data);
-        }
-    }
-
-    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr: tensor=%s, device=%d, using tensor->data=%p\n", tensor->name, device,
-                    tensor->data);
-    return tensor->data;
+    return ggml_sycl_get_data_ptr_slow(tensor, device);
 }
 
 inline bool ggml_sycl_tensor_is_weight(const ggml_tensor * tensor) {
@@ -2370,6 +2281,18 @@ struct ggml_backend_sycl_context {
     bool moe_graphs_disabled      = false;  // Set when MoE preload fails; disables graphs for all splits
     bool moe_graphs_disabled_once = false;  // Set when we skip graphs for a single run
 
+    // === Cached per-graph computations (reset when n_nodes changes) ===
+    int  cached_persistent_n_nodes = -1;   // n_nodes when persistent check was cached
+    bool cached_persistent_result  = false; // cached should_use_persistent_tg result
+    bool cached_is_decode_phase    = false; // cached phase detection result
+
+    uint64_t cached_graph_sig         = 0;  // cached graph signature hash
+    int      cached_graph_sig_n_nodes = -1; // n_nodes when hash was cached
+
+    // Pre-cached input tensor set for graph_refresh (populated during recording)
+    std::vector<ggml_tensor *> cached_input_tensors;
+    bool input_tensors_cached = false;
+
     // Pre-allocated buffers for MoE graph recording
     // MUL_MAT_ID needs Q8_1 quantization buffers which cannot be allocated during graph recording
     struct moe_graph_buffers {
@@ -2668,6 +2591,12 @@ struct ggml_backend_sycl_context {
     std::optional<sycl::event> barrier_event;
     bool                       has_pending_barrier = false;
     std::optional<sycl::event> last_graph_event;
+
+    // Persistent staging buffer for get_tensor_async readback.
+    // Avoids per-call USM host alloc/free overhead for logits readback (~128KB/token).
+    // Tracked via host memory tracking (ggml_sycl_malloc_host_tracked_bytes).
+    void * readback_staging      = nullptr;
+    size_t readback_staging_size = 0;
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {

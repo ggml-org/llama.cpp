@@ -123,6 +123,35 @@ static dnnl::memory::data_type ggml_sycl_onednn_dtype(ggml_type type);
 static bool g_sycl_loaded                = false;
 int         g_ggml_sycl_debug            = 0;
 int         g_ggml_sycl_debug_sync       = 0;
+
+// Per-token timing accumulators for framework overhead profiling
+// Reset at synchronize, accumulated across init_tensor/set_tensor/get_tensor/graph_compute calls
+struct FrameworkTimingAccumulator {
+    double init_tensor_ms  = 0;
+    double set_tensor_ms   = 0;
+    double get_tensor_ms   = 0;
+    double graph_compute_ms = 0;
+    double gap_sync_to_gc_ms = 0;  // sync_exit → gc_entry
+    double gap_gc_to_sync_ms = 0;  // gc_exit → sync_entry
+    int    init_tensor_n   = 0;
+    int    set_tensor_n    = 0;
+    int    get_tensor_n    = 0;
+    int    graph_compute_n = 0;
+    int    sync_count      = 0;
+    std::chrono::high_resolution_clock::time_point last_sync_exit;
+    std::chrono::high_resolution_clock::time_point last_gc_exit;
+    bool   last_sync_valid = false;
+    bool   last_gc_valid   = false;
+    void reset() {
+        int sc = sync_count;
+        auto lse = last_sync_exit; bool lsv = last_sync_valid;
+        auto lge = last_gc_exit; bool lgv = last_gc_valid;
+        *this = {};
+        sync_count = sc; last_sync_exit = lse; last_sync_valid = lsv;
+        last_gc_exit = lge; last_gc_valid = lgv;
+    }
+};
+static thread_local FrameworkTimingAccumulator g_framework_timing;
 int         g_ggml_sycl_tp_debug         = 0;  // Tensor Parallelism debug output (GGML_SYCL_TP_DEBUG env var)
 int         g_ggml_sycl_tp_async_ffn     = 0;  // Async FFN pipelining (DISABLED - causes hangs)
 int         g_ggml_sycl_disable_graph    = 0;
@@ -139,6 +168,9 @@ int g_ggml_sycl_xmx_threshold = 1024;  // Max batch size for XMX (XMX faster for
 static std::atomic<int> g_ggml_sycl_unified_dispatch{-1};  // -1 = not initialized, 0 = disabled, 1 = enabled
 thread_local bool        g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 std::atomic<int>         g_ggml_sycl_graph_recording_depth{ 0 };
+static std::atomic<int>  g_sycl_barrier_count_during_recording{ 0 };  // DIAG: barrier counter during graph recording
+std::atomic<int>  g_sycl_submit_count_during_recording{ 0 };  // DIAG: operation dispatches during recording
+std::atomic<int>  g_sycl_extra_submit_count_during_recording{ 0 };  // DIAG: extra markers/events during recording
 static std::mutex        g_sycl_graph_compute_mutex;
 static std::atomic<int>  g_sycl_graph_inflight{ 0 };
 static std::atomic<bool> g_sycl_graph_multithreaded{ false };
@@ -315,16 +347,16 @@ static bool ggml_sycl_force_vram_enabled() {
     return val != 0;
 }
 
-// Check if unified kernel should use SoA layout for better memory bandwidth.
-// Unified kernel now supports both AoS and SoA layouts natively.
-// Set GGML_SYCL_UNIFIED_SOA=1 to enable SoA for 2-3x better decode performance.
+// SoA layout is ON by default for the unified kernel DMMV path (batch=1).
+// SoA reorders quantized weights so threads read contiguous memory → coalesced access → 2-3x decode speedup.
+// Set GGML_SYCL_UNIFIED_SOA=0 to force AoS layout (for debugging or if SoA causes issues).
 static bool ggml_sycl_unified_soa_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char * env = std::getenv("GGML_SYCL_UNIFIED_SOA");
-        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
-        if (enabled) {
-            fprintf(stderr, "[SYCL] Unified kernel SoA layout enabled (GGML_SYCL_UNIFIED_SOA=1)\n");
+        enabled = (env && std::atoi(env) == 0) ? 0 : 1;  // Default ON
+        if (!enabled) {
+            fprintf(stderr, "[SYCL] Unified kernel SoA layout DISABLED (GGML_SYCL_UNIFIED_SOA=0)\n");
         }
     }
     return enabled != 0;
@@ -2328,6 +2360,107 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     }
     return cached_ptr;
 }
+
+// Cold path for ggml_sycl_get_data_ptr: full resolution chain
+// (tiered cache, get_pointer_type, unified cache, staging).
+// Called only when the fast-path data_device[] cache misses.
+void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
+    if (tensor == nullptr) {
+        return nullptr;
+    }
+    const bool is_input_tensor = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
+    const bool tp_enabled      = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
+    if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
+        sycl::usm::alloc alloc      = sycl::usm::alloc::unknown;
+        void *           cached_ptr = ggml_sycl_get_cached_tensor_ptr_for(tensor, device, nullptr, nullptr, &alloc);
+        if (cached_ptr != nullptr) {
+            if (is_input_tensor && !tp_enabled && tensor->data) {
+                ggml_sycl_refresh_cached_input_ptr(cached_ptr, tensor->data, ggml_nbytes(tensor), device);
+            }
+            return cached_ptr;
+        }
+    }
+    if (tensor->extra != nullptr) {
+        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+        if (extra->data_device[device] != nullptr) {
+            if (is_input_tensor && !tp_enabled && tensor->data) {
+                ggml_sycl_refresh_cached_input_ptr(extra->data_device[device], tensor->data, ggml_nbytes(tensor), device);
+            }
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
+                            tensor->name, device, device, extra->data_device[device]);
+            return extra->data_device[device];
+        }
+    }
+
+    // Check if tensor->data is mmap'd memory (non-USM) that can't be accessed by GPU kernels.
+    if (tensor->data != nullptr) {
+        sycl::context   ctx_storage;
+        sycl::context * ctx = nullptr;
+        if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+            ctx = ggml_sycl_get_tp_context();
+        }
+        if (ctx == nullptr) {
+            try {
+                ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
+                ctx         = &ctx_storage;
+            } catch (...) {
+                ctx = nullptr;
+            }
+        }
+
+        if (ctx != nullptr) {
+            sycl::usm::alloc ptr_type = sycl::get_pointer_type(tensor->data, *ctx);
+
+            if (ptr_type == sycl::usm::alloc::device) {
+                if (tensor->extra != nullptr) {
+                    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+                    if (extra->data_device[device] == nullptr) {
+                        extra->data_device[device] = tensor->data;
+                    }
+                }
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
+                                tensor->name, device, tensor->data);
+                return tensor->data;
+            }
+
+            const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
+                                   ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+
+            if (ggml_sycl::unified_cache_enabled() && is_weight) {
+                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                    if (cache_key.valid) {
+                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
+                        if (cached) {
+                            GGML_SYCL_DEBUG(
+                                "ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, non-device fallback to cache=%p (type=%d)\n",
+                                tensor->name, device, cached, (int) ptr_type);
+                            return cached;
+                        }
+                    }
+                }
+            }
+
+            size_t nbytes = ggml_nbytes(tensor);
+            void * staged = ggml_sycl_get_staged_ptr_device(tensor->data, nbytes, device);
+            if (staged != nullptr) {
+                if (is_input_tensor && !tp_enabled) {
+                    std::memcpy(staged, tensor->data, nbytes);
+                }
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
+                                tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
+                return staged;
+            }
+            GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, staging FAILED for non-device (type=%d), using tensor->data=%p\n",
+                            tensor->name, device, (int) ptr_type, tensor->data);
+        }
+    }
+
+    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using tensor->data=%p\n", tensor->name, device,
+                    tensor->data);
+    return tensor->data;
+}
+
 static ggml_sycl_cache_id ggml_sycl_get_moe_expert_cache_key(const ggml_tensor * tensor, ggml_tensor_extra_gpu * extra, int expert_id) {
     ggml_sycl_cache_id id{};
     if (!extra || expert_id < 0) {
@@ -3000,6 +3133,7 @@ static void ggml_sycl_init_layout_info(ggml_tensor_extra_gpu * extra,
     tensor->layout            = &extra->layout;
 }
 static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) try {
+    auto t_init_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
@@ -3032,6 +3166,25 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
                 }
             }
         }
+        // Populate data_device for ALL view tensors to avoid sycl::get_pointer_type()
+        // driver round-trips (~0.7ms each) in get_data_ptr_slow during dispatch.
+        // All tensors in a SYCL buffer have device USM data pointers.
+        if (tensor->data != nullptr) {
+            ggml_tensor_extra_gpu * extra;
+            if (tensor->extra != nullptr) {
+                extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            } else {
+                extra = new ggml_tensor_extra_gpu{};
+                tensor->extra = extra;
+                ctx->tensor_extras.push_back({ tensor, extra });
+            }
+            if (extra->data_device[ctx->device] == nullptr) {
+                extra->data_device[ctx->device] = tensor->data;
+            }
+        }
+        g_framework_timing.init_tensor_ms += std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - t_init_start).count();
+        g_framework_timing.init_tensor_n++;
         return GGML_STATUS_SUCCESS;
     }
     // For TP compute buffers, set up extra->data_device[] for each TP device
@@ -3089,14 +3242,20 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
                         tensor->name, tensor->type, (void *) extra, (int) extra->optimized_feature.get_reorder(),
                         ctx->tensor_extras.size());
     }
-    // For non-quantized weight tensors that already have extra but no data_device set,
-    // populate data_device to avoid get_pointer_type() in dispatch.
-    if (tensor->extra != nullptr) {
-        auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-        if (extra->data_device[ctx->device] == nullptr && tensor->data != nullptr) {
-            if (!(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
-                extra->data_device[ctx->device] = tensor->data;
-            }
+    // Ensure ALL non-view tensors have extra->data_device populated for fast get_data_ptr.
+    // All tensors in a SYCL buffer have device USM pointers; caching avoids
+    // sycl::get_pointer_type() driver round-trips (~0.7ms each) in get_data_ptr_slow.
+    if (tensor->data != nullptr && !(ctx->is_tp_compute_buffer && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
+        ggml_tensor_extra_gpu * extra;
+        if (tensor->extra != nullptr) {
+            extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+        } else {
+            extra = new ggml_tensor_extra_gpu{};
+            tensor->extra = extra;
+            ctx->tensor_extras.push_back({ tensor, extra });
+        }
+        if (extra->data_device[ctx->device] == nullptr) {
+            extra->data_device[ctx->device] = tensor->data;
         }
     }
     if (ggml_is_quantized(tensor->type)) {
@@ -3109,6 +3268,9 @@ static enum ggml_status ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer
         }
     }
 
+    g_framework_timing.init_tensor_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_init_start).count();
+    g_framework_timing.init_tensor_n++;
     return GGML_STATUS_SUCCESS;
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -4981,6 +5143,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                 const void *          data,
                                                 size_t                offset,
                                                 size_t                size) try {
+    auto t_set_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     if (tensor->type == GGML_TYPE_MXFP4) {
         GGML_SYCL_DEBUG("[UPLOAD-DEBUG] MXFP4 tensor: %s size=%zu offset=%zu\n", tensor->name, size, offset);
@@ -5365,6 +5528,9 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                           (int) adjusted_layout, tensor->name ? tensor->name : "unknown");
         }
     }
+    g_framework_timing.set_tensor_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_set_start).count();
+    g_framework_timing.set_tensor_n++;
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -5449,6 +5615,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                 size_t                offset,
 
                                                 size_t                size) try {
+    auto t_get_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
@@ -5520,6 +5687,9 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
         sycl::queue & readback_q = stream;
         if (ggml_sycl_readback_via_shared_kernel(readback_q, src_ptr, data, size, "buffer_get_tensor_force_shared")) {
             GGML_LOG_INFO("[SYCL] buffer_get_tensor force-shared readback succeeded (%zu bytes)\n", size);
+            g_framework_timing.get_tensor_ms += std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - t_get_start).count();
+            g_framework_timing.get_tensor_n++;
             return;
         }
         GGML_LOG_ERROR("[SYCL] buffer_get_tensor force-shared readback failed (%zu bytes)\n", size);
@@ -5544,6 +5714,9 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                     ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
                     GGML_LOG_INFO("[SYCL] buffer_get_tensor fallback readback succeeded on in-order queue (%zu bytes)\n",
                                   size);
+                    g_framework_timing.get_tensor_ms += std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - t_get_start).count();
+                    g_framework_timing.get_tensor_n++;
                     return;
                 }
             } catch (const sycl::exception & fb_e) {
@@ -5556,6 +5729,9 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
             sycl::queue & readback_q = stream;
             if (ggml_sycl_readback_via_shared_kernel(readback_q, src_ptr, data, size, "buffer_get_tensor_shared_fallback")) {
                 GGML_LOG_INFO("[SYCL] buffer_get_tensor shared-kernel fallback succeeded (%zu bytes)\n", size);
+                g_framework_timing.get_tensor_ms += std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - t_get_start).count();
+                g_framework_timing.get_tensor_n++;
                 return;
             }
             GGML_LOG_ERROR("[SYCL] buffer_get_tensor shared-kernel fallback failed (%zu bytes)\n", size);
@@ -5564,6 +5740,9 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
         }
         throw;
     }
+    g_framework_timing.get_tensor_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_get_start).count();
+    g_framework_timing.get_tensor_n++;
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -9387,6 +9566,13 @@ ggml_backend_sycl_context::~ggml_backend_sycl_context() {
         }
     }
     moe_ids_cache.clear();
+
+    // Free persistent readback staging buffer
+    if (readback_staging) {
+        ggml_sycl_free_host_tracked_bytes(readback_staging, readback_staging_size, *stream());
+        readback_staging      = nullptr;
+        readback_staging_size = 0;
+    }
 }
 
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
@@ -19080,6 +19266,60 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     GGML_SYCL_DEBUG("[DEBUG-MULMAT] ENTER: src0=%s src1=%s dst=%s\n", src0->name ? src0->name : "(null)",
                     src1->name ? src1->name : "(null)", dst->name ? dst->name : "(null)");
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    // =====================================================================
+    // TG fast-path: batch=1, single-device, quantized -> MMVQ (same as master)
+    // Bypasses orchestrator, name parsing, prefetch, TP checks for maximum speed.
+    // With SOA layout enabled by default, MMVQ+SOA is ~30% faster than unified DMMV+SOA.
+    // The unified kernel still handles PP (M >= 64) via oneDNN FP16 -- unchanged.
+    // Set GGML_SYCL_TG_FAST=0 to disable and fall through to unified kernel.
+    // =====================================================================
+    {
+        const bool fast_split = ggml_backend_buffer_is_sycl_split(src0->buffer);
+        static const bool tg_fast_disabled = []() {
+            const char * env = std::getenv("GGML_SYCL_TG_FAST");
+            return env && std::atoi(env) == 0;
+        }();
+        if (!tg_fast_disabled && src1->ne[1] == 1 && !fast_split
+            && ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32
+            && dst->type == GGML_TYPE_F32
+            && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
+
+            ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+            const bool has_soa_reorder = extra && extra->optimized_feature.is_reordered()
+                                         && ggml_sycl_supports_reorder_mmvq(src0->type);
+            const layout_mode effective_layout = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
+
+            if (has_soa_reorder) {
+                // MMVQ with SOA reorder -- matches master's fast path
+                GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d)\n",
+                                src0->name ? src0->name : "?", src0->type, static_cast<int>(effective_layout));
+                ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(
+                    ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, effective_layout);
+                return;
+            } else if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
+                // MMVQ with AOS layout
+                GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+AOS for %s (type=%d)\n",
+                                src0->name ? src0->name : "?", src0->type);
+                ggml_sycl_op_mul_mat<quantize_q8_1>(
+                    ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, GGML_LAYOUT_AOS);
+                return;
+            } else {
+                // DMMV fallback for types not supported by MMVQ
+                const bool use_dmmv = ggml_sycl_supports_dmmv(src0->type)
+                                      && src0->ne[0] % GGML_SYCL_DMMV_X == 0;
+                if (use_dmmv) {
+                    GGML_SYCL_DEBUG("[TG-FAST] batch=1 DMMV for %s (type=%d)\n",
+                                    src0->name ? src0->name : "?", src0->type);
+                    ggml_sycl_op_mul_mat<no_quantize_q8_1>(
+                        ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec, GGML_LAYOUT_AOS);
+                    return;
+                }
+            }
+            // Neither MMVQ nor DMMV available: fall through to full dispatch
+        }
+    }
+
     auto is_kqv_matmul = [](const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * c) -> bool {
         if (c && c->name && std::strstr(c->name, "kqv") != nullptr) {
             return true;
@@ -19470,9 +19710,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             if (!force_legacy) {
             // IMPORTANT: unified kernel must use device-accessible pointers.
             // Using tensor->data directly can pass host/mmap pointers and yield NaNs.
-            // Choose layout: SoA for better memory bandwidth (GGML_SYCL_UNIFIED_SOA=1), else AoS.
-            // CRITICAL: Only use SoA for batch=1 (DMMV path). Larger batches use ESIMD/XMX
+            // SoA layout is default for batch=1 (DMMV path) — coalesced memory access.
+            // CRITICAL: Only use SoA for batch=1. Larger batches use ESIMD/XMX
             // which requires AoS layout. Using SoA with ESIMD causes crashes.
+            // Set GGML_SYCL_UNIFIED_SOA=0 to disable.
             const bool use_soa = ggml_sycl_unified_soa_enabled() && (M == 1);
             const layout_mode requested_layout = use_soa ? GGML_LAYOUT_SOA : GGML_LAYOUT_AOS;
             const char * src0_ptr_source = nullptr;
@@ -19481,29 +19722,44 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
             float * dst_data = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
+            // One-shot USM pointer type diagnostic (first 8 weight tensors)
+            {
+                static std::atomic<int> usm_diag_left{500};
+                int rem = usm_diag_left.fetch_sub(1);
+                if (rem > 0 && rem % 50 == 0) {  // Print every 50th call
+                    auto alloc_name = [](sycl::usm::alloc a) -> const char * {
+                        switch (a) {
+                            case sycl::usm::alloc::host:    return "HOST";
+                            case sycl::usm::alloc::device:  return "DEVICE";
+                            case sycl::usm::alloc::shared:  return "SHARED";
+                            default:                        return "UNKNOWN";
+                        }
+                    };
+                    if (src0_data) {
+                        auto sycl_queue = *(ctx.stream());
+                        auto sycl_context = sycl_queue.get_context();
+                        auto src0_alloc = sycl::get_pointer_type(src0_data, sycl_context);
+                        auto src1_alloc = src1_data ? sycl::get_pointer_type(src1_data, sycl_context) : sycl::usm::alloc::unknown;
+                        auto dst_alloc  = dst_data  ? sycl::get_pointer_type(dst_data, sycl_context)  : sycl::usm::alloc::unknown;
+                        fprintf(stderr, "[USM-DIAG] %s M=%ld: src0=%s(%s) src1=%s dst=%s\n",
+                            src0->name, (long)M,
+                            alloc_name(src0_alloc), src0_ptr_source ? src0_ptr_source : "?",
+                            alloc_name(src1_alloc), alloc_name(dst_alloc));
+                    } else {
+                        fprintf(stderr, "[USM-DIAG] %s M=%ld: src0=NULL(%s) src1=%p dst=%p\n",
+                            src0->name, (long)M,
+                            src0_ptr_source ? src0_ptr_source : "?",
+                            (void*)src1_data, (void*)dst_data);
+                    }
+                }
+            }
+
             if (!src0_data || !src1_data || !dst_data) {
                 GGML_SYCL_DEBUG(
                     "[UNIFIED] Skipping - null pointer(s): src0=%p (%s) src1=%p dst=%p\n",
                     src0_data, src0_ptr_source ? src0_ptr_source : "?", src1_data, dst_data);
                 // Fall through to legacy dispatch below
             } else {
-                    // Validate that pointers are device-accessible USM.
-                    const sycl::context & sycl_ctx = ctx.stream()->get_context();
-                    const sycl::usm::alloc src0_alloc = sycl::get_pointer_type(src0_data, sycl_ctx);
-                    const sycl::usm::alloc src1_alloc = sycl::get_pointer_type(src1_data, sycl_ctx);
-                    const sycl::usm::alloc dst_alloc  = sycl::get_pointer_type(dst_data,  sycl_ctx);
-
-                    const bool src0_ok = src0_alloc != sycl::usm::alloc::unknown;
-                    const bool src1_ok = src1_alloc != sycl::usm::alloc::unknown;
-                    const bool dst_ok  = dst_alloc  != sycl::usm::alloc::unknown;
-
-                    if (!src0_ok || !src1_ok || !dst_ok) {
-                        GGML_SYCL_DEBUG(
-                            "[UNIFIED] Skipping - non-USM pointer(s): src0=%p alloc=%d (%s) src1=%p alloc=%d dst=%p alloc=%d\n",
-                            src0_data, (int) src0_alloc, src0_ptr_source ? src0_ptr_source : "?",
-                            src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
-                        // Fall through to legacy dispatch below
-                    } else {
                         // =============================================================
                         // OneDNN FP16 Matmul Path: Use oneDNN's optimized FP16 matmul
                         // for large prompt processing batches.
@@ -19636,10 +19892,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         {
                         // Call unified dispatch
                         GGML_SYCL_DEBUG(
-                            "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d src0=%p(%s,%d) src1=%p(%d) dst=%p(%d)\n",
+                            "[UNIFIED] Dispatching via unified kernel: M=%lld K=%lld N=%lld type=%d layout=%d src0=%p(%s) src1=%p dst=%p\n",
                             (long long) M, (long long) K, (long long) N, src0->type, static_cast<int>(src0_layout),
-                            src0_data, src0_ptr_source ? src0_ptr_source : "?", (int) src0_alloc,
-                            src1_data, (int) src1_alloc, dst_data, (int) dst_alloc);
+                            src0_data, src0_ptr_source ? src0_ptr_source : "?",
+                            src1_data, dst_data);
 
                         // Convert layout_mode to LayoutMode enum for kernel
                         const auto kernel_layout = (requested_layout == GGML_LAYOUT_SOA)
@@ -19907,7 +20163,6 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         }
 
                         unified_dispatched = true;
-                    }
                 }
             }
             }  // end !force_legacy block
@@ -22862,6 +23117,7 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
                                                void *              data,
                                                size_t              offset,
                                                size_t              size) try {
+    auto t_gta_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
@@ -22870,265 +23126,30 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
     // Accept both regular SYCL buffer type and TP host compute buffer type
     GGML_ASSERT((buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
                  buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)) &&
-
                 "unsupported buffer type");
-    // Default readback queue is backend stream; optionally force buffer-owner queue for diagnostics.
-    const queue_ptr backend_stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    const auto *    buf_ctx        = (const ggml_backend_sycl_buffer_context *) buf->context;
-    const queue_ptr owner_stream   = buf_ctx ? buf_ctx->stream : nullptr;
-    static int      s_use_owner_queue = -1;
-    if (s_use_owner_queue < 0) {
-        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_USE_OWNER_QUEUE");
-        s_use_owner_queue = (env && std::atoi(env) != 0) ? 1 : 0;
-    }
-    const bool      use_owner_queue = (s_use_owner_queue != 0) && owner_stream != nullptr;
-    const queue_ptr stream          = use_owner_queue ? owner_stream : backend_stream;
-    std::vector<sycl::event> deps;
-    if (sycl_ctx->last_graph_event.has_value()) {
 
-        deps.push_back(*sycl_ctx->last_graph_event);
-    }
-    if (sycl_ctx->has_pending_barrier && sycl_ctx->barrier_event.has_value() &&
+    // Fast path: direct memcpy on the backend's in-order queue (matches master).
+    // In-order queues guarantee that the memcpy runs after all prior work (graph compute),
+    // so no barriers, event deps, or staging buffers are needed.
+    // This avoids 53ms of event::wait() overhead per token from the barrier-based path.
+    const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        stream->memcpy(data, (const char *) tensor->data + offset, size)));
 
-        !sycl_ctx->last_graph_event.has_value()) {
-        deps.push_back(*sycl_ctx->barrier_event);
-    }
-    if (g_ggml_sycl_debug) {
-        GGML_SYCL_DEBUG("[SYCL] get_tensor_async deps: device=%d deps=%zu last_graph_event=%d barrier=%d\n",
-                        sycl_ctx ? sycl_ctx->device : -1, deps.size(),
-                        sycl_ctx && sycl_ctx->last_graph_event.has_value() ? 1 : 0,
-                        (sycl_ctx && sycl_ctx->has_pending_barrier && sycl_ctx->barrier_event.has_value()) ? 1 : 0);
-
-    }
-    if (stream != backend_stream) {
-        // If we switched readback queue, wait backend stream directly and avoid cross-queue deps.
-        try {
-            backend_stream->wait_and_throw();
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] get_tensor_async backend pre-wait failed (%zu bytes): %s\n", size, e.what());
-            throw;
+    // DIAG: report get_tensor_async timing
+    {
+        static int s_gta_count = 0;
+        s_gta_count++;
+        if (s_gta_count % 50 == 0) {
+            double gta_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - t_gta_start).count();
+            fprintf(stderr, "[GTA-DIAG] call#%d get_tensor_async: %.2fms size=%zu tensor=%s\n",
+                    s_gta_count, gta_ms, size, tensor->name ? tensor->name : "(null)");
         }
-        deps.clear();
-    } else if (deps.empty() && !stream->has_property<sycl::property::queue::in_order>()) {
-        // Out-of-order queues need an explicit barrier to serialize prior work before memcpy.
-        deps.push_back(stream->ext_oneapi_submit_barrier());
-        if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[SYCL] get_tensor_async: inserted barrier for out-of-order queue\n");
-        }
-    }
-    const void *           src_ptr          = (const char *) tensor->data + offset;
-    const sycl::usm::alloc src_alloc_stream = sycl::get_pointer_type(src_ptr, stream->get_context());
-    const sycl::usm::alloc dst_alloc        = sycl::get_pointer_type(data, stream->get_context());
-    const bool             dst_is_device_usm = dst_alloc == sycl::usm::alloc::device;
-    const bool             dst_is_unknown_usm = dst_alloc == sycl::usm::alloc::unknown;
-    const sycl::usm::alloc src_alloc_default =
-        sycl::get_pointer_type(src_ptr, dpct::get_in_order_queue().get_context());
-    const sycl::usm::alloc dst_alloc_default =
-        sycl::get_pointer_type(data, dpct::get_in_order_queue().get_context());
-    static int s_get_tensor_trace = -1;
-    if (s_get_tensor_trace < 0) {
-        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_TRACE");
-        s_get_tensor_trace = (env && std::atoi(env) != 0) ? 1 : 0;
-    }
-    auto alloc_name = [](sycl::usm::alloc a) -> const char * {
-        switch (a) {
-            case sycl::usm::alloc::host:   return "host";
-            case sycl::usm::alloc::device: return "device";
-            case sycl::usm::alloc::shared: return "shared";
-            case sycl::usm::alloc::unknown:
-            default:                       return "unknown";
-        }
-    };
-    if (s_get_tensor_trace) {
-        const size_t tensor_nbytes = ggml_nbytes(tensor);
-        const char * buf_name      = (buf && buf->buft && buf->buft->iface.get_name)
-                                     ? buf->buft->iface.get_name(buf->buft)
-                                     : "(null)";
-        const bool stream_owner_match = owner_stream && backend_stream ? owner_stream == backend_stream : false;
-        const bool stream_ctx_match =
-            owner_stream && backend_stream ? (owner_stream->get_context() == backend_stream->get_context()) : false;
-        const bool stream_dev_match =
-            owner_stream && backend_stream ? (owner_stream->get_device() == backend_stream->get_device()) : false;
-        size_t free_mem = 0;
-        size_t total_mem = 0;
-        ggml_backend_sycl_get_device_memory(sycl_ctx->device, &free_mem, &total_mem);
-        std::string stream_dev_name = stream->get_device().get_info<sycl::info::device::name>();
-        std::string src_dev_name    = "(unknown)";
-        try {
-            src_dev_name = sycl::get_pointer_device(src_ptr, stream->get_context()).get_info<sycl::info::device::name>();
-        } catch (const sycl::exception &) {
-        }
-        const uintptr_t base = buf_ctx ? (uintptr_t) buf_ctx->dev_ptr : 0;
-        const uintptr_t end  = buf_ctx ? (base + buf_ctx->size_bytes) : 0;
-        const uintptr_t src_u = (uintptr_t) src_ptr;
-        const bool src_in_range = buf_ctx ? (src_u >= base && (src_u + size) <= end) : false;
-        GGML_LOG_INFO(
-            "[SYCL] get_tensor_async ptr types: tensor='%s' buffer='%s' nbytes=%zu offset=%zu req_size=%zu src(stream=%s,default=%s) dst(stream=%s,default=%s) src=%p dst=%p mem_free=%.1fMB mem_total=%.1fMB stream_dev='%s' src_dev='%s' qsel=%s owner_stream=%p backend_stream=%p owner==backend=%d ctx_match=%d dev_match=%d buf_base=%p buf_size=%zu src_in_range=%d\n",
-            tensor && tensor->name[0] ? tensor->name : "(unnamed)", buf_name, tensor_nbytes, offset, size,
-            alloc_name(src_alloc_stream), alloc_name(src_alloc_default), alloc_name(dst_alloc),
-            alloc_name(dst_alloc_default), src_ptr, data,
-            free_mem / (1024.0 * 1024.0), total_mem / (1024.0 * 1024.0), stream_dev_name.c_str(),
-            src_dev_name.c_str(),
-            use_owner_queue ? "owner" : "backend",
-            (void *) owner_stream, (void *) backend_stream,
-            stream_owner_match ? 1 : 0, stream_ctx_match ? 1 : 0, stream_dev_match ? 1 : 0,
-            buf_ctx ? buf_ctx->dev_ptr : nullptr, buf_ctx ? buf_ctx->size_bytes : 0, src_in_range ? 1 : 0);
-    }
-
-    static int s_get_tensor_probe = -1;
-    if (s_get_tensor_probe < 0) {
-        const char * env = std::getenv("GGML_SYCL_GET_TENSOR_PROBE");
-        s_get_tensor_probe = (env && std::atoi(env) != 0) ? 1 : 0;
-    }
-    static int s_force_shared_fallback = -1;
-    if (s_force_shared_fallback < 0) {
-        const char * env = std::getenv("GGML_SYCL_FORCE_SHARED_READBACK");
-        s_force_shared_fallback = (env && std::atoi(env) != 0) ? 1 : 0;
-    }
-    const bool force_shared_readback =
-        (s_force_shared_fallback != 0) ||
-        ggml_sycl_device_kernel_readback_enabled(sycl_ctx->device) ||
-        ggml_sycl_should_prefer_kernel_readback(sycl_ctx->device, tensor, size);
-
-    if (!dst_is_device_usm) {
-        if (force_shared_readback) {
-            if (!deps.empty()) {
-                try {
-                    sycl::event::wait(deps);
-                } catch (const sycl::exception & e) {
-                    GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared deps wait failed (%zu bytes): %s\n",
-                                   size, e.what());
-                }
-            }
-            try {
-                stream->wait_and_throw();
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared pre-wait failed (%zu bytes): %s\n",
-                               size, e.what());
-            }
-            sycl::queue & readback_q = *stream;
-            if (ggml_sycl_readback_via_shared_kernel(readback_q, (const char *) tensor->data + offset, data, size,
-                                                     "get_tensor_async_force_shared")) {
-                GGML_LOG_INFO("[SYCL] get_tensor_async force-shared readback succeeded (%zu bytes)\n", size);
-                return;
-            }
-            GGML_LOG_ERROR("[SYCL] get_tensor_async force-shared readback failed (%zu bytes)\n", size);
-        }
-        // Stage to USM host, then memcpy to caller buffer.
-        if (!deps.empty()) {
-            try {
-                sycl::event::wait(deps);
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async pre-copy deps wait failed (%zu bytes): %s\n",
-                               size, e.what());
-                throw;
-            }
-        }
-        try {
-            stream->wait_and_throw();
-        } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[SYCL] get_tensor_async pre-copy wait failed (%zu bytes): %s\n", size, e.what());
-            throw;
-        }
-        if (s_get_tensor_probe && tensor && std::strcmp(tensor->name, "result_output") == 0) {
-            constexpr size_t probe_nbytes = 16;
-            void * probe = ggml_sycl_malloc_host_tracked_bytes(probe_nbytes, *stream, "get_tensor_async_probe");
-            if (probe) {
-                auto run_probe = [&](const char * label, const void * ptr) {
-                    try {
-                        sycl::event pev = stream->memcpy(probe, ptr, probe_nbytes);
-                        pev.wait();
-                        GGML_LOG_INFO("[SYCL] get_tensor_async probe OK: %s ptr=%p bytes=%zu\n",
-                                      label, ptr, probe_nbytes);
-                    } catch (const sycl::exception & pe) {
-                        GGML_LOG_ERROR("[SYCL] get_tensor_async probe FAIL: %s ptr=%p bytes=%zu err=%s\n",
-                                       label, ptr, probe_nbytes, pe.what());
-                    }
-                };
-                run_probe("result_output", src_ptr);
-                if (tensor->src[0] && tensor->src[0]->data) {
-                    run_probe(tensor->src[0]->name[0] ? tensor->src[0]->name : "src0", tensor->src[0]->data);
-                }
-                if (tensor->src[1] && tensor->src[1]->data) {
-                    run_probe(tensor->src[1]->name[0] ? tensor->src[1]->name : "src1", tensor->src[1]->data);
-                }
-                ggml_sycl_free_host_tracked_bytes(probe, probe_nbytes, *stream);
-            } else {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async probe alloc failed (%zu bytes)\n", probe_nbytes);
-            }
-        }
-        void * staging = ggml_sycl_malloc_host_tracked_bytes(size, *stream, "get_tensor_async_staging");
-        if (!staging) {
-            GGML_LOG_ERROR("[SYCL] get_tensor_async staging alloc failed (%zu bytes)\n", size);
-            throw sycl::exception(sycl::make_error_code(sycl::errc::memory_allocation),
-                                  "get_tensor_async staging allocation failed");
-        }
-        try {
-            sycl::event ev;
-            try {
-                // Avoid submitting host-readback memcpy with event dependencies.
-                // Under some Level Zero conditions this submit form can fail with
-                // UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY even with ample free VRAM.
-                ev = stream->memcpy(staging, (const char *) tensor->data + offset, size);
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async staging memcpy submit failed (%zu bytes): %s\n", size, e.what());
-                ggml_sycl_enable_device_kernel_readback(sycl_ctx->device, "get_tensor_async memcpy submit", e.what());
-                ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
-                staging = nullptr;
-                const bool is_oom_submit = std::strstr(e.what(), "UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY") != nullptr;
-                sycl::queue & readback_q = *stream;
-                if (!is_oom_submit) {
-                    // Retry on in-order queue to separate queue-state vs pointer/context issues.
-                    void * fallback_staging =
-                        ggml_sycl_malloc_host_tracked_bytes(size, readback_q, "get_tensor_async_staging_fallback");
-                    if (fallback_staging) {
-                        try {
-                            sycl::event fb_ev = readback_q.memcpy(fallback_staging, (const char *) tensor->data + offset, size);
-                            fb_ev.wait();
-                            std::memcpy(data, fallback_staging, size);
-                            ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
-                            GGML_LOG_INFO("[SYCL] get_tensor_async fallback staged readback succeeded on in-order queue (%zu bytes)\n", size);
-                            return;
-                        } catch (const sycl::exception & fb_e) {
-                            GGML_LOG_ERROR("[SYCL] get_tensor_async fallback staged readback failed (%zu bytes): %s\n",
-                                           size, fb_e.what());
-                            ggml_sycl_free_host_tracked_bytes(fallback_staging, size, readback_q);
-                        }
-                    }
-                } else {
-                    GGML_LOG_INFO("[SYCL] get_tensor_async skipping retry memcpy after OOM submit failure\n");
-                }
-                if (ggml_sycl_readback_via_shared_kernel(readback_q, (const char *) tensor->data + offset, data, size,
-                                                         "get_tensor_async_shared_fallback")) {
-                    GGML_LOG_INFO("[SYCL] get_tensor_async shared-kernel fallback succeeded (%zu bytes)\n", size);
-                    return;
-                }
-                GGML_LOG_ERROR("[SYCL] get_tensor_async shared-kernel fallback failed (%zu bytes)\n", size);
-                throw;
-            }
-            try {
-                ev.wait();
-            } catch (const sycl::exception & e) {
-                GGML_LOG_ERROR("[SYCL] get_tensor_async staging memcpy wait failed (%zu bytes): %s\n", size, e.what());
-                throw;
-            }
-            std::memcpy(data, staging, size);
-            ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
-        } catch (...) {
-            if (staging) {
-                ggml_sycl_free_host_tracked_bytes(staging, size, *stream);
-            }
-            throw;
-        }
-    } else if (!deps.empty()) {
-        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size, deps)));
-    } else {
-        SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(data, (const char *) tensor->data + offset, size)));
     }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
-
 }
 static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst) try {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
@@ -23156,6 +23177,11 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggm
     std::exit(1);
 }
 static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
+    auto t_sync_entry = std::chrono::high_resolution_clock::now();
+    if (g_framework_timing.last_gc_valid) {
+        g_framework_timing.gap_gc_to_sync_ms += std::chrono::duration<double, std::milli>(
+            t_sync_entry - g_framework_timing.last_gc_exit).count();
+    }
 
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
@@ -23167,6 +23193,12 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
                         sycl_ctx->last_graph_event.has_value() ? 1 : 0,
                         (sycl_ctx->has_pending_barrier && sycl_ctx->barrier_event.has_value()) ? 1 : 0);
     }
+
+    // TG-DIAG: measure actual GPU execution time (how long we wait for GPU to finish)
+    static int sync_call_count = 0;
+    sync_call_count++;
+    auto t_sync_start = std::chrono::high_resolution_clock::now();
+
     std::unique_lock<std::mutex> graph_lock(g_sycl_graph_compute_mutex, std::defer_lock);
 
     if (ggml_sycl_graph_recording_active()) {
@@ -23174,6 +23206,33 @@ static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
 
     }
     stream->wait_and_throw();
+
+    double sync_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_sync_start).count();
+
+    // Framework timing: report per-token overhead breakdown
+    g_framework_timing.sync_count++;
+    if (g_framework_timing.sync_count % 50 == 0) {
+        int n = g_framework_timing.graph_compute_n > 0 ? g_framework_timing.graph_compute_n : 1;
+        double gc_per = g_framework_timing.graph_compute_ms / n;
+        double gap_s2g_per = g_framework_timing.gap_sync_to_gc_ms / n;
+        double gap_g2s_per = g_framework_timing.gap_gc_to_sync_ms / n;
+        double wait_per = sync_ms;  // single sync call duration (NOT averaged)
+        fprintf(stderr,
+            "[FW-TIMING] sync#%d (per tok) | gc: %.2fms | gc→sync: %.2fms | wait: %.2fms | sync→gc: %.2fms | "
+            "Σ: %.2fms | actual: ~%.1fms | init:%d set:%d get:%d\n",
+            g_framework_timing.sync_count,
+            gc_per, gap_g2s_per, wait_per, gap_s2g_per,
+            gc_per + gap_g2s_per + wait_per + gap_s2g_per,
+            1000.0 / 16.0,  // expected at current ~16 tok/s
+            g_framework_timing.init_tensor_n,
+            g_framework_timing.set_tensor_n,
+            g_framework_timing.get_tensor_n);
+        g_framework_timing.reset();
+    }
+    g_framework_timing.last_sync_exit = std::chrono::high_resolution_clock::now();
+    g_framework_timing.last_sync_valid = true;
+
     GGML_UNUSED(backend);
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -23954,6 +24013,21 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     };
     const bool do_nan_check = nan_check_enabled();
     GGML_SYCL_DEBUG("[DEBUG-IMPL] Starting node loop, n_nodes=%d\n", cgraph->n_nodes);
+    // One-shot graph histogram (first TG-sized graph only)
+    {
+        static std::atomic<int> hist_done{0};
+        if (cgraph->n_nodes > 100 && cgraph->n_nodes < 2000 && hist_done.exchange(1) == 0) {
+            std::unordered_map<int, int> op_counts;
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                if (cgraph->nodes[i]) op_counts[cgraph->nodes[i]->op]++;
+            }
+            fprintf(stderr, "[GRAPH-HIST] n_nodes=%d n_leafs=%d ops:\n", cgraph->n_nodes, cgraph->n_leafs);
+            for (auto & [op, count] : op_counts) {
+                fprintf(stderr, "  %-20s %d\n", ggml_op_name((ggml_op)op), count);
+            }
+            fflush(stderr);
+        }
+    }
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
         ggml_tensor * node = cgraph->nodes[i];
@@ -24271,7 +24345,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 #endif
+        if (g_ggml_sycl_graph_recording) {
+            g_sycl_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
+        }
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
+
         if (!ok) {
             GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
@@ -24608,6 +24686,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
     }
+
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
     static int end_pass_dbg = 0;
     if (end_pass_dbg++ < 0 && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
@@ -25303,57 +25382,64 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
 // When reusing an executable SYCL command graph, the usual per-op pointer refresh
 // paths are not executed. We must explicitly refresh dynamic input tensors (e.g. tokens)
 // on device before replaying the graph.
+//
+// Optimization: On first call, discover and cache the input tensor list (~5-10 tensors).
+// On subsequent calls, only refresh the cached list instead of scanning the full graph
+// (avoids iterating all n_nodes x GGML_MAX_SRC sources per token).
 static void graph_refresh_input_tensors(ggml_backend_sycl_context * ctx, const ggml_cgraph * cgraph) {
     if (!ctx || !cgraph || cgraph->n_nodes == 0) {
         return;
     }
-    std::unordered_set<const void *> refreshed_ptrs;
-    int                              refreshed_count = 0;
 
-    auto refresh_tensor = [&](const ggml_tensor * tensor) {
-        if (!tensor || !tensor->data) {
-            return;
+    // Use pre-cached input tensor list if available
+    if (ctx->input_tensors_cached && !ctx->cached_input_tensors.empty()) {
+        int refreshed_count = 0;
+        for (ggml_tensor * tensor : ctx->cached_input_tensors) {
+            if (!tensor || !tensor->data) continue;
+            void * resolved_ptr = ggml_sycl_get_data_ptr(tensor, ctx->device);
+            refreshed_count++;
+            if (g_ggml_sycl_debug) {
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed cached input %s -> %p\n",
+                                tensor->name ? tensor->name : "?", resolved_ptr);
+            }
         }
-        if (ggml_sycl_tensor_is_weight(tensor)) {
-            return;
+        if (g_ggml_sycl_debug && refreshed_count > 0) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed %d cached input tensors\n", refreshed_count);
         }
-        const bool is_input = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
-        if (!is_input) {
-            return;
-        }
+        return;
+    }
 
-        // Deduplicate by source data pointer; input tensors reuse the same storage.
-        if (!refreshed_ptrs.insert(tensor->data).second) {
-            return;
-        }
+    // First call: discover and cache input tensors
+    std::unordered_set<const void *> seen_ptrs;
+    ctx->cached_input_tensors.clear();
 
-        // Trigger the standard SYCL pointer path to refresh any cached/staged storage
-        // (tiered cache, extra->data_device, and pinned staging buffers).
+    auto discover_input = [&](ggml_tensor * tensor) {
+        if (!tensor || !tensor->data) return;
+        if (ggml_sycl_tensor_is_weight(tensor)) return;
+        if (!(tensor->flags & GGML_TENSOR_FLAG_INPUT)) return;
+        if (!seen_ptrs.insert(tensor->data).second) return;
+
+        ctx->cached_input_tensors.push_back(tensor);
         void * resolved_ptr = ggml_sycl_get_data_ptr(tensor, ctx->device);
-
-        refreshed_count++;
         if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed input tensor %s -> %p\n",
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] discovered input %s -> %p\n",
                             tensor->name ? tensor->name : "?", resolved_ptr);
         }
     };
 
     for (int i = 0; i < cgraph->n_leafs; ++i) {
-        refresh_tensor(cgraph->leafs[i]);
+        discover_input(cgraph->leafs[i]);
     }
     for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        if (!node) {
-            continue;
-        }
+        if (!cgraph->nodes[i]) continue;
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            refresh_tensor(node->src[j]);
+            discover_input(cgraph->nodes[i]->src[j]);
         }
     }
 
-    if (g_ggml_sycl_debug && refreshed_count > 0) {
-        GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed %d input tensors before graph replay\n", refreshed_count);
-    }
+    ctx->input_tensors_cached = true;
+    GGML_SYCL_DEBUG("[SYCL-GRAPH] cached %zu input tensors for future replays\n",
+                    ctx->cached_input_tensors.size());
 }
 
 static uint64_t ggml_sycl_graph_signature(const ggml_cgraph * cgraph) {
@@ -29390,6 +29476,11 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
 }
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    auto t_gc_start = std::chrono::high_resolution_clock::now();
+    if (g_framework_timing.last_sync_valid) {
+        g_framework_timing.gap_sync_to_gc_ms += std::chrono::duration<double, std::milli>(
+            t_gc_start - g_framework_timing.last_sync_exit).count();
+    }
     struct graph_inflight_guard {
         std::atomic<int> & counter;
         explicit graph_inflight_guard(std::atomic<int> & counter) : counter(counter) {}
@@ -29429,6 +29520,24 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
     } timing{timing_call_count};
 
+    // TG-DIAG: measure total graph_compute time (entry to return) via RAII
+    auto t_graph_compute_entry = std::chrono::high_resolution_clock::now();
+    static int gc_diag_count = 0;
+    gc_diag_count++;
+    struct GCTimingGuard {
+        int    call_num;
+        std::chrono::high_resolution_clock::time_point start;
+        double refresh_ms = 0;
+        ~GCTimingGuard() {
+            if (g_ggml_sycl_debug && call_num % 50 == 0) {
+                double total_ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - start).count();
+                GGML_SYCL_DEBUG("[TG-DIAG] graph_compute #%d: total=%.2fms refresh=%.2fms\n",
+                                call_num, total_ms, refresh_ms);
+            }
+        }
+    } gc_timing{gc_diag_count, t_graph_compute_entry};
+
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Creating lambda...\n");
 
     auto record_completion = [&](bool graph_executed_now) {
@@ -29461,7 +29570,25 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
     // Check persistent TG eligibility BEFORE finalize_layouts to skip the
     // O(n_nodes) graph scans when persistent TG handles its own pointer resolution.
-    const bool persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
+    // Cache the result (3x O(n) scans avoided on steady-state TG).
+    bool persistent_eligible;
+    bool cached_is_decode = false;
+    if (sycl_ctx->cached_persistent_n_nodes == cgraph->n_nodes) {
+        persistent_eligible = sycl_ctx->cached_persistent_result;
+        cached_is_decode = sycl_ctx->cached_is_decode_phase;
+    } else {
+        persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
+        // Phase detection: find first MUL_MAT and check ne[1]
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT && cgraph->nodes[i]->src[1]) {
+                cached_is_decode = (cgraph->nodes[i]->src[1]->ne[1] == 1);
+                break;
+            }
+        }
+        sycl_ctx->cached_persistent_n_nodes = cgraph->n_nodes;
+        sycl_ctx->cached_persistent_result  = persistent_eligible;
+        sycl_ctx->cached_is_decode_phase    = cached_is_decode;
+    }
 
     // Skip finalize_layouts when layouts are stable (no dirty weights, no epoch change).
     // This applies to ALL dispatch modes, not just persistent TG.
@@ -29646,9 +29773,17 @@ normal_dispatch:
 
     }
     if (use_sycl_graph) {
-        GGML_SYCL_DEBUG("[DEBUG] About to call ggml_sycl_graph_signature cgraph=%p\n", (void *) cgraph);
-        const uint64_t graph_hash = ggml_sycl_graph_signature(cgraph);
-        GGML_SYCL_DEBUG("[DEBUG] ggml_sycl_graph_signature returned hash=%lu\n", graph_hash);
+        // Cache graph hash (saves ~41K FNV-1a hash mix ops per token)
+        uint64_t graph_hash;
+        if (sycl_ctx->cached_graph_sig_n_nodes == cgraph->n_nodes && sycl_ctx->exec_graph) {
+            graph_hash = sycl_ctx->cached_graph_sig;
+        } else {
+            GGML_SYCL_DEBUG("[DEBUG] About to call ggml_sycl_graph_signature cgraph=%p\n", (void *) cgraph);
+            graph_hash = ggml_sycl_graph_signature(cgraph);
+            sycl_ctx->cached_graph_sig = graph_hash;
+            sycl_ctx->cached_graph_sig_n_nodes = cgraph->n_nodes;
+        }
+        GGML_SYCL_DEBUG("[DEBUG] graph_hash=%lu\n", graph_hash);
         GGML_SYCL_DEBUG("[DEBUG] Checking graph support for device %d...\n", sycl_ctx->device);
         const bool graph_support = ggml_sycl_get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         GGML_SYCL_DEBUG("[DEBUG] graph_support=%d\n", graph_support ? 1 : 0);
@@ -29659,33 +29794,10 @@ normal_dispatch:
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
-        // Check if we're in decode phase (ne[1]==1 for MUL_MAT activations).
-        // IMPORTANT: Skip SYCL graphs entirely during prompt phase because:
-        // 1. Prompt phase uses non-reordered kernels
-        // 2. Pre-reorder would corrupt prompt computation
-        // 3. Decode phase uses reordered kernels after first decode reorders tensors
-        GGML_SYCL_DEBUG("[DEBUG] Checking decode/prompt phase...\n");
-        bool is_decode_phase = false;
-        bool is_prompt_phase = false;
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            GGML_SYCL_DEBUG("[DEBUG] Node %d: %p op=%d\n", i, (void *) cgraph->nodes[i],
-                            cgraph->nodes[i] ? cgraph->nodes[i]->op : -1);
-            if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT) {
-                GGML_SYCL_DEBUG("[DEBUG] Found MUL_MAT at node %d, checking src...\n", i);
-                GGML_SYCL_DEBUG("[DEBUG] src ptr array: %p\n", (void *) cgraph->nodes[i]->src);
-                GGML_SYCL_DEBUG("[DEBUG] src[0]=%p src[1]=%p\n", (void *) cgraph->nodes[i]->src[0],
-                                (void *) cgraph->nodes[i]->src[1]);
-                const ggml_tensor * src1 = cgraph->nodes[i]->src[1];
-                if (src1) {
-                    if (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1) {
-                        is_decode_phase = true;
-                    } else {
-                        is_prompt_phase = true;
-                    }
-                }
-                break;  // Only need to check first MUL_MAT
-            }
-        }
+        // Use cached phase detection result from persistent_eligible check above.
+        // This avoids an O(n_nodes) scan per token during steady-state TG.
+        bool is_decode_phase = cached_is_decode;
+        bool is_prompt_phase = !cached_is_decode && cgraph->n_nodes > 0;
 
         timing.compat_ms = std::chrono::duration<double, std::milli>(
             std::chrono::high_resolution_clock::now() - t_compat_start).count();
@@ -29810,6 +29922,11 @@ normal_dispatch:
                 sycl_ctx->exec_graph.reset();
                 sycl_ctx->exec_graph_n_nodes = 0;
                 sycl_ctx->exec_graph_hash    = 0;
+                // Invalidate cached per-graph computations
+                sycl_ctx->cached_persistent_n_nodes = -1;
+                sycl_ctx->cached_graph_sig_n_nodes  = -1;
+                sycl_ctx->input_tensors_cached      = false;
+                sycl_ctx->cached_input_tensors.clear();
                 // Unpin expert cache slots when graph is invalidated
                 // This allows slots to be evicted for the new graph recording
                 graph_unpin_moe_experts(sycl_ctx);
@@ -29898,6 +30015,11 @@ normal_dispatch:
                 sycl_ctx->exec_graph_hash     = 0;
                 sycl_ctx->fa_graph_ptrs_valid = false;
                 sycl_ctx->fa_graph_ptrs.clear();
+                // Invalidate cached per-graph computations
+                sycl_ctx->cached_persistent_n_nodes = -1;
+                sycl_ctx->cached_graph_sig_n_nodes  = -1;
+                sycl_ctx->input_tensors_cached      = false;
+                sycl_ctx->cached_input_tensors.clear();
                 graph_unpin_moe_experts(sycl_ctx);
                 graph_unpin_weights(sycl_ctx);
             }
@@ -29920,13 +30042,59 @@ normal_dispatch:
                             cgraph->n_nodes, is_decode_phase ? "decode" : "prompt");
         }
 
-        // If we already have an executable graph with matching structure, just execute it.
-        // Kernel arguments are captured by value, so pointers must remain stable across replays.
-        // We don't need to re-record because the kernel arguments (buffer pointers)
-        // are captured by reference in SYCL kernels, so updates happen automatically.
-        if (sycl_ctx->exec_graph) {
+        // Re-record strategy (like master): re-record every call + update executable graph.
+        // Enable with GGML_SYCL_GRAPH_RERECORD=1 to test if stale recording causes perf issues.
+        static bool rerecord_mode = (getenv("GGML_SYCL_GRAPH_RERECORD") != nullptr);
+
+        if (sycl_ctx->exec_graph && rerecord_mode) {
+            // Re-record + update: matches master's strategy (re-record every call)
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record + update...\n");
+            try {
+                sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()),
+                    { sycl_ex::property::graph::assume_buffer_outlives_graph{} });
+
+                // Pre-stage leaf tensors (ensures input data is on device before recording)
+                graph_prestage_leaf_tensors(sycl_ctx, cgraph);
+
+                g_ggml_sycl_graph_recording_depth.fetch_add(1, std::memory_order_acq_rel);
+                g_ggml_sycl_graph_recording = true;
+                model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
+                timed_compute_impl();
+                model_sycl_graph.end_recording();
+                g_ggml_sycl_graph_recording = false;
+                g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
+
+                // Update existing executable graph with fresh recording
+                sycl_ctx->exec_graph->update(model_sycl_graph);
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
+
+                graph_executed = true;
+                {
+                    auto t_replay = std::chrono::high_resolution_clock::now();
+                    sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+                    timing.replay_ms = std::chrono::duration<double, std::milli>(
+                        std::chrono::high_resolution_clock::now() - t_replay).count();
+                }
+            } catch (const sycl::exception & exc) {
+                g_ggml_sycl_graph_recording = false;
+                g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
+                GGML_LOG_ERROR("[SYCL-GRAPH] re-record+update failed: %s, re-finalizing\n", exc.what());
+                // Invalidate and force re-record on next call
+                sycl_ctx->exec_graph.reset();
+                sycl_ctx->exec_graph_n_nodes = 0;
+                sycl_ctx->exec_graph_hash = 0;
+                timed_compute_impl();
+            }
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record+update done\n");
+        } else if (sycl_ctx->exec_graph) {
+            // Default: replay cached graph (branch's original strategy)
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute existing graph...\n");
-            graph_refresh_input_tensors(sycl_ctx, cgraph);
+            {
+                auto t_refresh = std::chrono::high_resolution_clock::now();
+                graph_refresh_input_tensors(sycl_ctx, cgraph);
+                gc_timing.refresh_ms = std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - t_refresh).count();
+            }
             graph_executed = true;
             {
                 auto t_replay = std::chrono::high_resolution_clock::now();
@@ -29969,19 +30137,29 @@ normal_dispatch:
                 sycl_ctx->fa_graph_ptrs_recording = true;
                 sycl_ctx->fa_graph_ptrs_valid     = false;
                 g_ggml_sycl_graph_recording_depth.fetch_add(1, std::memory_order_acq_rel);
+                g_sycl_barrier_count_during_recording.store(0);
+                g_sycl_submit_count_during_recording.store(0);
+                g_sycl_extra_submit_count_during_recording.store(0);
                 g_ggml_sycl_graph_recording = true;  // Mark recording state
                 model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] calling compute_impl...\n");
                 timed_compute_impl();
                 GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] end_recording...\n");
                 model_sycl_graph.end_recording();
+                fprintf(stderr, "[GRAPH-DIAG] barriers: %d  ops_dispatched: %d  extra_submits: %d  nodes: %d\n",
+                        g_sycl_barrier_count_during_recording.load(),
+                        g_sycl_submit_count_during_recording.load(),
+                        g_sycl_extra_submit_count_during_recording.load(),
+                        cgraph->n_nodes);
                 sycl_ctx->fa_graph_ptrs_recording = false;
                 sycl_ctx->fa_graph_ptrs_valid     = true;
                 g_ggml_sycl_graph_recording       = false;  // Clear recording state
 
                 g_ggml_sycl_graph_recording_depth.fetch_sub(1, std::memory_order_acq_rel);
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] finalize (new graph)...\n");
-                auto exec_graph = model_sycl_graph.finalize();
+                auto exec_graph = rerecord_mode
+                    ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{})
+                    : model_sycl_graph.finalize();
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] finalize done, creating unique_ptr...\n");
                 sycl_ctx->exec_graph =
                     std::make_unique<sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
@@ -30010,6 +30188,11 @@ normal_dispatch:
                 sycl_ctx->graphs_disabled = true;
 
                 sycl_ctx->exec_graph.reset();
+                // Invalidate cached per-graph computations
+                sycl_ctx->cached_persistent_n_nodes = -1;
+                sycl_ctx->cached_graph_sig_n_nodes  = -1;
+                sycl_ctx->input_tensors_cached      = false;
+                sycl_ctx->cached_input_tensors.clear();
                 timed_compute_impl();
                 record_completion(false);
 
@@ -30025,6 +30208,11 @@ normal_dispatch:
     }
     record_completion(graph_executed);
 
+    g_framework_timing.graph_compute_ms += std::chrono::duration<double, std::milli>(
+        std::chrono::high_resolution_clock::now() - t_gc_start).count();
+    g_framework_timing.graph_compute_n++;
+    g_framework_timing.last_gc_exit = std::chrono::high_resolution_clock::now();
+    g_framework_timing.last_gc_valid = true;
     return GGML_STATUS_SUCCESS;
 }
 static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) try {
