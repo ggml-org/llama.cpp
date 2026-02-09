@@ -458,8 +458,8 @@ static void ggml_gemv_q5_K_NxM_q8_K_generic_impl(int                        n,
                                                  const void * GGML_RESTRICT vy,
                                                  int                        nr,
                                                  int                        nc) {
-    constexpr int         ncols_interleaved = N;
     constexpr int         blocklen          = M;
+    constexpr int         ncols_interleaved = N;
     const int             qk                = QK_K;
     const int             nb                = n / qk;
     static const uint32_t kmask1            = 0x3f3f3f3f;
@@ -545,7 +545,7 @@ static void ggml_gemv_q5_K_NxM_q8_K_generic_impl(int                        n,
     }
 }
 
-template <int N, int M>
+template <int M, int N>
 static void ggml_gemm_q5_K_NxM_q8_K_generic_impl(int                        n,
                                                  float * GGML_RESTRICT      s,
                                                  size_t                     bs,
@@ -553,8 +553,8 @@ static void ggml_gemm_q5_K_NxM_q8_K_generic_impl(int                        n,
                                                  const void * GGML_RESTRICT vy,
                                                  int                        nr,
                                                  int                        nc) {
-    constexpr int         ncols_interleaved = N;
     constexpr int         blocklen          = M;
+    constexpr int         ncols_interleaved = N;
     const int             qk                = QK_K;
     const int             nb                = n / qk;
     static const uint32_t kmask1            = 0x3f3f3f3f;
@@ -1004,7 +1004,7 @@ void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 }
 
 void ggml_gemv_q5_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    ggml_gemv_q5_K_NxM_q8_K_generic_impl<8, 4>(n, s, bs, vx, vy, nr, nc);
+    ggml_gemv_q5_K_NxM_q8_K_generic_impl<4, 8>(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemv_q5_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
@@ -1609,7 +1609,7 @@ void ggml_gemm_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 }
 
 void ggml_gemm_q5_K_8x4_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    ggml_gemm_q5_K_NxM_q8_K_generic_impl<8, 4>(n, s, bs, vx, vy, nr, nc);
+    ggml_gemm_q5_K_NxM_q8_K_generic_impl<4, 8>(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_q5_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
