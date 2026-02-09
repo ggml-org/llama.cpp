@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Cable, ExternalLink, Globe, Zap, Radio } from '@lucide/svelte';
+	import { Cable, ExternalLink } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
 	import { MCPTransportType } from '$lib/enums';
+	import { MCP_TRANSPORT_LABELS, MCP_TRANSPORT_ICONS } from '$lib/constants/mcp';
 	import { Badge } from '$lib/components/ui/badge';
 	import { McpCapabilitiesBadges } from '$lib/components/app/mcp';
 
@@ -27,21 +28,6 @@
 		capabilities,
 		transportType
 	}: Props = $props();
-
-	const transportLabels: Record<MCPTransportType, string> = {
-		[MCPTransportType.WEBSOCKET]: 'WebSocket',
-		[MCPTransportType.STREAMABLE_HTTP]: 'HTTP',
-		[MCPTransportType.SSE]: 'SSE'
-	};
-
-	const transportIcons: Record<
-		MCPTransportType,
-		typeof Cable | typeof Zap | typeof Globe | typeof Radio
-	> = {
-		[MCPTransportType.WEBSOCKET]: Zap,
-		[MCPTransportType.STREAMABLE_HTTP]: Globe,
-		[MCPTransportType.SSE]: Radio
-	};
 </script>
 
 <div class="space-y-3">
@@ -87,13 +73,13 @@
 			{#if capabilities || transportType}
 				<div class="flex flex-wrap items-center gap-1">
 					{#if transportType}
-						{@const TransportIcon = transportIcons[transportType]}
+						{@const TransportIcon = MCP_TRANSPORT_ICONS[transportType]}
 						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
 							{#if TransportIcon}
 								<TransportIcon class="h-3 w-3" />
 							{/if}
 
-							{transportLabels[transportType] || transportType}
+							{MCP_TRANSPORT_LABELS[transportType] || transportType}
 						</Badge>
 					{/if}
 

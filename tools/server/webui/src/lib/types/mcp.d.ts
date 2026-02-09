@@ -11,6 +11,7 @@ import type {
 	PromptMessage,
 	Transport
 } from '@modelcontextprotocol/sdk';
+import type { MimeTypeUnion } from './common';
 
 export type { Tool, CallToolResult, Prompt, GetPromptResult, PromptMessage };
 export type ClientCapabilities = SDKClientCapabilities;
@@ -37,7 +38,7 @@ export interface MCPServerInfo {
 	title?: string;
 	description?: string;
 	websiteUrl?: string;
-	icons?: Array<{ src: string; mimeType?: string; sizes?: string[] }>;
+	icons?: Array<{ src: string; mimeType?: MimeTypeUnion; sizes?: string[] }>;
 }
 
 /**
@@ -281,7 +282,7 @@ export interface MCPResourceAnnotations {
  */
 export interface MCPResourceIcon {
 	src: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	sizes?: string[];
 	theme?: 'light' | 'dark';
 }
@@ -294,7 +295,7 @@ export interface MCPResource {
 	name: string;
 	title?: string;
 	description?: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	annotations?: MCPResourceAnnotations;
 	icons?: MCPResourceIcon[];
 	_meta?: Record<string, unknown>;
@@ -308,7 +309,7 @@ export interface MCPResourceTemplate {
 	name: string;
 	title?: string;
 	description?: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	annotations?: MCPResourceAnnotations;
 	icons?: MCPResourceIcon[];
 	_meta?: Record<string, unknown>;
@@ -319,7 +320,7 @@ export interface MCPResourceTemplate {
  */
 export interface MCPTextResourceContent {
 	uri: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	text: string;
 }
 
@@ -328,7 +329,7 @@ export interface MCPTextResourceContent {
  */
 export interface MCPBlobResourceContent {
 	uri: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	/** Base64-encoded binary data */
 	blob: string;
 }
@@ -354,7 +355,7 @@ export interface MCPResourceInfo {
 	name: string;
 	title?: string;
 	description?: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	serverName: string;
 	annotations?: MCPResourceAnnotations;
 	icons?: MCPResourceIcon[];
@@ -368,7 +369,7 @@ export interface MCPResourceTemplateInfo {
 	name: string;
 	title?: string;
 	description?: string;
-	mimeType?: string;
+	mimeType?: MimeTypeUnion;
 	serverName: string;
 	annotations?: MCPResourceAnnotations;
 	icons?: MCPResourceIcon[];

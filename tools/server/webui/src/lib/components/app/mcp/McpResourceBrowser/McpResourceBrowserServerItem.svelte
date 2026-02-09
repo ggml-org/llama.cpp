@@ -10,10 +10,9 @@
 		type ResourceTreeNode,
 		buildResourceTree,
 		countTreeResources,
-		getDisplayName,
-		getResourceIcon,
 		sortTreeChildren
 	} from './mcp-resource-browser';
+	import { getDisplayName, getResourceIcon } from '$lib/utils';
 
 	interface Props {
 		serverName: string;
@@ -93,7 +92,7 @@
 		</Collapsible.Root>
 	{:else if node.resource}
 		{@const resource = node.resource}
-		{@const ResourceIcon = getResourceIcon(resource)}
+		{@const ResourceIcon = getResourceIcon(resource.mimeType, resource.uri)}
 		{@const isSelected = isResourceSelected(resource)}
 		{@const resourceDisplayName = resource.title || getDisplayName(node.name)}
 

@@ -7,6 +7,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpResources, mcpTotalResourceCount } from '$lib/stores/mcp-resources.svelte';
 	import { McpResourceBrowser, McpResourcePreview } from '$lib/components/app';
+	import { getResourceDisplayName } from '$lib/utils';
 	import type { MCPResourceInfo } from '$lib/types';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -88,20 +89,7 @@
 		lastSelectedUri = resource.uri;
 	}
 
-	function getResourceDisplayName(resource: MCPResourceInfo): string {
-		// Extract the display name from the resource URI (last path segment)
-		try {
-			const uriWithoutProtocol = resource.uri.replace(/^[a-z]+:\/\//, '');
-			const parts = uriWithoutProtocol.split('/');
-			return parts[parts.length - 1] || resource.name || resource.uri;
-		} catch {
-			return resource.name || resource.uri;
-		}
-	}
-
 	function getAllResourcesFlatInTreeOrder(): MCPResourceInfo[] {
-		// Get resources in the same order as displayed in McpResourceBrowser tree
-		// Sort by: folders first (if applicable), then alphabetically by display name
 		const allResources: MCPResourceInfo[] = [];
 		const resourcesMap = mcpResources();
 
@@ -111,17 +99,11 @@
 			}
 		}
 
-		// Sort to match tree display order: folders first, then alphabetically
 		return allResources.sort((a, b) => {
 			const aName = getResourceDisplayName(a);
 			const bName = getResourceDisplayName(b);
 			return aName.localeCompare(bName);
 		});
-	}
-
-	function getAllResourcesFlat(): MCPResourceInfo[] {
-		// Fallback for other uses (like attaching)
-		return getAllResourcesFlatInTreeOrder();
 	}
 
 	async function handleAttach() {
@@ -130,7 +112,7 @@
 		isAttaching = true;
 
 		try {
-			const allResources = getAllResourcesFlat();
+			const allResources = getAllResourcesFlatInTreeOrder();
 			const resourcesToAttach = allResources.filter((r) => selectedResources.has(r.uri));
 
 			for (const resource of resourcesToAttach) {
@@ -185,7 +167,7 @@
 
 			<div class="min-w-0 flex-1 overflow-auto p-4">
 				{#if selectedResources.size === 1}
-					{@const allResources = getAllResourcesFlat()}
+					{@const allResources = getAllResourcesFlatInTreeOrder()}
 					{@const selectedResource = allResources.find((r) => selectedResources.has(r.uri))}
 
 					<McpResourcePreview resource={selectedResource ?? null} />

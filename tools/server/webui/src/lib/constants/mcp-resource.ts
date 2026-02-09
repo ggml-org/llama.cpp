@@ -18,7 +18,7 @@ export const FILE_EXTENSION_REGEX = /\.[^.]+$/;
  */
 export const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
 	[MimeTypeImage.JPEG]: 'jpg',
-	'image/jpg': 'jpg',
+	[MimeTypeImage.JPG]: 'jpg',
 	[MimeTypeImage.PNG]: 'png',
 	[MimeTypeImage.GIF]: 'gif',
 	[MimeTypeImage.WEBP]: 'webp'

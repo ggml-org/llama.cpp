@@ -162,7 +162,7 @@
 		selectorModelRef?.open();
 	}
 
-	let showMcpDialog = $state(false);
+	let showChatSettingsDialogWithMcpSection = $state(false);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -189,10 +189,13 @@
 			{onSystemPromptClick}
 			{onMcpPromptClick}
 			{onMcpResourcesClick}
-			onMcpSettingsClick={() => (showMcpDialog = true)}
+			onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 		/>
 
-		<McpServersSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
+		<McpServersSelector
+			{disabled}
+			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+		/>
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
@@ -232,7 +235,7 @@
 </div>
 
 <DialogChatSettings
-	open={showMcpDialog}
-	onOpenChange={(open) => (showMcpDialog = open)}
+	open={showChatSettingsDialogWithMcpSection}
+	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
 	initialSection={SETTINGS_SECTION_TITLES.MCP}
 />

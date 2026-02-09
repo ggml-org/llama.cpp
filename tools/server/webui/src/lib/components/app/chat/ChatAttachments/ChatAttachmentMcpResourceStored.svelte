@@ -1,14 +1,8 @@
 <script lang="ts">
-	import { FileText, Database, Image, Code, File } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { getResourceIcon } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
-	import {
-		IMAGE_FILE_EXTENSION_REGEX,
-		CODE_FILE_EXTENSION_REGEX,
-		TEXT_FILE_EXTENSION_REGEX
-	} from '$lib/constants/mcp-resource';
-	import { MimeTypePrefix, MimeTypeIncludes, UriPattern } from '$lib/enums';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ActionIconRemove } from '$lib/components/app';
 
@@ -21,34 +15,6 @@
 	}
 
 	let { extra, readonly = true, onRemove, onClick, class: className }: Props = $props();
-
-	function getResourceIcon(mimeType?: string, uri?: string) {
-		const mime = mimeType?.toLowerCase() || '';
-		const u = uri?.toLowerCase() || '';
-
-		if (mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
-			return Image;
-		}
-
-		if (
-			mime.includes(MimeTypeIncludes.JSON) ||
-			mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-			mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
-			CODE_FILE_EXTENSION_REGEX.test(u)
-		) {
-			return Code;
-		}
-
-		if (mime.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
-			return FileText;
-		}
-
-		if (u.includes(UriPattern.DATABASE_KEYWORD) || u.includes(UriPattern.DATABASE_SCHEME)) {
-			return Database;
-		}
-
-		return File;
-	}
 
 	const ResourceIcon = $derived(getResourceIcon(extra.mimeType, extra.uri));
 	const serverName = $derived(mcpStore.getServerDisplayName(extra.serverName));
