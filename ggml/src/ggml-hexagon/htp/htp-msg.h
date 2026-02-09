@@ -64,6 +64,10 @@ enum htp_op {
     HTP_OP_SCALE          = 16,
     HTP_OP_GET_ROWS       = 17,
     HTP_OP_CPY            = 18,
+    HTP_OP_ARGSORT        = 19,
+    HTP_OP_SQR            = 20,
+    HTP_OP_SQRT           = 21,
+    HTP_OP_SUM_ROWS       = 22,
     INVALID
 };
 
@@ -99,22 +103,6 @@ static inline size_t htp_type_nbytes(uint32_t t) {
             return sizeof(block_mxfp4);
         default:
             assert(0 && "unsupported HTP data type");
-    }
-    return 0;
-}
-
-static const char * htp_type_name(uint32_t t) {
-    switch (t) {
-        case HTP_TYPE_F32:
-            return "fp32";
-        case HTP_TYPE_F16:
-            return "fp16";
-        case HTP_TYPE_Q4_0:
-            return "q4_0";
-        case HTP_TYPE_Q8_0:
-            return "q8_0";
-        case HTP_TYPE_MXFP4:
-            return "mxfp4";
     }
     return 0;
 }

@@ -443,6 +443,68 @@ static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
+//
+// Square
+//
+
+#define hvx_sqr_loop_body(dst_type, src_type, vec_store)           \
+    do {                                                                   \
+        dst_type * restrict vdst  = (dst_type *) dst;                      \
+        src_type * restrict vsrc = (src_type *) src;                       \
+                                                                           \
+        const uint32_t elem_size = sizeof(float);                          \
+        const uint32_t epv  = 128 / elem_size;                             \
+        const uint32_t nvec = n / epv;                                     \
+        const uint32_t nloe = n % epv;                                     \
+                                                                           \
+        uint32_t i = 0;                                                    \
+                                                                           \
+        _Pragma("unroll(4)")                                               \
+        for (; i < nvec; i++) {                                            \
+            vdst[i] = HVX_OP_MUL(vsrc[i], vsrc[i]);                        \
+        }                                                                  \
+        if (nloe) {                                                        \
+            HVX_Vector v = HVX_OP_MUL(vsrc[i], vsrc[i]);                   \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);             \
+        }                                                                  \
+    } while(0)
+
+static inline void hvx_sqr_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    hvx_sqr_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_sqr_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f32(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) {
+    if (hex_is_aligned((void *) dst, 128)) {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f32_aa(dst, src, num_elems);
+        } else {
+            hvx_sqr_f32_au(dst, src, num_elems);
+        }
+    } else {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f32_ua(dst, src, num_elems);
+        } else {
+            hvx_sqr_f32_uu(dst, src, num_elems);
+        }
+    }
+}
+
 #undef HVX_OP_ADD
 #undef HVX_OP_SUB
 #undef HVX_OP_MUL
