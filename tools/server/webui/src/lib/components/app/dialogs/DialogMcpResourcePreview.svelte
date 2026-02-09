@@ -51,6 +51,7 @@
 		const blob = new Blob([extra.content], { type: extra.mimeType || 'text/plain' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
+
 		a.href = url;
 		a.download = extra.name || 'resource.txt';
 		document.body.appendChild(a);

@@ -11,6 +11,7 @@ export interface ResourceTreeNode {
 export function parseResourcePath(uri: string): string[] {
 	try {
 		const withoutProtocol = uri.replace(/^[a-z]+:\/\//, '');
+
 		return withoutProtocol.split('/').filter((p) => p.length > 0);
 	} catch {
 		return [uri];
@@ -19,6 +20,7 @@ export function parseResourcePath(uri: string): string[] {
 
 export function getDisplayName(pathPart: string): string {
 	const withoutExt = pathPart.replace(/\.[^.]+$/, '');
+
 	return withoutExt
 		.split(/[-_]/)
 		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -58,6 +60,7 @@ export function buildResourceTree(
 				children: new Map()
 			});
 		}
+
 		return root;
 	}
 
@@ -113,9 +116,11 @@ export function buildResourceTree(
 export function countTreeResources(node: ResourceTreeNode): number {
 	if (node.resource) return 1;
 	let count = 0;
+
 	for (const child of node.children.values()) {
 		count += countTreeResources(child);
 	}
+
 	return count;
 }
 
@@ -126,6 +131,7 @@ export function getResourceIcon(resource: MCPResourceInfo) {
 	if (mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|svg|webp)$/.test(uri)) {
 		return Image;
 	}
+
 	if (
 		mimeType.includes('json') ||
 		mimeType.includes('javascript') ||
@@ -134,12 +140,15 @@ export function getResourceIcon(resource: MCPResourceInfo) {
 	) {
 		return Code;
 	}
+
 	if (mimeType.includes('text') || /\.(txt|md|log)$/.test(uri)) {
 		return FileText;
 	}
+
 	if (uri.includes('database') || uri.includes('db://')) {
 		return Database;
 	}
+
 	return File;
 }
 
@@ -147,8 +156,10 @@ export function sortTreeChildren(children: ResourceTreeNode[]): ResourceTreeNode
 	return children.sort((a, b) => {
 		const aIsFolder = !a.resource && a.children.size > 0;
 		const bIsFolder = !b.resource && b.children.size > 0;
+
 		if (aIsFolder && !bIsFolder) return -1;
 		if (!aIsFolder && bIsFolder) return 1;
+
 		return a.name.localeCompare(b.name);
 	});
 }

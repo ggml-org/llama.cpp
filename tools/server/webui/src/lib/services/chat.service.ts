@@ -146,6 +146,7 @@ export class ChatService {
 			.map((msg) => {
 				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+
 					return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
 				} else {
 					return msg as ApiChatMessageData;
@@ -171,8 +172,10 @@ export class ChatService {
 							console.info(
 								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
 							);
+
 							return false;
 						}
+
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
@@ -260,9 +263,11 @@ export class ChatService {
 
 			if (!response.ok) {
 				const error = await ChatService.parseErrorResponse(response);
+
 				if (onError) {
 					onError(error);
 				}
+
 				throw error;
 			}
 
@@ -279,6 +284,7 @@ export class ChatService {
 					conversationId,
 					signal
 				);
+
 				return;
 			} else {
 				return ChatService.handleNonStreamResponse(
@@ -317,9 +323,11 @@ export class ChatService {
 			}
 
 			console.error('Error in sendMessage:', error);
+
 			if (onError) {
 				onError(userFriendlyError);
 			}
+
 			throw userFriendlyError;
 		}
 	}
@@ -438,6 +446,7 @@ export class ChatService {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
 							streamFinished = true;
+
 							continue;
 						}
 
@@ -543,6 +552,7 @@ export class ChatService {
 
 			if (!responseText.trim()) {
 				const noResponseError = new Error('No response received from server. Please try again.');
+
 				throw noResponseError;
 			}
 
@@ -572,6 +582,7 @@ export class ChatService {
 
 			if (!content.trim() && !serializedToolCalls) {
 				const noResponseError = new Error('No response received from server. Please try again.');
+
 				throw noResponseError;
 			}
 
@@ -691,9 +702,11 @@ export class ChatService {
 				role: message.role as MessageRole,
 				content: message.content
 			};
+
 			if (toolCalls && toolCalls.length > 0) {
 				result.tool_calls = toolCalls;
 			}
+
 			return result;
 		}
 
@@ -865,6 +878,7 @@ export class ChatService {
 				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 			};
 			fallback.name = 'HttpError';
+
 			return fallback;
 		}
 	}
@@ -896,18 +910,26 @@ export class ChatService {
 
 		// 1) root (some implementations provide `model` at the top level)
 		const rootModel = getTrimmedString(root.model);
-		if (rootModel) return rootModel;
+		if (rootModel) {
+			return rootModel;
+		}
 
 		// 2) streaming choice (delta) or final response (message)
 		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
-		if (!firstChoice) return undefined;
+		if (!firstChoice) {
+			return undefined;
+		}
 
 		// priority: delta.model (first chunk) else message.model (final response)
 		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
-		if (deltaModel) return deltaModel;
+		if (deltaModel) {
+			return deltaModel;
+		}
 
 		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
-		if (messageModel) return messageModel;
+		if (messageModel) {
+			return messageModel;
+		}
 
 		// avoid guessing from non-standard locations (metadata, etc.)
 		return undefined;

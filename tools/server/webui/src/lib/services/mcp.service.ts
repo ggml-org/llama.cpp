@@ -159,6 +159,7 @@ export class MCPService {
 			} catch (sseError) {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
 				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
+
 				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
 			}
 		}
@@ -168,7 +169,10 @@ export class MCPService {
 	 * Extract server info from SDK Implementation type
 	 */
 	private static extractServerInfo(impl: Implementation | undefined): MCPServerInfo | undefined {
-		if (!impl) return undefined;
+		if (!impl) {
+			return undefined;
+		}
+
 		return {
 			name: impl.name,
 			version: impl.version,
@@ -213,6 +217,7 @@ export class MCPService {
 		if (import.meta.env.DEV) {
 			console.log(`[MCPService][${serverName}] Creating transport...`);
 		}
+
 		const { transport, type: transportType } = this.createTransport(serverConfig);
 
 		// Setup WebSocket reconnection handler
@@ -334,6 +339,7 @@ export class MCPService {
 			if (connection.transport.onclose) {
 				connection.transport.onclose = undefined;
 			}
+
 			await connection.client.close();
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Error during disconnect:`, error);
@@ -346,6 +352,7 @@ export class MCPService {
 	static async listTools(connection: MCPConnection): Promise<Tool[]> {
 		try {
 			const result = await connection.client.listTools();
+
 			return result.tools ?? [];
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Failed to list tools:`, error);
@@ -360,6 +367,7 @@ export class MCPService {
 	static async listPrompts(connection: MCPConnection): Promise<Prompt[]> {
 		try {
 			const result = await connection.client.listPrompts();
+
 			return result.prompts ?? [];
 		} catch (error) {
 			console.warn(`[MCPService][${connection.serverName}] Failed to list prompts:`, error);

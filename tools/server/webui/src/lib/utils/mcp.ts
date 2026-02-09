@@ -1,7 +1,21 @@
-import type { MCPServerSettingsEntry } from '$lib/types';
-import { MCPTransportType, MCPLogLevel, UrlPrefix, MimeTypePrefix } from '$lib/enums';
+import type { MCPServerSettingsEntry, MCPResourceContent, MCPResourceInfo } from '$lib/types';
+import {
+	MCPTransportType,
+	MCPLogLevel,
+	UrlPrefix,
+	MimeTypePrefix,
+	MimeTypeIncludes,
+	UriPattern
+} from '$lib/enums';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
-import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
+import {
+	IMAGE_FILE_EXTENSION_REGEX,
+	CODE_FILE_EXTENSION_REGEX,
+	TEXT_FILE_EXTENSION_REGEX,
+	PROTOCOL_PREFIX_REGEX,
+	FILE_EXTENSION_REGEX
+} from '$lib/constants/mcp-resource';
+import { Database, File, FileText, Image, Code, Info, AlertTriangle, XCircle } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
 /**

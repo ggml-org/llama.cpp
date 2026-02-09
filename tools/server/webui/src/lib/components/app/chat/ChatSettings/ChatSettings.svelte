@@ -306,12 +306,6 @@
 	let activeSection = $state<SettingsSectionTitle>(
 		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
 	);
-
-	$effect(() => {
-		if (initialSection) {
-			activeSection = initialSection;
-		}
-	});
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
@@ -320,6 +314,12 @@
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 	let scrollContainer: HTMLDivElement | undefined = $state();
+
+	$effect(() => {
+		if (initialSection) {
+			activeSection = initialSection;
+		}
+	});
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;

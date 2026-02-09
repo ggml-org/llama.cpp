@@ -117,6 +117,7 @@
 			<div class="mt-2 flex justify-end gap-2">
 				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
 					<X class="mr-1 h-3 w-3" />
+
 					Cancel
 				</Button>
 
@@ -127,6 +128,7 @@
 					size="sm"
 				>
 					<Check class="mr-1 h-3 w-3" />
+
 					Save
 				</Button>
 			</div>
@@ -174,6 +176,7 @@
 								<div
 									class="pointer-events-none absolute right-0 bottom-0 left-0 h-48 bg-gradient-to-t from-muted to-transparent"
 								></div>
+
 								<div
 									class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
 								>

@@ -117,9 +117,11 @@
 						onclick={() => (activeView = ChatMessageStatsView.READING)}
 					>
 						<BookOpenText class="h-3 w-3" />
+
 						<span class="sr-only">Reading</span>
 					</button>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>Reading (prompt processing)</p>
 				</Tooltip.Content>
@@ -139,9 +141,11 @@
 					disabled={isGenerationDisabled}
 				>
 					<Sparkles class="h-3 w-3" />
+
 					<span class="sr-only">Generation</span>
 				</button>
 			</Tooltip.Trigger>
+
 			<Tooltip.Content>
 				<p>
 					{isGenerationDisabled
@@ -150,6 +154,7 @@
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
+
 		{#if hasAgenticStats}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -203,12 +208,14 @@
 				value="{predictedTokens?.toLocaleString()} tokens"
 				tooltipLabel="Generated tokens"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedTime}
 				tooltipLabel="Generation time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
@@ -222,12 +229,14 @@
 				value="{agenticTimings!.toolCallsCount} calls"
 				tooltipLabel="Tool calls executed"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
@@ -241,12 +250,14 @@
 				value="{agenticTimings!.turns} turns"
 				tooltipLabel="Agentic turns (LLM calls)"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={WholeWord}
 				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 				tooltipLabel="Total tokens generated"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
@@ -260,12 +271,14 @@
 				value="{promptTokens} tokens"
 				tooltipLabel="Prompt tokens"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
 				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}

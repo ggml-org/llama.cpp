@@ -131,6 +131,7 @@
 								{key}
 							</span>
 						</Tooltip.Trigger>
+
 						<Tooltip.Content>
 							<span class="max-w-xs break-all">{value}</span>
 						</Tooltip.Content>
@@ -161,7 +162,9 @@
 			>
 				<div class="space-y-2">
 					<div class="h-3 w-3/4 animate-pulse rounded bg-foreground/20"></div>
+
 					<div class="h-3 w-full animate-pulse rounded bg-foreground/20"></div>
+
 					<div class="h-3 w-5/6 animate-pulse rounded bg-foreground/20"></div>
 				</div>
 			</div>

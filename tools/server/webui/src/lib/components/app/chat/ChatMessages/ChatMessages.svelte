@@ -28,13 +28,16 @@
 			);
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
+
 		delete: async (message: DatabaseMessage) => {
 			await chatStore.deleteMessage(message.id);
 			refreshAllMessages();
 		},
+
 		navigateToSibling: async (siblingId: string) => {
 			await conversationsStore.navigateToSibling(siblingId);
 		},
+
 		editWithBranching: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -44,6 +47,7 @@
 			await chatStore.editMessageWithBranching(message.id, newContent, newExtras);
 			refreshAllMessages();
 		},
+
 		editWithReplacement: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -53,6 +57,7 @@
 			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
 			refreshAllMessages();
 		},
+
 		editUserMessagePreserveResponses: async (
 			message: DatabaseMessage,
 			newContent: string,
@@ -62,11 +67,13 @@
 			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
 			refreshAllMessages();
 		},
+
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
 		},
+
 		continueAssistantMessage: async (message: DatabaseMessage) => {
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
