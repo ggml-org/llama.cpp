@@ -4113,6 +4113,26 @@ class Qwen2MoeModel(TextModel):
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
+            if self.model_arch == gguf.MODEL_ARCH.QWEN3VLMOE:
+                # Qwen3VL has transposed packed tensors
+                if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
+                    raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
+                split_dim = data_torch.shape[-1] // 2
+                gate = data_torch[..., :split_dim].contiguous()
+                up = data_torch[..., split_dim:].contiguous()
+                # Input gate/up: (n_expert=128, n_embd=2048, n_ff_exp=768)
+                # Want GGML ne: {n_embd, n_ff_exp, n_expert} = {2048, 768, 128}
+                # Need PyTorch: (128, 768, 2048) [reversed of GGML]
+                # So: permute(0, 2, 1): (128, 2048, 768) -> (128, 768, 2048)
+                base_name = name.removesuffix(".weight")
+                base = base_name.rsplit('.', 1)[0]
+                mapped_gate = f"{base}.gate_proj.weight"
+                mapped_up = f"{base}.up_proj.weight"
+                perm_gate = gate.permute(0, 2, 1).contiguous()
+                perm_up = up.permute(0, 2, 1).contiguous()
+                yield from super().modify_tensors(perm_gate, mapped_gate, bid)
+                yield from super().modify_tensors(perm_up, mapped_up, bid)
+                return
             # HF: [n_expert, 2*n_ff, n_embd] → split on dim=1
             n_ff = data_torch.shape[1] // 2
             gate = data_torch[:, :n_ff, :].contiguous()
