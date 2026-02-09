@@ -27,8 +27,7 @@ export function getDisplayName(pathPart: string): string {
 
 function resourceMatchesSearch(resource: MCPResource, query: string): boolean {
 	return (
-		resource.title?.toLowerCase().includes(query) ||
-		resource.uri.toLowerCase().includes(query)
+		resource.title?.toLowerCase().includes(query) || resource.uri.toLowerCase().includes(query)
 	);
 }
 
@@ -63,11 +62,11 @@ export function buildResourceTree(
 	}
 
 	const query = searchQuery.toLowerCase();
-	
+
 	// Build tree with filtering
 	for (const resource of resourceList) {
 		if (!resourceMatchesSearch(resource, query)) continue;
-		
+
 		const pathParts = parseResourcePath(resource.uri);
 		let current = root;
 
@@ -87,27 +86,27 @@ export function buildResourceTree(
 			isFiltered: true
 		});
 	}
-	
+
 	// Clean up empty folders that don't match
 	function cleanupEmptyFolders(node: ResourceTreeNode): boolean {
 		if (node.resource) return true;
-		
+
 		const toDelete: string[] = [];
 		for (const [name, child] of node.children.entries()) {
 			if (!cleanupEmptyFolders(child)) {
 				toDelete.push(name);
 			}
 		}
-		
+
 		for (const name of toDelete) {
 			node.children.delete(name);
 		}
-		
+
 		return node.children.size > 0;
 	}
-	
+
 	cleanupEmptyFolders(root);
-	
+
 	return root;
 }
 

@@ -1037,7 +1037,7 @@ class ChatStore {
 			let appendedContent = '',
 				hasReceivedContent = false,
 				isReasoningOpen = hasUnclosedReasoningTag(originalContent);
-				
+
 			const updateStreamingContent = (fullContent: string) => {
 				this.setChatStreaming(msg.convId, fullContent, msg.id);
 				conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
@@ -1351,13 +1351,13 @@ class ChatStore {
 
 		if (isRouterMode()) {
 			const modelContextSize = selectedModelContextSize();
-	
+
 			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
 				return modelContextSize;
 			}
 		} else {
 			const propsContextSize = contextSize();
-	
+
 			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
 				return propsContextSize;
 			}
