@@ -25391,27 +25391,40 @@ static void graph_refresh_input_tensors(ggml_backend_sycl_context * ctx, const g
         return;
     }
 
-    // Use pre-cached input tensor list if available
+    // Use pre-cached input tensor list if available.
+    // On replay, do direct async memcpy for tensors whose resolved device pointer
+    // differs from tensor->data, avoiding expensive sycl::get_pointer_type() driver calls
+    // (~1.15ms each). For tensors where resolved_ptr == tensor->data, set_tensor_async
+    // already copied the data so no additional work is needed.
     if (ctx->input_tensors_cached && !ctx->cached_input_tensors.empty()) {
-        int refreshed_count = 0;
-        for (ggml_tensor * tensor : ctx->cached_input_tensors) {
+        sycl::queue & q           = ggml_sycl_get_device(ctx->device).default_queue();
+        const size_t  n           = ctx->cached_input_tensors.size();
+        int           copy_count  = 0;
+        int           skip_count  = 0;
+        for (size_t idx = 0; idx < n; idx++) {
+            ggml_tensor * tensor = ctx->cached_input_tensors[idx];
             if (!tensor || !tensor->data) continue;
-            void * resolved_ptr = ggml_sycl_get_data_ptr(tensor, ctx->device);
-            refreshed_count++;
-            if (g_ggml_sycl_debug) {
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed cached input %s -> %p\n",
-                                tensor->name ? tensor->name : "?", resolved_ptr);
+            void * dev_ptr = ctx->cached_input_dev_ptrs[idx];
+            if (!dev_ptr) continue;
+            if (dev_ptr == tensor->data) {
+                // Device pointer IS tensor->data: set_tensor_async already refreshed it
+                skip_count++;
+                continue;
             }
+            // Device pointer differs from tensor->data: direct async memcpy needed
+            size_t nbytes = ggml_nbytes(tensor);
+            q.memcpy(dev_ptr, tensor->data, nbytes);
+            copy_count++;
         }
-        if (g_ggml_sycl_debug && refreshed_count > 0) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed %d cached input tensors\n", refreshed_count);
-        }
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] refreshed %d input tensors (skipped %d same-ptr)\n",
+                        copy_count, skip_count);
         return;
     }
 
-    // First call: discover and cache input tensors
+    // First call: discover and cache input tensors + their resolved device pointers
     std::unordered_set<const void *> seen_ptrs;
     ctx->cached_input_tensors.clear();
+    ctx->cached_input_dev_ptrs.clear();
 
     auto discover_input = [&](ggml_tensor * tensor) {
         if (!tensor || !tensor->data) return;
@@ -25419,12 +25432,13 @@ static void graph_refresh_input_tensors(ggml_backend_sycl_context * ctx, const g
         if (!(tensor->flags & GGML_TENSOR_FLAG_INPUT)) return;
         if (!seen_ptrs.insert(tensor->data).second) return;
 
-        ctx->cached_input_tensors.push_back(tensor);
+        // Resolve device pointer once (slow path OK for one-time discovery)
         void * resolved_ptr = ggml_sycl_get_data_ptr(tensor, ctx->device);
-        if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] discovered input %s -> %p\n",
-                            tensor->name ? tensor->name : "?", resolved_ptr);
-        }
+        ctx->cached_input_tensors.push_back(tensor);
+        ctx->cached_input_dev_ptrs.push_back(resolved_ptr);
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] discovered input %s -> %p (tensor->data=%p, %s)\n",
+                        tensor->name ? tensor->name : "?", resolved_ptr, tensor->data,
+                        resolved_ptr == tensor->data ? "same" : "DIFFERENT");
     };
 
     for (int i = 0; i < cgraph->n_leafs; ++i) {
@@ -29481,6 +29495,38 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         g_framework_timing.gap_sync_to_gc_ms += std::chrono::duration<double, std::milli>(
             t_gc_start - g_framework_timing.last_sync_exit).count();
     }
+
+    // Per-section timing to identify overhead hotspots in graph_compute.
+    // Prints every 50th call when GGML_SYCL_DEBUG=1.
+    struct SectionTimer {
+        std::chrono::high_resolution_clock::time_point marks[20];
+        const char * names[20];
+        int          count    = 0;
+        int          call_num = 0;
+        void mark(const char * name) {
+            if (count < 20) {
+                marks[count] = std::chrono::high_resolution_clock::now();
+                names[count] = name;
+                count++;
+            }
+        }
+        ~SectionTimer() {
+            if (!g_ggml_sycl_debug || call_num % 50 != 0 || count < 2) return;
+            mark("end");
+            double total = std::chrono::duration<double, std::milli>(marks[count - 1] - marks[0]).count();
+            fprintf(stderr, "[SECTION-TIMING] call #%d: total=%.3fms (%d sections)\n", call_num, total, count - 1);
+            for (int i = 1; i < count; i++) {
+                double dt = std::chrono::duration<double, std::milli>(marks[i] - marks[i - 1]).count();
+                fprintf(stderr, "[SECTION-TIMING]   %-35s: %.3fms\n", names[i], dt);
+            }
+        }
+    };
+    static int section_call_count = 0;
+    section_call_count++;
+    SectionTimer section;
+    section.call_num = section_call_count;
+    section.mark("entry");
+
     struct graph_inflight_guard {
         std::atomic<int> & counter;
         explicit graph_inflight_guard(std::atomic<int> & counter) : counter(counter) {}
@@ -29500,6 +29546,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     sycl_ctx ? sycl_ctx->device : -1);
     ggml_sycl_set_main_device(sycl_ctx->device);
     std::lock_guard<std::mutex> graph_lock(sycl_ctx->graph_mutex);
+    section.mark("after_mutex_locks");
     if (g_sycl_graph_inflight.load(std::memory_order_relaxed) > 1) {
 
         g_sycl_graph_multithreaded.store(true, std::memory_order_relaxed);
@@ -29589,6 +29636,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         sycl_ctx->cached_persistent_result  = persistent_eligible;
         sycl_ctx->cached_is_decode_phase    = cached_is_decode;
     }
+    section.mark("persistent_eligibility");
 
     // Skip finalize_layouts when layouts are stable (no dirty weights, no epoch change).
     // This applies to ALL dispatch modes, not just persistent TG.
@@ -29628,6 +29676,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     } else {
         GGML_SYCL_DEBUG("[DEBUG] Skipping finalize_layouts (layouts stable, dirty_count=0)\n");
     }
+    section.mark("layout_stability");
 
     // =========================================================================
     // Persistent TG Kernel Dispatch Check
@@ -29743,6 +29792,7 @@ normal_dispatch:
     if (sycl_ctx->unified_kernel && sycl_ctx->unified_kernel->has_cached_plan()) {
         sycl_ctx->unified_kernel->invalidate_plan_cache();
     }
+    section.mark("normal_dispatch_entry");
 
 #ifdef GGML_SYCL_GRAPH
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
@@ -29772,6 +29822,7 @@ normal_dispatch:
         sycl_ctx->moe_graphs_disabled_once = false;
 
     }
+    section.mark("check_graph_compat");
     if (use_sycl_graph) {
         // Cache graph hash (saves ~41K FNV-1a hash mix ops per token)
         uint64_t graph_hash;
@@ -29879,6 +29930,7 @@ normal_dispatch:
                 return GGML_STATUS_SUCCESS;
             }
         }
+        section.mark("moe_host_mem_scan");
         // Layout finalization decides coalesced usage before graph recording.
         // Minimum nodes to benefit from graph batching - skip tiny graphs
         constexpr int MIN_GRAPH_NODES = 10;
@@ -29927,12 +29979,14 @@ normal_dispatch:
                 sycl_ctx->cached_graph_sig_n_nodes  = -1;
                 sycl_ctx->input_tensors_cached      = false;
                 sycl_ctx->cached_input_tensors.clear();
+                sycl_ctx->cached_input_dev_ptrs.clear();
                 // Unpin expert cache slots when graph is invalidated
                 // This allows slots to be evicted for the new graph recording
                 graph_unpin_moe_experts(sycl_ctx);
                 graph_unpin_weights(sycl_ctx);
             }
         }
+        section.mark("cache_invalidation_check");
         // Pre-allocate V2 partition attention buffers before graph recording.
         // This ensures V2 dispatch works during graph recording (malloc/free forbidden during recording).
         if (is_decode_phase && !sycl_ctx->exec_graph) {
@@ -29982,6 +30036,7 @@ normal_dispatch:
         // Invalidate Q8_1 quantization cache at start of each graph execution.
         // Same src1 pointer may hold different data in a new forward pass.
         sycl_ctx->moe_q8_cache.invalidate();
+        section.mark("buffer_resets");
         // Prepare MoE pointer tables for current ids before graph recording/execution.
         if (!graph_preload_moe_experts(*sycl_ctx, cgraph)) {
             GGML_LOG_WARN("[SYCL-GRAPH] MoE pointer table prep failed, disabling graphs for all splits\n");
@@ -29991,6 +30046,7 @@ normal_dispatch:
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
+        section.mark("moe_preload");
         // Warmup pass: If this phase hasn't been warmed up, run without graph recording
 
         // to populate the oneDNN primitive cache. This avoids JIT compilation during
@@ -30020,6 +30076,7 @@ normal_dispatch:
                 sycl_ctx->cached_graph_sig_n_nodes  = -1;
                 sycl_ctx->input_tensors_cached      = false;
                 sycl_ctx->cached_input_tensors.clear();
+                sycl_ctx->cached_input_dev_ptrs.clear();
                 graph_unpin_moe_experts(sycl_ctx);
                 graph_unpin_weights(sycl_ctx);
             }
@@ -30042,6 +30099,7 @@ normal_dispatch:
                             cgraph->n_nodes, is_decode_phase ? "decode" : "prompt");
         }
 
+        section.mark("warmup_fa_state_checks");
         // Re-record strategy (like master): re-record every call + update executable graph.
         // Enable with GGML_SYCL_GRAPH_RERECORD=1 to test if stale recording causes perf issues.
         static bool rerecord_mode = (getenv("GGML_SYCL_GRAPH_RERECORD") != nullptr);
@@ -30089,12 +30147,14 @@ normal_dispatch:
         } else if (sycl_ctx->exec_graph) {
             // Default: replay cached graph (branch's original strategy)
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute existing graph...\n");
+            section.mark("before_refresh_inputs");
             {
                 auto t_refresh = std::chrono::high_resolution_clock::now();
                 graph_refresh_input_tensors(sycl_ctx, cgraph);
                 gc_timing.refresh_ms = std::chrono::duration<double, std::milli>(
                     std::chrono::high_resolution_clock::now() - t_refresh).count();
             }
+            section.mark("after_refresh_inputs");
             graph_executed = true;
             {
                 auto t_replay = std::chrono::high_resolution_clock::now();
@@ -30102,6 +30162,7 @@ normal_dispatch:
                 timing.replay_ms = std::chrono::duration<double, std::milli>(
                     std::chrono::high_resolution_clock::now() - t_replay).count();
             }
+            section.mark("after_graph_replay");
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
         } else {
             // First time - record and finalize the graph
@@ -30193,6 +30254,7 @@ normal_dispatch:
                 sycl_ctx->cached_graph_sig_n_nodes  = -1;
                 sycl_ctx->input_tensors_cached      = false;
                 sycl_ctx->cached_input_tensors.clear();
+                sycl_ctx->cached_input_dev_ptrs.clear();
                 timed_compute_impl();
                 record_completion(false);
 
@@ -30206,13 +30268,16 @@ normal_dispatch:
     {
         timed_compute_impl();
     }
+    section.mark("before_record_completion");
     record_completion(graph_executed);
+    section.mark("after_record_completion");
 
     g_framework_timing.graph_compute_ms += std::chrono::duration<double, std::milli>(
         std::chrono::high_resolution_clock::now() - t_gc_start).count();
     g_framework_timing.graph_compute_n++;
     g_framework_timing.last_gc_exit = std::chrono::high_resolution_clock::now();
     g_framework_timing.last_gc_valid = true;
+    section.mark("framework_timing_done");
     return GGML_STATUS_SUCCESS;
 }
 static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) try {

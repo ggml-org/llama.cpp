@@ -2291,6 +2291,11 @@ struct ggml_backend_sycl_context {
 
     // Pre-cached input tensor set for graph_refresh (populated during recording)
     std::vector<ggml_tensor *> cached_input_tensors;
+    // Parallel vector: resolved device pointers for each cached input tensor.
+    // When resolved_ptr == tensor->data, set_tensor_async already refreshed the data
+    // and no additional copy is needed. When different, a direct async memcpy is done
+    // from tensor->data to resolved_ptr, avoiding expensive get_pointer_type() driver calls.
+    std::vector<void *> cached_input_dev_ptrs;
     bool input_tensors_cached = false;
 
     // Pre-allocated buffers for MoE graph recording
