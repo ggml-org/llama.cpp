@@ -231,10 +231,9 @@ void common_ngram_map_draft(common_ngram_map & map,
         GGML_ABORT("%s: cur_len exceeds UINT32_MAX: %zu", __func__, cur_len);
     }
 
-    // Only check every check_rate tokens to save compute
-    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (map.idx_last_check + map.check_rate > cur_len) {
-        return;
+    if (map.idx_last_check  > cur_len) {
+        // Should not happen because of common_ngram_map_begin().
+        GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
     }
     map.idx_last_check = cur_len;
 

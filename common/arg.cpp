@@ -3438,16 +3438,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
-        {"--spec-ngram-check-rate"}, "N",
-        string_format("ngram check rate for ngram-simple/ngram-map speculative decoding (default: %d)", params.speculative.ngram_check_rate),
-        [](common_params & params, int value) {
-            if (value < 1) {
-                throw std::invalid_argument("ngram check rate must be at least 1");
-            }
-            params.speculative.ngram_check_rate = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
         {"--spec-ngram-min-hits"}, "N",
         string_format("minimum hits for ngram-map speculative decoding (default: %d)", params.speculative.ngram_min_hits),
         [](common_params & params, int value) {
