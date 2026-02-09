@@ -434,13 +434,10 @@ struct blue_noise_rng {
 
     // uniform double in [0, 1) with blue noise temporal autocorrelation
     double nextf() {
-        double res = 0.0;
-        res += hash(position ^ ~seed); // fill low bits with white noise
-        res *= 1.0 / 4294967296.0;
-        res += next32();
-        res *= 1.0 / 4294967296.0;
-        if (res >= 1.0) res = std::nextafter(1.0, 0.0);
-        return res;
+        uint32_t lo = hash(position ^ ~seed); // white noise low bits
+        uint32_t hi = next32();               // blue noise high bits
+        uint64_t combined = ((uint64_t)hi << 32) | lo;
+        return (combined >> 11) * 0x1.0p-53;
     }
 };
 
