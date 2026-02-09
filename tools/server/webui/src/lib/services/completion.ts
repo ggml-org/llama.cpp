@@ -1,11 +1,7 @@
 import { getJsonHeaders } from '$lib/utils';
 import { ChatService } from '$lib/services/chat';
 
-import type {
-	ApiCompletionRequest,
-	ApiCompletionResponse,
-	ApiCompletionStreamChunk
-} from '$lib/types/api';
+import type { ApiCompletionRequest, ApiCompletionStreamChunk } from '$lib/types/api';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import type { SettingsChatServiceOptions } from '$lib/types/settings';
 
@@ -16,11 +12,11 @@ import type { SettingsChatServiceOptions } from '$lib/types/settings';
 export class CompletionService {
 	/**
 	 * Sends a completion request to the llama.cpp server.
-	 * Supports both streaming and non-streaming responses.
+	 * Supports only streaming responses.
 	 *
 	 * @param prompt - The text prompt to complete
 	 * @param options - Configuration options for the completion request
-	 * @returns {Promise<string | void>} that resolves to the complete response string (non-streaming) or void (streaming)
+	 * @returns {Promise<void>} that resolves to void
 	 * @throws {Error} if the request fails or is aborted
 	 */
 	static async sendCompletion(
@@ -29,7 +25,6 @@ export class CompletionService {
 		signal?: AbortSignal
 	): Promise<string | void> {
 		const {
-			stream,
 			onChunk,
 			onComplete,
 			onError,
@@ -63,9 +58,14 @@ export class CompletionService {
 			timings_per_token
 		} = options;
 
+		// We only support streaming responses
+		const stream: boolean = true;
+		const cache_prompt: boolean = true;
+
 		const requestBody: ApiCompletionRequest = {
 			prompt,
-			stream
+			stream,
+			cache_prompt
 		};
 
 		// Include model in request if provided
@@ -75,7 +75,8 @@ export class CompletionService {
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
-			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+			// On the completion endpoint, max_tokens is called n_predict
+			requestBody.n_predict = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
 		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
@@ -131,25 +132,16 @@ export class CompletionService {
 				throw error;
 			}
 
-			if (stream) {
-				await CompletionService.handleCompletionStreamResponse(
-					response,
-					onChunk,
-					onComplete,
-					onError,
-					onModel,
-					onTimings,
-					signal
-				);
-				return;
-			} else {
-				return CompletionService.handleCompletionNonStreamResponse(
-					response,
-					onComplete,
-					onError,
-					onModel
-				);
-			}
+			await CompletionService.handleCompletionStreamResponse(
+				response,
+				onChunk,
+				onComplete,
+				onError,
+				onModel,
+				onTimings,
+				signal
+			);
+			return;
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
 				console.log('Completion request was aborted');
@@ -297,51 +289,6 @@ export class CompletionService {
 			throw err;
 		} finally {
 			reader.releaseLock();
-		}
-	}
-
-	/**
-	 * Handles non-streaming response from the completion API
-	 */
-	private static async handleCompletionNonStreamResponse(
-		response: Response,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onModel?: (model: string) => void
-	): Promise<string> {
-		try {
-			const responseText = await response.text();
-
-			if (!responseText.trim()) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-				throw noResponseError;
-			}
-
-			const data: ApiCompletionResponse = JSON.parse(responseText);
-
-			if (data.model) {
-				onModel?.(data.model);
-			}
-
-			const content = data.content || '';
-
-			if (!content.trim()) {
-				const noResponseError = new Error('No response received from server. Please try again.');
-				throw noResponseError;
-			}
-
-			onComplete?.(content, undefined, data.timings, undefined);
-
-			return content;
-		} catch (error) {
-			const err = error instanceof Error ? error : new Error('Parse error');
-			onError?.(err);
-			throw err;
 		}
 	}
 }

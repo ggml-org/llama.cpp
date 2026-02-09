@@ -222,10 +222,11 @@ export interface ApiChatCompletionRequest {
 export interface ApiCompletionRequest {
 	prompt: string;
 	stream?: boolean;
+	cache_prompt?: boolean;
 	model?: string;
 	// Generation parameters
 	temperature?: number;
-	max_tokens?: number;
+	n_predict?: number;
 	// Sampling parameters
 	dynatemp_range?: number;
 	dynatemp_exponent?: number;
@@ -303,19 +304,6 @@ export interface ApiCompletionStreamChunk {
 		cache_n?: number;
 	};
 	prompt_progress?: ChatMessagePromptProgress;
-}
-
-export interface ApiCompletionResponse {
-	content: string;
-	stop: boolean;
-	model: string;
-	timings?: {
-		prompt_n?: number;
-		prompt_ms?: number;
-		predicted_n?: number;
-		predicted_ms?: number;
-		cache_n?: number;
-	};
 }
 
 export interface ApiChatCompletionResponse {
