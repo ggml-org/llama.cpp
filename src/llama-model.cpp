@@ -2418,6 +2418,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
                 // Load linear attention (gated delta net) parameters
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
@@ -8755,8 +8756,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_PANGU_EMBED:
         case LLM_ARCH_AFMOE:
         case LLM_ARCH_QWEN3NEXT:
-        case LLM_ARCH_QWEN3_5:
-        case LLM_ARCH_QWEN3_5_MOE:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
             return LLAMA_ROPE_TYPE_NEOX;
@@ -8765,6 +8764,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_MROPE;
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN3_5:
+        case LLM_ARCH_QWEN3_5_MOE:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         case LLM_ARCH_GLM4:

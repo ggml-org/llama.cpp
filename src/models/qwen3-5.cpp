@@ -132,15 +132,18 @@ ggml_tensor * llm_build_qwen3_5::build_layer_attn(
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_ext(
+    int sections[4];
+    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+
+    Qcur = ggml_rope_multi(
             ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
 
-    Kcur = ggml_rope_ext(
+    Kcur = ggml_rope_multi(
             ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base,
-            freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
