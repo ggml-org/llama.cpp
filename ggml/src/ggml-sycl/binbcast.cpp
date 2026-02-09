@@ -43,6 +43,9 @@ static ggml_sycl_binbcast_event_mode ggml_sycl_get_binbcast_event_mode() {
 struct ggml_sycl_binbcast_unpin_event_kernel;
 
 static sycl::event ggml_sycl_submit_binbcast_event(sycl::queue & q, ggml_sycl_binbcast_event_mode mode) {
+    if (g_ggml_sycl_graph_recording) {
+        g_sycl_extra_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
+    }
     if (mode == ggml_sycl_binbcast_event_mode::BARRIER &&
         q.has_property<sycl::property::queue::in_order>()) {
         mode = ggml_sycl_binbcast_event_mode::SAFE;

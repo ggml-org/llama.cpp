@@ -372,6 +372,28 @@ struct SetRowsMeta {
 };
 
 // =============================================================================
+// DAG Scheduling State for Persistent Kernel
+// =============================================================================
+
+// Device-side arrays for DAG-based event scheduling.
+// Replaces device-scope barriers with per-operation atomic dependency counters.
+struct DeviceDAGState {
+    // Per-op scheduling state (n_ops elements, reset every token)
+    int * ready_counter;      // atomic: predecessors remaining (0 = ready to run)
+    int * tile_claimed;       // atomic: work-stealing counter per op
+    int * tiles_done;         // atomic: completed tile count per op
+
+    // Static DAG topology (set once during plan build, reused across tokens)
+    int * successor_offset;   // [n_ops+1] CSR index into successor_list
+    int * successor_list;     // [total_edges] successor op indices
+    int * n_tiles;            // [n_ops] tile count per op
+
+    // Termination
+    int * completed_count;    // [1] atomic: number of fully completed ops
+    int   n_ops;              // total operation count
+};
+
+// =============================================================================
 // Persistent Plan and Stats
 // =============================================================================
 
@@ -2608,6 +2630,17 @@ public:
     void finish_plan_update();    // API bookend; no-op currently, validates plan readiness in future
     void invalidate_plan_cache();
     void * get_rows_stable_ptr(size_t bytes);
+    int cached_op_count() const;
+    OperationType plan_op_type(int op_idx) const;
+    bool get_op_descriptor(int op_idx, OperationDescriptor & out) const;
+    bool update_op_descriptor(int op_idx, const OperationDescriptor & desc);
+
+    // DAG scheduling for barrier-free persistent kernel
+    void build_dag(const std::vector<std::vector<int>> & successors,
+                   const std::vector<int> & in_degree);
+    void reset_dag_counters();
+    bool has_dag() const { return dag_allocated_; }
+    const DeviceDAGState & dag_state() const { return dag_state_; }
 
     bool            supports_persistent() const;
     bool            is_building_plan() const;
@@ -2624,6 +2657,7 @@ private:
     // Plan caching
     std::vector<OperationDescriptor> cached_ops_;
     PersistentPlan                   cached_plan_template_;
+    std::vector<void *>              cached_temp_device_allocs_;
     bool                             plan_cache_valid_ = false;
 
     // Device ops table pool (DeviceOperation * — defined in unified-kernel.cpp)
@@ -2642,6 +2676,14 @@ private:
     int *   barrier_counter_       = nullptr;
     int *   barrier_sense_         = nullptr;
     size_t  persistent_buffer_size_ = 0;
+
+    // DAG scheduling state
+    DeviceDAGState         dag_state_          = {};
+    bool                   dag_allocated_      = false;
+    int                    dag_pool_n_ops_     = 0;
+    int                    dag_pool_n_edges_   = 0;
+    std::vector<int>       host_initial_ready_counter_;
+    std::vector<int>       host_n_tiles_;
 
     void copy_plan_shape(const PersistentPlan & src, PersistentPlan & dst);
     void allocate_persistent_buffers(int hidden_dim, int intermediate_dim);

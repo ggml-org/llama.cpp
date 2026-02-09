@@ -3766,9 +3766,7 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
     // A more sophisticated version would use template instantiation for common sizes
 
     if (tile_m == 1) {
-        // Decode path: M=1. Use a wider N tile for better throughput.
-        // Important: we must actually submit a kernel here; otherwise the
-        // output buffer is left unchanged and sampling goes off the rails.
+        // M=1 fallback: use generic SLM-tiled path (DMMV path above handles batch=1)
         constexpr int TM = 1;
         constexpr int TN = 64;
         constexpr int TK = 32;
@@ -3780,8 +3778,8 @@ cooperative_path:;  // Fallthrough label for large-tile to cooperative path
         const int wg_n = std::min(TN, 16);
 
         q.submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);  // Weights [TN x TK]
-            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);  // Activations [TM x TK]
+            sycl::local_accessor<float, 1> slm_w(TN * TK, cgh);
+            sycl::local_accessor<float, 1> slm_a(TM * TK, cgh);
 
             sycl::nd_range<2> range(
                 sycl::range<2>(tm_grid_m * wg_m, tm_grid_n * wg_n),
@@ -4014,6 +4012,8 @@ struct PersistentKernelArgs {
     void *                  scratch_buffers[4];
     int                     hidden_dim;
     int                     intermediate_dim;
+    DeviceDAGState          dag;              // DAG scheduling state
+    int                     use_dag;          // 1 = DAG mode, 0 = legacy barriers
 };
 
 // =============================================================================
@@ -4078,6 +4078,104 @@ public:
             } else {
                 device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
             }
+        }
+    }
+
+    // DAG-based scheduling: replaces sequential loop + device-scope barriers
+    // with per-operation dependency counters and dynamic work scheduling.
+    // ZERO device-scope barriers — only intra-WG group_barrier after tile processing.
+    void run_dag() {
+        const int local_id = item_.get_local_id(0);
+        const DeviceDAGState & dag = args_.dag;
+        const int n_ops = dag.n_ops;
+        int scan_hint = 0;  // start scanning from here (locality optimization)
+
+        while (true) {
+            int op_idx = -1;
+
+            // Thread 0 scans for a ready op with unclaimed tiles
+            if (local_id == 0) {
+                for (int attempt = 0; attempt < n_ops; attempt++) {
+                    const int scan = (scan_hint + attempt) % n_ops;
+                    sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        rc(dag.ready_counter[scan]);
+                    if (rc.load() != 0) continue;  // predecessors pending
+
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        tc(dag.tile_claimed[scan]);
+                    if (tc.load() < dag.n_tiles[scan]) {
+                        op_idx = scan;
+                        break;
+                    }
+                }
+                // Check termination
+                if (op_idx < 0) {
+                    sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        cc(*dag.completed_count);
+                    if (cc.load() >= n_ops) op_idx = -2;  // TERMINATE
+                }
+            }
+            op_idx = sycl::group_broadcast(item_.get_group(), op_idx, 0);
+
+            if (op_idx == -2) break;       // all ops done
+            if (op_idx < 0)  continue;     // nothing ready, spin-retry
+
+            // Update scan hint for locality (next scan starts near current op)
+            scan_hint = op_idx;
+
+            // Claim and process tiles (same work-stealing pattern as legacy run())
+            const DeviceOperation & op = args_.operations[op_idx];
+            int my_tiles = 0;
+            while (true) {
+                int tile_idx = -1;
+                if (local_id == 0) {
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        tc(dag.tile_claimed[op_idx]);
+                    tile_idx = tc.fetch_add(1);
+                }
+                tile_idx = sycl::group_broadcast(item_.get_group(), tile_idx, 0);
+                if (tile_idx >= op.n_tiles) break;
+                dispatch_operation(op, tile_idx);
+                my_tiles++;
+            }
+
+            // Signal completion: last WG to finish this op wakes successors
+            if (my_tiles > 0 && local_id == 0) {
+                sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    td(dag.tiles_done[op_idx]);
+                const int done = td.fetch_add(my_tiles);
+                if (done + my_tiles == dag.n_tiles[op_idx]) {
+                    // All tiles complete — decrement successors' ready counters
+                    sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                     sycl::memory_scope::device,
+                                     sycl::access::address_space::global_space>
+                        cc(*dag.completed_count);
+                    cc.fetch_add(1);
+                    for (int s = dag.successor_offset[op_idx];
+                         s < dag.successor_offset[op_idx + 1]; s++) {
+                        const int succ = dag.successor_list[s];
+                        sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                                         sycl::memory_scope::device,
+                                         sycl::access::address_space::global_space>
+                            rc(dag.ready_counter[succ]);
+                        rc.fetch_sub(1);
+                    }
+                }
+            }
+
+            // Intra-WG sync only — ensures all threads done before claiming next op
+            // NO device-scope barrier!
+            sycl::group_barrier(item_.get_group());
         }
     }
 
@@ -5236,7 +5334,106 @@ void UnifiedKernel::free_persistent_buffers() {
     barrier_sense_   = nullptr;
     if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
     if (get_rows_pool_) { sycl::free(get_rows_pool_, queue_); get_rows_pool_ = nullptr; get_rows_pool_size_ = 0; }
+    // Free DAG allocations
+    if (dag_allocated_) {
+        if (dag_state_.ready_counter)    sycl::free(dag_state_.ready_counter, queue_);
+        if (dag_state_.tile_claimed)     sycl::free(dag_state_.tile_claimed, queue_);
+        if (dag_state_.tiles_done)       sycl::free(dag_state_.tiles_done, queue_);
+        if (dag_state_.successor_offset) sycl::free(dag_state_.successor_offset, queue_);
+        if (dag_state_.successor_list)   sycl::free(dag_state_.successor_list, queue_);
+        if (dag_state_.n_tiles)          sycl::free(dag_state_.n_tiles, queue_);
+        if (dag_state_.completed_count)  sycl::free(dag_state_.completed_count, queue_);
+        dag_state_          = {};
+        dag_allocated_      = false;
+        dag_pool_n_ops_     = 0;
+        dag_pool_n_edges_   = 0;
+    }
+    invalidate_plan_cache();
     persistent_buffer_size_ = 0;
+}
+
+// -----------------------------------------------------------------------------
+// DAG Scheduling Methods
+// -----------------------------------------------------------------------------
+
+void UnifiedKernel::build_dag(const std::vector<std::vector<int>> & successors,
+                              const std::vector<int> & in_degree) {
+    const int n_ops     = static_cast<int>(in_degree.size());
+    int       n_edges   = 0;
+    for (const auto & s : successors) {
+        n_edges += static_cast<int>(s.size());
+    }
+
+    // Reallocate if pool is too small
+    if (n_ops > dag_pool_n_ops_ || n_edges > dag_pool_n_edges_) {
+        // Free old allocations
+        if (dag_allocated_) {
+            sycl::free(dag_state_.ready_counter, queue_);
+            sycl::free(dag_state_.tile_claimed, queue_);
+            sycl::free(dag_state_.tiles_done, queue_);
+            sycl::free(dag_state_.successor_offset, queue_);
+            sycl::free(dag_state_.successor_list, queue_);
+            sycl::free(dag_state_.n_tiles, queue_);
+            sycl::free(dag_state_.completed_count, queue_);
+        }
+        // Allocate new with some headroom
+        const int alloc_ops   = n_ops + 64;
+        const int alloc_edges = n_edges + 128;
+        dag_state_.ready_counter    = sycl::malloc_device<int>(alloc_ops, queue_);
+        dag_state_.tile_claimed     = sycl::malloc_device<int>(alloc_ops, queue_);
+        dag_state_.tiles_done       = sycl::malloc_device<int>(alloc_ops, queue_);
+        dag_state_.successor_offset = sycl::malloc_device<int>(alloc_ops + 1, queue_);
+        dag_state_.successor_list   = sycl::malloc_device<int>(std::max(alloc_edges, 1), queue_);
+        dag_state_.n_tiles          = sycl::malloc_device<int>(alloc_ops, queue_);
+        dag_state_.completed_count  = sycl::malloc_device<int>(1, queue_);
+        dag_pool_n_ops_   = alloc_ops;
+        dag_pool_n_edges_ = alloc_edges;
+    }
+    dag_state_.n_ops = n_ops;
+    dag_allocated_   = true;
+
+    // Build CSR successor list on host then upload
+    std::vector<int> offsets(n_ops + 1);
+    std::vector<int> flat_successors;
+    flat_successors.reserve(n_edges);
+    offsets[0] = 0;
+    for (int i = 0; i < n_ops; i++) {
+        flat_successors.insert(flat_successors.end(), successors[i].begin(), successors[i].end());
+        offsets[i + 1] = static_cast<int>(flat_successors.size());
+    }
+
+    // Cache host-side initial state for fast per-token reset
+    host_initial_ready_counter_ = in_degree;
+
+    // Upload static topology to device (n_tiles uploaded later in launch_persistent_kernel
+    // after tile counts are computed from DeviceOperations)
+    queue_.memcpy(dag_state_.successor_offset, offsets.data(), (n_ops + 1) * sizeof(int));
+    if (n_edges > 0) {
+        queue_.memcpy(dag_state_.successor_list, flat_successors.data(), n_edges * sizeof(int));
+    }
+    queue_.wait();
+
+    // Log DAG statistics
+    int source_count = 0;
+    for (int i = 0; i < n_ops; i++) {
+        if (in_degree[i] == 0) source_count++;
+    }
+    GGML_SYCL_DEBUG("[PERSISTENT-TG] DAG built: %d ops, %d edges, %d sources\n",
+                    n_ops, n_edges, source_count);
+}
+
+void UnifiedKernel::reset_dag_counters() {
+    if (!dag_allocated_) return;
+    const int n_ops = dag_state_.n_ops;
+
+    // Restore in-degree values (predecessors remaining) from cached initial state
+    queue_.memcpy(dag_state_.ready_counter, host_initial_ready_counter_.data(),
+                  n_ops * sizeof(int));
+    // Reset per-token mutable counters to zero
+    queue_.memset(dag_state_.tile_claimed, 0, n_ops * sizeof(int));
+    queue_.memset(dag_state_.tiles_done, 0, n_ops * sizeof(int));
+    queue_.memset(dag_state_.completed_count, 0, sizeof(int));
+    queue_.wait();
 }
 
 // -----------------------------------------------------------------------------
@@ -5659,6 +5856,23 @@ bool UnifiedKernel::has_cached_plan() const {
     return plan_cache_valid_;
 }
 
+int UnifiedKernel::cached_op_count() const {
+    return plan_cache_valid_ ? static_cast<int>(cached_ops_.size()) : 0;
+}
+
+OperationType UnifiedKernel::plan_op_type(int op_idx) const {
+    if (op_idx < 0) {
+        return OperationType::RMS_NORM;
+    }
+    if (current_plan_ && op_idx < (int) current_plan_->operations.size()) {
+        return current_plan_->operations[op_idx].type;
+    }
+    if (plan_cache_valid_ && op_idx < (int) cached_ops_.size()) {
+        return cached_ops_[op_idx].type;
+    }
+    return OperationType::RMS_NORM;
+}
+
 void UnifiedKernel::begin_plan_update() {
     // Cancel any in-flight plan but DON'T free cached data
     if (current_plan_) {
@@ -5672,6 +5886,22 @@ void UnifiedKernel::begin_plan_update() {
     current_plan_ = std::make_unique<PersistentPlan>();
     copy_plan_shape(cached_plan_template_, *current_plan_);
     current_plan_->operations        = cached_ops_;  // copy the vector
+}
+
+bool UnifiedKernel::get_op_descriptor(int op_idx, OperationDescriptor & out) const {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return false;
+    }
+    out = current_plan_->operations[op_idx];
+    return true;
+}
+
+bool UnifiedKernel::update_op_descriptor(int op_idx, const OperationDescriptor & desc) {
+    if (!current_plan_ || op_idx < 0 || op_idx >= (int) current_plan_->operations.size()) {
+        return false;
+    }
+    current_plan_->operations[op_idx] = desc;
+    return true;
 }
 
 void UnifiedKernel::update_op_pointers(int op_idx, const void * input, void * output,
@@ -5705,7 +5935,7 @@ void UnifiedKernel::update_op_attention(int op_idx, const void * q, const void *
     op.q_nb0   = q_nb0;  op.q_nb1 = q_nb1;  op.q_nb2 = q_nb2;  op.q_nb3 = q_nb3;
     op.k_nb0   = k_nb0;  op.k_nb1 = k_nb1;  op.k_nb2 = k_nb2;  op.k_nb3 = k_nb3;
     op.v_nb0   = v_nb0;  op.v_nb1 = v_nb1;  op.v_nb2 = v_nb2;  op.v_nb3 = v_nb3;
-    op.N       = seq_len;
+    op.M       = seq_len;
 }
 
 void UnifiedKernel::update_op_rope(int op_idx, void * q, void * k, void * rope_dst,
@@ -5715,13 +5945,17 @@ void UnifiedKernel::update_op_rope(int op_idx, void * q, void * k, void * rope_d
         return;
     }
     auto & op = current_plan_->operations[op_idx];
-    op.input  = q;
-    op.output = k;  // K pointer stored in output for dual-tensor RoPE
-    op.aux    = const_cast<float *>(sin_cache);
+    op.input   = q;
     op.weights = cos_cache;
     op.M       = position;
-    // rope_dst used for single-tensor mode
-    if (rope_dst) {
+
+    if (k) {
+        // Dual-tensor mode: input=q, aux=k, output=sin_cache.
+        op.aux    = k;
+        op.output = const_cast<float *>(sin_cache);
+    } else {
+        // Single-tensor mode: input=q, aux=sin_cache, output=rope_dst.
+        op.aux    = const_cast<float *>(sin_cache);
         op.output = rope_dst;
     }
 }
@@ -5733,6 +5967,13 @@ void UnifiedKernel::finish_plan_update() {
 void UnifiedKernel::invalidate_plan_cache() {
     plan_cache_valid_ = false;
     cached_ops_.clear();
+    cached_plan_template_ = {};
+    for (void * ptr : cached_temp_device_allocs_) {
+        if (ptr) {
+            sycl::free(ptr, queue_);
+        }
+    }
+    cached_temp_device_allocs_.clear();
 }
 
 void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
@@ -5764,6 +6005,8 @@ void UnifiedKernel::execute_persistent() {
     if (!plan_cache_valid_) {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
+        cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        current_plan_->temp_device_allocs.clear();
         plan_cache_valid_ = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
     }
@@ -5836,7 +6079,9 @@ void UnifiedKernel::launch_persistent_kernel() {
 
         // Fuse MATMUL_GATE + MATMUL_UP + SILU_MUL into a single op when the
         // dependency chain is explicit and contiguous in the persistent plan.
-        if (src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+        // NOTE: Fusion changes the operation count and invalidates DAG indices
+        // (built pre-fusion in extract_persistent_plan). Skip fusion when DAG is active.
+        if (!dag_allocated_ && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
             const bool contiguous_chain =
@@ -5917,6 +6162,19 @@ void UnifiedKernel::launch_persistent_kernel() {
         host_ops.push_back(dst);
     }
 
+    // Cache host-side tile counts for DAG construction (before device upload)
+    host_n_tiles_.resize(host_ops.size());
+    for (size_t i = 0; i < host_ops.size(); i++) {
+        host_n_tiles_[i] = host_ops[i].n_tiles;
+    }
+
+    // Upload tile counts to DAG device array (DAG topology was built earlier in
+    // extract_persistent_plan, but tile counts weren't available until now)
+    if (dag_allocated_ && dag_state_.n_tiles != nullptr) {
+        const int n = static_cast<int>(host_n_tiles_.size());
+        queue_.memcpy(dag_state_.n_tiles, host_n_tiles_.data(), n * sizeof(int)).wait();
+    }
+
     // Copy operation table to device (reuse pooled allocation when capacity is sufficient)
     const int n_ops_device = static_cast<int>(host_ops.size());
     if (n_ops_device > d_ops_pool_size_) {
@@ -5930,7 +6188,37 @@ void UnifiedKernel::launch_persistent_kernel() {
     // Kernel configuration
     constexpr int BLOCK_SIZE = 256;
     const bool use_split_barrier = persistent_use_split_barrier();
-    const int n_workgroups = persistent_num_workgroups(total_tiles, has_attention, has_ffn_matmul, use_split_barrier);
+    int n_workgroups;
+    // Check if DAG mode is disabled via environment variable
+    bool use_dag_mode = dag_allocated_;
+    if (use_dag_mode) {
+        static int dag_env_checked = -1;
+        if (dag_env_checked < 0) {
+            const char * env = std::getenv("GGML_SYCL_PERSISTENT_TG_DAG");
+            dag_env_checked = (env != nullptr && std::strcmp(env, "0") == 0) ? 0 : 1;
+        }
+        use_dag_mode = (dag_env_checked != 0);
+    }
+
+    if (use_dag_mode) {
+        // DAG mode: no device-scope barriers, so WG count is not barrier-constrained.
+        // Use max_compute_units / 2 by default for good parallelism across independent ops.
+        try {
+            const int max_cu = (int)queue_.get_device().get_info<sycl::info::device::max_compute_units>();
+            n_workgroups = std::clamp(max_cu / 2, 4, 64);
+        } catch (...) {
+            n_workgroups = 16;
+        }
+        if (const char * env_wgs = std::getenv("GGML_SYCL_PERSISTENT_TG_N_WGS")) {
+            char * end = nullptr;
+            const long parsed = std::strtol(env_wgs, &end, 10);
+            if (end && end != env_wgs && parsed > 0 && parsed <= 128) {
+                n_workgroups = static_cast<int>(parsed);
+            }
+        }
+    } else {
+        n_workgroups = persistent_num_workgroups(total_tiles, has_attention, has_ffn_matmul, use_split_barrier);
+    }
     const int attention_slm = current_plan_->head_dim + 2 * (BLOCK_SIZE / 16);
     const int matmul_slm    = (BLOCK_SIZE / 16) * 32;      // SG lanes x Q4_0 block cache
     const int slm_floats   = std::max({BLOCK_SIZE / 16,               // At least n_warps for reduction
@@ -5949,8 +6237,15 @@ void UnifiedKernel::launch_persistent_kernel() {
     }
 
     auto run_persistent_kernel = [&](const DeviceOperation * operations, int operation_count) -> double {
-        // Reset tile counter + barrier state (counter=0, sense=0) in single memset
-        queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+        const bool use_dag = use_dag_mode;
+
+        if (use_dag) {
+            // Reset DAG scheduling counters for this token
+            reset_dag_counters();
+        } else {
+            // Reset tile counter + barrier state (counter=0, sense=0) in single memset
+            queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
+        }
 
         PersistentKernelArgs args = {};
         args.operations           = operations;
@@ -5965,6 +6260,8 @@ void UnifiedKernel::launch_persistent_kernel() {
         }
         args.hidden_dim       = current_plan_->hidden_dim;
         args.intermediate_dim = current_plan_->intermediate_dim;
+        args.dag              = dag_state_;
+        args.use_dag          = use_dag ? 1 : 0;
 
         const auto start = std::chrono::high_resolution_clock::now();
         queue_.submit([&](sycl::handler & cgh) {
@@ -5974,7 +6271,11 @@ void UnifiedKernel::launch_persistent_kernel() {
                 sycl::nd_range<1>(n_workgroups * BLOCK_SIZE, BLOCK_SIZE),
                 [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
                     PersistentTGKernelImpl<BLOCK_SIZE> kernel(args_copy, slm, item);
-                    kernel.run();
+                    if (args_copy.use_dag) {
+                        kernel.run_dag();
+                    } else {
+                        kernel.run();
+                    }
                 });
         });
         queue_.wait();
