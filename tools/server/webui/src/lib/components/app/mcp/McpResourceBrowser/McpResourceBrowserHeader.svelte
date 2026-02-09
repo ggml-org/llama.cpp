@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { RefreshCw, Loader2, Search } from '@lucide/svelte';
+	import { RefreshCw, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
 	import SearchInput from '../../forms/SearchInput.svelte';
 
 	interface Props {
@@ -15,7 +14,7 @@
 </script>
 
 <div class="flex flex-col gap-2">
-	<div class="flex items-center gap-4 mb-2">
+	<div class="mb-2 flex items-center gap-4">
 		<SearchInput
 			placeholder="Search resources..."
 			value={searchQuery}

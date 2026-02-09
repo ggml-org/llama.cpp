@@ -12,7 +12,6 @@
 	interface Props {
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
 		onToggle?: (resource: MCPResourceInfo, checked: boolean) => void;
-		onAttach?: (resource: MCPResourceInfo) => void;
 		selectedUris?: Set<string>;
 		expandToUri?: string;
 		class?: string;
@@ -109,7 +108,12 @@
 </script>
 
 <div class={cn('flex flex-col gap-2', className)}>
-	<McpResourceBrowserHeader {isLoading} onRefresh={handleRefresh} onSearch={(q) => searchQuery = q} searchQuery={searchQuery} />
+	<McpResourceBrowserHeader
+		{isLoading}
+		onRefresh={handleRefresh}
+		onSearch={(q) => (searchQuery = q)}
+		{searchQuery}
+	/>
 
 	<div class="flex flex-col gap-1">
 		{#if filteredResources.size === 0}
@@ -126,7 +130,7 @@
 					onToggleFolder={toggleFolder}
 					{onSelect}
 					{onToggle}
-					searchQuery={searchQuery}
+					{searchQuery}
 				/>
 			{/each}
 		{/if}

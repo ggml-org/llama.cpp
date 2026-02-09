@@ -66,21 +66,9 @@
 		</div>
 	{/if}
 
-	<div class="flex justify-end mt-8 gap-2">
-		<Button
-			type="button"
-			size="sm"
-			onclick={onCancel}
-			variant="secondary"
-		>
-			Cancel
-		</Button>
+	<div class="mt-8 flex justify-end gap-2">
+		<Button type="button" size="sm" onclick={onCancel} variant="secondary">Cancel</Button>
 
-		<Button
-			size="sm"
-			type="submit"
-		>
-			Use Prompt
-		</Button>
+		<Button size="sm" type="submit">Use Prompt</Button>
 	</div>
 </form>
