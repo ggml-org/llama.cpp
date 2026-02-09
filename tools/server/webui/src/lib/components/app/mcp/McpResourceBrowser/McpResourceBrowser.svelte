@@ -21,7 +21,6 @@
 	let {
 		onSelect,
 		onToggle,
-		onAttach,
 		selectedUris = new Set(),
 		expandToUri,
 		class: className

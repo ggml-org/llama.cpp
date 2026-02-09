@@ -58,7 +58,8 @@
 
 	function handleResourceSelect(resource: MCPResourceInfo, shiftKey: boolean = false) {
 		if (shiftKey && lastSelectedUri) {
-			const allResources = getAllResourcesFlat();
+			// Get all resources in tree order (matching the display order in McpResourceBrowser)
+			const allResources = getAllResourcesFlatInTreeOrder();
 			const lastIndex = allResources.findIndex((r) => r.uri === lastSelectedUri);
 			const currentIndex = allResources.findIndex((r) => r.uri === resource.uri);
 
@@ -87,7 +88,20 @@
 		lastSelectedUri = resource.uri;
 	}
 
-	function getAllResourcesFlat(): MCPResourceInfo[] {
+	function getResourceDisplayName(resource: MCPResourceInfo): string {
+		// Extract the display name from the resource URI (last path segment)
+		try {
+			const uriWithoutProtocol = resource.uri.replace(/^[a-z]+:\/\//, '');
+			const parts = uriWithoutProtocol.split('/');
+			return parts[parts.length - 1] || resource.name || resource.uri;
+		} catch {
+			return resource.name || resource.uri;
+		}
+	}
+
+	function getAllResourcesFlatInTreeOrder(): MCPResourceInfo[] {
+		// Get resources in the same order as displayed in McpResourceBrowser tree
+		// Sort by: folders first (if applicable), then alphabetically by display name
 		const allResources: MCPResourceInfo[] = [];
 		const resourcesMap = mcpResources();
 
@@ -97,7 +111,17 @@
 			}
 		}
 
-		return allResources;
+		// Sort to match tree display order: folders first, then alphabetically
+		return allResources.sort((a, b) => {
+			const aName = getResourceDisplayName(a);
+			const bName = getResourceDisplayName(b);
+			return aName.localeCompare(bName);
+		});
+	}
+
+	function getAllResourcesFlat(): MCPResourceInfo[] {
+		// Fallback for other uses (like attaching)
+		return getAllResourcesFlatInTreeOrder();
 	}
 
 	async function handleAttach() {
@@ -129,27 +153,11 @@
 			isAttaching = false;
 		}
 	}
-
-	async function handleQuickAttach(resource: MCPResourceInfo) {
-		isAttaching = true;
-
-		try {
-			await mcpStore.attachResource(resource.uri);
-
-			onAttach?.(resource);
-
-			toast.success(`Resource attached: ${resource.name}`);
-		} catch (error) {
-			console.error('Failed to attach resource:', error);
-		} finally {
-			isAttaching = false;
-		}
-	}
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
-		<Dialog.Header class="border-b px-6 py-4">
+		<Dialog.Header class="border-b border-border/30 px-6 py-4">
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />
 
@@ -165,18 +173,17 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="flex h-[500px]">
-			<div class="w-72 shrink-0 overflow-y-auto border-r p-4">
+		<div class="flex h-[500px] min-w-0">
+			<div class="w-72 shrink-0 overflow-y-auto border-r border-border/30 p-4">
 				<McpResourceBrowser
 					onSelect={handleResourceSelect}
 					onToggle={handleResourceToggle}
-					onAttach={handleQuickAttach}
 					selectedUris={selectedResources}
 					expandToUri={preSelectedUri}
 				/>
 			</div>
 
-			<div class="flex-1 overflow-y-auto p-4">
+			<div class="min-w-0 flex-1 overflow-auto p-4">
 				{#if selectedResources.size === 1}
 					{@const allResources = getAllResourcesFlat()}
 					{@const selectedResource = allResources.find((r) => selectedResources.has(r.uri))}
@@ -194,7 +201,7 @@
 			</div>
 		</div>
 
-		<Dialog.Footer class="border-t px-6 py-4">
+		<Dialog.Footer class="border-t border-border/30 px-6 py-4">
 			<Button variant="outline" onclick={() => handleOpenChange(false)}>Cancel</Button>
 
 			<Button onclick={handleAttach} disabled={selectedResources.size === 0 || isAttaching}>
