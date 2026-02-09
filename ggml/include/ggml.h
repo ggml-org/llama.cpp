@@ -252,6 +252,7 @@
 #define GGML_ROPE_TYPE_MROPE  8
 #define GGML_ROPE_TYPE_VISION 24
 #define GGML_ROPE_TYPE_IMROPE 40 // binary: 101000
+#define GGML_ROPE_TYPE_ERNIE3D 72 // binary: 1001000, ERNIE-VL 3D RoPE (NORMAL rotation + interleaved h/w freq)
 
 #define GGML_MROPE_SECTIONS   4
 

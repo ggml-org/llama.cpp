@@ -85,6 +85,7 @@ extern "C" {
         LLAMA_ROPE_TYPE_MROPE  = GGML_ROPE_TYPE_MROPE,
         LLAMA_ROPE_TYPE_IMROPE = GGML_ROPE_TYPE_IMROPE,
         LLAMA_ROPE_TYPE_VISION = GGML_ROPE_TYPE_VISION,
+        LLAMA_ROPE_TYPE_ERNIE3D = GGML_ROPE_TYPE_ERNIE3D,
     };
 
     enum llama_token_type { //TODO: remove, required until per token attributes are available from GGUF file
