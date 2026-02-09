@@ -16,38 +16,6 @@ import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
 
-/**
- * ChatService - Low-level API communication layer for Chat Completions
- *
- * **Terminology - Chat vs Conversation:**
- * - **Chat**: The active interaction space with the Chat Completions API. This service
- *   handles the real-time communication with the AI backend - sending messages, receiving
- *   streaming responses, and managing request lifecycles. "Chat" is ephemeral and runtime-focused.
- * - **Conversation**: The persistent database entity storing all messages and metadata.
- *   Managed by ConversationsService/Store, conversations persist across sessions.
- *
- * This service handles direct communication with the llama-server's Chat Completions API.
- * It provides the network layer abstraction for AI model interactions while remaining
- * stateless and focused purely on API communication.
- *
- * **Architecture & Relationships:**
- * - **ChatService** (this class): Stateless API communication layer
- *   - Handles HTTP requests/responses with the llama-server
- *   - Manages streaming and non-streaming response parsing
- *   - Provides per-conversation request abortion capabilities
- *   - Converts database messages to API format
- *   - Handles error translation for server responses
- *
- * - **chatStore**: Uses ChatService for all AI model communication
- * - **conversationsStore**: Provides message context for API requests
- *
- * **Key Responsibilities:**
- * - Message format conversion (DatabaseMessage → API format)
- * - Streaming response handling with real-time callbacks
- * - Reasoning content extraction and processing
- * - File attachment processing (images, PDFs, audio, text)
- * - Request lifecycle management (abort via AbortSignal)
- */
 export class ChatService {
 	private static stripReasoningContent(
 		content: ApiChatMessageData['content'] | null | undefined
