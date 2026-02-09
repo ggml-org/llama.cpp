@@ -1447,7 +1447,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 // input embeddings with optional lora
 ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     const int64_t n_embd_inp = hparams.n_embd_inp();
-    const int64_t n_embd     = hparams.n_embd;
+    // Use initial token embedding dimension (n_embd_features) if different from final dimension (n_embd)
+    const int64_t n_embd     = hparams.n_embd_features != 0 ? hparams.n_embd_features : hparams.n_embd;
 
     assert(n_embd_inp >= n_embd);
 
