@@ -193,7 +193,7 @@ void main() {
                         uint coord = (j * Bc + c) * k_stride * BLOCK_SIZE + 4 * d;
                         uint ib = coord / BLOCK_SIZE;
                         uint iqs = (coord % BLOCK_SIZE);
-                        K_Tf = FLOAT_TYPEV4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
+                        K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
 #else
                         K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c) * k_stride / 4 + d]);
 #endif
@@ -224,7 +224,7 @@ void main() {
                     uint coord = (j * Bc + c * cols_per_iter + col_tid) * k_stride * BLOCK_SIZE + 4 * (d * D_split + d_tid);
                     uint ib = coord / BLOCK_SIZE;
                     uint iqs = (coord % BLOCK_SIZE);
-                    K_Tf = FLOAT_TYPEV4(dequantize4(ib, iqs, k_offset, BINDING_IDX_K));
+                    K_Tf = dequantize4(ib, iqs, k_offset, BINDING_IDX_K);
 #else
                     K_Tf = FLOAT_TYPEV4(data_kv4[k_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * k_stride / 4 + d * D_split + d_tid]);
 #endif
@@ -299,7 +299,7 @@ void main() {
                         uint coord = (j * Bc + c) * v_stride * BLOCK_SIZE + 4 * d;
                         uint ib = coord / BLOCK_SIZE;
                         uint iqs = (coord % BLOCK_SIZE);
-                        V_Tf = FLOAT_TYPEV4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
+                        V_Tf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
 #else
                         V_Tf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c) * v_stride / 4 + d]);
 #endif
@@ -331,7 +331,7 @@ void main() {
                     uint coord = (j * Bc + c * cols_per_iter + col_tid) * v_stride * BLOCK_SIZE + 4 * (d * D_split + d_tid);
                     uint ib = coord / BLOCK_SIZE;
                     uint iqs = (coord % BLOCK_SIZE);
-                    Vf = FLOAT_TYPEV4(dequantize4(ib, iqs, v_offset, BINDING_IDX_V));
+                    Vf = dequantize4(ib, iqs, v_offset, BINDING_IDX_V);
 #else
                     Vf = FLOAT_TYPEV4(data_vv4[v_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * v_stride / 4 + d * D_split + d_tid]);
 #endif
