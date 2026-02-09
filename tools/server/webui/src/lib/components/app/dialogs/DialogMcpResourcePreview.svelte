@@ -4,8 +4,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { SyntaxHighlightedCode, ActionIconCopyToClipboard } from '$lib/components/app';
-	import { getLanguageFromFilename } from '$lib/utils';
-	import { MimeTypePrefix, MimeTypeIncludes } from '$lib/enums';
+	import {
+		getLanguageFromFilename,
+		isCodeResource,
+		isImageResource,
+		downloadResourceContent
+	} from '$lib/utils';
+	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 
 	interface Props {
@@ -19,23 +24,6 @@
 	const serverName = $derived(mcpStore.getServerDisplayName(extra.serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));
 
-	function isCode(mimeType?: string, uri?: string): boolean {
-		const mime = mimeType?.toLowerCase() || '';
-		const u = uri?.toLowerCase() || '';
-		return (
-			mime.includes(MimeTypeIncludes.JSON) ||
-			mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-			mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
-			/\.(js|ts|json|yaml|yml|xml|html|css|py|rs|go|java|cpp|c|h|rb|sh|toml)$/i.test(u)
-		);
-	}
-
-	function isImage(mimeType?: string, uri?: string): boolean {
-		const mime = mimeType?.toLowerCase() || '';
-		const u = uri?.toLowerCase() || '';
-		return mime.startsWith(MimeTypePrefix.IMAGE) || /\.(png|jpg|jpeg|gif|svg|webp)$/i.test(u);
-	}
-
 	function getLanguage(): string {
 		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return 'json';
 		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return 'javascript';
@@ -47,17 +35,11 @@
 
 	function handleDownload() {
 		if (!extra.content) return;
-
-		const blob = new Blob([extra.content], { type: extra.mimeType || 'text/plain' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-
-		a.href = url;
-		a.download = extra.name || 'resource.txt';
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
+		downloadResourceContent(
+			extra.content,
+			extra.mimeType || MimeTypeText.PLAIN,
+			extra.name || 'resource.txt'
+		);
 	}
 </script>
 
@@ -113,7 +95,7 @@
 		</div>
 
 		<div class="overflow-auto">
-			{#if isImage(extra.mimeType, extra.uri) && extra.content}
+			{#if isImageResource(extra.mimeType, extra.uri) && extra.content}
 				<div class="flex items-center justify-center">
 					<img
 						src={extra.content.startsWith('data:')
@@ -123,7 +105,7 @@
 						class="max-h-[70vh] max-w-full rounded object-contain"
 					/>
 				</div>
-			{:else if isCode(extra.mimeType, extra.uri) && extra.content}
+			{:else if isCodeResource(extra.mimeType, extra.uri) && extra.content}
 				<SyntaxHighlightedCode code={extra.content} language={getLanguage()} maxHeight="70vh" />
 			{:else if extra.content}
 				<pre

@@ -63,3 +63,5 @@ export interface ParsedClipboardContent {
 	textAttachments: ClipboardTextAttachment[];
 	mcpPromptAttachments: ClipboardMcpPromptAttachment[];
 }
+
+export type MimeTypeUnion = MimeTypeAudio | MimeTypeImage | MimeTypeApplication | MimeTypeText;

@@ -1,5 +1,9 @@
 import type { AgenticConfig } from '$lib/types/agentic';
 
+export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
+
+export const NEWLINE_SEPARATOR = '\n';
+
 export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	enabled: true,
 	maxTurns: 100,

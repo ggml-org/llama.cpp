@@ -109,7 +109,16 @@ export {
 	parseMcpServerSettings,
 	getMcpLogLevelIcon,
 	getMcpLogLevelClass,
-	isImageMimeType
+	isImageMimeType,
+	parseResourcePath,
+	getDisplayName,
+	getResourceDisplayName,
+	isCodeResource,
+	isImageResource,
+	getResourceIcon,
+	getResourceTextContent,
+	getResourceBlobContent,
+	downloadResourceContent
 } from './mcp';
 
 // Data URL utilities

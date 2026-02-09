@@ -4,7 +4,7 @@
 	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
 	import type { MCPServerResources, MCPResourceInfo } from '$lib/types';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
-	import { parseResourcePath } from './mcp-resource-browser';
+	import { parseResourcePath } from '$lib/utils';
 	import McpResourceBrowserHeader from './McpResourceBrowserHeader.svelte';
 	import McpResourceBrowserEmptyState from './McpResourceBrowserEmptyState.svelte';
 	import McpResourceBrowserServerItem from './McpResourceBrowserServerItem.svelte';

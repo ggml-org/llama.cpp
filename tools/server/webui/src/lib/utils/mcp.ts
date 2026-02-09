@@ -5,7 +5,8 @@ import {
 	UrlPrefix,
 	MimeTypePrefix,
 	MimeTypeIncludes,
-	UriPattern
+	UriPattern,
+	MimeTypeText
 } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 import {
@@ -15,8 +16,18 @@ import {
 	PROTOCOL_PREFIX_REGEX,
 	FILE_EXTENSION_REGEX
 } from '$lib/constants/mcp-resource';
-import { Database, File, FileText, Image, Code, Info, AlertTriangle, XCircle } from '@lucide/svelte';
+import {
+	Database,
+	File,
+	FileText,
+	Image,
+	Code,
+	Info,
+	AlertTriangle,
+	XCircle
+} from '@lucide/svelte';
 import type { Component } from 'svelte';
+import type { MimeTypeUnion } from '$lib/types/common';
 
 /**
  * Detects the MCP transport type from a URL.
@@ -119,6 +130,170 @@ export function getMcpLogLevelClass(level: MCPLogLevel): string {
  * @param mimeType - The MIME type to check
  * @returns True if the MIME type starts with 'image/'
  */
-export function isImageMimeType(mimeType?: string): boolean {
+export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
 	return mimeType?.startsWith(MimeTypePrefix.IMAGE) ?? false;
+}
+
+/**
+ * Parse a resource URI into path segments, stripping the protocol prefix.
+ *
+ * @param uri - The resource URI to parse
+ * @returns Array of non-empty path segments
+ */
+export function parseResourcePath(uri: string): string[] {
+	try {
+		const withoutProtocol = uri.replace(PROTOCOL_PREFIX_REGEX, '');
+		return withoutProtocol.split('/').filter((p) => p.length > 0);
+	} catch {
+		return [uri];
+	}
+}
+
+/**
+ * Convert a path part into a human-readable display name.
+ * Strips file extensions and converts kebab-case/snake_case to Title Case.
+ *
+ * @param pathPart - The path segment to convert
+ * @returns Human-readable display name
+ */
+export function getDisplayName(pathPart: string): string {
+	const withoutExt = pathPart.replace(FILE_EXTENSION_REGEX, '');
+	return withoutExt
+		.split(/[-_]/)
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(' ');
+}
+
+/**
+ * Get the display name from a resource, extracting the last path segment from the URI.
+ *
+ * @param resource - The MCP resource info
+ * @returns Display name string
+ */
+export function getResourceDisplayName(resource: MCPResourceInfo): string {
+	try {
+		const parts = parseResourcePath(resource.uri);
+		return parts[parts.length - 1] || resource.name || resource.uri;
+	} catch {
+		return resource.name || resource.uri;
+	}
+}
+
+/**
+ * Determine if a MIME type and/or URI represents code content.
+ *
+ * @param mimeType - Optional MIME type string
+ * @param uri - Optional URI string
+ * @returns True if the content is code
+ */
+export function isCodeResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
+	const mime = mimeType?.toLowerCase() || '';
+	const u = uri?.toLowerCase() || '';
+	return (
+		mime.includes(MimeTypeIncludes.JSON) ||
+		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
+		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		CODE_FILE_EXTENSION_REGEX.test(u)
+	);
+}
+
+/**
+ * Determine if a MIME type and/or URI represents image content.
+ *
+ * @param mimeType - Optional MIME type string
+ * @param uri - Optional URI string
+ * @returns True if the content is an image
+ */
+export function isImageResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
+	const mime = mimeType?.toLowerCase() || '';
+	const u = uri?.toLowerCase() || '';
+	return mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u);
+}
+
+/**
+ * Get the appropriate Lucide icon component for an MCP resource based on its MIME type and URI.
+ *
+ * @param mimeType - Optional MIME type of the resource
+ * @param uri - Optional URI of the resource
+ * @returns Lucide icon component
+ */
+export function getResourceIcon(mimeType?: MimeTypeUnion, uri?: string): Component {
+	const mime = mimeType?.toLowerCase() || '';
+	const u = uri?.toLowerCase() || '';
+
+	if (mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
+		return Image;
+	}
+
+	if (
+		mime.includes(MimeTypeIncludes.JSON) ||
+		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
+		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		CODE_FILE_EXTENSION_REGEX.test(u)
+	) {
+		return Code;
+	}
+
+	if (mime.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
+		return FileText;
+	}
+
+	if (u.includes(UriPattern.DATABASE_KEYWORD) || u.includes(UriPattern.DATABASE_SCHEME)) {
+		return Database;
+	}
+
+	return File;
+}
+
+/**
+ * Extract text content from MCP resource content array.
+ *
+ * @param content - Array of MCP resource content items
+ * @returns Joined text content string
+ */
+export function getResourceTextContent(content: MCPResourceContent[] | null | undefined): string {
+	if (!content) return '';
+	return content
+		.filter((c): c is { uri: string; mimeType?: MimeTypeUnion; text: string } => 'text' in c)
+		.map((c) => c.text)
+		.join('\n\n');
+}
+
+/**
+ * Extract blob content from MCP resource content array.
+ *
+ * @param content - Array of MCP resource content items
+ * @returns Array of blob content items
+ */
+export function getResourceBlobContent(
+	content: MCPResourceContent[] | null | undefined
+): Array<{ uri: string; mimeType?: MimeTypeUnion; blob: string }> {
+	if (!content) return [];
+
+	return content.filter(
+		(c): c is { uri: string; mimeType?: MimeTypeUnion; blob: string } => 'blob' in c
+	);
+}
+
+/**
+ * Trigger a file download from text content.
+ *
+ * @param text - The text content to download
+ * @param mimeType - MIME type for the blob
+ * @param filename - Suggested filename
+ */
+export function downloadResourceContent(
+	text: string,
+	mimeType: MimeTypeUnion = MimeTypeText.PLAIN,
+	filename: string = 'resource.txt'
+): void {
+	const blob = new Blob([text], { type: mimeType });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = filename;
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+	URL.revokeObjectURL(url);
 }

@@ -3,8 +3,14 @@
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { isImageMimeType, createBase64DataUrl } from '$lib/utils';
-	import { MimeTypeApplication } from '$lib/enums';
+	import {
+		isImageMimeType,
+		createBase64DataUrl,
+		getResourceTextContent,
+		getResourceBlobContent,
+		downloadResourceContent
+	} from '$lib/utils';
+	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
 	import { ActionIconCopyToClipboard } from '$lib/components/app';
 	import type { MCPResourceInfo, MCPResourceContent } from '$lib/types';
 
@@ -46,34 +52,14 @@
 		}
 	}
 
-	function getTextContent(): string {
-		if (!content) return '';
-		return content
-			.filter((c): c is { uri: string; mimeType?: string; text: string } => 'text' in c)
-			.map((c) => c.text)
-			.join('\n\n');
-	}
-
-	function getBlobContent(): Array<{ uri: string; mimeType?: string; blob: string }> {
-		if (!content) return [];
-		return content.filter(
-			(c): c is { uri: string; mimeType?: string; blob: string } => 'blob' in c
-		);
-	}
-
 	function handleDownload() {
-		const text = getTextContent();
+		const text = getResourceTextContent(content);
 		if (!text || !resource) return;
-
-		const blob = new Blob([text], { type: resource.mimeType || 'text/plain' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = resource.name || 'resource.txt';
-		document.body.appendChild(a);
-		a.click();
-		document.body.removeChild(a);
-		URL.revokeObjectURL(url);
+		downloadResourceContent(
+			text,
+			resource.mimeType || MimeTypeText.PLAIN,
+			resource.name || 'resource.txt'
+		);
 	}
 </script>
 
@@ -98,8 +84,8 @@
 
 			<div class="flex items-center gap-1">
 				<ActionIconCopyToClipboard
-					text={getTextContent()}
-					canCopy={!isLoading && !!getTextContent()}
+					text={getResourceTextContent(content)}
+					canCopy={!isLoading && !!getResourceTextContent(content)}
 					ariaLabel="Copy content"
 				/>
 
@@ -108,7 +94,7 @@
 					size="sm"
 					class="h-7 w-7 p-0"
 					onclick={handleDownload}
-					disabled={isLoading || !getTextContent()}
+					disabled={isLoading || !getResourceTextContent(content)}
 					title="Download content"
 				>
 					<Download class="h-3.5 w-3.5" />
@@ -128,8 +114,8 @@
 					<span class="text-sm">{error}</span>
 				</div>
 			{:else if content}
-				{@const textContent = getTextContent()}
-				{@const blobContent = getBlobContent()}
+				{@const textContent = getResourceTextContent(content)}
+				{@const blobContent = getResourceBlobContent(content)}
 
 				{#if textContent}
 					<pre class="font-mono text-xs break-words whitespace-pre-wrap">{textContent}</pre>

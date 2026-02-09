@@ -8,7 +8,7 @@
 	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, AttachmentType, FileTypeText } from '$lib/enums';
 	import { formatJsonPretty } from '$lib/utils';
-	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic-ui';
+	import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants/agentic';
 	import { parseAgenticContent, type AgenticSection } from '$lib/utils/agentic';
 	import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
 
@@ -77,7 +77,7 @@
 		toolResult: string,
 		extras?: DatabaseMessage['extra']
 	): ToolResultLine[] {
-		const lines = toolResult.split('\n');
+		const lines = toolResult.split(NEWLINE_SEPARATOR);
 
 		return lines.map((line) => {
 			const match = line.match(ATTACHMENT_SAVED_REGEX);

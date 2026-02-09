@@ -5,9 +5,11 @@
 	import { KeyboardKey } from '$lib/enums';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
-	import ChatFormPromptPickerList from './ChatFormPromptPickerList.svelte';
-	import ChatFormPromptPickerHeader from './ChatFormPromptPickerHeader.svelte';
-	import ChatFormPromptPickerArgumentForm from './ChatFormPromptPickerArgumentForm.svelte';
+	import {
+		ChatFormPromptPickerList,
+		ChatFormPromptPickerHeader,
+		ChatFormPromptPickerArgumentForm
+	} from '$lib/components/app/chat';
 	import * as Popover from '$lib/components/ui/popover';
 
 	interface Props {

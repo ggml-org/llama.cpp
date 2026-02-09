@@ -1,30 +1,11 @@
-import { Database, File, FileText, Image, Code } from '@lucide/svelte';
 import type { MCPResource, MCPResourceInfo } from '$lib/types';
+import { parseResourcePath } from '$lib/utils';
 
 export interface ResourceTreeNode {
 	name: string;
 	resource?: MCPResourceInfo;
 	children: Map<string, ResourceTreeNode>;
 	isFiltered?: boolean;
-}
-
-export function parseResourcePath(uri: string): string[] {
-	try {
-		const withoutProtocol = uri.replace(/^[a-z]+:\/\//, '');
-
-		return withoutProtocol.split('/').filter((p) => p.length > 0);
-	} catch {
-		return [uri];
-	}
-}
-
-export function getDisplayName(pathPart: string): string {
-	const withoutExt = pathPart.replace(/\.[^.]+$/, '');
-
-	return withoutExt
-		.split(/[-_]/)
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-		.join(' ');
 }
 
 function resourceMatchesSearch(resource: MCPResource, query: string): boolean {
@@ -122,34 +103,6 @@ export function countTreeResources(node: ResourceTreeNode): number {
 	}
 
 	return count;
-}
-
-export function getResourceIcon(resource: MCPResourceInfo) {
-	const mimeType = resource.mimeType?.toLowerCase() || '';
-	const uri = resource.uri.toLowerCase();
-
-	if (mimeType.startsWith('image/') || /\.(png|jpg|jpeg|gif|svg|webp)$/.test(uri)) {
-		return Image;
-	}
-
-	if (
-		mimeType.includes('json') ||
-		mimeType.includes('javascript') ||
-		mimeType.includes('typescript') ||
-		/\.(js|ts|json|yaml|yml|xml|html|css)$/.test(uri)
-	) {
-		return Code;
-	}
-
-	if (mimeType.includes('text') || /\.(txt|md|log)$/.test(uri)) {
-		return FileText;
-	}
-
-	if (uri.includes('database') || uri.includes('db://')) {
-		return Database;
-	}
-
-	return File;
 }
 
 export function sortTreeChildren(children: ResourceTreeNode[]): ResourceTreeNode[] {

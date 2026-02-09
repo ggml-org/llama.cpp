@@ -23,6 +23,7 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, AGENTIC_TAGS } from '$lib/constants/agentic';
+import { IMAGE_MIME_TO_EXTENSION } from '$lib/constants/mcp-resource';
 import { AttachmentType, ContentPartType, MessageRole } from '$lib/enums';
 import type {
 	AgenticFlowParams,
@@ -658,14 +659,7 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
-		const extensionMap: Record<string, string> = {
-			'image/jpeg': 'jpg',
-			'image/jpg': 'jpg',
-			'image/png': 'png',
-			'image/gif': 'gif',
-			'image/webp': 'webp'
-		};
-		const extension = extensionMap[mimeType] ?? 'img';
+		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? 'img';
 		return `mcp-attachment-${Date.now()}-${index}.${extension}`;
 	}
 }
