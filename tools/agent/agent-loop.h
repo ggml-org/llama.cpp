@@ -207,6 +207,9 @@ public:
     const session_stats & get_stats() const { return stats_; }
 
 private:
+    // Build prompt + parser metadata using server chat template config.
+    common_chat_params format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools);
+
     // Generate a completion and get the parsed response with tool calls
     common_chat_msg generate_completion(result_timings & out_timings);
 

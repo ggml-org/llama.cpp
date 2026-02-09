@@ -6,8 +6,8 @@
 #include <mutex>
 #include <sstream>
 
-// Global mutex to serialize generate_completion calls across all agent instances
-// This works around a race condition in the server's cli_input handling
+// Protect the shared prompt-formatting + task-posting path without serializing
+// the full generation loop.
 static std::mutex g_completion_mutex;
 
 #if defined(_WIN32)
@@ -63,8 +63,8 @@ agent_loop::agent_loop(server_context & server_ctx,
     task_defaults_.antiprompt  = params.antiprompt;
     task_defaults_.stream      = true;
     task_defaults_.timings_per_token = true;
-    task_defaults_.oaicompat_chat_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-    task_defaults_.oaicompat_chat_syntax.parse_tool_calls = true;
+    task_defaults_.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    task_defaults_.chat_parser_params.parse_tool_calls = true;
 
     // Initialize tool context
     tool_ctx_.working_dir = config.working_dir.empty() ? "." : config.working_dir;
@@ -280,8 +280,8 @@ agent_loop::agent_loop(server_context & server_ctx,
     task_defaults_.antiprompt  = params.antiprompt;
     task_defaults_.stream      = true;
     task_defaults_.timings_per_token = true;
-    task_defaults_.oaicompat_chat_syntax.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-    task_defaults_.oaicompat_chat_syntax.parse_tool_calls = true;
+    task_defaults_.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    task_defaults_.chat_parser_params.parse_tool_calls = true;
 
     // Initialize tool context
     tool_ctx_.working_dir = config.working_dir.empty() ? "." : config.working_dir;
@@ -319,10 +319,30 @@ void agent_loop::clear() {
     stats_ = session_stats{};
 }
 
+common_chat_params agent_loop::format_chat_with_tools(const std::vector<common_chat_tool> & chat_tools) {
+    auto meta = server_ctx_.get_meta();
+    auto & chat_params = meta.chat_params;
+
+    common_chat_templates_inputs inputs;
+    inputs.messages              = common_chat_msgs_parse_oaicompat(messages_);
+    inputs.tools                 = chat_tools;
+    inputs.tool_choice           = chat_tools.empty() ? COMMON_CHAT_TOOL_CHOICE_NONE : COMMON_CHAT_TOOL_CHOICE_AUTO;
+    inputs.json_schema           = ""; // TODO
+    inputs.grammar               = ""; // TODO
+    inputs.use_jinja             = chat_params.use_jinja;
+    inputs.parallel_tool_calls   = false;
+    inputs.add_generation_prompt = true;
+    inputs.reasoning_format      = chat_params.reasoning_format;
+    inputs.enable_thinking       = chat_params.enable_thinking;
+    inputs.chat_template_kwargs  = chat_params.chat_template_kwargs;
+
+    return common_chat_templates_apply(chat_params.tmpls.get(), inputs);
+}
+
 common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
     server_response_reader rd = server_ctx_.get_response_reader();
     {
-        // Serialize task posting to work around server race condition with concurrent cli_input tasks
+        // Keep formatting + posting atomic across agent/subagent threads.
         std::lock_guard<std::mutex> lock(g_completion_mutex);
 
         server_task task = server_task(SERVER_TASK_TYPE_COMPLETION);
@@ -335,14 +355,18 @@ common_chat_msg agent_loop::generate_completion(result_timings & out_timings) {
         auto chat_tools = allowed_tools_.empty()
             ? tool_registry::instance().to_chat_tools()
             : tool_registry::instance().to_chat_tools_filtered(allowed_tools_);
-        json tools_json = common_chat_tools_to_json_oaicompat<json>(chat_tools);
 
-        // Pass both messages and tools as extended cli_input format
-        // Use deep copy to avoid any shared state issues across concurrent agents
-        task.cli_input = json::object();
-        task.cli_input["messages"] = json::parse(messages_.dump());
-        task.cli_input["tools"] = json::parse(tools_json.dump());
-        task.cli_input["tool_choice"] = "auto";
+        auto chat_params = format_chat_with_tools(chat_tools);
+
+        task.cli        = true;
+        task.cli_prompt = std::move(chat_params.prompt);
+
+        task.params.chat_parser_params = common_chat_parser_params(chat_params);
+        task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        task.params.chat_parser_params.parse_tool_calls = !chat_tools.empty();
+        if (!chat_params.parser.empty()) {
+            task.params.chat_parser_params.parser.load(chat_params.parser);
+        }
 
         rd.post_task(std::move(task));
     }
@@ -892,12 +916,18 @@ common_chat_msg agent_loop::generate_completion_streaming(
         auto chat_tools = allowed_tools_.empty()
             ? tool_registry::instance().to_chat_tools()
             : tool_registry::instance().to_chat_tools_filtered(allowed_tools_);
-        json tools_json = common_chat_tools_to_json_oaicompat<json>(chat_tools);
 
-        task.cli_input = json::object();
-        task.cli_input["messages"] = json::parse(messages_.dump());
-        task.cli_input["tools"] = json::parse(tools_json.dump());
-        task.cli_input["tool_choice"] = "auto";
+        auto chat_params = format_chat_with_tools(chat_tools);
+
+        task.cli        = true;
+        task.cli_prompt = std::move(chat_params.prompt);
+
+        task.params.chat_parser_params = common_chat_parser_params(chat_params);
+        task.params.chat_parser_params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        task.params.chat_parser_params.parse_tool_calls = !chat_tools.empty();
+        if (!chat_params.parser.empty()) {
+            task.params.chat_parser_params.parser.load(chat_params.parser);
+        }
 
         rd.post_task(std::move(task));
     }
