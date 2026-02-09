@@ -4583,8 +4583,8 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
             mapped_up = f"{base}.up_proj.weight"
             perm_gate = gate.permute(0, 2, 1).contiguous()
             perm_up = up.permute(0, 2, 1).contiguous()
-            yield from TextModel.modify_tensors(self, perm_gate, mapped_gate, bid)
-            yield from TextModel.modify_tensors(self, perm_up, mapped_up, bid)
+            yield from ModelBase.modify_tensors(self, perm_gate, mapped_gate, bid)
+            yield from ModelBase.modify_tensors(self, perm_up, mapped_up, bid)
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
