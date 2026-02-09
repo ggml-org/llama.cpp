@@ -508,11 +508,11 @@
 		/>
 
 		<div
-			class="flex-column relative min-h-[48px] items-center rounded-3xl p-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!p-3"
+			class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
 			onpaste={handlePaste}
 		>
 			<ChatFormTextarea
-				class="px-2 py-1.5 md:pt-0"
+				class="px-5 py-1.5 md:pt-0"
 				bind:this={textareaRef}
 				bind:value
 				onKeydown={handleKeydown}
@@ -535,6 +535,7 @@
 			{/if}
 
 			<ChatFormActions
+				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
 				hasText={value.trim().length > 0}

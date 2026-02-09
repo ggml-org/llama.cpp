@@ -28,8 +28,9 @@
 {#if hasAttachments}
 	<div class={className}>
 		<HorizontalScrollCarousel gapSize="2">
-			{#each attachments as attachment (attachment.id)}
+			{#each attachments as attachment, i (attachment.id)}
 				<ChatAttachmentMcpResource
+					class={i === 0 ? 'ml-3' : ''}
 					{attachment}
 					onRemove={handleRemove}
 					onClick={() => handleResourceClick(attachment.resource.uri)}
