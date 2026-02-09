@@ -131,7 +131,7 @@ static inline HVX_Vector hvx_dot_f16_f16_aa_rx32(const void * restrict y,
                                                  const size_t stride_x,
                                                  const size_t n,
                                                  float        s) {
-    HVX_Vector   sums       = Q6_V_vsplat_R(0);
+    HVX_Vector   sums;  // initialize at j = 0
     const size_t stride_x_4 = stride_x * 4;
     for (uint32_t j = 0; j < VLEN_FP32; j += 4) {
         HVX_Vector     sums_x4 = hvx_dot_f16_f16_aa_rx4(y, x, stride_x, n);
