@@ -71,6 +71,7 @@ layout (push_constant) uniform parameter {
 layout (binding = 4) readonly buffer S {float data_s[];};
 
 layout (binding = 5) writeonly buffer O {D_TYPE data_o[];};
+layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
@@ -246,3 +247,11 @@ void init_indices()
 // Bias applied to softmax to stay in fp16 range.
 // Based on ggml-cuda issue https://github.com/ggml-org/llama.cpp/issues/18606
 const float FATTN_KQ_MAX_OFFSET = 3.0f*0.6931f;
+
+// Store the output when doing grouped query attention.
+// Rows index by Q's dimension 2, and the first N rows are valid.
+void gqaStore(const in uint32_t r, const in uint32_t c, const in ACC_TYPEV4 elems, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
+{
+    uint32_t offset = (iq2 + r) * HSV / 4 + c;
+    data_ov4[o_offset + offset] = D_TYPEV4(elems);
+}
