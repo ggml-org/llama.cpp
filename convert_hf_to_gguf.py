@@ -4108,7 +4108,12 @@ class Qwen2MoeModel(TextModel):
         # per-expert [out, in] weights into [n_expert, out, in]), so no permute is needed.
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            # HF: [n_expert, n_embd, n_ff] → GGML: {n_ff, n_embd, n_expert} ✓
+            if self.model_arch == gguf.MODEL_ARCH.QWEN3VLMOE:
+                # Qwen3VL has transposed packed tensors
+                permuted = data_torch.permute(0, 2, 1).contiguous()
+                yield from super().modify_tensors(permuted, mapped, bid)
+                return            
+            # HF: [n_expert, n_embd, n_ff] -> GGML: {n_ff, n_embd, n_expert}
             yield from super().modify_tensors(data_torch, mapped, bid)
             return
 
@@ -4133,11 +4138,11 @@ class Qwen2MoeModel(TextModel):
                 yield from super().modify_tensors(perm_gate, mapped_gate, bid)
                 yield from super().modify_tensors(perm_up, mapped_up, bid)
                 return
-            # HF: [n_expert, 2*n_ff, n_embd] → split on dim=1
+            # HF: [n_expert, 2*n_ff, n_embd] -> split on dim=1
             n_ff = data_torch.shape[1] // 2
             gate = data_torch[:, :n_ff, :].contiguous()
             up = data_torch[:, n_ff:, :].contiguous()
-            # gate/up: [n_expert, n_ff, n_embd] → GGML: {n_embd, n_ff, n_expert} ✓
+            # gate/up: [n_expert, n_ff, n_embd] -> GGML: {n_embd, n_ff, n_expert}
             base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
             mapped_gate = f"{base_name}.gate_proj.weight"
             mapped_up = f"{base_name}.up_proj.weight"
