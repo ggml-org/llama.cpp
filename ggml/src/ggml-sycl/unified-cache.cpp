@@ -847,7 +847,7 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &     key_id,
             entry.pinned       = was_pinned;
             entry.owns_ptr     = true;
             entry.location     = pooled_alloc ? cache_location::HOST_PINNED : cache_location::HOST_MMAP;
-            used_ += dst_size;
+            used_.fetch_add(dst_size, std::memory_order_relaxed);
             if (g_ggml_sycl_debug >= 2) {
                 GGML_SYCL_DEBUG(
                     "[HOST-CACHE] realloc: model=%llu name_hash=0x%llx layout=%d size=%zu ptr=%p guard=%zu pinned=%d owns=%d loc=%d\n",
@@ -1026,7 +1026,7 @@ void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &     key_id,
     entry.location     = pooled_alloc ? cache_location::HOST_PINNED : cache_location::HOST_MMAP;
 
     entries_[key] = entry;
-    used_ += dst_size;
+    used_.fetch_add(dst_size, std::memory_order_relaxed);
 
     if (needs_fill) {
         *needs_fill = true;
@@ -1351,7 +1351,7 @@ void host_cache::free_entry(host_cache_entry & entry) {
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] Freeing non-pinned host cache entry (unexpected)\n");
             std::free(entry.host_ptr);
         }
-        used_ -= entry.size;
+        saturating_sub_used(entry.size);
     }
     entry.host_ptr = nullptr;
     entry.size     = 0;
@@ -1505,10 +1505,10 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                 it->second.host_resident = is_host_resident;
                 it->second.location     = new_location;
                 if (!is_host_resident) {
-                    used_ += (size - old_size);
+                    used_.fetch_add(size - old_size, std::memory_order_relaxed);
                 } else if (!it->second.host_resident) {
                     // Migrated from device to host, reduce device usage
-                    used_ -= old_size;
+                    saturating_sub_used(old_size);
                 }
                 it->second.pinned = was_pinned;
             } else if (content_changed) {
@@ -1646,7 +1646,7 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
 
     // Only track device memory usage, not host-resident entries
     if (!is_host_resident) {
-        used_ += size;
+        used_.fetch_add(size, std::memory_order_relaxed);
     }
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cached %s%s: %.2f MB (used=%.1f/%.1f MB)\n",
@@ -1764,7 +1764,7 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
 
             it->second.device_ptr = new_device_ptr;
             it->second.size       = alloc_size;
-            used_ += (alloc_size - old_size);
+            used_.fetch_add(alloc_size - old_size, std::memory_order_relaxed);
             content_changed = true;
         }
 
@@ -1834,7 +1834,7 @@ void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
             GGML_ABORT("unified_cache id_to_key mismatch");
         }
     }
-    used_ += alloc_size;
+    used_.fetch_add(alloc_size, std::memory_order_relaxed);
 
     if (needs_fill) {
         *needs_fill = true;
@@ -2005,7 +2005,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                             sycl::free(it->second.device_ptr, queue_);
                         } catch (...) {
                         }
-                        used_ -= it->second.size;
+                        saturating_sub_used(it->second.size);
                     }
                     // Pool entries: used_ stays at chunk level
                 }
@@ -2197,7 +2197,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         } catch (...) {
                             // Ignore - may leak memory but avoid crash
                         }
-                        used_ -= entry.size;
+                        saturating_sub_used(entry.size);
                     }
                     // Pool entries: used_ stays at chunk level
                 }
@@ -2359,7 +2359,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     is_pool_alloc = true;
                     // Account for any new physical memory consumed by new chunks
                     if (pool_result.new_physical_bytes > 0) {
-                        used_ += pool_result.new_physical_bytes;
+                        used_.fetch_add(pool_result.new_physical_bytes, std::memory_order_relaxed);
                     }
                 }
             }
@@ -2491,7 +2491,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             if (!is_host_resident && !is_pool_alloc) {
                 // Only count device memory against unified cache budget.
                 // Pool entries are tracked at chunk granularity (added when chunk is allocated).
-                used_ += request.dst_size;
+                used_.fetch_add(request.dst_size, std::memory_order_relaxed);
             }
             device_ptr = new_device_ptr;
             needs_fill = !is_host_resident;  // Host-resident already filled above
@@ -2613,7 +2613,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         // Free failed - memory may leak, but avoid crash
                         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Failed to free device memory during error recovery\n");
                     }
-                    used_ -= it->second.size;
+                    saturating_sub_used(it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -2644,7 +2644,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         sycl::free(it->second.device_ptr, queue_);
                     } catch (...) {
                     }
-                    used_ -= it->second.size;
+                    saturating_sub_used(it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -2675,7 +2675,7 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                         sycl::free(it->second.device_ptr, queue_);
                     } catch (...) {
                     }
-                    used_ -= it->second.size;
+                    saturating_sub_used(it->second.size);
                 }
                 // Pool entries: used_ stays at chunk level
                 it->second.device_ptr = nullptr;
@@ -3753,7 +3753,7 @@ void unified_cache::process_deferred_frees() {
                     sycl::free(it->ptr, queue_);
                 } catch (...) {
                 }
-                used_ -= it->size;
+                saturating_sub_used(it->size);
             }
             // Pool entries: used_ stays at chunk level, memory stays in pool
             GGML_SYCL_DEBUG("[UNIFIED-CACHE] deferred free done: ptr=%p size=%zu pool=%d\n", it->ptr, it->size, is_pool ? 1 : 0);
@@ -4673,6 +4673,50 @@ size_t unified_cache_get_runtime_host_bytes() {
     return g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
 }
 
+// === Budget Query API ===
+
+size_t unified_cache_available_for_compute(int device) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return 0;
+    }
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return 0;
+    }
+    return it->second->available_for_compute();
+}
+
+size_t unified_cache_total_managed(int device) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return 0;
+    }
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return 0;
+    }
+    return it->second->base_budget();
+}
+
+size_t unified_cache_weight_bytes(int device) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return 0;
+    }
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return 0;
+    }
+    return it->second->weight_bytes();
+}
+
 // === MoE Cache Helpers ===
 
 void unpin_all_experts() {
@@ -4910,7 +4954,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         onednn_activations_scratch_size_ = 0;
     }
     if (old_total > 0) {
-        used_.fetch_sub(old_total);
+        saturating_sub_used(old_total);
     }
 
     // Check if we have budget
@@ -4957,7 +5001,7 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
     }
 
     // Track in budget
-    used_.fetch_add(total_needed);
+    used_.fetch_add(total_needed, std::memory_order_relaxed);
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved oneDNN scratch: weights=%.1f MB, activations=%.1f MB\n",
                   weights_size / (1024.0f * 1024.0f), activations_size / (1024.0f * 1024.0f));
@@ -5064,7 +5108,7 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
             try {
                 sycl::free(entry.device_ptr, queue_);
             } catch (...) {}
-            used_.fetch_sub(entry.size);
+            saturating_sub_used(entry.size);
         }
         persistent_scratches_.erase(it);
     }
@@ -5099,7 +5143,7 @@ bool unified_cache::reserve_persistent_scratch(const std::string & buffer_name, 
     }
 
     // Track in budget and store entry
-    used_.fetch_add(size_bytes);
+    used_.fetch_add(size_bytes, std::memory_order_relaxed);
     persistent_scratches_[buffer_name] = { ptr, size_bytes, pin };
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Reserved persistent scratch '%s': %.1f MB (pinned=%d)\n",
@@ -5134,7 +5178,7 @@ void unified_cache::release_persistent_scratch(const std::string & buffer_name) 
         try {
             sycl::free(entry.device_ptr, queue_);
         } catch (...) {}
-        used_.fetch_sub(entry.size);
+        saturating_sub_used(entry.size);
         GGML_SYCL_DEBUG("[UNIFIED-CACHE] Released persistent scratch '%s' (%.1f MB)\n",
                       buffer_name.c_str(),
                       entry.size / (1024.0f * 1024.0f));

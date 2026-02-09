@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <list>
@@ -412,6 +413,22 @@ class host_cache {
     float  compute_score(const host_cache_entry & entry) const;
     void   free_entry(host_cache_entry & entry);
 
+    // Saturating subtract from used_ to prevent underflow to SIZE_MAX.
+    // Logs a warning if underflow is detected, then clamps to 0.
+    void saturating_sub_used(size_t bytes) {
+        size_t prev = used_.load(std::memory_order_relaxed);
+        for (;;) {
+            const size_t next = (prev >= bytes) ? (prev - bytes) : 0;
+            if (used_.compare_exchange_weak(prev, next, std::memory_order_relaxed)) {
+                if (prev < bytes) {
+                    fprintf(stderr, "[HOST-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n",
+                            prev, bytes);
+                }
+                return;
+            }
+        }
+    }
+
     sycl::queue &        queue_;
     size_t               budget_ = 0;
     size_t               base_budget_ = 0;
@@ -622,6 +639,18 @@ class unified_cache {
         return budget_ > used ? budget_ - used : 0;
     }
 
+    // Raw VRAM budget before runtime reservations
+    size_t base_budget() const { return base_budget_; }
+
+    // Bytes currently occupied by cached weights
+    size_t weight_bytes() const { return used_.load(); }
+
+    // VRAM available for non-weight allocations (compute, KV, scratch)
+    size_t available_for_compute() const {
+        const size_t w = used_.load();
+        return base_budget_ > w ? base_budget_ - w : 0;
+    }
+
     // Force eviction to free at least bytes_needed
     // Returns actual bytes freed
     size_t evict(size_t bytes_needed);
@@ -796,6 +825,22 @@ class unified_cache {
     void        enqueue_deferred_free(void * ptr, size_t size);
     void        enqueue_deferred_host_free(void * ptr, size_t size, const sycl::event & event);
 
+    // Saturating subtract from used_ to prevent underflow to SIZE_MAX.
+    // Logs a warning if underflow is detected, then clamps to 0.
+    void saturating_sub_used(size_t bytes) {
+        size_t prev = used_.load(std::memory_order_relaxed);
+        for (;;) {
+            const size_t next = (prev >= bytes) ? (prev - bytes) : 0;
+            if (used_.compare_exchange_weak(prev, next, std::memory_order_relaxed)) {
+                if (prev < bytes) {
+                    fprintf(stderr, "[UNIFIED-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n",
+                            prev, bytes);
+                }
+                return;
+            }
+        }
+    }
+
     sycl::queue &        queue_;
     size_t               budget_;       // Total GPU memory budget (after reservations)
     size_t               base_budget_;  // Raw cache budget before reservations
@@ -968,6 +1013,11 @@ size_t unified_cache_get_runtime_bytes(int device);
 void   unified_cache_add_runtime_host_bytes(size_t bytes);
 void   unified_cache_sub_runtime_host_bytes(size_t bytes);
 size_t unified_cache_get_runtime_host_bytes();
+
+// Budget query API — high-level accessors for non-weight allocation sizing
+size_t unified_cache_available_for_compute(int device);
+size_t unified_cache_total_managed(int device);
+size_t unified_cache_weight_bytes(int device);
 
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
