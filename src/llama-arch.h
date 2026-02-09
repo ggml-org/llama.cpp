@@ -41,6 +41,8 @@ enum llm_arch {
     LLM_ARCH_QWEN3NEXT,
     LLM_ARCH_QWEN3VL,
     LLM_ARCH_QWEN3VLMOE,
+    LLM_ARCH_QWEN35,
+    LLM_ARCH_QWEN35MOE,
     LLM_ARCH_PHI2,
     LLM_ARCH_PHI3,
     LLM_ARCH_PHIMOE,
@@ -404,13 +406,14 @@ enum llm_tensor {
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
+    LLM_TENSOR_SSM_ALPHA,           // qwen3.5
     // Kimi Linear KDA (using SSM_ prefix for consistency)
     LLM_TENSOR_SSM_CONV1D_Q,        // kimi: Q conv1d weight
     LLM_TENSOR_SSM_CONV1D_K,        // kimi: K conv1d weight
     LLM_TENSOR_SSM_CONV1D_V,        // kimi: V conv1d weight
     LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
     LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
-    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient
+    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     LLM_TENSOR_TIME_MIX_W0,

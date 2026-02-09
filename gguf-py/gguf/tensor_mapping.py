@@ -228,6 +228,7 @@ class TensorNameMap:
             "transformer_encoder.{bid}.qkv",                                       # neobert
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
         ),
 
         # Attention query
@@ -359,6 +360,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_GATE: (
             "model.layers.{bid}.self_attn.gate_proj", # afmoe
+            "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
         ),
 
@@ -823,6 +825,10 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5
+        ),
+
         MODEL_TENSOR.SSM_BETA_ALPHA: (
             "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3next
         ),
@@ -844,7 +850,8 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.f_b_proj",
         ),
         MODEL_TENSOR.SSM_BETA: (
-            "model.layers.{bid}.self_attn.b_proj",
+            "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
+            "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
         ),
         MODEL_TENSOR.SSM_G_A: (
             "model.layers.{bid}.self_attn.g_a_proj",
@@ -1871,6 +1878,12 @@ class TensorNameMap:
             MODEL_TENSOR.FFN_NORM_EXP: (
                 "model.layers.{bid}.post_attention_layernorm",
             ),
+        },
+        MODEL_ARCH.QWEN35: {
+            MODEL_TENSOR.FFN_NORM: (),
+        },
+        MODEL_ARCH.QWEN35MOE: {
+            MODEL_TENSOR.FFN_NORM: (),
         },
     }
 
