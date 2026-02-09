@@ -5848,22 +5848,21 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
 
 void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
     if (current_plan_ && ptr) {
-        current_plan_->temp_device_allocs.push_back(ptr);
+        current_plan_->temp_device_allocs.push_back({ptr, bytes});
         current_plan_->temp_device_alloc_bytes += bytes;
-        if (bytes > 0 && device_id_ >= 0) {
+        if (device_id_ >= 0) {
             ggml_sycl::unified_cache_add_runtime_bytes(device_id_, bytes);
         }
     }
 }
 
 void UnifiedKernel::cancel_persistent() {
-    // Free any temp allocations before clearing the plan
     if (current_plan_) {
-        for (void * ptr : current_plan_->temp_device_allocs) {
-            sycl::free(ptr, queue_);
-        }
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+        }
+        for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
+            sycl::free(ptr, queue_);
         }
         current_plan_->temp_device_allocs.clear();
         current_plan_->temp_device_alloc_bytes = 0;
@@ -5910,11 +5909,11 @@ OperationType UnifiedKernel::plan_op_type(int op_idx) const {
 void UnifiedKernel::begin_plan_update() {
     // Cancel any in-flight plan but DON'T free cached data
     if (current_plan_) {
-        for (void * ptr : current_plan_->temp_device_allocs) {
-            sycl::free(ptr, queue_);
-        }
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+        }
+        for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
+            sycl::free(ptr, queue_);
         }
         current_plan_.reset();
     }
@@ -6005,13 +6004,13 @@ void UnifiedKernel::invalidate_plan_cache() {
     plan_cache_valid_ = false;
     cached_ops_.clear();
     cached_plan_template_ = {};
-    for (void * ptr : cached_temp_device_allocs_) {
+    if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_);
+    }
+    for (auto & [ptr, sz] : cached_temp_device_allocs_) {
         if (ptr) {
             sycl::free(ptr, queue_);
         }
-    }
-    if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_);
     }
     cached_temp_device_allocs_.clear();
     cached_temp_device_alloc_bytes_ = 0;
@@ -6056,19 +6055,19 @@ void UnifiedKernel::execute_persistent() {
         cached_ops_ = current_plan_->operations;
         cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
         cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
-        // Ownership transfers to cached — don't subtract from budget yet
         current_plan_->temp_device_allocs.clear();
         current_plan_->temp_device_alloc_bytes = 0;
+        // Budget stays reserved — ownership transfers to cached allocs
         plan_cache_valid_ = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
     }
 
-    // Free temporary device allocations (e.g. RoPE cos/sin caches)
-    for (void * ptr : current_plan_->temp_device_allocs) {
-        sycl::free(ptr, queue_);
-    }
+    // Free non-cached temp allocs
     if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+    }
+    for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
+        sycl::free(ptr, queue_);
     }
     current_plan_->temp_device_allocs.clear();
     current_plan_->temp_device_alloc_bytes = 0;

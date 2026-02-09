@@ -1739,15 +1739,12 @@ static void ggml_sycl_init_pp_shared_context() {
 
 // Internal: allocate double buffers using PP shared context if available
 static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
-    // Untrack old host memory from budget before freeing
-    if (g_pp_transfer_buf_size > 0) {
-        ggml_sycl::unified_cache_sub_runtime_host_bytes(2 * g_pp_transfer_buf_size);
-    }
     // Free old buffers if they exist
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
             // Free in the context where it was allocated
             if (g_pp_shared_context != nullptr) {
+                ggml_sycl::unified_cache_sub_runtime_host_bytes(g_pp_transfer_buf_size);
                 sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[i]);
@@ -1807,8 +1804,11 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     }
 
     g_pp_transfer_buf_size = alloc_size;
-    // Track host memory in unified cache budget
-    ggml_sycl::unified_cache_add_runtime_host_bytes(2 * alloc_size);
+    // Track shared-context buffers in host budget (non-shared path uses ggml_sycl_host_malloc which already tracks)
+    if (g_pp_shared_context != nullptr) {
+        ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
+        ggml_sycl::unified_cache_add_runtime_host_bytes(alloc_size);
+    }
     GGML_LOG_INFO("SYCL PP: Allocated 2x %.1f KB pinned host memory%s\n",
                   alloc_size / 1024.0,
                   g_pp_shared_context ? " (shared context)" : " (default context)");
@@ -1885,14 +1885,11 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
         }
     }
 
-    // Untrack host memory from budget
-    if (g_pp_transfer_buf_size > 0) {
-        ggml_sycl::unified_cache_sub_runtime_host_bytes(2 * g_pp_transfer_buf_size);
-    }
     // Free buffers (use shared context if it was used for allocation)
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
             if (g_pp_shared_context != nullptr) {
+                ggml_sycl::unified_cache_sub_runtime_host_bytes(g_pp_transfer_buf_size);
                 sycl::free(g_pp_transfer_buf[i], *g_pp_shared_context);
             } else {
                 ggml_sycl_host_free(g_pp_transfer_buf[i]);

@@ -1006,10 +1006,27 @@ enum class alloc_hint : uint8_t {
     DEBUG      = 4,  // Debug/profiling allocations (env-gated, not production)
 };
 
+// Per-category classification for runtime (non-weight) VRAM accounting.
+// Used by add/sub_runtime_bytes to track where non-weight memory goes.
+enum class runtime_category : uint8_t {
+    COMPUTE    = 0,  // Compute buffers, scratch memory
+    KV         = 1,  // KV cache allocations
+    STAGING    = 2,  // DMA staging, oneDNN scratch buffers
+    PERSISTENT = 3,  // Context-lifetime persistent buffers
+    OTHER      = 4,  // Uncategorized runtime allocations
+};
+static constexpr int RUNTIME_CATEGORY_COUNT = 5;
+
+// Human-readable name for a runtime_category value.
+const char * runtime_category_name(runtime_category cat);
+
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
-void   unified_cache_add_runtime_bytes(int device, size_t bytes);
-void   unified_cache_sub_runtime_bytes(int device, size_t bytes);
+void   unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);
+void   unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);
 size_t unified_cache_get_runtime_bytes(int device);
+
+// Query runtime bytes for a specific category on a device.
+size_t unified_cache_get_runtime_bytes_by_category(int device, runtime_category cat);
 
 void   unified_cache_add_runtime_host_bytes(size_t bytes);
 void   unified_cache_sub_runtime_host_bytes(size_t bytes);
