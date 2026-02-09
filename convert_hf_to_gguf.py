@@ -4563,7 +4563,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
             name = name.replace("language_model.", "")
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
             permuted = data_torch.permute(0, 2, 1).contiguous()
-            yield from TextModel.modify_tensors(self, permuted, mapped, bid)
+            yield from ModelBase.modify_tensors(self, permuted, mapped, bid)
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
