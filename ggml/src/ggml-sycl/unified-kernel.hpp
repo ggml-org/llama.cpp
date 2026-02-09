@@ -441,6 +441,7 @@ struct PersistentPlan {
     // Device memory allocations made during plan building (e.g. RoPE cos/sin caches).
     // These are freed after execute_persistent() completes.
     std::vector<void *> temp_device_allocs;
+    size_t              temp_device_alloc_bytes = 0;
 
     bool is_valid() const { return n_layers > 0 && !operations.empty(); }
 };
@@ -2609,7 +2610,7 @@ public:
     void set_persistent_debug_rms(float * debug_ptr, int layer, int hidden_dim, int * flag);
     void set_persistent_debug_matmul(float * debug_ptr, int layer, MatmulType type, int out_dim, int * flag);
     void set_persistent_debug_hash(uint64_t * debug_ptr, int debug_bytes);
-    void add_temp_device_alloc(void * ptr);
+    void add_temp_device_alloc(void * ptr, size_t bytes);
     void execute_persistent();
     void cancel_persistent();
 
@@ -2660,6 +2661,7 @@ private:
     std::vector<OperationDescriptor> cached_ops_;
     PersistentPlan                   cached_plan_template_;
     std::vector<void *>              cached_temp_device_allocs_;
+    size_t                           cached_temp_device_alloc_bytes_ = 0;
     bool                             plan_cache_valid_ = false;
 
     // Device ops table pool (DeviceOperation * — defined in unified-kernel.cpp)

@@ -5352,7 +5352,14 @@ void UnifiedKernel::free_persistent_buffers() {
     barrier_counter_ = nullptr;
     barrier_sense_   = nullptr;
     if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
-    if (get_rows_pool_) { sycl::free(get_rows_pool_, queue_); get_rows_pool_ = nullptr; get_rows_pool_size_ = 0; }
+    if (get_rows_pool_) {
+        if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_);
+        }
+        sycl::free(get_rows_pool_, queue_);
+        get_rows_pool_ = nullptr;
+        get_rows_pool_size_ = 0;
+    }
     // Free DAG allocations
     if (dag_allocated_) {
         if (dag_state_.ready_counter)    sycl::free(dag_state_.ready_counter, queue_);
@@ -5839,9 +5846,13 @@ void UnifiedKernel::add_rope(int layer, const RopeDescriptor & desc) {
     current_plan_->operations.push_back(op);
 }
 
-void UnifiedKernel::add_temp_device_alloc(void * ptr) {
+void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
     if (current_plan_ && ptr) {
         current_plan_->temp_device_allocs.push_back(ptr);
+        current_plan_->temp_device_alloc_bytes += bytes;
+        if (bytes > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, bytes);
+        }
     }
 }
 
@@ -5851,7 +5862,11 @@ void UnifiedKernel::cancel_persistent() {
         for (void * ptr : current_plan_->temp_device_allocs) {
             sycl::free(ptr, queue_);
         }
+        if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+        }
         current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_bytes = 0;
     }
     current_plan_.reset();
 }
@@ -5897,6 +5912,9 @@ void UnifiedKernel::begin_plan_update() {
     if (current_plan_) {
         for (void * ptr : current_plan_->temp_device_allocs) {
             sycl::free(ptr, queue_);
+        }
+        if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
         }
         current_plan_.reset();
     }
@@ -5992,18 +6010,30 @@ void UnifiedKernel::invalidate_plan_cache() {
             sycl::free(ptr, queue_);
         }
     }
+    if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_);
+    }
     cached_temp_device_allocs_.clear();
+    cached_temp_device_alloc_bytes_ = 0;
 }
 
 void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
     if (bytes <= get_rows_pool_size_ && get_rows_pool_) {
         return get_rows_pool_;
     }
+    // Free old pool and untrack
     if (get_rows_pool_) {
         sycl::free(get_rows_pool_, queue_);
+        if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_);
+        }
     }
     get_rows_pool_ = sycl::malloc_device(bytes, queue_);
     get_rows_pool_size_ = get_rows_pool_ ? bytes : 0;
+    // Track new pool
+    if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, get_rows_pool_size_);
+    }
     return get_rows_pool_;
 }
 
@@ -6025,7 +6055,10 @@ void UnifiedKernel::execute_persistent() {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
         cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
+        // Ownership transfers to cached — don't subtract from budget yet
         current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_bytes = 0;
         plan_cache_valid_ = true;
         GGML_SYCL_DEBUG("[PERSISTENT-TG] Plan cached: %zu operations\n", cached_ops_.size());
     }
@@ -6034,7 +6067,11 @@ void UnifiedKernel::execute_persistent() {
     for (void * ptr : current_plan_->temp_device_allocs) {
         sycl::free(ptr, queue_);
     }
+    if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+    }
     current_plan_->temp_device_allocs.clear();
+    current_plan_->temp_device_alloc_bytes = 0;
 
     // Clear the plan after execution (cached copy remains)
     current_plan_.reset();

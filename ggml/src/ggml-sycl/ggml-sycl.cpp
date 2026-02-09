@@ -26062,7 +26062,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc dst_ptr=%p bytes=%zu\n", dst_ptr, bytes);
         }
-        kernel.add_temp_device_alloc(dst_ptr);
+        kernel.add_temp_device_alloc(dst_ptr, bytes);
 
         auto * meta_dev = sycl::malloc_device<StridedCopyMeta>(1, *q);
         if (!meta_dev) {
@@ -26072,7 +26072,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc meta_dev=%p\n", (void *) meta_dev);
         }
-        kernel.add_temp_device_alloc(meta_dev);
+        kernel.add_temp_device_alloc(meta_dev, sizeof(StridedCopyMeta));
 
         StridedCopyMeta meta = {};
         for (int d = 0; d < GGML_MAX_DIMS; d++) {
@@ -26225,7 +26225,7 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
             return nullptr;
         }
 
-        kernel.add_temp_device_alloc(dev_ptr);
+        kernel.add_temp_device_alloc(dev_ptr, bytes);
         ggml_sycl_safe_memcpy(*q, dev_ptr, ptr, bytes, {});
         q->wait_and_throw();
         return dev_ptr;
@@ -26596,8 +26596,8 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                             }
                             q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
                             q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
-                            kernel.add_temp_device_alloc(d_cos);
-                            kernel.add_temp_device_alloc(d_sin);
+                            kernel.add_temp_device_alloc(d_cos, half_dim * sizeof(float));
+                            kernel.add_temp_device_alloc(d_sin, half_dim * sizeof(float));
                             rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
                         }
 
@@ -27858,8 +27858,8 @@ full_build:
                     q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
                     q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
 
-                    kernel.add_temp_device_alloc(d_cos);
-                    kernel.add_temp_device_alloc(d_sin);
+                    kernel.add_temp_device_alloc(d_cos, half_dim * sizeof(float));
+                    kernel.add_temp_device_alloc(d_sin, half_dim * sizeof(float));
                     rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
                 }
 
@@ -28498,7 +28498,7 @@ full_build:
                     GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate SetRowsMeta\n");
                     return false;
                 }
-                kernel.add_temp_device_alloc(meta_dev);
+                kernel.add_temp_device_alloc(meta_dev, sizeof(SetRowsMeta));
                 q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
 
                 const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
@@ -28592,7 +28592,7 @@ full_build:
                     GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta for CONT\n");
                     return false;
                 }
-                kernel.add_temp_device_alloc(meta_dev);
+                kernel.add_temp_device_alloc(meta_dev, sizeof(StridedCopyMeta));
                 q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
 
                 const int64_t n_elements = ggml_nelements(node->src[0]);
