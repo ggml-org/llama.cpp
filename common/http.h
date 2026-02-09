@@ -57,6 +57,17 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
         throw std::runtime_error("error: invalid URL format");
     }
 
+#ifndef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (parts.scheme == "https") {
+        throw std::runtime_error(
+            "HTTPS is not supported. Please rebuild with one of:\n"
+            "  -DLLAMA_BUILD_BORINGSSL=ON\n"
+            "  -DLLAMA_BUILD_LIBRESSL=ON\n"
+            "  -DLLAMA_OPENSSL=ON (default, requires OpenSSL dev files installed)"
+        );
+    }
+#endif
+
     httplib::Client cli(parts.scheme + "://" + parts.host);
 
     if (!parts.user.empty()) {

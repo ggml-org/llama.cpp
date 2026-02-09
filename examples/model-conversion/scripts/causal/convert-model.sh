@@ -4,10 +4,15 @@ set -e
 
 # Parse command line arguments
 MMPROJ=""
+DEBUG=""
 while [[ $# -gt 0 ]]; do
     case $1 in
         --mmproj)
             MMPROJ="--mmproj"
+            shift
+            ;;
+        --debug)
+            DEBUG="1"
             shift
             ;;
         *)
@@ -28,7 +33,12 @@ echo "Data  type: ${TYPE}"
 echo "Converted model path:: ${CONVERTED_MODEL}"
 echo "Metadata override: ${METADATA_OVERRIDE}"
 
-CMD_ARGS=("python" "../../convert_hf_to_gguf.py" "--verbose")
+if [[ -n "$DEBUG" ]]; then
+    CMD_ARGS=("python" "-m" "pdb")
+else
+    CMD_ARGS=("python")
+fi
+CMD_ARGS+=("../../convert_hf_to_gguf.py" "--verbose")
 CMD_ARGS+=("${MODEL_PATH}")
 CMD_ARGS+=("--outfile" "${CONVERTED_MODEL}")
 CMD_ARGS+=("--outtype" "${TYPE}")

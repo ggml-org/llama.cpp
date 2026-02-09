@@ -314,23 +314,26 @@ static bool common_pull_file(httplib::Client & cli,
 
 // download one single file from remote URL to local path
 // returns status code or -1 on error
-static int common_download_file_single_online(const std::string & url,
-                                               const std::string & path,
-                                               const std::string & bearer_token,
-                                               const common_header_list & custom_headers) {
+static int common_download_file_single_online(const std::string        & url,
+                                              const std::string        & path,
+                                              const std::string        & bearer_token,
+                                              const common_header_list & custom_headers) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers default_headers = {{"User-Agent", "llama-cpp"}};
-    if (!bearer_token.empty()) {
-        default_headers.insert({"Authorization", "Bearer " + bearer_token});
-    }
+    httplib::Headers headers;
     for (const auto & h : custom_headers) {
-        default_headers.emplace(h.first, h.second);
+        headers.emplace(h.first, h.second);
     }
-    cli.set_default_headers(default_headers);
+    if (headers.find("User-Agent") == headers.end()) {
+        headers.emplace("User-Agent", "llama-cpp/" + build_info);
+    }
+    if (!bearer_token.empty()) {
+        headers.emplace("Authorization", "Bearer " + bearer_token);
+    }
+    cli.set_default_headers(headers);
 
     const bool file_exists = std::filesystem::exists(path);
 
@@ -437,10 +440,12 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
                                                              const common_remote_params & params) {
     auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers = {{"User-Agent", "llama-cpp"}};
-
-    for (const auto & header : params.headers) {
-        headers.emplace(header.first, header.second);
+    httplib::Headers headers;
+    for (const auto & h : params.headers) {
+        headers.emplace(h.first, h.second);
+    }
+    if (headers.find("User-Agent") == headers.end()) {
+        headers.emplace("User-Agent", "llama-cpp/" + build_info);
     }
 
     if (params.timeout > 0) {

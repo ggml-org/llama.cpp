@@ -5,7 +5,7 @@
 #include "json-partial.h"
 #include "regex-partial.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <optional>
 #include <string>
@@ -19,20 +19,20 @@ class common_chat_msg_partial_exception : public std::runtime_error {
 class common_chat_msg_parser {
     std::string input_;
     bool is_partial_;
-    common_chat_syntax syntax_;
+    common_chat_parser_params syntax_; // TODO: rename to params
     std::string healing_marker_;
 
     size_t pos_ = 0;
     common_chat_msg result_;
 
   public:
-    common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+    common_chat_msg_parser(const std::string & input, bool is_partial, const common_chat_parser_params & syntax);
     const std::string & input() const { return input_; }
     size_t pos() const { return pos_; }
     const std::string & healing_marker() const { return healing_marker_; }
     const bool & is_partial() const { return is_partial_; }
     const common_chat_msg & result() const { return result_; }
-    const common_chat_syntax & syntax() const { return syntax_; }
+    const common_chat_parser_params & syntax() const { return syntax_; }
 
     void move_to(size_t pos) {
         if (pos > input_.size()) {

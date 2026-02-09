@@ -61,6 +61,12 @@ size_t string::length() const {
     return len;
 }
 
+void string::hash_update(hasher & hash) const noexcept {
+    for (const auto & part : parts) {
+        hash.update(part.val.data(), part.val.length());
+    }
+}
+
 bool string::all_parts_are_input() const {
     for (const auto & part : parts) {
         if (!part.is_input) {

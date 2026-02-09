@@ -20,9 +20,9 @@ struct server_context_meta {
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
 
-    // chat template
-    std::string chat_template;
-    std::string chat_template_tool_use;
+    // chat params
+    server_chat_params & chat_params;
+    std::map<std::string, bool> chat_template_caps;
 
     // tokens
     std::string bos_token_str;
@@ -95,6 +95,7 @@ struct server_routes {
     server_http_context::handler_t post_completions;
     server_http_context::handler_t post_completions_oai;
     server_http_context::handler_t post_chat_completions;
+    server_http_context::handler_t post_responses_oai;
     server_http_context::handler_t post_anthropic_messages;
     server_http_context::handler_t post_anthropic_count_tokens;
     server_http_context::handler_t post_apply_template;

@@ -402,7 +402,7 @@ class SchemaConverter:
             Transforms a regular expression pattern into a GBNF rule.
 
             Input: https://json-schema.org/understanding-json-schema/reference/regular_expressions
-            Output: https://github.com/ggerganov/llama.cpp/blob/master/grammars/README.md
+            Output: https://github.com/ggml-org/llama.cpp/blob/master/grammars/README.md
 
             Unsupported features: negative/positive lookaheads, greedy/non-greedy modifiers.
 

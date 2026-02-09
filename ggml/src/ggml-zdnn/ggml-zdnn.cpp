@@ -58,6 +58,10 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
             continue;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         bool ok = ggml_zdnn_compute_forward(ctx, node);
         if (!ok) {
             GGML_LOG_ERROR("%s: unsupported op %s (%s)\n",
@@ -368,7 +372,8 @@ static size_t ggml_backend_zdnn_buffer_type_get_alignment(ggml_backend_buffer_ty
 }
 
 static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
-    return true;
+    /* while it resides in host memory, additional transformation is needed */
+    return false;
 
     GGML_UNUSED(buft);
 }
