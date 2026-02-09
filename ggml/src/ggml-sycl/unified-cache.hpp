@@ -1024,6 +1024,9 @@ size_t unified_cache_total_managed(int device);
 // Current weight bytes on device
 size_t unified_cache_weight_bytes(int device);
 
+// Log budget summary (weights, runtime, available) for diagnostics
+void unified_cache_log_budget_summary(int device);
+
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
 host_cache * get_host_cache_for_device(int device_id);

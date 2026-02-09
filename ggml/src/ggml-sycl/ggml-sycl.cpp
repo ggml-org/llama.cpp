@@ -6358,6 +6358,14 @@ static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_typ
         return 0;
     }
 
+    // When unified cache is initialized, report available compute headroom.
+    // This lets the framework auto-size KV cache to fit within remaining VRAM.
+    size_t cache_avail = ggml_sycl::unified_cache_available_for_compute(ctx->device);
+    if (cache_avail > 0) {
+        return cache_avail;
+    }
+
+    // Fallback: device hardware limit (cache not yet initialized or VRAM fully consumed)
     return ggml_sycl_info().devices[ctx->device].max_alloc_size;
 
 }
@@ -20275,7 +20283,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             GGML_LOG_WARN("[MUL_MAT] Generic BLAS fallback for %s (type=%d batch=%lld)\n",
                           src0->name ? src0->name : "?", src0->type, (long long) src1->ne[1]);
+
+            // Reserve budget headroom for F16 dequantization buffer.
+            // This triggers weight eviction if needed, freeing physical VRAM
+            // so the pool allocator inside ggml_sycl_op_mul_mat_sycl can succeed.
+            const size_t f16_bytes = src0->ne[0] * src0->ne[1] * sizeof(sycl::half);
+            ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, f16_bytes);
             ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, GGML_LAYOUT_AOS);
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, f16_bytes);
             return;
         }
         GGML_LOG_ERROR("[MUL_MAT] No eligible kernel variant for %s (type=%d)\n", src0->name ? src0->name : "?",
@@ -29981,6 +29996,16 @@ normal_dispatch:
             warmup_n_nodes = cgraph->n_nodes;
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup complete for %s phase\n", is_decode_phase ? "decode" : "prompt");
+
+            // Log budget summary once after first warmup
+            {
+                static bool budget_logged = false;
+                if (!budget_logged) {
+                    budget_logged = true;
+                    ggml_sycl::unified_cache_log_budget_summary(sycl_ctx->device);
+                }
+            }
+
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }

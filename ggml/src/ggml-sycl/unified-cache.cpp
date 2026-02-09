@@ -4717,6 +4717,76 @@ size_t unified_cache_weight_bytes(int device) {
     return it->second->weight_bytes();
 }
 
+// === Budget Summary Diagnostic ===
+
+void unified_cache_log_budget_summary(int device) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return;
+    }
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return;
+    }
+    auto & cache      = *it->second;
+    const size_t base = cache.base_budget();
+    const size_t wt   = cache.weight_bytes();
+    const size_t rt   = g_runtime_reserved_bytes[effective_device].load(std::memory_order_relaxed);
+    const size_t eff  = cache.budget();
+    const size_t avl  = cache.available();
+
+    GGML_LOG_INFO("[UNIFIED-CACHE] Budget summary for device %d:\n"
+                  "  Total VRAM budget:    %8.1f MB\n"
+                  "  Weight bytes (used_): %8.1f MB\n"
+                  "  Runtime reserved:     %8.1f MB\n"
+                  "  Effective budget:     %8.1f MB\n"
+                  "  Available for alloc:  %8.1f MB\n",
+                  device,
+                  base / (1024.0f * 1024.0f),
+                  wt / (1024.0f * 1024.0f),
+                  rt / (1024.0f * 1024.0f),
+                  eff / (1024.0f * 1024.0f),
+                  avl / (1024.0f * 1024.0f));
+
+    // Validate accounting consistency:
+    //   weight_bytes + available should equal effective budget
+    //   (effective budget = base_budget - internal reserved)
+    const size_t tolerance = 1024 * 1024;  // 1 MB
+    const size_t wt_plus_avl = wt + avl;
+    if (wt_plus_avl > eff + tolerance || eff > wt_plus_avl + tolerance) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] Accounting mismatch on device %d: "
+                      "weights(%.1f) + available(%.1f) = %.1f MB, "
+                      "but effective_budget = %.1f MB (delta = %.1f MB)\n",
+                      device,
+                      wt / (1024.0f * 1024.0f),
+                      avl / (1024.0f * 1024.0f),
+                      wt_plus_avl / (1024.0f * 1024.0f),
+                      eff / (1024.0f * 1024.0f),
+                      (double)(wt_plus_avl > eff ? wt_plus_avl - eff : eff - wt_plus_avl) / (1024.0 * 1024.0));
+    }
+
+    // Sanity: used_ should not exceed effective budget
+    if (wt > eff + tolerance) {
+        GGML_LOG_WARN("[UNIFIED-CACHE] Over-allocation on device %d: "
+                      "weight_bytes(%.1f MB) > effective_budget(%.1f MB)\n",
+                      device,
+                      wt / (1024.0f * 1024.0f),
+                      eff / (1024.0f * 1024.0f));
+    }
+
+    // Diagnostic: flag if external runtime tracker diverges from internal reserved
+    const size_t implied_reserved = (base > eff) ? (base - eff) : 0;
+    if (rt > implied_reserved + tolerance || implied_reserved > rt + tolerance) {
+        GGML_LOG_INFO("[UNIFIED-CACHE] Note: external runtime tracker (%.1f MB) "
+                      "differs from internal reserved (%.1f MB) on device %d\n",
+                      rt / (1024.0f * 1024.0f),
+                      implied_reserved / (1024.0f * 1024.0f),
+                      device);
+    }
+}
+
 // === MoE Cache Helpers ===
 
 void unpin_all_experts() {
