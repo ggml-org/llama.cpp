@@ -17790,7 +17790,16 @@ bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
             GGML_ASSERT(expert_cache_key.valid && "missing MoE cache key");
             return false;
         }
-        ggml_sycl_assert_layout_choice(expert_cache_key, device, layout, src0->name, "ggml_sycl_update_moe_ptr_table");
+        // When force_cache_aos is set, the caller is explicitly overriding the layout
+        // for host-resident weights that may have a different finalized layout choice.
+        // This happens when model exceeds VRAM and weights fall to host memory.
+        if (!force_cache_aos) {
+            ggml_sycl_assert_layout_choice(expert_cache_key, device, layout, src0->name, "ggml_sycl_update_moe_ptr_table");
+        } else {
+            // Log the override but don't assert — the layout will be AoS for host staging
+            ggml_sycl_log_layout_mismatch_once(expert_cache_key, device, layout, layout, src0->name,
+                                               "ggml_sycl_update_moe_ptr_table(force_cache_aos)");
+        }
         ggml_sycl::cache_layout_request req{};
         req.key              = expert_cache_key;
         req.src_ptr          = expert_aos;
@@ -20192,6 +20201,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                            src0->name ? src0->name : "?", ggml_sycl_layout_mode_name(chosen_layout), src0->type,
                            (long long) src1->ne[1]);
             GGML_ABORT("MUL_MAT dispatch failed for finalized layout");
+        }
+        // Generic BLAS fallback for types without dedicated kernels (e.g., MXFP4 on host).
+        // Dequantizes to F16 and uses oneDNN GEMM, matching master's catch-all path.
+        if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            GGML_LOG_WARN("[MUL_MAT] Generic BLAS fallback for %s (type=%d batch=%lld)\n",
+                          src0->name ? src0->name : "?", src0->type, (long long) src1->ne[1]);
+            ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, GGML_LAYOUT_AOS);
+            return;
         }
         GGML_LOG_ERROR("[MUL_MAT] No eligible kernel variant for %s (type=%d)\n", src0->name ? src0->name : "?",
                        src0->type);
