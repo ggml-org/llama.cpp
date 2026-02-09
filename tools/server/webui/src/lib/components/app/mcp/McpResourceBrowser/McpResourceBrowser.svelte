@@ -2,8 +2,8 @@
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpResources, mcpResourcesLoading } from '$lib/stores/mcp-resources.svelte';
-	import type { MCPResourceInfo } from '$lib/types';
-	import { SvelteSet } from 'svelte/reactivity';
+	import type { MCPServerResources, MCPResourceInfo } from '$lib/types';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { parseResourcePath } from './mcp-resource-browser';
 	import McpResourceBrowserHeader from './McpResourceBrowserHeader.svelte';
 	import McpResourceBrowserEmptyState from './McpResourceBrowserEmptyState.svelte';
@@ -29,15 +29,42 @@
 
 	let expandedServers = new SvelteSet<string>();
 	let expandedFolders = new SvelteSet<string>();
-	let lastExpandedUri = $state<string | undefined>(undefined);
+	let searchQuery = $state('');
 
 	const resources = $derived(mcpResources());
 	const isLoading = $derived(mcpResourcesLoading());
 
+	const filteredResources = $derived.by(() => {
+		if (!searchQuery.trim()) {
+			return resources;
+		}
+
+		const query = searchQuery.toLowerCase();
+		const filtered = new SvelteMap();
+
+		for (const [serverName, serverRes] of resources.entries()) {
+			const filteredResources = serverRes.resources.filter((r) => {
+				return (
+					r.title?.toLowerCase().includes(query) ||
+					r.uri.toLowerCase().includes(query) ||
+					serverName.toLowerCase().includes(query)
+				);
+			});
+
+			if (filteredResources.length > 0 || query.trim()) {
+				filtered.set(serverName, {
+					...serverRes,
+					resources: filteredResources
+				});
+			}
+		}
+
+		return filtered;
+	});
+
 	$effect(() => {
-		if (expandToUri && resources.size > 0 && expandToUri !== lastExpandedUri) {
+		if (expandToUri && resources.size > 0) {
 			autoExpandToResource(expandToUri);
-			lastExpandedUri = expandToUri;
 		}
 	});
 
@@ -83,24 +110,24 @@
 </script>
 
 <div class={cn('flex flex-col gap-2', className)}>
-	<McpResourceBrowserHeader {isLoading} onRefresh={handleRefresh} />
+	<McpResourceBrowserHeader {isLoading} onRefresh={handleRefresh} onSearch={(q) => searchQuery = q} searchQuery={searchQuery} />
 
 	<div class="flex flex-col gap-1">
-		{#if resources.size === 0}
+		{#if filteredResources.size === 0}
 			<McpResourceBrowserEmptyState {isLoading} />
 		{:else}
-			{#each [...resources.entries()] as [serverName, serverRes] (serverName)}
+			{#each [...filteredResources.entries()] as [serverName, serverRes] (serverName)}
 				<McpResourceBrowserServerItem
-					{serverName}
-					{serverRes}
-					isExpanded={expandedServers.has(serverName)}
+					serverName={serverName as string}
+					serverRes={serverRes as MCPServerResources}
+					isExpanded={expandedServers.has(serverName as string)}
 					{selectedUris}
 					{expandedFolders}
-					onToggleServer={() => toggleServer(serverName)}
+					onToggleServer={() => toggleServer(serverName as string)}
 					onToggleFolder={toggleFolder}
 					{onSelect}
 					{onToggle}
-					{onAttach}
+					searchQuery={searchQuery}
 				/>
 			{/each}
 		{/if}

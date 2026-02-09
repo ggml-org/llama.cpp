@@ -5,6 +5,7 @@ export interface ResourceTreeNode {
 	name: string;
 	resource?: MCPResourceInfo;
 	children: Map<string, ResourceTreeNode>;
+	isFiltered?: boolean;
 }
 
 export function parseResourcePath(uri: string): string[] {
@@ -24,20 +25,56 @@ export function getDisplayName(pathPart: string): string {
 		.join(' ');
 }
 
+function resourceMatchesSearch(resource: MCPResource, query: string): boolean {
+	return (
+		resource.title?.toLowerCase().includes(query) ||
+		resource.uri.toLowerCase().includes(query)
+	);
+}
+
 export function buildResourceTree(
 	resourceList: MCPResource[],
-	serverName: string
+	serverName: string,
+	searchQuery?: string
 ): ResourceTreeNode {
 	const root: ResourceTreeNode = { name: 'root', children: new Map() };
 
+	if (!searchQuery || !searchQuery.trim()) {
+		for (const resource of resourceList) {
+			const pathParts = parseResourcePath(resource.uri);
+			let current = root;
+
+			for (let i = 0; i < pathParts.length - 1; i++) {
+				const part = pathParts[i];
+				if (!current.children.has(part)) {
+					current.children.set(part, { name: part, children: new Map() });
+				}
+				current = current.children.get(part)!;
+			}
+
+			const fileName = pathParts[pathParts.length - 1] || resource.name;
+			current.children.set(resource.uri, {
+				name: fileName,
+				resource: { ...resource, serverName },
+				children: new Map()
+			});
+		}
+		return root;
+	}
+
+	const query = searchQuery.toLowerCase();
+	
+	// Build tree with filtering
 	for (const resource of resourceList) {
+		if (!resourceMatchesSearch(resource, query)) continue;
+		
 		const pathParts = parseResourcePath(resource.uri);
 		let current = root;
 
 		for (let i = 0; i < pathParts.length - 1; i++) {
 			const part = pathParts[i];
 			if (!current.children.has(part)) {
-				current.children.set(part, { name: part, children: new Map() });
+				current.children.set(part, { name: part, children: new Map(), isFiltered: true });
 			}
 			current = current.children.get(part)!;
 		}
@@ -46,10 +83,31 @@ export function buildResourceTree(
 		current.children.set(resource.uri, {
 			name: fileName,
 			resource: { ...resource, serverName },
-			children: new Map()
+			children: new Map(),
+			isFiltered: true
 		});
 	}
-
+	
+	// Clean up empty folders that don't match
+	function cleanupEmptyFolders(node: ResourceTreeNode): boolean {
+		if (node.resource) return true;
+		
+		const toDelete: string[] = [];
+		for (const [name, child] of node.children.entries()) {
+			if (!cleanupEmptyFolders(child)) {
+				toDelete.push(name);
+			}
+		}
+		
+		for (const name of toDelete) {
+			node.children.delete(name);
+		}
+		
+		return node.children.size > 0;
+	}
+	
+	cleanupEmptyFolders(root);
+	
 	return root;
 }
 
