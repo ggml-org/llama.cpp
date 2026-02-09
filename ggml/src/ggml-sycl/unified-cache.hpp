@@ -951,6 +951,15 @@ void set_unified_cache_budget_pct(int pct);
 // Set unified host cache budget as percentage of total system RAM (call before first use)
 void set_unified_cache_host_budget_pct(int pct);
 
+// Classification of VRAM allocations for budget tracking and diagnostics
+enum class alloc_hint : uint8_t {
+    WEIGHT     = 0,  // Evictable model weights (managed by cache LRU)
+    COMPUTE    = 1,  // Per-inference scratch (compute buffers, activation staging)
+    EPHEMERAL  = 2,  // Per-graph temporaries (freed within graph_compute)
+    PERSISTENT = 3,  // Context-lifetime buffers (persistent kernel state, DAG arrays)
+    DEBUG      = 4,  // Debug/profiling allocations (env-gated, not production)
+};
+
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
 void   unified_cache_add_runtime_bytes(int device, size_t bytes);
 void   unified_cache_sub_runtime_bytes(int device, size_t bytes);

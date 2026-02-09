@@ -2648,6 +2648,8 @@ public:
 
 private:
     sycl::queue &                    queue_;
+    int                              device_id_ = -1;
+    size_t                           runtime_tracked_bytes_ = 0;
     ggml_sycl_unified::XMXConfig     xmx_config_;
     bool                             xmx_configured_ = false;
 

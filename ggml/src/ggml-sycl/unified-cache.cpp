@@ -4893,7 +4893,8 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         return true;
     }
 
-    // Free existing if resizing
+    // Free existing if resizing — subtract old sizes from budget first
+    const size_t old_total = onednn_weights_scratch_size_ + onednn_activations_scratch_size_;
     if (onednn_weights_scratch_) {
         try {
             sycl::free(onednn_weights_scratch_, queue_);
@@ -4907,6 +4908,9 @@ bool unified_cache::reserve_onednn_scratch(size_t weights_size, size_t activatio
         } catch (...) {}
         onednn_activations_scratch_ = nullptr;
         onednn_activations_scratch_size_ = 0;
+    }
+    if (old_total > 0) {
+        used_.fetch_sub(old_total);
     }
 
     // Check if we have budget

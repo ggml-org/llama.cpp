@@ -5166,7 +5166,8 @@ private:
 // -----------------------------------------------------------------------------
 
 UnifiedKernel::UnifiedKernel(sycl::queue & queue)
-    : queue_(queue) {
+    : queue_(queue)
+    , device_id_(ggml_sycl_get_device_id_from_queue(queue)) {
     xmx_config_ = {};
     xmx_config_.supported = false;
     last_stats_ = {};
@@ -5174,6 +5175,7 @@ UnifiedKernel::UnifiedKernel(sycl::queue & queue)
 
 UnifiedKernel::~UnifiedKernel() {
     free_persistent_buffers();
+    // runtime_tracked_bytes_ is decremented inside free_persistent_buffers()
 }
 
 void UnifiedKernel::configure(const ggml_sycl_unified::XMXConfig & xmx_config) {
@@ -5319,9 +5321,26 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
     queue_.memset(sync_block_, 0, 3 * sizeof(int)).wait();
 
     persistent_buffer_size_ = required_size;
+
+    // Track persistent buffers in cache budget (4 buffers + sync_block)
+    const size_t total_bytes = 4 * required_size + 3 * sizeof(int);
+    if (device_id_ >= 0) {
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, total_bytes);
+        runtime_tracked_bytes_ += total_bytes;
+        GGML_SYCL_DEBUG("[UNIFIED-KERNEL] Tracked persistent buffers: %.1f MB on device %d\n",
+                        total_bytes / (1024.0f * 1024.0f), device_id_);
+    }
 }
 
 void UnifiedKernel::free_persistent_buffers() {
+    // Untrack from cache budget before freeing
+    if (runtime_tracked_bytes_ > 0 && device_id_ >= 0) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, runtime_tracked_bytes_);
+        GGML_SYCL_DEBUG("[UNIFIED-KERNEL] Untracked persistent buffers: %.1f MB on device %d\n",
+                        runtime_tracked_bytes_ / (1024.0f * 1024.0f), device_id_);
+        runtime_tracked_bytes_ = 0;
+    }
+
     for (int i = 0; i < 4; i++) {
         if (persistent_buffers_[i]) {
             sycl::free(persistent_buffers_[i], queue_);

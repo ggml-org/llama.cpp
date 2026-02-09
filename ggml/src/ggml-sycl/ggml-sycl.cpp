@@ -9229,6 +9229,10 @@ void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const cha
     }
     if (ptr != nullptr) {
         ggml_sycl_alloc_trace_record("device", size, tag);
+        if (size >= 1024 * 1024) {
+            GGML_SYCL_DEBUG("[ALLOC] device %.1f MB  tag=%s\n",
+                            size / (1024.0f * 1024.0f), tag ? tag : "unknown");
+        }
     }
     return ptr;
 }
