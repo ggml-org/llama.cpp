@@ -2,7 +2,6 @@
 	import { FolderOpen, ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceInfo, MCPServerResources } from '$lib/types';
@@ -26,7 +25,7 @@
 		onToggleFolder: (folderId: string) => void;
 		onSelect?: (resource: MCPResourceInfo, shiftKey?: boolean) => void;
 		onToggle?: (resource: MCPResourceInfo, checked: boolean) => void;
-		onAttach?: (resource: MCPResourceInfo) => void;
+		searchQuery?: string;
 	}
 
 	let {
@@ -55,11 +54,6 @@
 		onToggle?.(resource, checked);
 	}
 
-	function handleAttachClick(e: Event, resource: MCPResourceInfo) {
-		e.stopPropagation();
-		onAttach?.(resource);
-	}
-
 	function isResourceSelected(resource: MCPResourceInfo): boolean {
 		return selectedUris.has(resource.uri);
 	}
@@ -81,10 +75,14 @@
 				{:else}
 					<ChevronRight class="h-3 w-3" />
 				{/if}
+
 				<FolderOpen class="h-3.5 w-3.5 text-muted-foreground" />
+
 				<span class="font-medium">{node.name}</span>
+
 				<span class="text-xs text-muted-foreground">({folderCount})</span>
 			</Collapsible.Trigger>
+
 			<Collapsible.Content>
 				<div class="ml-4 flex flex-col gap-0.5 border-l border-border/50 pl-2">
 					{#each sortTreeChildren( [...node.children.values()] ) as child (child.resource?.uri || `${serverName}:${parentPath}/${node.name}/${child.name}`)}
@@ -98,6 +96,7 @@
 		{@const ResourceIcon = getResourceIcon(resource)}
 		{@const isSelected = isResourceSelected(resource)}
 		{@const resourceDisplayName = resource.title || getDisplayName(node.name)}
+
 		<div class="group flex w-full items-center gap-2">
 			{#if onToggle}
 				<Checkbox
@@ -107,6 +106,7 @@
 					class="h-4 w-4"
 				/>
 			{/if}
+
 			<button
 				class={cn(
 					'flex flex-1 items-center gap-2 rounded px-2 py-1 text-left text-sm transition-colors',
@@ -117,19 +117,10 @@
 				title={resourceDisplayName}
 			>
 				<ResourceIcon class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+
 				<span class="min-w-0 flex-1 truncate text-left">
 					{resourceDisplayName}
 				</span>
-				{#if onAttach}
-					<Button
-						variant="ghost"
-						size="sm"
-						class="h-5 px-1.5 text-xs opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-						onclick={(e: MouseEvent) => handleAttachClick(e, resource)}
-					>
-						Attach
-					</Button>
-				{/if}
 			</button>
 		</div>
 	{/if}
@@ -144,6 +135,7 @@
 		{:else}
 			<ChevronRight class="h-3.5 w-3.5" />
 		{/if}
+
 		{#if favicon}
 			<img
 				src={favicon}
@@ -154,10 +146,13 @@
 				}}
 			/>
 		{/if}
+
 		<span class="font-medium">{displayName}</span>
+
 		<span class="text-xs text-muted-foreground">
 			({serverRes.resources.length})
 		</span>
+
 		{#if serverRes.loading}
 			<Loader2 class="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
 		{/if}
