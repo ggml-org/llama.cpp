@@ -1,18 +1,3 @@
-/**
- * MCPService - Stateless MCP Protocol Communication Layer
- *
- * Low-level MCP operations:
- * - Transport creation (WebSocket, StreamableHTTP, SSE)
- * - Server connection/disconnection
- * - Tool discovery (listTools)
- * - Tool execution (callTool)
- *
- * NO business logic, NO state management, NO orchestration.
- * This is the protocol layer - pure MCP SDK operations.
- *
- * @see mcpStore in stores/mcp.svelte.ts for business logic facade
- */
-
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
@@ -70,7 +55,13 @@ interface ToolCallResult {
 
 export class MCPService {
 	/**
-	 * Create a connection log entry
+	 * Create a connection log entry for phase tracking.
+	 *
+	 * @param phase - The connection phase this log belongs to
+	 * @param message - Human-readable log message
+	 * @param level - Log severity level (default: INFO)
+	 * @param details - Optional structured details for debugging
+	 * @returns Formatted connection log entry
 	 */
 	private static createLog(
 		phase: MCPConnectionPhase,
@@ -90,8 +81,16 @@ export class MCPService {
 	/**
 	 * Create transport based on server configuration.
 	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
-	 * When useProxy is enabled, routes HTTP requests through llama-server's CORS proxy.
-	 * Returns both transport and the type used.
+	 * When `useProxy` is enabled, routes HTTP requests through llama-server's CORS proxy.
+	 *
+	 * **Fallback Order:**
+	 * 1. WebSocket — if explicitly configured (no CORS proxy support)
+	 * 2. StreamableHTTP — default for HTTP connections
+	 * 3. SSE — automatic fallback if StreamableHTTP fails
+	 *
+	 * @param config - Server configuration with url, transport type, proxy, and auth settings
+	 * @returns Object containing the created transport and the transport type used
+	 * @throws {Error} If url is missing, WebSocket + proxy combination, or all transports fail
 	 */
 	static createTransport(config: MCPServerConfig): {
 		transport: Transport;
@@ -166,7 +165,11 @@ export class MCPService {
 	}
 
 	/**
-	 * Extract server info from SDK Implementation type
+	 * Extract server info from SDK Implementation type.
+	 * Normalizes the SDK's server version response into our MCPServerInfo type.
+	 *
+	 * @param impl - Raw Implementation object from MCP SDK
+	 * @returns Normalized server info or undefined if input is empty
 	 */
 	private static extractServerInfo(impl: Implementation | undefined): MCPServerInfo | undefined {
 		if (!impl) {
@@ -189,9 +192,23 @@ export class MCPService {
 
 	/**
 	 * Connect to a single MCP server with detailed phase tracking.
-	 * Returns connection object with client, transport, discovered tools, and connection details.
-	 * @param onPhase - Optional callback for connection phase changes
-	 * @param listChangedHandlers - Optional handlers for list changed notifications
+	 *
+	 * Performs the full MCP connection lifecycle:
+	 * 1. Transport creation (with automatic fallback)
+	 * 2. Client initialization and capability exchange
+	 * 3. Tool discovery via `listTools`
+	 *
+	 * Reports progress via `onPhase` callback at each step, enabling
+	 * UI progress indicators during connection.
+	 *
+	 * @param serverName - Display name for the server (used in logging)
+	 * @param serverConfig - Server URL, transport type, proxy, and auth configuration
+	 * @param clientInfo - Optional client identification (defaults to app info)
+	 * @param capabilities - Optional client capability declaration
+	 * @param onPhase - Optional callback for connection phase progress updates
+	 * @param listChangedHandlers - Optional handlers for server-initiated list change notifications
+	 * @returns Full connection object with client, transport, tools, server info, and timing
+	 * @throws {Error} If transport creation or connection fails
 	 */
 	static async connect(
 		serverName: string,
@@ -331,6 +348,9 @@ export class MCPService {
 
 	/**
 	 * Disconnect from a server.
+	 * Clears the `onclose` handler to prevent reconnection attempts on voluntary disconnect.
+	 *
+	 * @param connection - The active MCP connection to close
 	 */
 	static async disconnect(connection: MCPConnection): Promise<void> {
 		console.log(`[MCPService][${connection.serverName}] Disconnecting...`);
@@ -348,6 +368,10 @@ export class MCPService {
 
 	/**
 	 * List tools from a connection.
+	 * Silently returns empty array on failure (logged as warning).
+	 *
+	 * @param connection - The MCP connection to query
+	 * @returns Array of available tools, or empty array on error
 	 */
 	static async listTools(connection: MCPConnection): Promise<Tool[]> {
 		try {
@@ -363,6 +387,10 @@ export class MCPService {
 
 	/**
 	 * List prompts from a connection.
+	 * Silently returns empty array on failure (logged as warning).
+	 *
+	 * @param connection - The MCP connection to query
+	 * @returns Array of available prompts, or empty array on error
 	 */
 	static async listPrompts(connection: MCPConnection): Promise<Prompt[]> {
 		try {
@@ -378,6 +406,14 @@ export class MCPService {
 
 	/**
 	 * Get a specific prompt with arguments.
+	 * Unlike list operations, this throws on failure since the caller explicitly
+	 * requested a specific prompt and needs to handle the error.
+	 *
+	 * @param connection - The MCP connection to use
+	 * @param name - The prompt name to retrieve
+	 * @param args - Optional key-value arguments to pass to the prompt
+	 * @returns The prompt result with messages and metadata
+	 * @throws {Error} If the prompt retrieval fails
 	 */
 	static async getPrompt(
 		connection: MCPConnection,
@@ -395,6 +431,14 @@ export class MCPService {
 
 	/**
 	 * Execute a tool call on a connection.
+	 * Supports abort signal for cancellable operations (e.g., when user stops generation).
+	 * Formats the raw tool result into a string representation.
+	 *
+	 * @param connection - The MCP connection to execute against
+	 * @param params - Tool name and arguments to execute
+	 * @param signal - Optional AbortSignal for cancellation support
+	 * @returns Formatted tool execution result with content string and error flag
+	 * @throws {Error} If tool execution fails or is aborted
 	 */
 	static async callTool(
 		connection: MCPConnection,
@@ -426,7 +470,11 @@ export class MCPService {
 	}
 
 	/**
-	 * Format tool result content to string.
+	 * Format tool result content items to a single string.
+	 * Handles text, image (base64 data URL), and embedded resource content types.
+	 *
+	 * @param result - Raw tool call result from MCP SDK
+	 * @returns Concatenated string representation of all content items
 	 */
 	private static formatToolResult(result: ToolCallResult): string {
 		const content = result.content;
@@ -661,10 +709,11 @@ export class MCPService {
 
 	/**
 	 * Check if a connection supports resources.
-	 * Per MCP spec: presence of the `resources` key (even as empty object {}) indicates support.
+	 * Per MCP spec: presence of the `resources` key (even as empty object `{}`) indicates support.
 	 * Empty object means resources are supported but no sub-features (subscribe, listChanged).
+	 *
 	 * @param connection - The MCP connection to check
-	 * @returns Whether the server supports resources
+	 * @returns Whether the server declares the resources capability
 	 */
 	static supportsResources(connection: MCPConnection): boolean {
 		// Per MCP spec: "Servers that support resources MUST declare the resources capability"
