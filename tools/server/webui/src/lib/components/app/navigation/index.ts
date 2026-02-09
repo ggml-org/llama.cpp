@@ -7,30 +7,32 @@
  */
 
 /**
- * **DropdownMenuSearchable** - Filterable dropdown menu
+ * **DropdownMenuSearchable** - Searchable content for dropdown menus
  *
- * Generic dropdown with search input for filtering options.
- * Uses Svelte snippets for flexible content rendering.
+ * Renders a search input with filtered content area, empty state, and optional footer.
+ * Designed to be injected into any dropdown container (DropdownMenu.Content,
+ * DropdownMenu.SubContent, etc.) without providing its own Root.
  *
  * **Features:**
- * - Search/filter input with clear on close
+ * - Search/filter input
  * - Keyboard navigation support
- * - Custom trigger, content, and footer via snippets
+ * - Custom content and footer via snippets
  * - Empty state message
- * - Disabled state
- * - Configurable alignment and width
  *
  * @example
  * ```svelte
- * <DropdownMenuSearchable
- *   bind:open
- *   bind:searchValue
- *   placeholder="Search..."
- *   isEmpty={filteredItems.length === 0}
- * >
- *   {#snippet trigger()}<Button>Select</Button>{/snippet}
- *   {#snippet children()}{#each items as item}<Item {item} />{/each}{/snippet}
- * </DropdownMenuSearchable>
+ * <DropdownMenu.Root>
+ *   <DropdownMenu.Trigger>...</DropdownMenu.Trigger>
+ *   <DropdownMenu.Content class="pt-0">
+ *     <DropdownMenuSearchable
+ *       bind:searchValue
+ *       placeholder="Search..."
+ *       isEmpty={filteredItems.length === 0}
+ *     >
+ *       {#each items as item}<Item {item} />{/each}
+ *     </DropdownMenuSearchable>
+ *   </DropdownMenu.Content>
+ * </DropdownMenu.Root>
  * ```
  */
 export { default as DropdownMenuSearchable } from './DropdownMenuSearchable.svelte';

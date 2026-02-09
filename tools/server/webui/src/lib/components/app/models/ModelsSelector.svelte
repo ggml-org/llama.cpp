@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
@@ -261,19 +262,14 @@
 		{@const selectedOption = getDisplayOption()}
 
 		{#if isRouter}
-			<DropdownMenuSearchable
-				bind:open={isOpen}
-				onOpenChange={handleOpenChange}
-				bind:searchValue={searchTerm}
-				placeholder="Search models..."
-				onSearchKeyDown={handleSearchKeyDown}
-				align="end"
-				contentClass="w-full max-w-[100vw] sm:w-max sm:max-w-[calc(100vw-2rem)]"
-				emptyMessage="No models found."
-				isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
-				disabled={disabled || updating}
-			>
-				{#snippet trigger()}
+			<DropdownMenu.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
+				<DropdownMenu.Trigger
+					disabled={disabled || updating}
+					onclick={(e) => {
+						e.preventDefault();
+						e.stopPropagation();
+					}}
+				>
 					<button
 						type="button"
 						class={cn(
@@ -303,7 +299,16 @@
 							<ChevronDown class="h-3 w-3.5" />
 						{/if}
 					</button>
-				{/snippet}
+				</DropdownMenu.Trigger>
+
+				<DropdownMenu.Content align="end" class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]">
+					<DropdownMenuSearchable
+						bind:searchValue={searchTerm}
+						placeholder="Search models..."
+						onSearchKeyDown={handleSearchKeyDown}
+						emptyMessage="No models found."
+						isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
+					>
 
 				<div class="models-list">
 					{#if !isCurrentModelInCache() && currentModel}
@@ -401,8 +406,10 @@
 							</div>
 						</div>
 					{/each}
-				</div>
-			</DropdownMenuSearchable>
+					</div>
+					</DropdownMenuSearchable>
+				</DropdownMenu.Content>
+			</DropdownMenu.Root>
 		{:else}
 			<button
 				class={cn(

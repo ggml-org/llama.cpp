@@ -68,15 +68,21 @@
 </script>
 
 {#if hasMcpServers && hasEnabledMcpServers && mcpFavicons.length > 0}
-	<DropdownMenuSearchable
-		bind:searchValue={searchQuery}
-		placeholder="Search servers..."
-		emptyMessage="No servers found"
-		isEmpty={filteredMcpServers.length === 0}
-		{disabled}
-		onOpenChange={handleDropdownOpen}
+	<DropdownMenu.Root
+		onOpenChange={(open) => {
+			if (!open) {
+				searchQuery = '';
+			}
+			handleDropdownOpen(open);
+		}}
 	>
-		{#snippet trigger()}
+		<DropdownMenu.Trigger
+			{disabled}
+			onclick={(e) => {
+				e.preventDefault();
+				e.stopPropagation();
+			}}
+		>
 			<button
 				type="button"
 				class="inline-flex cursor-pointer items-center rounded-sm py-1 disabled:cursor-not-allowed disabled:opacity-60"
@@ -85,7 +91,15 @@
 			>
 				<McpActiveServersAvatars class={className} />
 			</button>
-		{/snippet}
+		</DropdownMenu.Trigger>
+
+		<DropdownMenu.Content align="start" class="w-72 pt-0">
+			<DropdownMenuSearchable
+				bind:searchValue={searchQuery}
+				placeholder="Search servers..."
+				emptyMessage="No servers found"
+				isEmpty={filteredMcpServers.length === 0}
+			>
 
 		<div class="max-h-64 overflow-y-auto">
 			{#each filteredMcpServers as server (server.id)}
@@ -139,5 +153,7 @@
 				<span>Manage MCP Servers</span>
 			</DropdownMenu.Item>
 		{/snippet}
-	</DropdownMenuSearchable>
+			</DropdownMenuSearchable>
+		</DropdownMenu.Content>
+	</DropdownMenu.Root>
 {/if}
