@@ -350,7 +350,7 @@
 		}
 	}}
 >
-	<Popover.Trigger class="pointer-events-none absolute top-0 right-0 left-0 h-0 w-full opacity-0">
+	<Popover.Trigger class="pointer-events-none absolute inset-0 opacity-0">
 		<span class="sr-only">Open prompt picker</span>
 	</Popover.Trigger>
 
@@ -358,7 +358,6 @@
 		side="top"
 		align="start"
 		sideOffset={12}
-		avoidCollisions={false}
 		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl {className}"
 		onkeydown={handleKeydown}
 		onOpenAutoFocus={(e) => e.preventDefault()}

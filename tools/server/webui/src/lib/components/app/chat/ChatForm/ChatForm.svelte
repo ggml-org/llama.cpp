@@ -365,8 +365,11 @@
 		promptInfo: MCPPromptInfo,
 		args?: Record<string, string>
 	) {
-		value = '';
-		onValueChange?.('');
+		// Only clear the value if the prompt was triggered by typing '/'
+		if (value.startsWith('/')) {
+			value = '';
+			onValueChange?.('');
+		}
 		isPromptPickerOpen = false;
 		promptSearchQuery = '';
 
