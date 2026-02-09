@@ -419,12 +419,6 @@ struct blue_noise_rng {
             uint32_t h = rng->next32() % 10;
             states[i] = {tbl[h][0], tbl[h][1]}; // random initial state
         }
-
-#if 0
-        // test against initial implementation outputs
-        // note: white noise padding in next64 is slightly different, but minimally consequential for testing
-        rng->reset(); // reset position so generation starts from 0
-#endif
     }
 
     uint16_t advance(uint32_t h) {
@@ -441,7 +435,7 @@ struct blue_noise_rng {
             s[1] = 0;
 
             // error diffusion dithering using binary weight perturbation
-            s[(h >> level) & 1 ? 0 : 1] += qe; // forward to t+1 or defer to t+2
+            s[(h >> (31 - level)) & 1 ? 0 : 1] += qe; // forward to t+1 or defer to t+2
 
             acc = acc * 2 + out;
         }
@@ -458,14 +452,14 @@ struct blue_noise_rng {
     uint32_t next32() {
         uint32_t h   = rng->next32();
         uint32_t val = advance(h);
-        return (val << (32 - bit_depth)) | (h >> bit_depth);
+        return (val << (32 - bit_depth)) | (h & ((1u << (32 - bit_depth)) - 1));
     }
 
     // blue noise in the upper bits, white noise in the lower bits
     uint64_t next64() {
         uint64_t r   = rng->next64();
-        uint32_t val = advance((uint32_t)r);
-        return ((uint64_t)val << (64 - bit_depth)) | (r >> bit_depth);
+        uint32_t val = advance((uint32_t)(r >> 32));
+        return ((uint64_t)val << (64 - bit_depth)) | (r & ((UINT64_C(1) << (64 - bit_depth)) - 1));
     }
 
     // uniform double in [0, 1) with blue noise temporal autocorrelation
@@ -557,8 +551,8 @@ struct llama_dist_rng_lowbias32 : llama_dist_rng {
     }
 
     uint64_t next64() override {
-        uint64_t hi = hash(position ^ ~hashed_seed); // secondary sequence using opposing seed
-        uint64_t lo = next();
+        uint64_t lo = hash(position ^ ~hashed_seed); // secondary sequence using opposing seed
+        uint64_t hi = next();
         return (hi << 32) | lo;
     }
 
