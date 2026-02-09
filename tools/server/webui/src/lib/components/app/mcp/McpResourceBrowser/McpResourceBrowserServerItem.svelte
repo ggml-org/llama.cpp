@@ -39,13 +39,13 @@
 		onToggleFolder,
 		onSelect,
 		onToggle,
-		onAttach
+		searchQuery = ''
 	}: Props = $props();
 
 	const hasResources = $derived(serverRes.resources.length > 0);
 	const displayName = $derived(mcpStore.getServerDisplayName(serverName));
 	const favicon = $derived(mcpStore.getServerFavicon(serverName));
-	const resourceTree = $derived(buildResourceTree(serverRes.resources, serverName));
+	const resourceTree = $derived(buildResourceTree(serverRes.resources, serverName, searchQuery));
 
 	function handleResourceClick(resource: MCPResourceInfo, event: MouseEvent) {
 		onSelect?.(resource, event.shiftKey);
