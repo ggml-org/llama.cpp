@@ -4114,10 +4114,12 @@ class Qwen2MoeModel(TextModel):
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            # HF: [n_expert, 2*n_ff, n_embd] -> split on dim=1
-            n_ff = data_torch.shape[1] // 2
-            gate = data_torch[:, :n_ff, :].contiguous()
-            up = data_torch[:, n_ff:, :].contiguous()
+            if data_torch.ndim < 3 or data_torch.shape[-2] % 2 != 0:
+                raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
+            # HF: [n_expert, 2*n_ff, n_embd] -> split on dim=-2
+            n_ff = data_torch.shape[-2] // 2
+            gate = data_torch[..., :n_ff, :].contiguous()
+            up = data_torch[..., n_ff:, :].contiguous()
             # gate/up: [n_expert, n_ff, n_embd] -> GGML: {n_embd, n_ff, n_expert}
             base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
             mapped_gate = f"{base_name}.gate_proj.weight"
