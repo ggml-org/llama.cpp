@@ -2774,17 +2774,17 @@ static void ggml_backend_cann_event_wait(ggml_backend_t backend, ggml_backend_ev
 }
 
 /**
- * @brief Sort the computation graph for improved parallelism.
+ * @brief Optimizes the computation graph for better parallelism in multi-stream execution.
  *
- * This function reorders the nodes in the computation graph to allow
- * more parallel execution. It groups together nodes that don't depend
- * on each other, reducing the number of synchronizations needed.
+ * This function reorders nodes in the computation graph to enable more parallel
+ * execution by grouping together nodes that don't depend on each other. This
+ * reduces the number of synchronizations needed between streams.
  *
- * The algorithm:
+ * The algorithm (inspired by Vulkan backend):
  * 1. Skip "empty" nodes (NONE, RESHAPE, TRANSPOSE, VIEW, PERMUTE) as they don't require computation
  * 2. For each unprocessed node, find subsequent nodes that can be executed in parallel
  * 3. Nodes can be parallelized if they don't depend on unprocessed nodes
- * 4. Preserve fusion patterns (e.g., RMS_NORM + MUL, ADD + RMS_NORM) by keeping them consecutive
+ * 4. Process in two passes: first real nodes, then view nodes
  *
  * @param backend Pointer to the CANN backend structure.
  * @param graph Pointer to the computation graph to optimize.
@@ -2823,55 +2823,17 @@ static void ggml_backend_cann_graph_optimize(ggml_backend_t backend, struct ggml
 
     std::vector<ggml_tensor *> new_order;
     std::vector<bool> used(graph->n_nodes, false);
-    std::set<ggml_tensor *> used_node_set;
 
     int first_unused = 0;
     while (first_unused < graph->n_nodes) {
         std::vector<int> current_set;
 
-        // Helper: check if a fusion pattern matches at a given position
-        auto const & match_pattern = [&](const std::initializer_list<ggml_op> & pattern, int start) -> bool {
-            if (start + (int) pattern.size() <= graph->n_nodes) {
-                bool is_pattern = true;
-                for (size_t j = 0; j < pattern.size(); ++j) {
-                    if (graph->nodes[start + j]->op != pattern.begin()[j] || used[start + j]) {
-                        is_pattern = false;
-                    }
-                }
-                return is_pattern;
-            }
-            return false;
-        };
-
-        // Helper: keep a fusion pattern together by adding all its nodes at once
-        auto const & keep_pattern = [&](const std::initializer_list<ggml_op> & pattern) -> bool {
-            if (match_pattern(pattern, first_unused)) {
-                for (size_t j = 0; j < pattern.size(); ++j) {
-                    new_order.push_back(graph->nodes[first_unused + j]);
-                    used_node_set.insert(graph->nodes[first_unused + j]);
-                    used[first_unused + j] = true;
-                }
-                while (first_unused < graph->n_nodes && used[first_unused]) {
-                    first_unused++;
-                }
-                return true;
-            }
-            return false;
-        };
-
-        // CANN specific fusion patterns that should be kept together
-        // ADD + RMS_NORM fusion (supported by CANN backend)
-        if (keep_pattern({ GGML_OP_ADD, GGML_OP_RMS_NORM })) {
-            continue;
-        }
-
         // First, grab the next unused node
         current_set.push_back(first_unused);
 
-        // Loop through the next N nodes. Grab any that don't depend on other nodes that
-        // haven't already been run. Nodes that have already been run have used[i] set
-        // to true. Allow nodes that depend on the previous node if it's a fusion pattern
-        // that we support (e.g., RMS_NORM + MUL, MUL_MAT + ADD).
+        // First pass: Loop through the next N nodes and grab any that don't depend
+        // on other nodes that haven't already been run. This pass only grabs "real"
+        // (non-view) nodes to avoid interleaving real and view nodes.
         const int NUM_TO_CHECK = 20;
         for (int j = first_unused + 1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
             if (used[j]) {
@@ -2880,136 +2842,47 @@ static void ggml_backend_cann_graph_optimize(ggml_backend_t backend, struct ggml
             if (is_empty(graph->nodes[j])) {
                 continue;
             }
-            // Don't pull forward nodes from fusion patterns
-            if (match_pattern({ GGML_OP_ADD, GGML_OP_RMS_NORM }, j)) {
-                continue;
-            }
 
+            // Check if this node depends on any unprocessed nodes
             bool ok = true;
             for (int c = first_unused; c < j; ++c) {
-                if (!used[c] &&
-                    is_src_of(graph->nodes[j], graph->nodes[c]) &&
-                    // Allow consecutive RMS_NORM + MUL fusion
-                    !(j == c + 1 && c == current_set.back() &&
-                      graph->nodes[c]->op == GGML_OP_RMS_NORM &&
-                      graph->nodes[j]->op == GGML_OP_MUL) &&
-                    // Allow consecutive MUL_MAT + ADD fusion
-                    !(j == c + 1 && c == current_set.back() &&
-                      graph->nodes[c]->op == GGML_OP_MUL_MAT &&
-                      graph->nodes[j]->op == GGML_OP_ADD) &&
-                    // Allow consecutive MUL_MAT_ID + ADD fusion
-                    !(j == c + 1 && c == current_set.back() &&
-                      graph->nodes[c]->op == GGML_OP_MUL_MAT_ID &&
-                      graph->nodes[j]->op == GGML_OP_ADD) &&
-                    // Allow consecutive ADD + ADD fusion
-                    !(j == c + 1 && c == current_set.back() &&
-                      graph->nodes[c]->op == GGML_OP_ADD &&
-                      graph->nodes[j]->op == GGML_OP_ADD)) {
+                if (!used[c] && is_src_of(graph->nodes[j], graph->nodes[c])) {
                     ok = false;
                     break;
                 }
             }
             if (ok) {
                 current_set.push_back(j);
-
-                int rope_idx = j;
-
-                // When we've found RMS_NORM + MUL, try to find a ROPE that uses it
-                if (j > 0 &&
-                    graph->nodes[j]->op == GGML_OP_MUL &&
-                    graph->nodes[j - 1]->op == GGML_OP_RMS_NORM) {
-                    for (int k = j + 1; k < std::min(j + 15, graph->n_nodes); ++k) {
-                        if (graph->nodes[k]->op == GGML_OP_ROPE &&
-                            graph->nodes[k]->src[0] == graph->nodes[j] &&
-                            // Check that other srcs are already valid
-                            graph->nodes[k]->src[1]->op == GGML_OP_NONE &&
-                            (graph->nodes[k]->src[2] == nullptr ||
-                             graph->nodes[k]->src[2]->op == GGML_OP_NONE)) {
-                            rope_idx = k;
-                            current_set.push_back(rope_idx);
-                            used[rope_idx] = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Look for ROPE + VIEW + SET_ROWS and make them consecutive
-                if (graph->nodes[rope_idx]->op == GGML_OP_ROPE) {
-                    int view_idx = -1;
-                    int set_rows_idx = -1;
-                    for (int k = rope_idx + 1; k < std::min(rope_idx + 10, graph->n_nodes); ++k) {
-                        if (view_idx == -1 &&
-                            graph->nodes[k]->op == GGML_OP_VIEW &&
-                            graph->nodes[k]->src[0] == graph->nodes[rope_idx]) {
-                            view_idx = k;
-                            continue;
-                        }
-                        if (view_idx != -1 &&
-                            set_rows_idx == -1 &&
-                            graph->nodes[k]->op == GGML_OP_SET_ROWS &&
-                            graph->nodes[k]->src[0] == graph->nodes[view_idx]) {
-                            set_rows_idx = k;
-                            break;
-                        }
-                    }
-                    if (set_rows_idx != -1) {
-                        current_set.push_back(view_idx);
-                        current_set.push_back(set_rows_idx);
-                        used[view_idx] = true;
-                        used[set_rows_idx] = true;
-                    }
-                }
-
-                // Look for MUL_MAT + ADD + ADD
-                if (j > 0 &&
-                    graph->nodes[j]->op == GGML_OP_ADD &&
-                    graph->nodes[j - 1]->op == GGML_OP_MUL_MAT) {
-                    for (int k = j + 1; k < std::min(j + 15, graph->n_nodes); ++k) {
-                        if (graph->nodes[k]->op == GGML_OP_ADD &&
-                            graph->nodes[k]->src[0] == graph->nodes[j] &&
-                            // src1 must either be weights or already processed
-                            (graph->nodes[k]->src[1]->op == GGML_OP_NONE ||
-                             used_node_set.find(graph->nodes[k]->src[1]) != used_node_set.end())) {
-                            current_set.push_back(k);
-                            used[k] = true;
-                            break;
-                        }
-                    }
-                }
             }
         }
 
-        // Second pass: grab view nodes
-        // Skip this if it would break a fusion optimization (don't split up add->rms_norm or add->add)
-        if (graph->nodes[current_set.back()]->op != GGML_OP_ADD) {
-            for (int j = first_unused + 1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
-                if (used[j]) {
-                    continue;
+        // Second pass: grab view nodes that don't depend on unprocessed nodes
+        for (int j = first_unused + 1; j < std::min(first_unused + NUM_TO_CHECK, graph->n_nodes); ++j) {
+            if (used[j]) {
+                continue;
+            }
+            if (!is_empty(graph->nodes[j])) {
+                continue;
+            }
+
+            // Check if this view node depends on any unprocessed nodes
+            bool ok = true;
+            for (int c = first_unused; c < j; ++c) {
+                bool c_in_current_set = std::find(current_set.begin(), current_set.end(), c) != current_set.end();
+                // Skip views whose srcs haven't been processed
+                if (!used[c] && is_src_of(graph->nodes[j], graph->nodes[c]) && !c_in_current_set) {
+                    ok = false;
+                    break;
                 }
-                if (!is_empty(graph->nodes[j])) {
-                    continue;
-                }
-                bool ok = true;
-                for (int c = first_unused; c < j; ++c) {
-                    bool c_in_current_set = std::find(current_set.begin(), current_set.end(), c) != current_set.end();
-                    // Skip views whose srcs haven't been processed
-                    if (!used[c] &&
-                        is_src_of(graph->nodes[j], graph->nodes[c]) &&
-                        !c_in_current_set) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok) {
-                    current_set.push_back(j);
-                }
+            }
+            if (ok) {
+                current_set.push_back(j);
             }
         }
 
         // Push the current set into new_order
         for (auto c : current_set) {
             new_order.push_back(graph->nodes[c]);
-            used_node_set.insert(graph->nodes[c]);
             used[c] = true;
         }
 
