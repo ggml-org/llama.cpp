@@ -225,8 +225,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     cb(k_cumdecay, "k_cumdecay", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
     ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
-    attn_kq = ggml_mul(ctx0, decay_mask, attn_kq);
-    attn_kq = ggml_mul(ctx0, attn_kq,    diag_mask);
+    attn_kq = ggml_mul(ctx0, attn_kq, decay_mask);
+    attn_kq = ggml_mul(ctx0, attn_kq, diag_mask);
     cb(attn_kq, "attn_kq", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
     // vectorized calculation of key_gdiff
