@@ -1,6 +1,5 @@
 #pragma once
 
-#include <sycl/sycl.hpp>
 #include <cstddef>
 #include <cstdint>
 
@@ -24,11 +23,6 @@ public:
     // kv_bytes_per_token: bytes per KV token (all layers combined)
     // Returns true if tiering is active (hot < total)
     bool configure(int device, size_t hot_bytes, size_t total_bytes, size_t kv_bytes_per_token);
-
-    // Calculate optimal hot window size based on available VRAM.
-    // kv_bytes_per_token: bytes per KV entry per token (sum across all layers)
-    // Returns suggested hot_tokens count.
-    static uint32_t compute_hot_window(int device, size_t kv_bytes_per_token);
 
     // Query tier state
     bool     is_active()     const { return active_; }

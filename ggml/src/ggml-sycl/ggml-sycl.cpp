@@ -6594,6 +6594,7 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
     }
     return &ggml_backend_sycl_buffer_types[device];
 }
+
 // === Tiered KV Buffer Type ===
 // Hot region in device memory (fast), cold region in host pinned memory (PCIe via USM).
 // SYCL USM makes both regions accessible from GPU kernels transparently.
@@ -6869,7 +6870,7 @@ ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
         static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
         cache[device].offload = ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate);
         cache[device].decided = true;
-        GGML_LOG_WARN("[DBG] kv_buffer_type dev=%d offload=%d\n", device, (int)cache[device].offload);
+        GGML_LOG_WARN("[DBG-KV] dev=%d offload=%d\n", device, (int)cache[device].offload);
         if (cache[device].offload) {
             GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory "
                           "(%.1f MB estimate, preserving full context)\n",
@@ -30773,19 +30774,21 @@ static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t *
     // as the unified cache, preventing over-allocation that triggers streaming fallback.
     const char * env_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
     if (env_pct) {
-        int pct = std::atoi(env_pct);
-        if (pct >= 1 && pct <= 100) {
-            size_t base_mem    = *total;
-            size_t budget      = static_cast<size_t>(base_mem * (static_cast<double>(pct) / 100.0));
-            const size_t min_headroom = 256ull * 1024ull * 1024ull;
-            const size_t headroom     = std::max(min_headroom, base_mem / 10);
-            if (base_mem > headroom && budget > base_mem - headroom) {
-                budget = base_mem - headroom;
-            }
-            if (*free > budget) {
-                *free = budget;
-            }
+        int pct = std::max(1, std::min(100, std::atoi(env_pct)));
+        size_t base_mem    = ggml_sycl_info().devices[ctx->device].total_vram;
+        if (base_mem == 0) {
+            base_mem = *total;
         }
+        size_t budget      = static_cast<size_t>(base_mem * (static_cast<double>(pct) / 100.0));
+        const size_t min_headroom = 256ull * 1024ull * 1024ull;
+        const size_t headroom     = std::max(min_headroom, base_mem / 10);
+        if (base_mem > headroom && budget > base_mem - headroom) {
+            budget = base_mem - headroom;
+        }
+        if (budget > *free) {
+            budget = *free;
+        }
+        *free = budget;
     }
 }
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
