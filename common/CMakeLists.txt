@@ -44,7 +44,7 @@ endif()
 
 set(TARGET common)
 
-add_library(${TARGET} STATIC
+add_library(${TARGET}
     arg.cpp
     arg.h
     base64.hpp
@@ -108,6 +108,8 @@ target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_BUILD)
+    target_compile_definitions(${TARGET} PUBLIC  LLAMA_SHARED)
 endif()
 
 # TODO: use list(APPEND LLAMA_COMMON_EXTRA_LIBS ...)
