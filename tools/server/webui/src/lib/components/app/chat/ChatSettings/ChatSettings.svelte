@@ -256,6 +256,11 @@
 					type: 'input'
 				},
 				{
+					key: 'alwaysShowAgenticTurns',
+					label: 'Always show agentic turns in conversation',
+					type: 'checkbox'
+				},
+				{
 					key: 'agenticMaxToolPreviewLines',
 					label: 'Max lines per tool preview',
 					type: 'input'

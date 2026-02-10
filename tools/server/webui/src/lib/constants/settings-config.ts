@@ -27,6 +27,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	agenticMaxTurns: 10,
 	agenticMaxToolPreviewLines: 25,
 	showToolCallInProgress: false,
+	alwaysShowAgenticTurns: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	backend_sampling: false,

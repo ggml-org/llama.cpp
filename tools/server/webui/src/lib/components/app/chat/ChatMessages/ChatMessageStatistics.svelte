@@ -15,6 +15,8 @@
 		isProcessingPrompt?: boolean;
 		initialView?: ChatMessageStatsView;
 		agenticTimings?: ChatMessageAgenticTimings;
+		onActiveViewChange?: (view: ChatMessageStatsView) => void;
+		hideSummary?: boolean;
 	}
 
 	let {
@@ -25,11 +27,17 @@
 		isLive = false,
 		isProcessingPrompt = false,
 		initialView = ChatMessageStatsView.GENERATION,
-		agenticTimings
+		agenticTimings,
+		onActiveViewChange,
+		hideSummary = false
 	}: Props = $props();
 
 	let activeView: ChatMessageStatsView = $state(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
+
+	$effect(() => {
+		onActiveViewChange?.(activeView);
+	});
 
 	// In live mode: auto-switch to GENERATION tab when prompt processing completes
 	$effect(() => {
@@ -177,26 +185,28 @@
 				</Tooltip.Content>
 			</Tooltip.Root>
 
-			<Tooltip.Root>
-				<Tooltip.Trigger>
-					<button
-						type="button"
-						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
-						ChatMessageStatsView.SUMMARY
-							? 'bg-background text-foreground shadow-sm'
-							: 'hover:text-foreground'}"
-						onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
-					>
-						<Layers class="h-3 w-3" />
+			{#if !hideSummary}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<button
+							type="button"
+							class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+							ChatMessageStatsView.SUMMARY
+								? 'bg-background text-foreground shadow-sm'
+								: 'hover:text-foreground'}"
+							onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
+						>
+							<Layers class="h-3 w-3" />
 
-						<span class="sr-only">Summary</span>
-					</button>
-				</Tooltip.Trigger>
+							<span class="sr-only">Summary</span>
+						</button>
+					</Tooltip.Trigger>
 
-				<Tooltip.Content>
-					<p>Agentic summary</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
+					<Tooltip.Content>
+						<p>Agentic summary</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
 		{/if}
 	</div>
 
