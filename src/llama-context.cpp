@@ -1872,8 +1872,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
             // TODO: not needed?
             buf_output = nullptr;
-            logits = {nullptr, 0};
-            embd = {nullptr, 0};
+            logits.data = nullptr;
+            embd.data = nullptr;
         }
 
         auto * buft = ggml_backend_cpu_buffer_type();
