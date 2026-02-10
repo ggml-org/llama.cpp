@@ -27,17 +27,20 @@
 
 | Track | Tasks | Description |
 |-------|-------|-------------|
-| A | 1, 3, 5 | Budget export API + MoE-aware budget + integration test |
+| A | 1, 3, 7 | Budget export API + MoE-aware budget + integration test |
 | B | 2, 4 | Re-enable fit_params + wire GPU streaming dispatch stubs |
+| C | 6, 7 | KV cache host fallback + hot/cold tiering |
 
 ### Dependency Graph
 
 ```
-Task 1 (Track A, no deps)       — Unified cache budget export API
-Task 2 (Track B, no deps)       — Re-enable fit_params with unified cache budget
-Task 3 (Track A, depends on 1)  — MoE-aware budget calculation
+Task 1 (Track A, no deps)         — Unified cache budget export API
+Task 2 (Track B, no deps)         — Re-enable fit_params with unified cache budget
+Task 3 (Track A, depends on 1)    — MoE-aware budget calculation
 Task 4 (Track B, depends on 1, 2) — Wire GPU streaming into tiered dispatch stubs
-Task 5 (depends on 2, 3, 4)    — Integration test: pressure hierarchy + benchmarks
+Task 5 (depends on 2, 3, 4)       — Integration test: pressure hierarchy + benchmarks
+Task 6 (Track C, depends on 1)    — KV cache host fallback buffer type
+Task 7 (Track C, depends on 6)    — KV cache hot/cold tiering with prefetch
 ```
 
 ### File Ownership Map
@@ -51,6 +54,10 @@ Task 5 (depends on 2, 3, 4)    — Integration test: pressure hierarchy + benchm
 | `ggml/src/ggml-sycl/ggml-sycl.cpp` (set_tensor_inventory ~2025-2125) | 1 | None (budget export) |
 | `ggml/src/ggml-sycl/ggml-sycl.cpp` (tiered dispatch stubs ~11967, ~15163, ~19421, ~19459, ~20886) | 4 | None (isolated stubs) |
 | `ggml/src/ggml-sycl/ggml-sycl.cpp` (graph gating ~29504, ~29779) | 4 | None (isolated section) |
+| `ggml/src/ggml-sycl/ggml-sycl.cpp` (KV buffer type ~6516-6548) | 6 | None (isolated function) |
+| `ggml/src/ggml-sycl/kv-tier-manager.hpp` | 7 | None (new file) |
+| `ggml/src/ggml-sycl/kv-tier-manager.cpp` | 7 | None (new file) |
+| `src/llama-kv-cache.cpp` (constructor ~25-198) | 7 | None (buffer type selection) |
 
 ---
 
@@ -113,7 +120,7 @@ When loading a model, the unified cache evaluates strategies in order from least
 
 ```
 Level 0: Everything in VRAM           → full speed (~70 TG, ~1240 PP)
-Level 1: Context reduction             → reduce n_ctx to free VRAM for weights
+Level 1: KV cache offloading          → keep full context, offload cold KV to pinned host
 Level 2: MoE expert offload (MoE only) → keep attention + active experts, stage rest
 Level 3: Full-layer CPU offload        → overflow layers on CPU backend (~20 tok/s)
 Level 4: Sub-layer CPU offload         → partial layers on CPU (attn-only GPU, FFN on CPU)
@@ -589,7 +596,7 @@ git commit -m "sycl: wire layer streaming into tiered dispatch stubs for GPU wei
 
 Verify the complete pressure hierarchy works correctly and benchmark all paths:
 1. Level 0: Model fits in VRAM — full speed, no changes
-2. Level 1: Context reduction (simulated via `GGML_SYCL_VRAM_BUDGET_PCT`)
+2. Level 1: KV cache offloading via `GGML_SYCL_KV_HOST=1`
 3. Level 3: CPU offload via fit_params
 4. Level 5: GPU streaming via `GGML_SYCL_FORCE_STREAMING=1`
 
@@ -680,16 +687,335 @@ GGML_SYCL_VRAM_BUDGET_PCT=30 GGML_SYCL_FORCE_STREAMING=1 ONEAPI_DEVICE_SELECTOR=
 
 ---
 
+## Task 6: KV Cache Host Fallback Buffer Type
+
+**Track:** C
+**Depends on:** Task 1 (needs budget info to decide when to activate)
+**File scope:**
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp:6516-6548` (KV buffer type function, ~30 lines)
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp:30428-30434` (KV buffer type from dev, ~5 lines)
+- Modify: `ggml/src/ggml-sycl/unified-cache.hpp` (add KV offload query, ~5 lines)
+- Modify: `ggml/src/ggml-sycl/unified-cache.cpp` (add KV offload logic, ~30 lines)
+
+**Description:**
+
+When model weights consume most of VRAM, allocate the KV cache in **pinned host memory** instead of device memory. SYCL USM (Unified Shared Memory) allows GPU kernels to access host-pinned memory directly through PCIe — no explicit DMA or graph changes needed. The attention kernel reads KV entries through PCIe at ~28 GB/s instead of VRAM's ~224 GB/s. This is slower for TG (attention-bound) but preserves full context length — no context reduction needed.
+
+This is Level 1 of the pressure hierarchy: the least invasive strategy after "everything fits in VRAM."
+
+**Key insight:** The KV cache buffer type is selected at `ggml_backend_sycl_kv_buffer_type()` (line 6516). Currently it always returns a device buffer type. We change it to return a **host pinned** buffer type when VRAM is tight, using the unified cache budget API (Task 1) to make the decision.
+
+**Acceptance Criteria:**
+
+- [ ] `ggml_backend_sycl_kv_buffer_type()` checks unified cache budget and returns host pinned buffer type when VRAM < threshold
+- [ ] New function `unified_cache_should_offload_kv(device)` returns true when VRAM is tight enough that KV should go to host
+- [ ] Threshold: offload KV when `available_for_weights < total_weight_bytes + kv_estimate` (weights won't fit alongside KV)
+- [ ] `GGML_SYCL_KV_HOST=1` env var forces KV to host memory (for testing/benchmarking)
+- [ ] `GGML_SYCL_KV_HOST=0` env var forces KV to device memory (override)
+- [ ] KV offload decision logged: `[SYCL-BUDGET] KV cache offloaded to host pinned memory (%.1f MB, preserving full context)`
+- [ ] Build succeeds with zero new warnings
+- [ ] Models that fit fully: KV stays on device, zero behavior change (PP512 >= 1200, TG128 >= 68)
+- [ ] Models where KV + weights exceed VRAM: KV on host, full context, TG > 0 (slower but correct)
+
+**Implementation Guide:**
+
+1. **Add KV offload query to `unified-cache.hpp`** after `unified_cache_get_margin_bytes`:
+
+```cpp
+// Check if KV cache should be offloaded to host pinned memory
+// Returns true when VRAM is too tight to hold both weights and KV cache
+// kv_estimate_bytes: estimated KV cache size (0 = use model hparams default)
+bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes = 0);
+```
+
+2. **Implement in `unified-cache.cpp`**:
+
+```cpp
+bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
+    // Check env var override
+    const char * env_kv = getenv("GGML_SYCL_KV_HOST");
+    if (env_kv) {
+        return std::atoi(env_kv) == 1;
+    }
+
+    auto info = unified_cache_get_budget_info(device);
+
+    // If model already exceeds VRAM, definitely offload KV
+    if (info.model_exceeds_vram) {
+        return true;
+    }
+
+    // If KV estimate provided, check if it would push us over budget
+    if (kv_estimate_bytes > 0 && info.available_for_weights > info.weight_bytes) {
+        size_t margin = info.available_for_weights - info.weight_bytes;
+        if (kv_estimate_bytes > margin) {
+            return true;
+        }
+    }
+
+    return false;
+}
+```
+
+3. **Modify `ggml_backend_sycl_kv_buffer_type()`** at line 6516 to check the offload decision:
+
+```cpp
+ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
+    // Check if KV should be offloaded to host pinned memory (Level 1 pressure hierarchy)
+    if (ggml_sycl::unified_cache_should_offload_kv(device)) {
+        GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory for device %d\n", device);
+        return ggml_backend_sycl_host_buffer_type();
+    }
+
+    // Standard: KV cache on device
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    // ... existing device buffer type code ...
+}
+```
+
+4. **Update `ggml_backend_sycl_kv_buffer_type_from_dev()`** at line 30428 — this function delegates to `ggml_backend_sycl_kv_buffer_type()` so the offload check is inherited automatically. Verify no bypass paths exist.
+
+5. **Track KV host bytes in unified cache budget** — When KV is on host, register the allocation:
+
+```cpp
+// In the KV buffer allocation path, after deciding to use host:
+unified_cache_add_runtime_host_bytes(kv_alloc_size);
+```
+
+**Commit:**
+```bash
+git add ggml/src/ggml-sycl/ggml-sycl.cpp ggml/src/ggml-sycl/unified-cache.hpp \
+        ggml/src/ggml-sycl/unified-cache.cpp
+git commit -m "sycl: KV cache host fallback when VRAM tight (Level 1 pressure hierarchy)"
+```
+
+**Notes for implementer:**
+- `ggml_backend_sycl_host_buffer_type()` returns host pinned buffer — this is the key. SYCL USM means GPU kernels can read host memory directly through PCIe without explicit DMA.
+- The KV cache constructor (`llama-kv-cache.cpp:138-150`) calls `ggml_backend_sycl_kv_buffer_type_from_dev(dev)` which calls `ggml_backend_sycl_kv_buffer_type(device)` — so our change propagates automatically.
+- **Performance impact**: TG will be slower (attention reads KV through PCIe at ~28 GB/s vs ~224 GB/s). PP is less affected (compute-bound). This is expected — the tradeoff is full context vs speed.
+- For testing: `GGML_SYCL_KV_HOST=1 ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0`
+- Mistral 7B Q4_0 (3.9 GB weights) with default context (131K tokens) would have ~8 GB KV cache — total ~12 GB, just barely fitting on Arc B580 (12 GB). With `KV_HOST=1`, weights stay in VRAM, KV goes to host, freeing ~8 GB VRAM.
+- The `unified_cache_should_offload_kv()` function needs to be called AFTER `set_tensor_inventory()` populates the budget — verify call order in `llama-kv-cache.cpp` constructor.
+
+---
+
+## Task 7: KV Cache Hot/Cold Tiering with Prefetch
+
+**Track:** C
+**Depends on:** Task 6
+**File scope:**
+- Create: `ggml/src/ggml-sycl/kv-tier-manager.hpp` (~150 lines)
+- Create: `ggml/src/ggml-sycl/kv-tier-manager.cpp` (~250 lines)
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp:6516-6548` (replace host fallback with tiered buffer type, ~40 lines)
+- Modify: `ggml/src/ggml-sycl/CMakeLists.txt` (add new files)
+
+**Description:**
+
+Upgrade the KV cache host fallback (Task 6) to a proper hot/cold tiering system. Instead of putting ALL KV entries on host, keep a **hot window** of recent tokens' KV entries in VRAM for fast access, and store older (cold) entries in pinned host memory. When attention needs cold entries, SYCL USM provides transparent access through PCIe.
+
+**Key architecture decisions:**
+- **Hot window sizing**: Hot window = available VRAM after weights and runtime allocations. Auto-calculated from `unified_cache_get_budget_info()`.
+- **No explicit DMA**: SYCL USM handles host↔device access transparently. Cold entries are accessed at PCIe speed without explicit copy operations.
+- **No graph changes**: `get_k()`/`get_v()` (line 1302-1370) return views into the underlying tensors. The tiered buffer type manages where the data physically lives. The graph and attention code remain unchanged.
+- **Prefetch hint** (future optimization): Before each layer's attention, hint which KV entries will be needed. The driver can use this for prefetch. Not required for correctness.
+
+**Acceptance Criteria:**
+
+- [ ] New `kv_tier_manager` class manages hot window (device) + cold tier (host pinned)
+- [ ] Hot window auto-sized: `(vram_budget - weight_bytes - runtime_bytes) / kv_bytes_per_token`
+- [ ] New tiered KV buffer type returned by `ggml_backend_sycl_kv_buffer_type()` when offloading enabled
+- [ ] Tiered buffer allocates: hot region in device memory, cold region in host pinned memory
+- [ ] `init_tensor` places tensor data in hot or cold region based on KV position
+- [ ] `GGML_SYCL_KV_HOT_TOKENS=N` env var to manually set hot window size (for testing)
+- [ ] Hot window ≥ 1024 tokens (minimum useful window)
+- [ ] Build succeeds with zero new warnings
+- [ ] Models that fit fully: zero behavior change (KV stays on device)
+- [ ] KV offload scenario: hot window fast, cold window slower but correct, full context preserved
+
+**Implementation Guide:**
+
+1. **Create `kv-tier-manager.hpp`**:
+
+```cpp
+#pragma once
+#include <sycl/sycl.hpp>
+#include <cstddef>
+#include <mutex>
+
+namespace ggml_sycl {
+
+// Manages hot/cold tiering for KV cache memory
+// Hot window: recent tokens in VRAM (fast GPU access)
+// Cold tier: older tokens in pinned host memory (PCIe access via USM)
+class kv_tier_manager {
+public:
+    kv_tier_manager() = default;
+
+    // Configure the tier split for a device
+    // hot_tokens: number of recent tokens to keep in VRAM
+    // total_tokens: total KV cache size (n_ctx)
+    // Returns true if tiering is active (hot < total)
+    bool configure(int device, uint32_t hot_tokens, uint32_t total_tokens);
+
+    // Calculate optimal hot window size based on available VRAM
+    // kv_bytes_per_token: bytes per KV entry per token (sum across all layers)
+    // Returns suggested hot_tokens count
+    static uint32_t compute_hot_window(int device, size_t kv_bytes_per_token);
+
+    // Query tier state
+    bool     is_active()     const { return active_; }
+    uint32_t hot_tokens()    const { return hot_tokens_; }
+    uint32_t total_tokens()  const { return total_tokens_; }
+
+    // For the tiered buffer type: determine if a KV position is hot or cold
+    bool is_hot(uint32_t token_pos) const;
+
+private:
+    bool     active_       = false;
+    int      device_       = -1;
+    uint32_t hot_tokens_   = 0;
+    uint32_t total_tokens_ = 0;
+};
+
+// Singleton accessor
+kv_tier_manager & get_kv_tier_manager(int device);
+
+} // namespace ggml_sycl
+```
+
+2. **Create `kv-tier-manager.cpp`**:
+
+```cpp
+#include "kv-tier-manager.hpp"
+#include "unified-cache.hpp"
+#include "ggml-sycl.h"
+#include "ggml.h"
+#include <algorithm>
+#include <array>
+
+namespace ggml_sycl {
+
+static std::array<kv_tier_manager, GGML_SYCL_MAX_DEVICES> g_kv_tier_managers;
+
+kv_tier_manager & get_kv_tier_manager(int device) {
+    return g_kv_tier_managers[device];
+}
+
+bool kv_tier_manager::configure(int device, uint32_t hot_tokens, uint32_t total_tokens) {
+    device_       = device;
+    total_tokens_ = total_tokens;
+
+    // Check env var override
+    const char * env = getenv("GGML_SYCL_KV_HOT_TOKENS");
+    if (env) {
+        hot_tokens_ = static_cast<uint32_t>(std::atoi(env));
+    } else {
+        hot_tokens_ = hot_tokens;
+    }
+
+    // Minimum hot window: 1024 tokens
+    hot_tokens_ = std::max(hot_tokens_, uint32_t(1024));
+
+    // If hot window >= total, no tiering needed
+    if (hot_tokens_ >= total_tokens_) {
+        active_ = false;
+        return false;
+    }
+
+    active_ = true;
+    GGML_LOG_INFO("[KV-TIER] Device %d: hot=%u tokens (VRAM), cold=%u tokens (host), total=%u\n",
+                  device_, hot_tokens_, total_tokens_ - hot_tokens_, total_tokens_);
+    return true;
+}
+
+uint32_t kv_tier_manager::compute_hot_window(int device, size_t kv_bytes_per_token) {
+    if (kv_bytes_per_token == 0) return UINT32_MAX;
+
+    auto info = unified_cache_get_budget_info(device);
+    size_t available = info.available_for_weights > info.weight_bytes
+                         ? info.available_for_weights - info.weight_bytes : 0;
+
+    // Reserve some VRAM for compute scratch (256 MB or 10% of budget)
+    size_t compute_reserve = std::max(size_t(256) << 20, info.budget_bytes / 10);
+    if (available > compute_reserve) {
+        available -= compute_reserve;
+    } else {
+        available = 0;
+    }
+
+    return static_cast<uint32_t>(available / kv_bytes_per_token);
+}
+
+bool kv_tier_manager::is_hot(uint32_t token_pos) const {
+    if (!active_) return true;  // All hot when tiering inactive
+    // Hot window = most recent hot_tokens_ positions
+    // In a ring buffer, "recent" depends on head position — caller manages this
+    return token_pos < hot_tokens_;
+}
+
+} // namespace ggml_sycl
+```
+
+3. **Create tiered buffer type** — Modify `ggml_backend_sycl_kv_buffer_type()` to return a tiered buffer type when `kv_tier_manager::is_active()`:
+
+The tiered buffer type uses a custom `ggml_backend_buffer_type_i` that:
+- `alloc_buffer`: allocates device memory for hot region + host pinned for cold region
+- `get_alignment`: returns device alignment (strictest)
+- `get_alloc_size`: returns total (hot + cold)
+
+The backing buffer uses a custom `ggml_backend_buffer_i` that:
+- `init_tensor`: assigns tensor data pointer to hot or cold region based on layer/position
+- `memset_tensor` / `set_tensor` / `get_tensor`: routes to correct region
+- `free_buffer`: frees both device and host allocations
+
+```cpp
+// Simplified approach: The tiered buffer type allocates one contiguous host-pinned
+// buffer for the full KV cache, plus a device buffer for the hot window.
+// The hot window is a prefix of the token positions.
+// get_k()/get_v() views will point into the correct region automatically
+// because the backing tensor spans both regions via USM addressing.
+//
+// Key: With SYCL USM, host-pinned memory IS accessible from GPU kernels.
+// So we just need the hot window to be a device copy for speed,
+// and cold entries are accessed in-place from host at PCIe speed.
+```
+
+4. **Wire into KV cache constructor** — The buffer type selection at `llama-kv-cache.cpp:148`:
+```cpp
+buft = ggml_backend_sycl_kv_buffer_type_from_dev(dev);
+```
+No changes needed — the tiered buffer type is returned transparently by `ggml_backend_sycl_kv_buffer_type()`.
+
+**Commit:**
+```bash
+git add ggml/src/ggml-sycl/kv-tier-manager.hpp ggml/src/ggml-sycl/kv-tier-manager.cpp \
+        ggml/src/ggml-sycl/ggml-sycl.cpp ggml/src/ggml-sycl/CMakeLists.txt
+git commit -m "sycl: KV cache hot/cold tiering with auto-sized hot window"
+```
+
+**Notes for implementer:**
+- **Critical**: SYCL USM makes this much simpler than CUDA. In SYCL, `sycl::malloc_host()` returns memory that is directly accessible by GPU kernels through PCIe. No need for explicit memcpy — the GPU accesses it in-place. The "tiering" is about placing HOT data in faster device memory, not about making cold data accessible.
+- The ring buffer nature of the KV cache complicates hot/cold: "recent" tokens wrap around. The simplest approach: the hot window covers positions `[head - hot_tokens, head)` where `head` is the current write position.
+- For the initial implementation, consider the simpler approach from Task 6 (full KV on host) as the fallback if tiering is too complex for the first iteration.
+- `kv_bytes_per_token` for Mistral 7B: `32 layers * (1024 + 1024) * 2 bytes (f16) = 131,072 bytes/token ≈ 128 KB/token`. At 1024 hot tokens = 128 MB hot window, 131K total = ~8 GB total.
+- The `get_k()`/`get_v()` functions at `llama-kv-cache.cpp:1302-1370` create **views** into backing tensors. The view's data pointer will point into either device or host memory depending on the token position. The attention kernel accesses through USM — no changes needed in the graph or compute code.
+- Testing: `GGML_SYCL_KV_HOST=1 GGML_SYCL_KV_HOT_TOKENS=1024` to force tiered KV with 1024 hot tokens.
+
+---
+
 ## Future Work (Not in This Plan)
 
 These are documented in `docs/plans/2026-02-09-unified-memory-architecture.md`:
 
-1. **Phase C: Unified Budget Authority** — Move the budget calculation entirely from `llama_params_fit` into the unified cache. The cache determines the optimal memory plan and exports it as `n_gpu_layers` + `tensor_buft_overrides`.
+1. **KV Cache DMA Prefetch** — For Task 7's hot/cold tiering: explicitly DMA cold KV entries to a device staging buffer before attention needs them, using double-buffered approach. Attention is layer-sequential, so prefetch layer N+1's cold entries during layer N's compute. Could improve cold-tier KV access from PCIe-limited to near-VRAM speed.
 
-2. **Phase D: MoE Expert-Aware Budgeting** — Build on Task 3 with OD-MoE-inspired look-ahead prediction (predict experts needed 2-3 layers ahead, start async DMA). MoEpic's vertical expert splitting (cache top segment of hot experts).
+2. **Phase C: Unified Budget Authority** — Move the budget calculation entirely from `llama_params_fit` into the unified cache. The cache determines the optimal memory plan and exports it as `n_gpu_layers` + `tensor_buft_overrides`.
 
-3. **Phase E: Sub-Layer Granularity** — Generate `tensor_buft_overrides` patterns from unified cache analysis. Keep attention on GPU, offload FFN to CPU for partial-layer offload.
+3. **Phase D: MoE Expert-Aware Budgeting** — Build on Task 3 with OD-MoE-inspired look-ahead prediction (predict experts needed 2-3 layers ahead, start async DMA). MoEpic's vertical expert splitting (cache top segment of hot experts).
 
-4. **Phase F: Adaptive Placement** — Runtime weight migration based on access patterns. Track per-tensor hotness, promote hot CPU tensors to GPU when headroom available, demote cold ones.
+4. **Phase E: Sub-Layer Granularity** — Generate `tensor_buft_overrides` patterns from unified cache analysis. Keep attention on GPU, offload FFN to CPU for partial-layer offload.
 
-5. **Layer Prefetch Optimization** — OD-MoE-style async double-buffered prefetch for streaming path. Predict layer N+2 while computing N, DMA N+1 into alternate buffer.
+5. **Phase F: Adaptive Placement** — Runtime weight migration based on access patterns. Track per-tensor hotness, promote hot CPU tensors to GPU when headroom available, demote cold ones.
+
+6. **Layer Prefetch Optimization** — OD-MoE-style async double-buffered prefetch for streaming path. Predict layer N+2 while computing N, DMA N+1 into alternate buffer.

@@ -18,10 +18,14 @@ Level 0: Everything in VRAM
   └─ Graph replay + persistent TG active
   └─ Full speed (~76 tok/s TG, ~1240 tok/s PP)
 
-Level 1: Context reduction
-  └─ Reduce n_ctx to free VRAM for weights
-  └─ Already implemented in llama_params_fit step 2
-  └─ Preserves full GPU performance, reduces max sequence length
+Level 1: KV cache offloading
+  └─ Keep full context size, offload cold KV entries to pinned host memory
+  └─ Hot window: recent N tokens' KV entries stay in VRAM
+  └─ Cold tier: older entries evict to host, stream back via PCIe for attention
+  └─ Prefetch: attention access is sequential, prefetch next cold chunk during compute
+  └─ Preserves full context capability (no sequence length reduction)
+  └─ New infrastructure: KV cache tier in unified cache
+  └─ Inspired by: vLLM KV offloading connector (Jan 2026), InfiniGen
 
 Level 2: MoE expert offload (MoE models only)
   └─ Move inactive expert FFN weights to CPU
@@ -58,7 +62,7 @@ Level 5: GPU weight streaming (last resort)
 |-----------|-----------|----------|
 | Mistral 7B Q4_0 (3.9 GB) | Yes (12 GB budget) | Level 0 |
 | Mistral 7B Q8_0 (7.2 GB) | Yes (12 GB budget) | Level 0 |
-| GPT-OSS 20B MXFP4 (11.3 GB) | Barely (after context reduction) | Level 1 + Level 2 |
+| GPT-OSS 20B MXFP4 (11.3 GB) | Barely (KV to host frees VRAM) | Level 1 + Level 2 |
 | Mixtral 8x7B Q4_0 (~26 GB) | No | Level 2 + Level 3 |
 | Llama 70B Q4_0 (~40 GB) | No | Level 3 |
 | GPT-OSS 120B MXFP4 (~60 GB) | No | Level 3 + Level 4 |
@@ -82,7 +86,7 @@ Output:
   - n_gpu_layers (how many full layers on GPU)
   - tensor_buft_overrides (which sub-layer tensors go to CPU)
   - moe_policy (which experts to keep on GPU)
-  - context_reduction (how much to reduce n_ctx)
+  - kv_offload_policy (hot window size, cold tier destination)
   - streaming_mode (enable layer streaming as last resort)
 ```
 
@@ -94,9 +98,12 @@ available_vram = total_vram * budget_pct / 100
 1. Try Level 0: all weights in VRAM
    if total_weight_size <= available_vram → DONE (Level 0)
 
-2. Try Level 1: reduce context
-   reduced_ctx_vram = compute_kv_savings(n_ctx_train → n_ctx_min)
-   if total_weight_size <= available_vram + reduced_ctx_vram → DONE (Level 1)
+2. Try Level 1: KV cache offloading
+   kv_size = compute_kv_size(n_ctx, n_layer, n_head, d_head)
+   vram_after_kv_offload = available_vram + kv_size  // KV moves to host
+   hot_window = min(n_ctx, available_vram_for_kv / kv_per_token)
+   if total_weight_size <= vram_after_kv_offload → DONE (Level 1)
+   // KV hot window stays in VRAM, cold entries stream from pinned host
 
 3. Try Level 2: MoE expert offload (if n_expert > 0)
    active_expert_ratio = expert_used_count / n_expert
@@ -309,7 +316,7 @@ PP is compute-bound, not memory-bound. CPU offload is much worse for PP than TG.
 
 1. **One budget, one authority**: The unified cache IS the memory manager. Everything else queries it.
 
-2. **Graduated response**: Start with the least invasive strategy and escalate only as needed. Never stream when you can offload. Never offload when you can reduce context.
+2. **Graduated response**: Start with the least invasive strategy and escalate only as needed. Never stream when you can offload. Never offload when you can offload KV cache. Never reduce context — offload KV to host instead.
 
 3. **Preserve GPU speed**: Strategies 0-4 keep graph replay and persistent TG active for GPU layers. Only Level 5 (streaming) disables them.
 
