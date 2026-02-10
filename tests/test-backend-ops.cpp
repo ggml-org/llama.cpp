@@ -2966,7 +2966,7 @@ struct test_bin_bcast : public test_case {
     int nf; // number of fused ops, nf == 1 -> single op (no fusion)
     bool perm1; // permute src1?
 
-    bool run_whole_graph() override { return nf > 1 || perm1; }
+    bool run_whole_graph() override { return nf > 1; }
 
     std::string vars() override {
         return VARS_TO_STR5(type, ne, nr, nf, perm1);
@@ -2999,6 +2999,7 @@ struct test_bin_bcast : public test_case {
                 ne_b[1] = ne[p[1]];
                 ne_b[2] = ne[p[2]];
                 ne_b[3] = ne[p[3]];
+
                 b[i] = ggml_new_tensor_4d(ctx, type, ne_b[0], ne_b[1], ne_b[2], ne_b[3]);
                 b[i] = ggml_permute(ctx, b[i], p[0], p[1], p[2], p[3]);
             } else {

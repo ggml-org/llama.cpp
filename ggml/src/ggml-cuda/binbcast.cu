@@ -39,7 +39,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
                                    const uint3            ne11,
                                    const uint3            ne12,
                                    const uint3            ne13,
-                                   const int              s0,
+                                 /*const int              s0,*/
                                    const int              s1,
                                    const int              s2,
                                    const int              s3,
@@ -82,7 +82,7 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
             result = bin_op(result, (float)src1[i_src1 + i10*s10]);
         }
 
-        dst_row[i0*s0] = (dst_t) result;
+        dst_row[i0] = (dst_t) result;
     }
 }
 
@@ -104,7 +104,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
                                            const uint3            ne11,
                                            const uint3            ne12,
                                            const uint3            ne13,
-                                           const int              s0,
+                                         /*const int              s0,*/
                                            const int              s1,
                                            const int              s2,
                                            const int              s3,
@@ -148,7 +148,7 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
         result = bin_op(result, (float)src1[i_src1 + i10*s10]);
     }
 
-    dst_row[i0*s0] = (dst_t) result;
+    dst_row[i0] = (dst_t) result;
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>
@@ -227,7 +227,7 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         size_t nb12 = cnb1[2];
         size_t nb13 = cnb1[3];
 
-        size_t s0 = nb0 / sizeof(dst_t);
+      //size_t s0 = nb0 / sizeof(dst_t);
         size_t s1 = nb1 / sizeof(dst_t);
         size_t s2 = nb2 / sizeof(dst_t);
         size_t s3 = nb3 / sizeof(dst_t);
@@ -286,14 +286,14 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
                 k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t><<<block_num, block_size, 0, stream>>>(
                     src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv, ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11,
                     ne12, ne13,
-                    s0,  s1, s2, s3,
+                  /*s0,*/ s1,  s2,  s3,
                     s00, s01, s02, s03,
                     s10, s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
             } else {
                 k_bin_bcast_unravel<bin_op, src0_t, src1_t, dst_t>
                     <<<block_num, block_size, 0, stream>>>(src0_dd, src1_dd, dst_dd, ne0_fastdiv, ne1_fastdiv,
                                                            ne2_fastdiv, ne3, prod_012, prod_01, ne10, ne11, ne12, ne13,
-                                                           s0,  s1, s2, s3,
+                                                         /*s0,*/ s1,  s2,  s3,
                                                            s00, s01, s02, s03,
                                                            s10, s11, s12, s13);
             }
@@ -302,13 +302,13 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
             if constexpr (sizeof...(I) > 0) {
                 k_bin_bcast<bin_op, src0_t, src1_t, dst_t><<<block_nums, block_dims, 0, stream>>>(
                     src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
-                    s0, s1, s2, s3,
-                    s00,s01, s02, s03,
+                  /*s0,*/ s1, s2,  s3,
+                    s00 ,s01, s02, s03,
                     s10, s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
             } else {
                 k_bin_bcast<bin_op, src0_t, src1_t, dst_t><<<block_nums, block_dims, 0, stream>>>(
                     src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
-                    s0,  s1, s2, s3,
+                  /*s0,*/ s1,  s2,  s3,
                     s00, s01, s02, s03,
                     s10, s11, s12, s13);
             }
