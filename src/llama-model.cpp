@@ -8541,6 +8541,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // Early tensor inventory collection for SYCL tiered memory
     // This MUST happen BEFORE buffer allocation so tiered mode can be enabled
     // before ggml_backend_alloc_ctx_tensors_from_buft() is called
+    // Skip during fit_params measurement probes (no_alloc) to avoid allocating
+    // streaming buffers and polluting global state
+    if (!ml.no_alloc) {
     LLAMA_LOG_INFO("%s: [SYCL] Starting early tensor inventory collection (ctx_map size: %zu)\n", __func__, ctx_map.size());
     {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
@@ -8580,6 +8583,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 __func__, sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
         }
     }
+    } // !ml.no_alloc
 #endif
 
     // create the backend buffers
@@ -8708,7 +8712,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // Post-allocation tensor inventory refresh for SYCL tiered memory
     // Note: Early inventory was already set before allocation (see above)
     // This refresh ensures the backend has final tensor names after allocation
-    if (!tensors_by_name.empty()) {
+    // Skip during fit_params measurement probes (no_alloc)
+    if (!ml.no_alloc && !tensors_by_name.empty()) {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         sycl_tensors.reserve(tensors_by_name.size());
         size_t total_size = 0;
