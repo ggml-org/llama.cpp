@@ -6,7 +6,9 @@
 #include "vec.h"
 #include "common.h"
 
-#ifdef GGML_SIMD
+
+// TODO: add support for sizeless vector types
+#if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !defined(__riscv_v_intrinsic)
 
 // TODO: untested on avx512 and arm
 // These are in units of GGML_F32_EPR
@@ -106,7 +108,7 @@ static void simd_gemm(
     }
 }
 
-#else // !GGML_SIMD
+#else // scalar path
 
 static void simd_gemm(
     float       * GGML_RESTRICT C,
