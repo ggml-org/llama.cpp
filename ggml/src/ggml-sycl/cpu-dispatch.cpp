@@ -25,24 +25,6 @@
 #include "gemm.hpp"
 #endif
 
-#include <cmath>
-#include <cstring>
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-// Get the CPU SYCL queue from device info (populated by Task 1).
-static sycl::queue * get_cpu_queue() {
-    return ggml_sycl_get_cpu_queue();
-}
-
-// Resolve a data pointer for a tensor using the standard resolution chain.
-// For CPU-dispatched ops, this returns the host-accessible pointer (pinned
-// host or mmap) via the unified cache or extra->data_device fallback.
-static void * resolve_cpu_ptr(const ggml_tensor * tensor, int device) {
-    return ggml_sycl_get_data_ptr(tensor, device);
-}
 
 // ---------------------------------------------------------------------------
 // MUL_MAT  (oneDNN on CPU queue)
@@ -54,7 +36,7 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_UNUSED(dst);
     return false;
 #else
-    sycl::queue * cpu_q = get_cpu_queue();
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
     if (!cpu_q) {
         return false;
     }
@@ -96,9 +78,9 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int K = static_cast<int>(ne00);
 
     const int device = ctx.device;
-    const void * src0_data = resolve_cpu_ptr(src0, device);
-    const void * src1_data = resolve_cpu_ptr(src1, device);
-    void *       dst_data  = resolve_cpu_ptr(dst, device);
+    const void * src0_data = ggml_sycl_get_data_ptr(src0, device);
+    const void * src1_data = ggml_sycl_get_data_ptr(src1, device);
+    void *       dst_data  = ggml_sycl_get_data_ptr(dst, device);
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
@@ -164,7 +146,7 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    sycl::queue * cpu_q = get_cpu_queue();
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
     if (!cpu_q) {
         return false;
     }
@@ -181,11 +163,11 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 
     float eps;
-    std::memcpy(&eps, dst->op_params, sizeof(float));
+    memcpy(&eps, dst->op_params, sizeof(float));
 
     const int device = ctx.device;
-    const float * src_data = static_cast<const float *>(resolve_cpu_ptr(src0, device));
-    float *       dst_data = static_cast<float *>(resolve_cpu_ptr(dst, device));
+    const float * src_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src0, device));
+    float *       dst_data = static_cast<float *>(ggml_sycl_get_data_ptr(dst, device));
 
     if (!src_data || !dst_data) {
         return false;
@@ -206,7 +188,7 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 sum_sq += src_row[j] * src_row[j];
             }
 
-            const float scale = 1.0f / std::sqrt(sum_sq / static_cast<float>(ne00) + eps);
+            const float scale = 1.0f / sycl::sqrt(sum_sq / static_cast<float>(ne00) + eps);
 
             for (int64_t j = 0; j < ne00; j++) {
                 dst_row[j] = src_row[j] * scale;
@@ -223,7 +205,7 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    sycl::queue * cpu_q = get_cpu_queue();
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
     if (!cpu_q) {
         return false;
     }
@@ -242,9 +224,9 @@ static bool cpu_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 
     const int device = ctx.device;
-    const float * src0_data = static_cast<const float *>(resolve_cpu_ptr(src0, device));
-    const float * src1_data = static_cast<const float *>(resolve_cpu_ptr(src1, device));
-    float *       dst_data  = static_cast<float *>(resolve_cpu_ptr(dst, device));
+    const float * src0_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src0, device));
+    const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, device));
+    float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, device));
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
@@ -282,7 +264,7 @@ static bool cpu_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    sycl::queue * cpu_q = get_cpu_queue();
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
     if (!cpu_q) {
         return false;
     }
@@ -301,9 +283,9 @@ static bool cpu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 
     const int device = ctx.device;
-    const float * src0_data = static_cast<const float *>(resolve_cpu_ptr(src0, device));
-    const float * src1_data = static_cast<const float *>(resolve_cpu_ptr(src1, device));
-    float *       dst_data  = static_cast<float *>(resolve_cpu_ptr(dst, device));
+    const float * src0_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src0, device));
+    const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, device));
+    float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, device));
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
