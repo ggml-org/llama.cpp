@@ -353,8 +353,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
         ggml_tensor * k,
         ggml_tensor * v,
         ggml_tensor * g,
-        ggml_tensor * beta,
-        ggml_tensor * state,
+        ggml_tensor * b, // beta
+        ggml_tensor * s, // state
         int           il) {
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
@@ -368,13 +368,13 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
     GGML_ASSERT(v->ne[2] == n_tokens);
     GGML_ASSERT(k->ne[2] == n_tokens);
     GGML_ASSERT(g->ne[0] == H_v && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
-    GGML_ASSERT(beta->ne[0] == H_v && beta->ne[2] == n_tokens && beta->ne[3] == n_seqs);
-    GGML_ASSERT(state->ne[0] == S_v && state->ne[1] == S_v && state->ne[2] == H_v && state->ne[3] == n_seqs);
+    GGML_ASSERT(b->ne[0] == H_v && b->ne[2] == n_tokens && b->ne[3] == n_seqs);
+    GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v && s->ne[3] == n_seqs);
 
     GGML_ASSERT(q->ne[0] == S_k && q->ne[1] == H_k && q->ne[2] == n_tokens && q->ne[3] == n_seqs);
     GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H_k && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
 
-    //GGML_ASSERT(H_k == H_v);  // we did a repeat to make sure this is the case
+    GGML_ASSERT(H_k == H_v);  // we did a repeat to make sure this is the case
 
     const float eps_norm = hparams.f_norm_rms_eps;
 
@@ -383,56 +383,46 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
 
     const float scale = 1.0f / sqrtf(S_k);
 
-    q    = ggml_scale(ctx0, q, scale);
-    beta = ggml_sigmoid(ctx0, beta);
+    q = ggml_scale(ctx0, q, scale);
+    b = ggml_sigmoid(ctx0, b);
 
     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
-    v = ggml_permute(ctx0, v, 1, 2, 0, 3);
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
     cb(q, "q_in", il);
     cb(k, "k_in", il);
     cb(v, "v_in", il);
-    cb(beta, "beta_in", il);
+    cb(b, "b_in", il);
     cb(g, "g_in", il);
 
-    ggml_tensor * g_t    = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, g),    1, 1, H_v, n_seqs);
-    ggml_tensor * beta_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, beta), 1, 1, H_v, n_seqs);
+    ggml_tensor * g_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, g), 1, 1, H_v, n_seqs);
+    ggml_tensor * b_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, b), 1, 1, H_v, n_seqs);
 
-    // Apply exponential to g_t
     g_t = ggml_exp(ctx0, g_t);
+    s   = ggml_mul(ctx0, s, g_t);
 
-    // Apply the gated delta rule for the single timestep
-    // last_recurrent_state = last_recurrent_state * g_t
-    state = ggml_mul(ctx0, state, g_t);
+    s = ggml_cont(ctx0, ggml_transpose(ctx0, s));
 
-    // kv_mem = (last_recurrent_state * k_t.unsqueeze(-1)).sum(dim=-2)
-    state = ggml_cont(ctx0, ggml_transpose(ctx0, state));
-    ggml_tensor * kv_mem = ggml_mul(ctx0, state, k);
+    ggml_tensor * kv_mem = ggml_mul(ctx0, s, k);
     kv_mem = ggml_sum_rows(ctx0, kv_mem);
 
-    // v_t = v.unsqueeze(2) (we insert the singleton dimension after n_seqs and H_v)
-    // delta = (v_t - kv_mem) * beta_t
-    ggml_tensor * v_diff = ggml_sub(ctx0, v, kv_mem);  // both should be [1, S_v, H_v, n_seqs]
-    ggml_tensor * delta  = ggml_mul(ctx0, v_diff, beta_t);
+    ggml_tensor * v_diff = ggml_sub(ctx0, v, ggml_transpose(ctx0, kv_mem));
+    ggml_tensor * delta  = ggml_mul(ctx0, v_diff, b_t);
 
-    // last_recurrent_state = last_recurrent_state + k_t.unsqueeze(-1) * delta
-    ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k, S_v, S_v, H_v, n_seqs), delta);
-    state = ggml_add(ctx0, state, k_t_delta);
+    ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k, S_v, S_v, H_v, n_seqs), ggml_transpose(ctx0, delta));
+    s = ggml_add(ctx0, s, k_t_delta);
 
-    // Compute the attention output
-    // core_attn_out = (last_recurrent_state * q_t.unsqueeze(-1)).sum(dim=-2)
-    ggml_tensor * state_q = ggml_mul(ctx0, state, q);
-    ggml_tensor * core_attn_out = ggml_sum_rows(ctx0, state_q);
+    ggml_tensor * s_q = ggml_mul(ctx0, s, q);
+    ggml_tensor * core_attn_out = ggml_sum_rows(ctx0, s_q);
 
     core_attn_out = ggml_transpose(ctx0, core_attn_out);
-    state         = ggml_transpose(ctx0, state);
+    s = ggml_transpose(ctx0, s);
 
-    // core_attn_out should be [S_v, 1, H_v, n_seqs] after this
     cb(core_attn_out, "output_tokens", il);
-    cb(state, "new_state", il);
+    cb(s, "new_state", il);
 
-    return {core_attn_out, state};
+    return {core_attn_out, s};
 }
 
 ggml_tensor * llm_build_qwen3next::build_norm_gated(
