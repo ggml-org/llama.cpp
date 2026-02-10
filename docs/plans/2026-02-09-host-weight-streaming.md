@@ -1,12 +1,12 @@
-# Host Weight Streaming Implementation Plan
+# Host Weight Streaming — Double-Buffered Layer Streaming
 
 > **For Claude:** REQUIRED SUB-SKILL: Use team-driven-development to implement this plan with agent teams.
 
-**Goal:** Wire the existing DMA streaming infrastructure into kernel dispatch so that host-resident weights are automatically streamed to device before kernel execution, enabling models larger than VRAM to run (slowly but correctly).
+**Goal:** Enable models larger than VRAM to run by streaming weight data from host memory to device using double-buffered layer-level DMA, overlapping compute and transfer for maximum throughput.
 
-**Architecture:** When a weight is needed by a GPU kernel but is host-resident (evicted from device cache or never loaded), the dispatch path must: (1) check if the weight is cached on device, (2) if not, use the unified cache's `copy_to_device_async()` or `ensure_cached_layout()` to bring it to device, (3) pass the device pointer to the kernel. This happens transparently in the existing pointer resolution functions.
+**Architecture:** Two device buffers (A and B), each sized to hold one transformer layer's weights. While GPU computes layer N from buffer A, DMA loads layer N+1 into buffer B asynchronously. Pointers are stable per-buffer, with layer transitions triggering buffer swaps. Graph replay and persistent TG are disabled when streaming is active since baked pointers are incompatible with buffer rotation.
 
-**Tech Stack:** C++17, SYCL/Level Zero, llama.cpp unified cache
+**Tech Stack:** C++17, SYCL/Level Zero, llama.cpp unified cache, existing `layer_prefetch_tracker`
 
 **Beads Issue:** llama.cpp-i7zx
 
@@ -21,29 +21,28 @@
 
 | Track | Tasks | Description |
 |-------|-------|-------------|
-| A | 1, 3, 5 | Core pointer resolution + unified kernel path + integration test |
-| B | 2, 4 | Legacy dispatch path + MMVQ fast-path |
+| A | 1, 3 | Layer stream manager module + async double-buffer prefetch |
+| B | 2, 4 | Disable graphs/persistent TG + wire streaming into dispatch |
 
 ### Dependency Graph
 
 ```
-Task 1 (Track A, no deps)     — Core streaming in pointer resolution
-Task 2 (Track B, no deps)     — Legacy dispatch hook
-Task 3 (Track A, depends on 1) — Unified kernel plan-build streaming
-Task 4 (Track B, depends on 2) — MMVQ fast-path streaming
-Task 5 (Track A, depends on 1,2) — Integration test
+Task 1 (Track A, no deps)       — Layer stream manager module
+Task 2 (Track B, no deps)       — Disable graph replay + persistent TG for streaming
+Task 3 (Track A, depends on 1)  — Wire async double-buffer prefetch into dispatch loop
+Task 4 (depends on 1, 2)        — Wire streaming into pointer resolution + tiered stubs
+Task 5 (depends on 3, 4)        — Integration test
 ```
 
 ### File Ownership Map
 
 | File/Directory | Tasks | Conflict Risk |
 |----------------|-------|---------------|
-| `ggml/src/ggml-sycl/common.hpp` (get_layout_ptr) | 1 | None (single task) |
-| `ggml/src/ggml-sycl/ggml-sycl.cpp` (get_data_ptr_slow + tiered stubs) | 1, 2 | **Sequential** — Task 2 depends on Task 1's changes |
-| `ggml/src/ggml-sycl/ggml-sycl.cpp` (plan_build section ~27380) | 3 | None (depends on 1) |
-| `ggml/src/ggml-sycl/ggml-sycl.cpp` (TG fast-path ~19320) | 4 | None (depends on 2) |
-| `ggml/src/ggml-sycl/unified-cache.hpp` | 1 | None |
-| `ggml/src/ggml-sycl/unified-cache.cpp` | 1 | None |
+| `ggml/src/ggml-sycl/layer-streaming.hpp` (NEW) | 1, 3 | Sequential (same track) |
+| `ggml/src/ggml-sycl/layer-streaming.cpp` (NEW) | 1, 3 | Sequential (same track) |
+| `ggml/src/ggml-sycl/ggml-sycl.cpp` (~29465-29640, graph section) | 2 | None (isolated section) |
+| `ggml/src/ggml-sycl/ggml-sycl.cpp` (pointer resolution, stubs, dispatch) | 3, 4 | Sequential (3 before 4) |
+| `ggml/src/ggml-sycl/common.hpp` (get_layout_ptr) | 4 | None |
 
 ---
 
@@ -53,251 +52,1134 @@ Task 5 (Track A, depends on 1,2) — Integration test
 
 1. **Unified cache with tiered storage**: `unified_cache` (device VRAM) + `host_cache` (pinned host memory). Weights evict from device → host when budget exceeded. (`unified-cache.hpp:508-968`)
 
-2. **DMA streaming infrastructure**:
-   - `unified_cache::copy_to_device(dst, src, size)` — sync host→device copy via staging buffer (`unified-cache.hpp:826`)
-   - `unified_cache::copy_to_device_async(dst, src, size, deps)` — async copy with event dependencies (`unified-cache.hpp:827`)
-   - `unified_cache::stream_dma(src, total_bytes, slice_bytes, buffer_count, slice_fn, ctx, deps)` — pipelined multi-buffer DMA streaming (`unified-cache.hpp:734-741`)
-   - `dma_staging_buffers` — device-resident staging buffer pool (`unified-cache.hpp:715-722`)
-   - Staging buffer in cache: `staging_` / `staging_size_` (default 64MB, `unified-cache.hpp:879-881`)
+2. **DMA infrastructure**: `copy_to_device()`, `copy_to_device_async()`, `stream_dma()` with staging buffers. (`unified-cache.hpp:826-741`)
 
-3. **Layer prefetch system**: Background worker thread (`prefetch_worker_loop`), `queue_layer_prefetch()`, `wait_layer_prefetch()`, per-layer pinning (`unified-cache.hpp:613-958`). This is for proactive prefetch, NOT for on-demand streaming.
+3. **Layer transition detection**: `layer_prefetch_tracker` in `layer-prefetch.hpp:32-135`. Detects layer transitions by parsing tensor names (`blk.N.attn_q.weight`). Triggers at attn_q (layer start) and ffn_gate (layer midpoint). Already integrated into `ggml_backend_sycl_mul_mat` dispatch at line 19400.
 
-4. **Tensor inventory + tier tracking**: `g_tensor_inventory`, `get_cached_tensor_ptr()`, `ggml_sycl_get_cached_tensor_ptr_for()` — these know which weights are VRAM/host/mmap and return the cached pointer + tier. (`ggml-sycl.cpp:2234-2330`)
+4. **Tensor inventory**: `g_tensor_inventory` (`ggml-sycl.cpp:1995`) stores all weight tensor names and sizes. `extract_layer_id()` (`tensor-types.hpp:139`) parses layer IDs from tensor names. `g_model_exceeds_vram` flag set at line 2093 when model > VRAM budget.
 
-5. **`ensure_cached_layout()` with host fallback**: When device allocation fails, creates host-resident entry and sets `result.host_resident = true`. (`unified-cache.cpp:2077, 2419, 2504`)
+5. **Layer prefetch system**: `queue_layer_prefetch()`, `await_layer()`, `release_layer()` with background worker thread and per-layer ready tracking (`unified-cache.hpp:612-958`). Currently pins cache entries — not suitable for host→device DMA.
 
-6. **`g_model_exceeds_vram` flag**: Set during tensor inventory when model size > VRAM budget. Controls whether tiered dispatch checks are active. (`ggml-sycl.cpp:1999, 2093`)
+6. **Graph replay**: `ggml_backend_sycl_graph_compute` (`ggml-sycl.cpp:29504`) records command graphs and replays them. `graph_refresh_input_tensors` (`ggml-sycl.cpp:25401`) updates input tensor data but NOT weight pointers (those are baked into kernel arguments).
+
+7. **Persistent TG**: `should_use_persistent_tg()` (`ggml-sycl.cpp:29465`) gates persistent kernel dispatch. `extract_persistent_plan()` builds a plan with baked weight pointers.
 
 ### What's Missing (THIS plan implements)
 
-1. **On-demand device streaming in `ggml_sycl_get_weight_layout_ptr()`**: When `result.host_resident == true`, instead of returning nullptr and falling back to AOS, stream the data to a temporary device buffer and return the device pointer.
+1. **Layer stream manager**: A new module that manages two device buffers, builds a per-layer weight map from the tensor inventory, and performs synchronous/asynchronous DMA from host to device at layer granularity.
 
-2. **On-demand device streaming in `ggml_sycl_get_data_ptr_slow()`**: The fallback path for AOS weights. When cache lookup returns a host pointer, copy to device staging and return device pointer.
+2. **Graph replay disable**: When `g_model_exceeds_vram` is true, graph replay must be disabled because weight pointers rotate between two buffers per token. Baked pointers in the graph would reference stale data.
 
-3. **Tiered dispatch hookup in legacy mul_mat**: The `"// Future: use cached_ptr"` stubs at lines 11946, 15142, 19428, 20855, 21823 need to actually use the cached device pointer when available, and trigger on-demand streaming when not.
+3. **Persistent TG disable**: Same reason — the persistent plan records weight pointers at build time. With double-buffered streaming, these pointers change per token.
 
-4. **Unified kernel plan-build streaming**: When building a persistent TG plan, `get_tensor_ptr_fast()` returns `extra->data_device[device]` which may be stale/null after eviction. Need to resolve through streaming-aware path.
+4. **Pointer resolution wiring**: The existing pointer resolution functions (`ggml_sycl_get_weight_layout_ptr`, `ggml_sycl_get_data_ptr_slow`, 5 tiered dispatch stubs) must query the layer stream manager for device pointers instead of returning host pointers.
 
-5. **MMVQ fast-path awareness**: The TG fast-path at line 19320 checks `extra->optimized_feature.is_reordered()` but doesn't handle the case where the reordered layout was evicted to host.
+5. **Async prefetch integration**: The existing `layer_prefetch_tracker` detects layer transitions but only logs them. It needs to trigger async DMA of the next layer into the alternate buffer.
 
 ---
 
-## Task 1: Core Streaming in Pointer Resolution
+## Performance Analysis
+
+### Buffer Sizing (Mistral 7B Q4_0)
+
+Per-layer weight tensors (32 layers):
+- `attn_q.weight`: 4096×4096 Q4_0 = ~9.4 MB
+- `attn_k.weight`: 4096×1024 Q4_0 = ~2.4 MB
+- `attn_v.weight`: 4096×1024 Q4_0 = ~2.4 MB
+- `attn_output.weight`: 4096×4096 Q4_0 = ~9.4 MB
+- `ffn_gate.weight`: 4096×14336 Q4_0 = ~33.6 MB
+- `ffn_up.weight`: 4096×14336 Q4_0 = ~33.6 MB
+- `ffn_down.weight`: 14336×4096 Q4_0 = ~33.6 MB
+- Norms (~32 KB, negligible)
+- **Total per layer: ~125 MB**
+- **Two buffers: ~250 MB**
+
+Non-layer tensors (stay in VRAM permanently):
+- `token_embd.weight`: ~77 MB
+- `output.weight`: ~77 MB
+- **Total: ~154 MB**
+
+VRAM footprint for streaming: ~250 MB (buffers) + ~154 MB (embedding/output) + ~300 MB (KV cache, compute) ≈ 700 MB. Arc B580 has 12 GB, so this fits with large headroom.
+
+### Throughput Estimates (Arc B580, PCIe Gen4 x16)
+
+PCIe practical bandwidth: ~15-20 GB/s
+Layer DMA time: 125 MB / 15 GB/s ≈ 8.3 ms
+Layer compute time (TG batch=1): 13.2 ms / 32 layers ≈ 0.4 ms
+
+- **Without streaming** (all VRAM): 13.2 ms/token → 76 tok/s
+- **Single scratch (no overlap)**: 32 × (8.3 + 0.4) = 278 ms → ~3.6 tok/s
+- **Double buffer (compute/DMA overlap)**: 8.3 + 31 × max(8.3, 0.4) = 266 ms → ~3.8 tok/s
+- **PP512 with double buffer**: DMA hidden behind compute → much better overlap
+
+Double-buffering benefits grow with larger batch sizes and PP mode where compute dominates.
+
+---
+
+## Task 1: Layer Stream Manager Module
 
 **Track:** A
 **Depends on:** None
 **File scope:**
-- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines 5078-5090 in `ggml_sycl_get_weight_layout_ptr`, lines 2339-2430 in `ggml_sycl_get_data_ptr_slow`)
-- Modify: `ggml/src/ggml-sycl/common.hpp` (lines 1790-1825 in `ggml_sycl_get_layout_ptr`)
-- Modify: `ggml/src/ggml-sycl/unified-cache.hpp` (add `stream_to_device()` public method)
-- Modify: `ggml/src/ggml-sycl/unified-cache.cpp` (implement `stream_to_device()`)
+- Create: `ggml/src/ggml-sycl/layer-streaming.hpp`
+- Create: `ggml/src/ggml-sycl/layer-streaming.cpp`
+- (No CMakeLists.txt change needed — `file(GLOB GGML_SOURCES_SYCL "*.cpp")` at line 34 auto-includes new .cpp files, and `file(GLOB GGML_HEADERS_SYCL "*.hpp")` at line 26 auto-includes new .hpp files)
 
 **Description:**
 
-The core problem: when `ensure_cached_layout()` returns `host_resident=true`, `ggml_sycl_get_weight_layout_ptr()` returns nullptr, and the entire fallback chain eventually returns a host pointer to the GPU kernel. The fix is to add an on-demand streaming path that copies host-resident data to a reusable device staging buffer.
+Self-contained module implementing double-buffered layer streaming. Manages two device buffers, builds a per-layer weight map from the tensor inventory, and provides synchronous and asynchronous DMA for loading layers from host to device. This is a new class that doesn't modify any existing files.
 
 **Acceptance Criteria:**
-- [ ] When a weight is host-resident, `ggml_sycl_get_weight_layout_ptr()` streams it to device and returns a device pointer
-- [ ] When `ggml_sycl_get_data_ptr_slow()` encounters a host-resident cached weight, it streams to device
-- [ ] A reusable "streaming scratch" device buffer is managed by the unified cache (sized to max weight tensor)
-- [ ] Streaming is synchronous (simple first implementation — async prefetch is WI-3 layer prefetch, separate work)
-- [ ] No regression for models that fit in VRAM (streaming code is only reached when weight is actually host-resident)
+- [ ] `layer_stream_manager` class compiles and links into ggml-sycl library
+- [ ] `build_layer_map()` correctly groups tensors by layer ID from tensor inventory
+- [ ] `allocate_buffers()` allocates two device buffers of `max_layer_size` bytes
+- [ ] `ensure_layer(layer_id)` synchronously loads all host-resident weights for a layer into the correct buffer
+- [ ] `get_weight_device_ptr(name)` returns the correct device pointer (buffer base + offset) for a loaded weight
+- [ ] `prefetch_next_layer(layer_id)` starts async DMA on a copy queue
+- [ ] `await_prefetch()` blocks until async DMA completes
+- [ ] Non-layer tensors (embedding, output) are excluded from the layer map
+- [ ] Buffer lifecycle (allocation, freeing) is correct — no leaks
 - [ ] Build succeeds with zero warnings
-- [ ] `llama-completion` with Mistral Q4_0 at `GGML_SYCL_VRAM_BUDGET_PCT=40` produces correct deterministic output
 
 **Implementation Guide:**
 
-### Step 1: Add `stream_weight_to_device()` to unified_cache
-
-Add a new public method to `unified_cache` that:
-1. Takes a host pointer, size, and optional layout info
-2. Uses the existing staging buffer (`staging_` / `staging_size_`) for the transfer
-3. Returns a device pointer to a reusable "streaming scratch" buffer
-
-In `ggml/src/ggml-sycl/unified-cache.hpp`, add after `copy_to_device_async` (line 827):
+### Step 1: Create the header `layer-streaming.hpp`
 
 ```cpp
-    // Stream a host-resident weight to a reusable device scratch buffer.
-    // Returns device pointer to the scratch buffer containing the weight data.
-    // The scratch buffer is reused across calls (only valid until next stream call).
-    // Thread-safe: protected by staging_mutex_.
-    void * stream_weight_to_device(const void * host_ptr, size_t size);
+//
+// MIT license
+// Copyright (C) 2024-2025 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
+
+#ifndef GGML_SYCL_LAYER_STREAMING_HPP
+#define GGML_SYCL_LAYER_STREAMING_HPP
+
+#include <atomic>
+#include <cstddef>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <sycl/sycl.hpp>
+
+#include "ggml.h"
+
+namespace ggml_sycl {
+
+// Double-buffered layer streaming manager.
+// Manages two device buffers that alternate holding transformer layer weights.
+// While GPU computes on buffer A (layer N), DMA loads layer N+1 into buffer B.
+//
+// Usage:
+//   1. build_layer_map(inventory, count) — once after tensor inventory is set
+//   2. allocate_buffers(queue) — once to create device buffers
+//   3. ensure_layer(layer_id) — before each layer's first kernel
+//   4. get_weight_device_ptr(name) — to get device pointer for a specific weight
+//   5. prefetch_next_layer(layer_id+1) — after layer N's first kernel launches
+//   6. shutdown() — cleanup
+
+class layer_stream_manager {
+  public:
+    layer_stream_manager() = default;
+    ~layer_stream_manager();
+
+    // Non-copyable, non-movable (owns device memory)
+    layer_stream_manager(const layer_stream_manager &)            = delete;
+    layer_stream_manager & operator=(const layer_stream_manager &) = delete;
+
+    // Build the layer weight map from tensor inventory.
+    // inventory: array of (name, size) pairs
+    // count: number of entries
+    // Filters to only include "blk.N.*" tensors (layer tensors).
+    void build_layer_map(const std::pair<std::string, size_t> * inventory, size_t count);
+
+    // Allocate two device buffers sized to max_layer_size.
+    // Returns false if allocation fails.
+    // queue: the SYCL queue for device allocation.
+    bool allocate_buffers(sycl::queue & queue);
+
+    // Free device buffers and reset state.
+    void shutdown();
+
+    // Synchronously ensure a layer's weights are loaded into a device buffer.
+    // If the layer is already loaded (from a previous prefetch or ensure call), this is a no-op.
+    // If not loaded, performs synchronous DMA from host pointers to the buffer.
+    // host_ptrs: map from tensor name to host pointer (from tensor->data or host cache).
+    // Returns true if the layer is now loaded.
+    bool ensure_layer(int layer_id, sycl::queue & queue);
+
+    // Start async DMA of a layer into the alternate buffer.
+    // Non-blocking — the DMA runs on copy_queue (if provided) or main queue.
+    // Call await_prefetch() before accessing the layer's data.
+    void prefetch_next_layer(int layer_id, sycl::queue & queue);
+
+    // Block until the most recent async prefetch completes.
+    void await_prefetch();
+
+    // Get the device pointer for a specific weight tensor.
+    // Returns nullptr if the weight's layer is not currently loaded.
+    // The pointer is valid until the layer is evicted (overwritten by a new layer load).
+    void * get_weight_device_ptr(const char * tensor_name) const;
+
+    // Check if a layer is currently loaded in a buffer.
+    bool is_layer_loaded(int layer_id) const;
+
+    // Get which buffer index (0 or 1) a layer is in. Returns -1 if not loaded.
+    int buffer_for_layer(int layer_id) const;
+
+    // Check if the manager is active (has buffers allocated).
+    bool is_active() const { return buffers_[0] != nullptr; }
+
+    // Total bytes allocated for the two buffers.
+    size_t allocated_bytes() const { return buffer_size_ * 2; }
+
+    // Max layer size across all layers.
+    size_t max_layer_size() const { return max_layer_size_; }
+
+    // Number of layers in the model.
+    int n_layers() const { return static_cast<int>(layers_.size()); }
+
+    // Register the host pointer for a tensor (called during model load/cache setup).
+    // This is needed because the tensor inventory only stores names and sizes,
+    // not the actual host pointers. The pointers are registered as tensors are
+    // encountered during inference.
+    void register_host_ptr(const char * tensor_name, const void * host_ptr, size_t size);
+
+  private:
+    // Per-weight entry within a layer
+    struct weight_entry {
+        std::string  name;
+        size_t       size            = 0;
+        size_t       offset_in_layer = 0;  // Byte offset within layer buffer
+        const void * host_ptr        = nullptr;  // Host-resident data pointer (registered later)
+    };
+
+    // Per-layer info
+    struct layer_info {
+        std::vector<weight_entry> weights;
+        size_t                    total_size = 0;
+    };
+
+    // Layer data
+    std::vector<layer_info>                       layers_;         // Indexed by layer_id
+    size_t                                        max_layer_size_ = 0;
+    std::unordered_map<std::string, std::pair<int, size_t>> name_to_location_;  // name -> (layer_id, weight_idx)
+
+    // Double buffers
+    void *  buffers_[2]       = {nullptr, nullptr};
+    size_t  buffer_size_      = 0;
+    int     loaded_layers_[2] = {-1, -1};  // Which layer is in each buffer (-1 = empty)
+
+    // Async prefetch state
+    int         prefetch_target_layer_ = -1;
+    int         prefetch_buffer_       = -1;
+    sycl::event prefetch_event_;
+    bool        prefetch_pending_      = false;
+    mutable std::mutex prefetch_mutex_;
+
+    // Host pointer registration
+    mutable std::mutex host_ptr_mutex_;
+
+    // Internal helpers
+    int  pick_buffer_for_layer(int layer_id) const;
+    bool load_layer_sync(int layer_id, int buffer_idx, sycl::queue & queue);
+};
+
+// Global accessor — returns the singleton layer stream manager for a device.
+// Creates on first access. Thread-safe.
+layer_stream_manager & get_layer_stream_manager(int device_id);
+
+// Free function API for use from ggml-sycl.cpp
+bool layer_streaming_active(int device_id);
+void * layer_streaming_get_weight_ptr(int device_id, const char * name);
+void layer_streaming_ensure_layer(int device_id, int layer_id, sycl::queue & queue);
+void layer_streaming_prefetch_next(int device_id, int layer_id, sycl::queue & queue);
+void layer_streaming_await_prefetch(int device_id);
+void layer_streaming_register_host_ptr(int device_id, const char * name, const void * ptr, size_t size);
+
+}  // namespace ggml_sycl
+
+#endif  // GGML_SYCL_LAYER_STREAMING_HPP
 ```
 
-Add private member after `dma_staging_mutex_` (line 888):
+### Step 2: Create the implementation `layer-streaming.cpp`
 
 ```cpp
-    // Reusable device scratch buffer for on-demand weight streaming.
-    // Sized to hold the largest weight tensor that needs streaming.
-    void *     stream_scratch_         = nullptr;
-    size_t     stream_scratch_size_    = 0;
-    std::mutex stream_scratch_mutex_;
-```
+//
+// MIT license
+// Copyright (C) 2024-2025 Intel Corporation
+// SPDX-License-Identifier: MIT
+//
 
-In `unified-cache.cpp`, implement:
+#include "layer-streaming.hpp"
+#include "tensor-types.hpp"
 
-```cpp
-void * unified_cache::stream_weight_to_device(const void * host_ptr, size_t size) {
-    if (!host_ptr || size == 0) {
-        return nullptr;
-    }
+#include "ggml-impl.h"
 
-    std::lock_guard<std::mutex> lock(stream_scratch_mutex_);
+#include <algorithm>
+#include <cstring>
 
-    // Grow scratch buffer if needed
-    if (size > stream_scratch_size_) {
-        if (stream_scratch_) {
-            sycl::free(stream_scratch_, queue_);
-            saturating_sub_used(stream_scratch_size_);
-        }
-        // Round up to 16MB alignment for efficient reuse
-        const size_t aligned_size = ((size + (16 * 1024 * 1024 - 1)) / (16 * 1024 * 1024)) * (16 * 1024 * 1024);
-        stream_scratch_ = sycl::malloc_device(aligned_size, queue_);
-        if (!stream_scratch_) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to allocate streaming scratch buffer (%zu MB)\n",
-                           aligned_size / (1024 * 1024));
-            stream_scratch_size_ = 0;
-            return nullptr;
-        }
-        stream_scratch_size_ = aligned_size;
-        used_.fetch_add(aligned_size, std::memory_order_relaxed);
-        GGML_LOG_INFO("[UNIFIED-CACHE] Allocated streaming scratch buffer: %.1f MB\n",
-                      aligned_size / (1024.0f * 1024.0f));
-    }
+namespace ggml_sycl {
 
-    // Copy host data to device scratch via staging buffer
-    copy_to_device(stream_scratch_, host_ptr, size);
-
-    return stream_scratch_;
+layer_stream_manager::~layer_stream_manager() {
+    shutdown();
 }
-```
 
-Also add cleanup in the destructor — find the existing destructor and add:
-```cpp
-    if (stream_scratch_) {
-        sycl::free(stream_scratch_, queue_);
-        stream_scratch_ = nullptr;
-        stream_scratch_size_ = 0;
+void layer_stream_manager::build_layer_map(
+    const std::pair<std::string, size_t> * inventory, size_t count) {
+
+    layers_.clear();
+    name_to_location_.clear();
+    max_layer_size_ = 0;
+
+    // First pass: find max layer_id to size the vector
+    int max_layer = -1;
+    for (size_t i = 0; i < count; i++) {
+        int layer_id = extract_layer_id(inventory[i].first.c_str());
+        if (layer_id >= 0) {
+            max_layer = std::max(max_layer, layer_id);
+        }
     }
-```
 
-Also add a free function for external use:
-
-In `unified-cache.hpp` after `unified_cache_is_budget_exceeded` (~line 1052):
-```cpp
-// Stream a host-resident weight to a reusable device scratch buffer.
-// Returns device pointer valid until the next stream call on the same device.
-void * unified_cache_stream_weight_to_device(int device_id, const void * host_ptr, size_t size);
-```
-
-In `unified-cache.cpp`, implement:
-```cpp
-void * unified_cache_stream_weight_to_device(int device_id, const void * host_ptr, size_t size) {
-    auto * cache = get_unified_cache_for_device(device_id);
-    if (!cache) {
-        return nullptr;
+    if (max_layer < 0) {
+        GGML_LOG_WARN("[LAYER-STREAM] No layer tensors found in inventory\n");
+        return;
     }
-    return cache->stream_weight_to_device(host_ptr, size);
+
+    layers_.resize(max_layer + 1);
+
+    // Second pass: populate layer entries
+    for (size_t i = 0; i < count; i++) {
+        const auto & [name, size] = inventory[i];
+        int layer_id = extract_layer_id(name.c_str());
+        if (layer_id < 0 || layer_id > max_layer) {
+            continue;  // Non-layer tensor (embedding, output, etc.)
+        }
+
+        auto & layer = layers_[layer_id];
+        weight_entry entry;
+        entry.name            = name;
+        entry.size            = size;
+        entry.offset_in_layer = layer.total_size;  // Pack sequentially
+        entry.host_ptr        = nullptr;  // Registered later
+
+        size_t weight_idx = layer.weights.size();
+        layer.weights.push_back(std::move(entry));
+        layer.total_size += size;
+
+        name_to_location_[name] = {layer_id, weight_idx};
+    }
+
+    // Calculate max layer size
+    for (const auto & layer : layers_) {
+        max_layer_size_ = std::max(max_layer_size_, layer.total_size);
+    }
+
+    GGML_LOG_INFO("[LAYER-STREAM] Built layer map: %d layers, max_layer_size=%.1f MB, total_entries=%zu\n",
+                  static_cast<int>(layers_.size()),
+                  max_layer_size_ / (1024.0 * 1024.0),
+                  name_to_location_.size());
 }
-```
 
-### Step 2: Fix `ggml_sycl_get_weight_layout_ptr()` host-resident handling
-
-In `ggml-sycl.cpp`, find the block at line 5078:
-
-```cpp
-    if (!had_exception && resolved != GGML_LAYOUT_AOS && result.host_resident) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s is not usable; falling back to AoS\n",
-                      (int) resolved, tensor->name);
-        if (cache_key.valid) {
-            ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
-        }
-        return nullptr;
+bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
+    if (max_layer_size_ == 0) {
+        GGML_LOG_ERROR("[LAYER-STREAM] Cannot allocate buffers: no layer map built\n");
+        return false;
     }
-```
 
-Replace with:
+    // Round up to 2MB alignment for efficient DMA
+    const size_t align = 2 * 1024 * 1024;
+    buffer_size_ = ((max_layer_size_ + align - 1) / align) * align;
 
-```cpp
-    if (!had_exception && resolved != GGML_LAYOUT_AOS && result.host_resident) {
-        // Non-AOS layout is host-resident — stream to device scratch buffer
-        void * device_ptr = ggml_sycl::unified_cache_stream_weight_to_device(
-            device, result.device_ptr, result.size);
-        if (device_ptr) {
-            GGML_LOG_DEBUG("[UNIFIED-CACHE] Streamed host-resident layout=%d for %s to device (%zu bytes)\n",
-                           (int) resolved, tensor->name, result.size);
-            // Update the layout info to point to the device scratch
-            if (auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra)) {
-                ggml_sycl_update_layout_from_cache(extra, tensor, device, resolved, device_ptr, result.size,
-                                                   result.xmx_info, result.onednn_pack_m);
+    for (int i = 0; i < 2; i++) {
+        buffers_[i] = sycl::malloc_device(buffer_size_, queue);
+        if (!buffers_[i]) {
+            GGML_LOG_ERROR("[LAYER-STREAM] Failed to allocate buffer %d (%.1f MB)\n",
+                           i, buffer_size_ / (1024.0 * 1024.0));
+            // Clean up buffer 0 if buffer 1 failed
+            if (i == 1 && buffers_[0]) {
+                sycl::free(buffers_[0], queue);
+                buffers_[0] = nullptr;
             }
-            return device_ptr;
+            return false;
         }
-        // Streaming failed — fall back to AOS
-        GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s: streaming failed, falling back to AoS\n",
-                      (int) resolved, tensor->name);
-        if (cache_key.valid) {
-            ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
-        }
-        return nullptr;
+        loaded_layers_[i] = -1;
     }
-```
 
-### Step 3: Fix `ggml_sycl_get_layout_ptr()` host weight final fallback
+    GGML_LOG_INFO("[LAYER-STREAM] Allocated 2 × %.1f MB device buffers (%.1f MB total)\n",
+                  buffer_size_ / (1024.0 * 1024.0),
+                  (buffer_size_ * 2) / (1024.0 * 1024.0));
+    return true;
+}
 
-In `common.hpp`, the function `ggml_sycl_get_layout_ptr()` at line 1810 has:
+void layer_stream_manager::shutdown() {
+    // Wait for any pending prefetch
+    if (prefetch_pending_) {
+        try {
+            prefetch_event_.wait();
+        } catch (...) {}
+        prefetch_pending_ = false;
+    }
 
-```cpp
-        if (host_weights) {
-            ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK);
-            return ggml_sycl_get_data_ptr(tensor, device);
+    // Note: we can't free here because we don't have a queue reference.
+    // The buffers are freed when the SYCL context is destroyed.
+    // In practice, shutdown() is called from the backend destructor
+    // which happens during process exit.
+    buffers_[0] = nullptr;
+    buffers_[1] = nullptr;
+    buffer_size_ = 0;
+    loaded_layers_[0] = -1;
+    loaded_layers_[1] = -1;
+}
+
+void layer_stream_manager::register_host_ptr(
+    const char * tensor_name, const void * host_ptr, size_t size) {
+    if (!tensor_name || !host_ptr) return;
+
+    std::lock_guard<std::mutex> lock(host_ptr_mutex_);
+    auto it = name_to_location_.find(tensor_name);
+    if (it == name_to_location_.end()) return;
+
+    auto [layer_id, weight_idx] = it->second;
+    if (layer_id < 0 || layer_id >= static_cast<int>(layers_.size())) return;
+    if (weight_idx >= layers_[layer_id].weights.size()) return;
+
+    auto & entry = layers_[layer_id].weights[weight_idx];
+    entry.host_ptr = host_ptr;
+    (void) size;  // Size already known from inventory
+}
+
+int layer_stream_manager::pick_buffer_for_layer(int layer_id) const {
+    // Check if already loaded
+    for (int i = 0; i < 2; i++) {
+        if (loaded_layers_[i] == layer_id) return i;
+    }
+    // Pick the buffer NOT currently holding the adjacent layer
+    // Simple heuristic: alternate by layer parity
+    return layer_id % 2;
+}
+
+bool layer_stream_manager::load_layer_sync(int layer_id, int buffer_idx, sycl::queue & queue) {
+    if (layer_id < 0 || layer_id >= static_cast<int>(layers_.size())) return false;
+    if (buffer_idx < 0 || buffer_idx > 1) return false;
+    if (!buffers_[buffer_idx]) return false;
+
+    const auto & layer = layers_[layer_id];
+    if (layer.weights.empty()) return false;
+
+    char * dst_base = static_cast<char *>(buffers_[buffer_idx]);
+    int    copied   = 0;
+    int    skipped  = 0;
+
+    for (const auto & w : layer.weights) {
+        if (!w.host_ptr) {
+            GGML_LOG_WARN("[LAYER-STREAM] No host pointer for %s (layer %d), skipping\n",
+                          w.name.c_str(), layer_id);
+            skipped++;
+            continue;
         }
-```
+        queue.memcpy(dst_base + w.offset_in_layer, w.host_ptr, w.size);
+        copied++;
+    }
 
-This returns `ggml_sycl_get_data_ptr()` which may return a host pointer. The fix is to ensure this falls through to the streaming path. The data_ptr_slow function (Step 4 below) will handle streaming, so this line is actually OK — but we need to verify that `ggml_sycl_get_data_ptr_slow` handles the case correctly.
+    // Wait for all copies to complete (synchronous)
+    queue.wait();
 
-### Step 4: Fix `ggml_sycl_get_data_ptr_slow()` for host-resident weights
+    loaded_layers_[buffer_idx] = layer_id;
 
-In `ggml-sycl.cpp` at line 2400, after the cache lookup:
+    GGML_LOG_DEBUG("[LAYER-STREAM] Loaded layer %d into buffer %d: %d tensors (%.1f MB), %d skipped\n",
+                   layer_id, buffer_idx, copied,
+                   layer.total_size / (1024.0 * 1024.0), skipped);
+    return true;
+}
 
-```cpp
-            if (ggml_sycl::unified_cache_enabled() && is_weight) {
-                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-                    if (cache_key.valid) {
-                        void * cached = cache->get_or_wait(cache_key, GGML_LAYOUT_AOS);
-                        if (cached) {
-                            ...
-                            return cached;
-                        }
-                    }
-                }
+bool layer_stream_manager::ensure_layer(int layer_id, sycl::queue & queue) {
+    if (!is_active()) return false;
+
+    // Already loaded?
+    if (is_layer_loaded(layer_id)) return true;
+
+    // Check if there's a pending prefetch for this layer
+    {
+        std::lock_guard<std::mutex> lock(prefetch_mutex_);
+        if (prefetch_pending_ && prefetch_target_layer_ == layer_id) {
+            // Wait for the prefetch to complete
+            try {
+                prefetch_event_.wait();
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[LAYER-STREAM] Prefetch wait failed: %s\n", e.what());
             }
+            prefetch_pending_ = false;
+            loaded_layers_[prefetch_buffer_] = layer_id;
+            return true;
+        }
+    }
+
+    // Need to load synchronously
+    int buf = pick_buffer_for_layer(layer_id);
+    return load_layer_sync(layer_id, buf, queue);
+}
+
+void layer_stream_manager::prefetch_next_layer(int layer_id, sycl::queue & queue) {
+    if (!is_active()) return;
+    if (layer_id < 0 || layer_id >= static_cast<int>(layers_.size())) return;
+    if (is_layer_loaded(layer_id)) return;  // Already loaded
+
+    std::lock_guard<std::mutex> lock(prefetch_mutex_);
+
+    // Cancel any existing prefetch that hasn't been consumed
+    if (prefetch_pending_ && prefetch_target_layer_ != layer_id) {
+        try {
+            prefetch_event_.wait();
+        } catch (...) {}
+        prefetch_pending_ = false;
+    }
+
+    if (prefetch_pending_ && prefetch_target_layer_ == layer_id) {
+        return;  // Already prefetching this layer
+    }
+
+    // Pick the buffer not currently in use
+    int buf = -1;
+    for (int i = 0; i < 2; i++) {
+        if (loaded_layers_[i] != loaded_layers_[0] || i == 1) {
+            // Pick the buffer with the older layer (or any free buffer)
+            buf = (loaded_layers_[0] == -1) ? 0 : (loaded_layers_[1] == -1) ? 1 : (layer_id % 2);
+            break;
+        }
+    }
+    if (buf < 0) buf = layer_id % 2;
+
+    // Don't evict a layer that's currently being computed
+    // The "other" buffer is the safe one to overwrite
+    if (loaded_layers_[buf] >= 0 && loaded_layers_[buf] == layer_id - 1) {
+        // Buffer holds the immediately preceding layer (might still be computing)
+        // Use the other buffer instead
+        buf = 1 - buf;
+    }
+
+    const auto & layer = layers_[layer_id];
+    if (layer.weights.empty()) return;
+
+    char * dst_base = static_cast<char *>(buffers_[buf]);
+
+    // Submit async copies
+    sycl::event last_event;
+    for (const auto & w : layer.weights) {
+        if (!w.host_ptr) continue;
+        last_event = queue.memcpy(dst_base + w.offset_in_layer, w.host_ptr, w.size);
+    }
+
+    prefetch_target_layer_ = layer_id;
+    prefetch_buffer_       = buf;
+    prefetch_event_        = last_event;
+    prefetch_pending_      = true;
+}
+
+void layer_stream_manager::await_prefetch() {
+    std::lock_guard<std::mutex> lock(prefetch_mutex_);
+    if (!prefetch_pending_) return;
+
+    try {
+        prefetch_event_.wait();
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[LAYER-STREAM] Prefetch await failed: %s\n", e.what());
+    }
+
+    loaded_layers_[prefetch_buffer_] = prefetch_target_layer_;
+    prefetch_pending_ = false;
+}
+
+void * layer_stream_manager::get_weight_device_ptr(const char * tensor_name) const {
+    if (!tensor_name || !is_active()) return nullptr;
+
+    auto it = name_to_location_.find(tensor_name);
+    if (it == name_to_location_.end()) return nullptr;
+
+    auto [layer_id, weight_idx] = it->second;
+
+    // Find which buffer holds this layer
+    int buf = buffer_for_layer(layer_id);
+    if (buf < 0) return nullptr;  // Layer not loaded
+
+    const auto & entry = layers_[layer_id].weights[weight_idx];
+    return static_cast<char *>(buffers_[buf]) + entry.offset_in_layer;
+}
+
+bool layer_stream_manager::is_layer_loaded(int layer_id) const {
+    return loaded_layers_[0] == layer_id || loaded_layers_[1] == layer_id;
+}
+
+int layer_stream_manager::buffer_for_layer(int layer_id) const {
+    if (loaded_layers_[0] == layer_id) return 0;
+    if (loaded_layers_[1] == layer_id) return 1;
+    return -1;
+}
+
+// --- Global accessors ---
+
+static std::unordered_map<int, std::unique_ptr<layer_stream_manager>> g_layer_managers;
+static std::mutex g_layer_managers_mutex;
+
+layer_stream_manager & get_layer_stream_manager(int device_id) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it == g_layer_managers.end()) {
+        g_layer_managers[device_id] = std::make_unique<layer_stream_manager>();
+        return *g_layer_managers[device_id];
+    }
+    return *it->second;
+}
+
+bool layer_streaming_active(int device_id) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    return it != g_layer_managers.end() && it->second->is_active();
+}
+
+void * layer_streaming_get_weight_ptr(int device_id, const char * name) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it == g_layer_managers.end()) return nullptr;
+    return it->second->get_weight_device_ptr(name);
+}
+
+void layer_streaming_ensure_layer(int device_id, int layer_id, sycl::queue & queue) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it != g_layer_managers.end()) {
+        it->second->ensure_layer(layer_id, queue);
+    }
+}
+
+void layer_streaming_prefetch_next(int device_id, int layer_id, sycl::queue & queue) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it != g_layer_managers.end()) {
+        it->second->prefetch_next_layer(layer_id, queue);
+    }
+}
+
+void layer_streaming_await_prefetch(int device_id) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it != g_layer_managers.end()) {
+        it->second->await_prefetch();
+    }
+}
+
+void layer_streaming_register_host_ptr(int device_id, const char * name, const void * ptr, size_t size) {
+    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+    auto it = g_layer_managers.find(device_id);
+    if (it != g_layer_managers.end()) {
+        it->second->register_host_ptr(name, ptr, size);
+    }
+}
+
+}  // namespace ggml_sycl
 ```
 
-After this block, if `cached` was null but the weight IS in the host cache, we need to stream it. Add after the closing `}` of the unified cache block:
-
-```cpp
-            // Weight not in device cache — try streaming from host
-            if (ggml_sycl::unified_cache_enabled() && is_weight) {
-                void * streamed = ggml_sycl::unified_cache_stream_weight_to_device(
-                    device, tensor->data, ggml_nbytes(tensor));
-                if (streamed) {
-                    GGML_LOG_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, streamed host->device %p -> %p (%zu bytes)\n",
-                                    tensor->name, device, tensor->data, streamed, ggml_nbytes(tensor));
-                    return streamed;
-                }
-            }
-```
-
-### Step 5: Build and test
+### Step 3: Build and verify compilation
 
 ```bash
 source /opt/intel/oneapi/setvars.sh --force
 ninja -C build -j $(nproc)
 ```
 
-Correctness test (normal VRAM):
+The new files will be auto-included via the CMakeLists.txt glob. Verify zero warnings, zero errors.
+
+Quick smoke test (no streaming expected — module is not wired in yet):
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
+```
+Expected: `6, 7, 8, 9, 10, ...` (correct output, no regression)
+
+**Commit:**
+```bash
+git add ggml/src/ggml-sycl/layer-streaming.hpp ggml/src/ggml-sycl/layer-streaming.cpp
+git commit -m "sycl: add layer stream manager for double-buffered weight streaming"
+```
+
+**Notes for implementer:**
+- The `register_host_ptr()` mechanism is necessary because the tensor inventory (`g_tensor_inventory`) only stores names and sizes, not actual pointers. Host pointers are registered lazily as tensors are encountered during inference (from `tensor->data` or from the unified cache's host entries).
+- The `shutdown()` method intentionally does NOT call `sycl::free()` because the queue reference isn't stored. The SYCL runtime will free device memory when the context is destroyed. If we need explicit free, store a `sycl::queue` reference at allocation time.
+- The global accessor `get_layer_stream_manager()` uses a per-device map because multi-device setups have independent memory spaces.
+- The `pick_buffer_for_layer()` uses simple parity (layer_id % 2). This works because consecutive layers alternate buffers: layer 0→buf 0, layer 1→buf 1, layer 2→buf 0, etc.
+- The existing `file(GLOB ...)` in CMakeLists.txt at line 34 automatically picks up new .cpp files. No CMakeLists change needed.
+
+---
+
+## Task 2: Disable Graph Replay + Persistent TG for Streaming Mode
+
+**Track:** B
+**Depends on:** None
+**File scope:**
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines ~29465-29500 in `should_use_persistent_tg`, lines ~29635 persistent dispatch, lines ~29790-29860 graph decision)
+
+**Description:**
+
+When `g_model_exceeds_vram` is true, graph replay must be disabled because weight pointers rotate between two device buffers per token (the graph has baked pointers that reference the wrong buffer after rotation). Similarly, persistent TG must be disabled because its plan records weight pointers at build time that become stale when buffers rotate.
+
+This is a small, isolated change to the graph_compute entry point. No overlap with Task 1's new files.
+
+**Acceptance Criteria:**
+- [ ] `should_use_persistent_tg()` returns false when `g_model_exceeds_vram` is true
+- [ ] Graph replay is disabled (falls through to `compute_impl()`) when `g_model_exceeds_vram` is true
+- [ ] No regression when `g_model_exceeds_vram` is false (normal models use graphs and persistent TG as before)
+- [ ] Build succeeds
+- [ ] Normal model perf: PP512 >= 1200, TG128 >= 68
+
+**Implementation Guide:**
+
+### Step 1: Gate persistent TG on streaming mode
+
+In `ggml-sycl.cpp`, find `should_use_persistent_tg()` at line 29465. Add after the environment variable gate (line 29468):
+
+```cpp
+static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+    // 1. Environment variable gate
+    if (!ggml_sycl::env_persistent_tg_enabled()) {
+        return false;
+    }
+
+    // 1b. Model exceeds VRAM — persistent TG records weight pointers that become
+    // stale during double-buffered layer streaming. Disable to use per-op dispatch.
+    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: model exceeds VRAM, weight streaming active\n");
+        return false;
+    }
+
+    if (!cgraph || cgraph->n_nodes == 0) {
+        return false;
+    }
+    // ... rest of function unchanged
+```
+
+### Step 2: Gate graph replay on streaming mode
+
+In `ggml_backend_sycl_graph_compute()`, find the graph support check around line 29790. Add before the existing `graph_support` check:
+
+```cpp
+    // Disable graph replay when model exceeds VRAM — weight streaming rotates
+    // pointers between two device buffers, incompatible with baked graph pointers.
+    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: model exceeds VRAM, weight streaming active\n");
+        compute_impl();
+        record_completion(false);
+        return GGML_STATUS_SUCCESS;
+    }
+```
+
+Add this BEFORE the existing `if (!graph_support)` check (around line 29790), so it short-circuits before any graph logic.
+
+### Step 3: Build and test
+
+```bash
+source /opt/intel/oneapi/setvars.sh --force
+ninja -C build -j $(nproc)
+```
+
+Normal model (no streaming, graphs should still work):
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 512 -n 128
+```
+Expected: PP512 >= 1200, TG128 >= 68 (graphs and persistent TG active)
+
+Low VRAM (streaming mode — graphs disabled, per-op dispatch):
+```bash
+GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+  ./build/bin/llama-completion \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
+```
+Expected: Still produces output (even if wrong — streaming isn't wired yet). Confirms graph disable doesn't crash.
+
+**Commit:**
+```bash
+git add ggml/src/ggml-sycl/ggml-sycl.cpp
+git commit -m "sycl: disable graph replay and persistent TG when model exceeds VRAM"
+```
+
+**Notes for implementer:**
+- The `g_model_exceeds_vram` check is an `atomic<bool>` loaded with `memory_order_acquire`. This is consistent with how it's checked elsewhere (e.g., line 19400).
+- The graph disable MUST come before any graph recording/replay logic. Place it at the very start of the graph section, before `if (!graph_support)`.
+- This change alone won't fix the streaming bug — it just removes obstacles. The actual streaming is wired in Tasks 3 and 4.
+- Test that PP512 perf is unchanged for normal models. The `g_model_exceeds_vram` flag is false when the model fits in VRAM, so the new checks are never hit.
+
+---
+
+## Task 3: Wire Async Double-Buffer Prefetch into Dispatch Loop
+
+**Track:** A
+**Depends on:** Task 1 (needs `layer_stream_manager` class)
+**File scope:**
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines ~2030-2100 in `set_tensor_inventory`, lines ~19390-19410 in layer prefetch section)
+
+**Description:**
+
+Initialize the layer stream manager during model load (tensor inventory setup), and wire the layer transition detection into the dispatch loop to trigger async DMA of the next layer. This uses the existing `layer_prefetch_tracker` which already detects layer transitions at `ggml_backend_sycl_mul_mat` line 19400.
+
+**Acceptance Criteria:**
+- [ ] Layer stream manager is initialized from tensor inventory when `g_model_exceeds_vram` is true
+- [ ] Two device buffers are allocated on the correct device
+- [ ] Layer transitions trigger `prefetch_next_layer()` on the manager
+- [ ] `ensure_layer()` is called before each layer's first weight access
+- [ ] Host pointers are registered as weights are encountered during inference
+- [ ] Build succeeds with zero warnings
+
+**Implementation Guide:**
+
+### Step 1: Initialize layer stream manager in `set_tensor_inventory`
+
+In `ggml-sycl.cpp`, find `ggml_backend_sycl_set_tensor_inventory()` at line 2030. After the `g_model_exceeds_vram` is set (line 2093), add initialization of the layer stream manager:
+
+```cpp
+    g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
+    g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
+
+    // Initialize double-buffered layer streaming when model exceeds VRAM
+    if (model_exceeds_vram) {
+        auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
+        mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+        sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
+        if (mgr.allocate_buffers(q)) {
+            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled: %d layers, 2 × %.1f MB buffers\n",
+                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+        } else {
+            GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
+        }
+    }
+```
+
+Add include at top of file (near line 118):
+```cpp
+#include "ggml-sycl/layer-streaming.hpp"
+```
+
+### Step 2: Wire layer transitions to trigger prefetch
+
+In `ggml-sycl.cpp`, find the layer prefetch tracker integration at line 19400. Replace the existing log-only code:
+
+```cpp
+    if (src0->name && src1->ne[1] == 1 && g_model_exceeds_vram.load(std::memory_order_acquire) &&
+        ggml_sycl::layer_prefetch_tracker::is_enabled()) {
+        int next_layer_id = -1;
+        if (ggml_sycl::get_prefetch_tracker().record_access(src0->name, next_layer_id)) {
+            // Layer transition detected - prefetch opportunity identified
+            // For now, just log the opportunity. Full prefetch requires cache_id lookup.
+            GGML_SYCL_DEBUG("[PREFETCH] Layer transition at %s -> prefetch layer %d\n",
+                            src0->name, next_layer_id);
+        }
+    }
+```
+
+With:
+
+```cpp
+    if (src0->name && src1->ne[1] == 1 && g_model_exceeds_vram.load(std::memory_order_acquire) &&
+        ggml_sycl::layer_prefetch_tracker::is_enabled()) {
+        int next_layer_id = -1;
+        if (ggml_sycl::get_prefetch_tracker().record_access(src0->name, next_layer_id)) {
+            if (ggml_sycl::layer_streaming_active(ctx.device) && next_layer_id >= 0) {
+                // Layer transition — start async DMA of next layer
+                sycl::queue & q = ggml_sycl_get_device(ctx.device).default_queue();
+                ggml_sycl::layer_streaming_prefetch_next(ctx.device, next_layer_id, q);
+                GGML_SYCL_DEBUG("[LAYER-STREAM] Prefetching layer %d (triggered by %s)\n",
+                                next_layer_id, src0->name);
+            }
+        }
+
+        // Ensure current layer is loaded before accessing weights
+        int current_layer = ggml_sycl::extract_layer_id(src0->name);
+        if (current_layer >= 0 && ggml_sycl::layer_streaming_active(ctx.device)) {
+            sycl::queue & q = ggml_sycl_get_device(ctx.device).default_queue();
+            ggml_sycl::layer_streaming_ensure_layer(ctx.device, current_layer, q);
+        }
+    }
+```
+
+### Step 3: Register host pointers during dispatch
+
+In the `get_data_ptr_slow` function (line ~2339), add host pointer registration when a weight tensor's host pointer is resolved. Find the section where `tensor->data` is accessed for weight tensors and add:
+
+```cpp
+    // Register host pointer with layer stream manager for DMA
+    if (is_weight && tensor->name && tensor->data &&
+        g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        ggml_sycl::layer_streaming_register_host_ptr(
+            device, tensor->name, tensor->data, ggml_nbytes(tensor));
+    }
+```
+
+Also add registration in the cache lookup path when a host-resident cached pointer is found, so the manager knows where to DMA from.
+
+### Step 4: Build and test
+
+```bash
+ninja -C build -j $(nproc)
+```
+
+Normal model (no streaming):
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
+```
+Expected: Correct output, no streaming messages in stderr.
+
+Low VRAM (streaming active):
+```bash
+GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+  ./build/bin/llama-completion \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  -p '1, 2, 3, 4, 5,' -n 5 --seed 42 --temp 0 2>&1 | head -50
+```
+Expected: Layer streaming messages in stderr. Output may still be wrong (pointer resolution not yet wired — that's Task 4).
+
+**Commit:**
+```bash
+git add ggml/src/ggml-sycl/ggml-sycl.cpp
+git commit -m "sycl: wire layer stream manager into dispatch and prefetch"
+```
+
+**Notes for implementer:**
+- The host pointer registration is lazy — pointers are registered as tensors are encountered during the first inference pass. The first token will be slower (sync DMA for all layers) but subsequent tokens benefit from prefetch.
+- The `ensure_layer()` call before each weight access is the synchronization point. If the prefetch completed, it's a no-op. If not, it blocks until DMA finishes.
+- Don't add the `ensure_layer()` call in the PP (prompt processing) path — PP uses batch sizes > 1 where `src1->ne[1] == 1` is false. The gate at line 19400 handles this.
+- For PP mode, the weights go through the normal pointer resolution which will be updated in Task 4. PP with streaming will be slower (no prefetch) but correct.
+
+---
+
+## Task 4: Wire Streaming into Pointer Resolution + Tiered Dispatch Stubs
+
+**Track:** B (converges with Track A)
+**Depends on:** Task 1 (layer_stream_manager API), Task 2 (graphs disabled)
+**File scope:**
+- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines ~2339-2430 get_data_ptr_slow, ~5078 get_weight_layout_ptr, ~11946 ~15142 ~19428 ~20855 ~21823 tiered stubs, ~19335 MMVQ fast-path, ~25965 get_tensor_ptr_fast)
+- Modify: `ggml/src/ggml-sycl/common.hpp` (lines ~1810 get_layout_ptr host fallback)
+
+**Description:**
+
+The existing pointer resolution functions return host pointers for weights that were evicted to host memory. This task wires them to the layer stream manager instead: when a weight is host-resident and its layer is loaded by the stream manager, return the device pointer from the buffer. Also replaces all 5 NOP tiered dispatch stubs with actual streaming calls.
+
+**Acceptance Criteria:**
+- [ ] `ggml_sycl_get_weight_layout_ptr()` returns device pointer from layer buffer when host-resident
+- [ ] `ggml_sycl_get_data_ptr_slow()` returns device pointer from layer buffer when host-resident
+- [ ] All 5 tiered dispatch stubs replaced with streaming-aware helper
+- [ ] MMVQ fast-path ensures weight is on device before layout check
+- [ ] `get_tensor_ptr_fast` lambda (unified kernel path) checks layer stream manager
+- [ ] `ggml_sycl_get_layout_ptr()` host fallback uses streaming
+- [ ] Correct deterministic output with `GGML_SYCL_VRAM_BUDGET_PCT=40`
+- [ ] No regression for models that fit in VRAM
+- [ ] Build succeeds with zero warnings
+
+**Implementation Guide:**
+
+### Step 1: Create streaming-aware helper function
+
+Add near line 11940 in `ggml-sycl.cpp` (before the first tiered dispatch stub):
+
+```cpp
+// Resolve weight pointer for streaming dispatch.
+// When model exceeds VRAM, checks layer stream manager first,
+// then falls back to tiered cache lookup + on-demand streaming.
+static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int device) {
+    if (!src0 || !src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra) {
+        return;
+    }
+
+    // Fast path: check layer stream manager
+    if (ggml_sycl::layer_streaming_active(device)) {
+        void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
+        if (streamed) {
+            extra->data_device[device] = streamed;
+            return;
+        }
+        // Layer not loaded — ensure it's loaded now
+        int layer_id = ggml_sycl::extract_layer_id(src0->name);
+        if (layer_id >= 0) {
+            sycl::queue & q = ggml_sycl_get_device(device).default_queue();
+            ggml_sycl::layer_streaming_ensure_layer(device, layer_id, q);
+            streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
+            if (streamed) {
+                extra->data_device[device] = streamed;
+                return;
+            }
+        }
+    }
+
+    // Fallback: tiered cache lookup (for non-layer tensors like embedding, output)
+    ggml_sycl::memory_tier tier;
+    bool                   in_inventory = false;
+    void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+    if (!cached_ptr || !in_inventory) {
+        return;
+    }
+
+    if (tier == ggml_sycl::memory_tier::VRAM) {
+        extra->data_device[device] = cached_ptr;
+    }
+    // For non-layer host-resident tensors, the normal pointer resolution
+    // path in get_data_ptr_slow handles the copy via unified cache.
+}
+```
+
+### Step 2: Replace all 5 tiered dispatch stubs
+
+Replace each NOP stub of the form:
+```cpp
+    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool                   in_inventory = false;
+        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            // Future: use cached_ptr for tiered dispatch
+            GGML_LOG_DEBUG("[SYCL] Tiered cache hit for %s (tier=%d)\n", ...);
+        } else if (in_inventory) {
+            GGML_LOG_DEBUG("[SYCL] Tiered: tensor %s in inventory, pending cache\n", ...);
+        }
+    }
+```
+
+With:
+```cpp
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
+```
+
+At all 5 locations:
+1. `ggml_sycl_get_rows` (~line 11946)
+2. `ggml_sycl_mul_mat_batched_sycl` (~line 15142)
+3. `ggml_backend_sycl_mul_mat` (~line 19428)
+4. `ggml_sycl_op_mul_mat_moe_q` (~line 20855)
+5. `ggml_sycl_op_mul_mat_moe_f16` (~line 21823)
+
+### Step 3: Fix `ggml_sycl_get_weight_layout_ptr()` host-resident handling
+
+At line ~5078, replace the host-resident block:
+
+```cpp
+    if (!had_exception && resolved != GGML_LAYOUT_AOS && result.host_resident) {
+        GGML_LOG_WARN(...)
+        ...
+        return nullptr;
+    }
+```
+
+With:
+
+```cpp
+    if (!had_exception && result.host_resident) {
+        // Check layer stream manager for device pointer
+        if (ggml_sycl::layer_streaming_active(device)) {
+            void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+            if (streamed) {
+                GGML_LOG_DEBUG("[LAYER-STREAM] Using streamed ptr for %s (layout=%d)\n",
+                               tensor->name, (int) resolved);
+                return streamed;
+            }
+        }
+        // Not in layer buffer — fall back to AOS
+        if (resolved != GGML_LAYOUT_AOS) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s not streamable, falling back to AoS\n",
+                          (int) resolved, tensor->name);
+            if (cache_key.valid) {
+                ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
+            }
+            return nullptr;
+        }
+    }
+```
+
+### Step 4: Fix `ggml_sycl_get_data_ptr_slow()` for host-resident weights
+
+At line ~2400, after the existing unified cache block, add:
+
+```cpp
+            // Check layer stream manager for host-resident weight
+            if (is_weight && ggml_sycl::layer_streaming_active(device) && tensor->name) {
+                void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+                if (streamed) {
+                    GGML_LOG_DEBUG("get_data_ptr_slow: %s from layer stream buffer\n", tensor->name);
+                    return streamed;
+                }
+            }
+```
+
+### Step 5: Fix MMVQ fast-path
+
+At line ~19335, just before the layout checks, add:
+
+```cpp
+            // Ensure weight is on device before checking layout
+            ggml_sycl_ensure_weight_on_device(src0, ctx.device);
+```
+
+### Step 6: Fix `get_tensor_ptr_fast` lambda
+
+At line ~25965, add layer stream check:
+
+```cpp
+    auto get_tensor_ptr_fast = [&](const ggml_tensor * tensor) -> void * {
+        if (!tensor) return nullptr;
+        if (tensor->extra) {
+            auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+            if (extra->data_device[ctx.device] != nullptr) {
+                return extra->data_device[ctx.device];
+            }
+        }
+        // Check layer stream manager for host-resident weights
+        if (ggml_sycl_tensor_is_weight(tensor) &&
+            g_model_exceeds_vram.load(std::memory_order_acquire) &&
+            ggml_sycl::layer_streaming_active(ctx.device) && tensor->name) {
+            void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(ctx.device, tensor->name);
+            if (streamed) return streamed;
+        }
+        if (tensor->data != nullptr) return tensor->data;
+        return ggml_sycl_get_data_ptr(tensor, ctx.device);
+    };
+```
+
+### Step 7: Fix `ggml_sycl_get_layout_ptr()` in common.hpp
+
+At line ~1810, update the host_weights fallback:
+
+```cpp
+        if (host_weights) {
+            // Check layer stream manager first
+            if (ggml_sycl::layer_streaming_active(device) && tensor->name) {
+                void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+                if (streamed) {
+                    ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK);
+                    return streamed;
+                }
+            }
+            ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK);
+            return ggml_sycl_get_data_ptr(tensor, device);
+        }
+```
+
+Add include at top of common.hpp:
+```cpp
+#include "layer-streaming.hpp"
+```
+
+### Step 8: Build and test
+
+```bash
+ninja -C build -j $(nproc)
+```
+
+Correctness (normal VRAM):
 ```bash
 ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
@@ -305,16 +1187,16 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
 ```
 Expected: `6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20`
 
-Low VRAM test (host streaming):
+Low VRAM streaming:
 ```bash
 GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
   ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 ```
-Expected: Same correct output (may be slow due to per-tensor streaming)
+Expected: Correct output (same sequence). Will be slow (~3-4 tok/s) but correct.
 
-Performance test (no regression for models that fit):
+Performance regression:
 ```bash
 ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 512 -n 128
@@ -323,333 +1205,35 @@ Expected: PP512 >= 1200, TG128 >= 68
 
 **Commit:**
 ```bash
-git add ggml/src/ggml-sycl/unified-cache.hpp ggml/src/ggml-sycl/unified-cache.cpp \
-        ggml/src/ggml-sycl/ggml-sycl.cpp ggml/src/ggml-sycl/common.hpp
-git commit -m "sycl: add on-demand weight streaming from host to device"
+git add ggml/src/ggml-sycl/ggml-sycl.cpp ggml/src/ggml-sycl/common.hpp
+git commit -m "sycl: wire layer streaming into pointer resolution and tiered dispatch"
 ```
 
 **Notes for implementer:**
-- The streaming scratch buffer is **reusable** — only one weight needs to be in device memory at a time during inference. Each kernel reads its weight, then the next kernel can reuse the same buffer.
-- This is a **synchronous** implementation. Async double-buffered streaming (WI-3 layer prefetch) is future work.
-- Be careful with `used_` accounting — the scratch buffer counts against the cache budget. Don't double-count.
-- The `copy_to_device()` method already uses the staging buffer for efficient host→device copy. Don't reinvent this.
-- Wait for 30+ seconds between benchmark runs to avoid thermal throttling on Arc B580.
-
----
-
-## Task 2: Legacy Dispatch Tiered Streaming
-
-**Track:** B
-**Depends on:** None (uses same `unified_cache_stream_weight_to_device` but can start with basic streaming inline)
-**File scope:**
-- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (tiered dispatch stubs at lines ~11946, ~15142, ~19428, ~20855, ~21823)
-
-**Description:**
-
-The legacy dispatch path (non-unified kernel) has 5 tiered dispatch stubs that currently log and do nothing. When `g_model_exceeds_vram` is true and `get_cached_tensor_ptr()` returns a tier other than VRAM, the weight data may be in host memory. The stubs need to actually use the cached pointer or trigger streaming.
-
-**Important context:** These stubs run on EVERY mul_mat/get_rows when `g_model_exceeds_vram` is true. Most weights will be in the device cache already (only evicted weights need streaming). The common case is a cache hit returning a device pointer — so the hot path must be fast.
-
-**Acceptance Criteria:**
-- [ ] All 5 tiered dispatch stubs are implemented (not just commented)
-- [ ] When tier is VRAM and alloc is device, the cached pointer replaces `tensor->data` via `extra->data_device`
-- [ ] When tier is HOST_PINNED or MMAP, streaming to device happens automatically
-- [ ] No performance regression when `g_model_exceeds_vram` is false (stubs are gated, not reached)
-- [ ] Build succeeds
-- [ ] Correct output with `GGML_SYCL_VRAM_BUDGET_PCT=40`
-
-**Implementation Guide:**
-
-### Step 1: Create a helper function for tiered dispatch
-
-Add near line 11940 (before the first tiered dispatch stub in `ggml_sycl_get_rows`):
-
-```cpp
-// Resolve weight pointer for tiered dispatch.
-// When model exceeds VRAM, weights may be in host memory.
-// This function ensures we have a valid device pointer.
-static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int device) {
-    if (!src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        return;
-    }
-    ggml_sycl::memory_tier tier;
-    bool                   in_inventory = false;
-    void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-
-    if (!cached_ptr || !in_inventory) {
-        return;  // Not a tracked tensor or not in cache
-    }
-
-    auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-    if (!extra) {
-        return;
-    }
-
-    if (tier == ggml_sycl::memory_tier::VRAM) {
-        // Weight is on device — update cached pointer for fast access
-        sycl::queue &    q     = ggml_sycl_get_device(device).default_queue();
-        sycl::usm::alloc alloc = sycl::get_pointer_type(cached_ptr, q.get_context());
-        if (alloc == sycl::usm::alloc::device) {
-            extra->data_device[device] = cached_ptr;
-        }
-    } else {
-        // Weight is in host memory — stream to device
-        void * device_ptr = ggml_sycl::unified_cache_stream_weight_to_device(
-            device, cached_ptr, ggml_nbytes(src0));
-        if (device_ptr) {
-            extra->data_device[device] = device_ptr;
-            GGML_LOG_DEBUG("[SYCL] Streamed %s from host to device (%zu bytes)\n",
-                           src0->name, ggml_nbytes(src0));
-        }
-    }
-}
-```
-
-### Step 2: Replace all 5 tiered dispatch stubs
-
-Replace each stub of the form:
-```cpp
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            // Future: use cached_ptr for tiered dispatch
-            GGML_LOG_DEBUG("[SYCL] Tiered cache hit for %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            GGML_LOG_DEBUG("[SYCL] Tiered: tensor %s in inventory, pending cache\n", src0->name);
-        }
-    }
-```
-
-With a single call:
-```cpp
-    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
-```
-
-Do this at all 5 locations:
-1. `ggml_sycl_get_rows` (~line 11946)
-2. `ggml_sycl_mul_mat_batched_sycl` (~line 15142)
-3. `ggml_backend_sycl_mul_mat` — the main mul_mat dispatcher (~line 19428)
-4. `ggml_sycl_op_mul_mat_moe_q` (~line 20855)
-5. `ggml_sycl_op_mul_mat_moe_f16` (~line 21823)
-
-**NOTE:** The `get_pointer_type()` call in the helper is expensive (~1ms). This is acceptable for host-streaming mode since streaming itself takes much longer. For models that fit in VRAM, the entire function is skipped due to the `g_model_exceeds_vram` gate.
-
-### Step 3: Build and test
-
-Same test commands as Task 1.
-
-**Commit:**
-```bash
-git add ggml/src/ggml-sycl/ggml-sycl.cpp
-git commit -m "sycl: implement tiered weight streaming in legacy dispatch path"
-```
-
-**Notes for implementer:**
-- The helper uses `get_pointer_type()` which is known to be slow (~1ms). This is ONLY called when `g_model_exceeds_vram` is true, so it doesn't affect normal models.
-- The `extra->data_device[device]` update is important — it caches the device pointer so that `get_tensor_ptr_fast()` in the unified kernel path picks it up.
-- Don't worry about the streaming scratch being reused between layers — the synchronous copy completes before the kernel launches. Each weight is fully loaded before use.
-
----
-
-## Task 3: Unified Kernel Plan-Build Streaming
-
-**Track:** A
-**Depends on:** Task 1 (needs `unified_cache_stream_weight_to_device`)
-**File scope:**
-- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines ~27380-27420 in plan_build, lines ~25965-25980 in `get_tensor_ptr_fast`)
-
-**Description:**
-
-The unified kernel's persistent TG plan building uses `get_tensor_ptr_fast()` which checks `extra->data_device[device]` then `tensor->data`. When weights are evicted, `extra->data_device[device]` may be null and `tensor->data` may be a stale pointer. The plan build needs to go through the streaming-aware path.
-
-**Acceptance Criteria:**
-- [ ] `get_tensor_ptr_fast` lambda uses streaming-aware pointer resolution for weight tensors
-- [ ] Plan build succeeds with `GGML_SYCL_VRAM_BUDGET_PCT=40`
-- [ ] Persistent TG kernel produces correct output with host-resident weights
-- [ ] No regression for models that fit in VRAM
-
-**Implementation Guide:**
-
-### Step 1: Make `get_tensor_ptr_fast` streaming-aware
-
-In `ggml-sycl.cpp` at line 25965, the `get_tensor_ptr_fast` lambda currently does:
-
-```cpp
-    auto get_tensor_ptr_fast = [&](const ggml_tensor * tensor) -> void * {
-        if (!tensor) {
-            return nullptr;
-        }
-        if (tensor->extra) {
-            auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-            if (extra->data_device[ctx.device] != nullptr) {
-                return extra->data_device[ctx.device];
-            }
-        }
-        if (tensor->data != nullptr) {
-            return tensor->data;
-        }
-        return ggml_sycl_get_data_ptr(tensor, ctx.device);
-    };
-```
-
-Replace with:
-
-```cpp
-    auto get_tensor_ptr_fast = [&](const ggml_tensor * tensor) -> void * {
-        if (!tensor) {
-            return nullptr;
-        }
-        if (tensor->extra) {
-            auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-            if (extra->data_device[ctx.device] != nullptr) {
-                return extra->data_device[ctx.device];
-            }
-        }
-        // For weight tensors when model exceeds VRAM, ensure device-resident data
-        if (ggml_sycl_tensor_is_weight(tensor) &&
-            g_model_exceeds_vram.load(std::memory_order_acquire)) {
-            ggml_sycl_ensure_weight_on_device(tensor, ctx.device);
-            if (tensor->extra) {
-                auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
-                if (extra->data_device[ctx.device] != nullptr) {
-                    return extra->data_device[ctx.device];
-                }
-            }
-        }
-        if (tensor->data != nullptr) {
-            return tensor->data;
-        }
-        return ggml_sycl_get_data_ptr(tensor, ctx.device);
-    };
-```
-
-### Step 2: Also fix the weight pointer resolution in plan build (line ~27395)
-
-The weight pointer resolution for quantized weights at line 27414-27418:
-
-```cpp
-                    if (!weight) {
-                        weight = get_tensor_ptr_view_fast(weight_tensor);
-                    }
-```
-
-`get_tensor_ptr_view_fast` calls `get_tensor_ptr_fast` which now has streaming support. This should work automatically with the Step 1 change.
-
-### Step 3: Build and test
-
-```bash
-ninja -C build -j $(nproc)
-```
-
-Test with low VRAM using both legacy and unified kernel:
-```bash
-# Default (unified kernel for PP, MMVQ for TG):
-GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
-  ./build/bin/llama-completion \
-  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
-  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
-
-# Force legacy kernel:
-GGML_SYCL_VRAM_BUDGET_PCT=40 GGML_SYCL_UNIFIED_FORCE_LEGACY=1 \
-  ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
-  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
-  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
-```
-Expected: Both produce correct output.
-
-**Commit:**
-```bash
-git add ggml/src/ggml-sycl/ggml-sycl.cpp
-git commit -m "sycl: add streaming support to unified kernel plan building"
-```
-
-**Notes for implementer:**
-- The persistent TG plan records weight pointers once during plan build. If the streaming scratch buffer is reused, the pointer recorded in the plan will be overwritten by the next weight. This means persistent TG can't work with host-streaming as-is. The plan-build code needs to either:
-  a) Detect host-streaming mode and disable persistent TG (fall back to per-token dispatch), OR
-  b) Record that weights need streaming and re-stream before each replay
-- Option (a) is simpler and correct. Add a check: if any weight was streamed during plan build, set a flag that disables persistent TG for this session. This is a performance hit (TG will be slow) but correct.
-- Implement option (a): add `bool weights_streamed = false;` before the plan-build loop. Set to true if `ggml_sycl_ensure_weight_on_device` was called. After plan build, if `weights_streamed`, cancel the plan and fall back to legacy dispatch.
-
----
-
-## Task 4: MMVQ Fast-Path Streaming
-
-**Track:** B
-**Depends on:** Task 2 (needs `ggml_sycl_ensure_weight_on_device`)
-**File scope:**
-- Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp` (lines ~19320-19370, TG fast-path)
-
-**Description:**
-
-The MMVQ fast-path checks `extra->optimized_feature.is_reordered()` to decide SOA vs AOS dispatch. When weights are host-resident, the reordered (SOA) layout may not be on device. Need to ensure the weight is on device before entering the MMVQ path.
-
-**Acceptance Criteria:**
-- [ ] MMVQ fast-path calls `ggml_sycl_ensure_weight_on_device` before checking layout
-- [ ] SOA layout correctly detected even after streaming
-- [ ] Falls back to AOS MMVQ gracefully if SOA layout can't be streamed
-- [ ] TG produces correct output with `GGML_SYCL_VRAM_BUDGET_PCT=40`
-
-**Implementation Guide:**
-
-### Step 1: Add streaming call to TG fast-path
-
-In `ggml-sycl.cpp` at line ~19335, just before the existing layout checks, add:
-
-```cpp
-        if (!tg_fast_disabled && src1->ne[1] == 1 && !fast_split
-            && ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32
-            && dst->type == GGML_TYPE_F32
-            && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
-
-            // Ensure weight is on device before checking layout
-            ggml_sycl_ensure_weight_on_device(src0, ctx.device);
-
-            ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-            ...
-```
-
-That's it — `ggml_sycl_ensure_weight_on_device` already updates `extra->data_device[device]`, and the existing MMVQ code goes through `ggml_sycl_op_mul_mat` which uses `ggml_sycl_get_layout_ptr_for()` to get the actual weight pointer.
-
-### Step 2: Build and test
-
-```bash
-ninja -C build -j $(nproc)
-GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
-  ./build/bin/llama-completion \
-  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
-  -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
-```
-
-**Commit:**
-```bash
-git add ggml/src/ggml-sycl/ggml-sycl.cpp
-git commit -m "sycl: add weight streaming to MMVQ fast-path"
-```
-
-**Notes for implementer:**
-- The MMVQ fast-path's `has_soa_reorder` check looks at `extra->optimized_feature.is_reordered()`. This flag is set during `set_tensor` when the SOA layout was materialized. If SOA materialization failed (host-resident), this flag might not be set. In that case, the code falls through to AOS MMVQ or DMMV, which is correct behavior.
-- The streaming only ensures the AOS data is on device. SOA re-ordering would require additional work (stream + re-order) which is beyond scope. AOS MMVQ is slower but correct.
+- The `ggml_sycl_ensure_weight_on_device()` function checks layer streaming first (fast O(1) hash lookup), then falls back to tiered cache lookup. This is efficient because the hash lookup is ~nanoseconds while `get_pointer_type()` is ~1ms.
+- For non-layer tensors (embedding, output), the layer stream manager returns nullptr (they're not in the layer map). These tensors go through the normal unified cache path which already handles host→device copies.
+- The MMVQ fast-path forces AOS dispatch for streamed weights because SOA layout isn't available (the SOA reordering data is in the unified cache's host entry, not in the layer buffer). This means streamed weights use the slower AOS MMVQ path. This is acceptable for v1.
+- For PP mode (batch > 1), `ensure_weight_on_device()` is called at each tiered stub. Since PP doesn't go through the TG prefetch path (gated by `src1->ne[1] == 1`), PP loads layers on-demand (synchronous). This is slower but correct. PP with streaming benefits from the double-buffer's stable pointers.
+- Be careful with the `#include "layer-streaming.hpp"` in common.hpp — it must not create circular dependencies. The layer-streaming module only depends on SYCL and ggml basics, not on common.hpp.
 
 ---
 
 ## Task 5: Integration Test and Verification
 
-**Track:** A
-**Depends on:** Task 1, Task 2
+**Track:** — (convergence point)
+**Depends on:** Task 3, Task 4
 **File scope:**
 - No code changes (testing only)
 
 **Description:**
 
-Run comprehensive verification to ensure host weight streaming works correctly across all dispatch paths and doesn't regress performance for normal models.
+Comprehensive verification that host weight streaming works correctly across all dispatch paths and doesn't regress performance for normal models.
 
 **Acceptance Criteria:**
 - [ ] Mistral Q4_0 at 40% VRAM produces correct deterministic output
 - [ ] Mistral Q4_0 at 100% VRAM (default) produces correct output with no perf regression
 - [ ] GPT-OSS 20B (exceeds VRAM) loads and produces output (may be slow)
-- [ ] Budget summary shows per-category breakdown including streaming scratch
+- [ ] Layer streaming messages visible in debug output
 - [ ] No crashes, no OOM, no hangs
 
 **Implementation Guide:**
@@ -662,7 +1246,7 @@ GGML_SYCL_VRAM_BUDGET_PCT=40 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 ```
-Expected: `6, 7, 8, 9, 10, ...` (correct sequence)
+Expected: `6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20`
 
 ### Test 2: No performance regression
 
@@ -672,32 +1256,51 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench \
 ```
 Expected: PP512 >= 1200, TG128 >= 68
 
+Wait 30+ seconds between runs to avoid thermal throttling on Arc B580.
+
 ### Test 3: GPT-OSS 20B (model exceeding VRAM)
 
 ```bash
 ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
   -m /Storage/GenAI/models/gpt-oss-20b-mxfp4.gguf \
-  -p 'Hello, my name is' -n 20 --seed 42 --temp 0
+  -p 'Hello, my name is' -n 10 --seed 42 --temp 0
 ```
-Expected: Coherent output (may take minutes due to per-weight streaming)
+Expected: Coherent output (may take a minute+ per token due to streaming).
+If it hangs, that may be a pre-existing MoE issue — document and move on.
 
-### Test 4: Strict mode with very low budget
+### Test 4: Very low budget
 
 ```bash
-GGML_SYCL_VRAM_BUDGET_PCT=20 GGML_SYCL_MEMORY_STRICT=1 \
-  ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-completion \
+GGML_SYCL_VRAM_BUDGET_PCT=10 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+  ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -p 'Hello' -n 1 --seed 42 --temp 0
 ```
-Expected: Either produces output (with host streaming) or fails gracefully (no crash)
+Expected: Either produces output or fails gracefully (no crash, no hang).
 
-**Commit:** No code commit — this is verification only.
+### Test 5: Debug output verification
+
+```bash
+GGML_SYCL_VRAM_BUDGET_PCT=40 GGML_SYCL_DEBUG=1 ONEAPI_DEVICE_SELECTOR=level_zero:0 \
+  ./build/bin/llama-completion \
+  -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  -p 'Hello' -n 1 --seed 42 --temp 0 2>/tmp/stream_debug.txt
+```
+Check `/tmp/stream_debug.txt` for:
+- `[LAYER-STREAM] Built layer map:` — manager initialization
+- `[LAYER-STREAM] Allocated 2 ×` — buffer allocation
+- `[LAYER-STREAM] Loaded layer N into buffer` — DMA activity
+- `[LAYER-STREAM] Prefetching layer N` — async prefetch
+- `[PERSISTENT-TG] Disabled: model exceeds VRAM` — persistent TG disabled
+- `[SYCL-GRAPH] Disabled: model exceeds VRAM` — graph replay disabled
+
+**No code commit — verification only.**
 
 **Notes for implementer:**
-- Wait 30+ seconds between benchmark runs to avoid thermal throttling.
-- The GPT-OSS 20B test may be very slow (minutes per token) due to per-weight streaming. This is expected — performance optimization is future work (WI-3 layer prefetch).
-- Check stderr for streaming debug messages to verify the streaming path is being exercised.
-- If GPT-OSS 20B hangs during loading, it may be the same pre-existing issue (not related to this work). Focus on the Mistral low-VRAM test as the primary verification.
+- Wait 30+ seconds between benchmark runs to avoid thermal throttling on Arc B580. A single TG128=2.41 result is NOT a regression — re-run after GPU cools.
+- The GPT-OSS 20B test may fail due to pre-existing MoE issues (llama.cpp-a73u). Focus on the Mistral tests as the primary verification.
+- Check stderr for streaming debug messages even without `GGML_SYCL_DEBUG=1` — the `GGML_LOG_INFO` messages from initialization are always visible.
+- If Test 1 produces wrong output, the issue is likely in pointer resolution (Task 4). Check if `get_weight_device_ptr()` returns valid pointers by adding a temporary `fprintf(stderr, ...)` in the function.
 
 ---
 
@@ -718,14 +1321,14 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf -p 512 -n 128
 ```
 
-## Critical Warning: Streaming Scratch Buffer Lifetime
+## Key Design Decisions
 
-The streaming scratch buffer is **reusable** — only valid until the next `stream_weight_to_device()` call. This means:
+1. **Layer-granularity over tensor-granularity**: Loading all weights for a layer at once (~125 MB) into a buffer means each weight has a stable pointer until the buffer is overwritten two layers later. This is compatible with per-op dispatch.
 
-1. **Legacy dispatch (per-token):** Safe. Each mul_mat reads its weight from the scratch, completes, then the next mul_mat overwrites the scratch with the next weight.
+2. **AOS-only for streamed weights**: SOA layout data exists in the unified cache's host entries, but the layer stream manager copies raw tensor data (AOS). SOA reordering during streaming is too expensive. MMVQ falls back to AOS dispatch for streamed weights.
 
-2. **Unified kernel (persistent TG):** **UNSAFE.** The plan records pointers at build time. If weight A's pointer is the scratch buffer, and weight B is streamed next (overwriting the scratch), weight A's pointer is now invalid. Task 3 must handle this by disabling persistent TG when streaming is active.
+3. **Disable graphs + persistent TG**: Both bake weight pointers at record/build time. With double-buffered streaming, pointers rotate per token. Disabling these is the simplest correct approach for v1.
 
-3. **Graph replay:** The graph captures kernel arguments including pointers. If the scratch pointer is captured, replaying the graph after the scratch is overwritten produces garbage. The solution is to also disable graph replay when streaming is active, OR ensure the scratch pointer is stable (one per weight — expensive but correct).
+4. **Lazy host pointer registration**: The tensor inventory stores names/sizes but not pointers. Host pointers are registered as tensors are first encountered during inference. First-token latency is higher (sync DMA for all layers) but subsequent tokens benefit from prefetch.
 
-The simplest correct approach for v1: **disable persistent TG and graph replay when `g_model_exceeds_vram` is true.** This makes inference slow but correct. Performance optimization is WI-3 layer prefetch work.
+5. **Two equal-sized buffers**: Both buffers are sized to `max_layer_size`. This handles models with variable layer sizes (e.g., MoE where some layers have expert tensors). The parity-based buffer selection (layer_id % 2) ensures consecutive layers alternate buffers.
