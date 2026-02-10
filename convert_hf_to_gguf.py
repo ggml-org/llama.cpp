@@ -4112,37 +4112,29 @@ class Qwen2MoeModel(TextModel):
         # Expected GGML ne: {n_embd, n_ff_exp, n_expert} for gate/up, {n_ff_exp, n_embd, n_expert} for down
         if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
             mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            # Input: (n_expert=128, n_ff_exp=768, n_embd=2048)
-            # Want GGML ne: {n_ff_exp, n_embd, n_expert} = {768, 2048, 128}
-            # Need PyTorch: (128, 2048, 768) [reversed of GGML]
-            # So: permute(0, 2, 1): (128, 768, 2048) -> (128, 2048, 768)
-            permuted = data_torch.permute(0, 2, 1).contiguous()
-            yield from super().modify_tensors(permuted, mapped, bid)
+            # HF: [n_expert, n_embd, n_ff] -> GGML: {n_ff, n_embd, n_expert}
+            yield from super().modify_tensors(data_torch, mapped, bid)
             return
 
         if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
+            if data_torch.ndim < 3 or data_torch.shape[-2] % 2 != 0:
                 raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
-            split_dim = data_torch.shape[-1] // 2
-            gate = data_torch[..., :split_dim].contiguous()
-            up = data_torch[..., split_dim:].contiguous()
-            # Input gate/up: (n_expert=128, n_embd=2048, n_ff_exp=768)
-            # Want GGML ne: {n_embd, n_ff_exp, n_expert} = {2048, 768, 128}
-            # Need PyTorch: (128, 768, 2048) [reversed of GGML]
-            # So: permute(0, 2, 1): (128, 2048, 768) -> (128, 768, 2048)
-            base_name = name.removesuffix(".weight")
-            base = base_name.rsplit('.', 1)[0]
-            mapped_gate = f"{base}.gate_proj.weight"
-            mapped_up = f"{base}.up_proj.weight"
-            perm_gate = gate.permute(0, 2, 1).contiguous()
-            perm_up = up.permute(0, 2, 1).contiguous()
-            yield from super().modify_tensors(perm_gate, mapped_gate, bid)
-            yield from super().modify_tensors(perm_up, mapped_up, bid)
+            # HF: [n_expert, 2*n_ff, n_embd] -> split on dim=-2
+            n_ff = data_torch.shape[-2] // 2
+            gate = data_torch[..., :n_ff, :].contiguous()
+            up = data_torch[..., n_ff:, :].contiguous()
+            # gate/up: [n_expert, n_ff, n_embd] -> GGML: {n_embd, n_ff, n_expert}
+            base_name = name.removesuffix(".weight").removesuffix(".gate_up_proj")
+            mapped_gate = f"{base_name}.gate_proj.weight"
+            mapped_up = f"{base_name}.up_proj.weight"
+            yield from super().modify_tensors(gate, mapped_gate, bid)
+            yield from super().modify_tensors(up, mapped_up, bid)
             return
 
         if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector") or name.startswith("model.visual"):
             # skip visual tensors
             return
+
         if name.find("experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
@@ -4541,6 +4533,35 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision tensors - they go in the mmproj file
         if name.startswith("model.visual."):
+            return
+
+        # Qwen3VL has transposed packed tensors, so we treat it differently from general Qwen2MoE packed tensors
+        if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
+            name = name.replace("language_model.", "")
+            mapped = f"{name}.weight" if not name.endswith(".weight") else name
+            permuted = data_torch.permute(0, 2, 1).contiguous()
+            yield from ModelBase.modify_tensors(self, permuted, mapped, bid)
+            return
+
+        if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
+            name = name.replace("language_model.", "")
+            if data_torch.ndim < 3 or data_torch.shape[-1] % 2 != 0:
+                raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
+            split_dim = data_torch.shape[-1] // 2
+            gate = data_torch[..., :split_dim].contiguous()
+            up = data_torch[..., split_dim:].contiguous()
+            # Input gate/up: (n_expert=128, n_embd=2048, n_ff_exp=768)
+            # Want GGML ne: {n_embd, n_ff_exp, n_expert} = {2048, 768, 128}
+            # Need PyTorch: (128, 768, 2048) [reversed of GGML]
+            # So: permute(0, 2, 1): (128, 2048, 768) -> (128, 768, 2048)
+            base_name = name.removesuffix(".weight")
+            base = base_name.rsplit('.', 1)[0]
+            mapped_gate = f"{base}.gate_proj.weight"
+            mapped_up = f"{base}.up_proj.weight"
+            perm_gate = gate.permute(0, 2, 1).contiguous()
+            perm_up = up.permute(0, 2, 1).contiguous()
+            yield from ModelBase.modify_tensors(self, perm_gate, mapped_gate, bid)
+            yield from ModelBase.modify_tensors(self, perm_up, mapped_up, bid)
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
