@@ -17,7 +17,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
 
 };
 
-struct llm_graph_context_delta : public llm_graph_context_mamba {
+struct llm_graph_context_delta : public llm_graph_context {
     llm_graph_context_delta(const llm_graph_params & params);
 
     virtual ~llm_graph_context_delta() = default;
