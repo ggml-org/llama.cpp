@@ -9604,6 +9604,67 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffer_type(int device
     return &ggml_backend_sycl_host_compute_buffer_types[device];
 }
 
+// CPU-offload compute buffer type:
+// Allocates host-pinned memory (sycl::malloc_host) with the SYCL buffer interface.
+// Reports is_host=true so cpu-dispatch.cpp fast-paths bypass staging memcpy.
+// GPU kernels can still access host-pinned memory via PCIe (slower but functional).
+// Used when GGML_SYCL_CPU_OFFLOAD=1 to avoid staging overhead for CPU-dispatched layers.
+static const char * ggml_backend_sycl_cpu_offload_compute_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    static std::string name = GGML_SYCL_NAME "_CpuOffloadCompute";
+    return name.c_str();
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_sycl_cpu_offload_compute_is_host(ggml_backend_buffer_type_t buft) {
+    return true;
+    GGML_UNUSED(buft);
+}
+
+static size_t ggml_backend_sycl_cpu_offload_compute_get_max_size(ggml_backend_buffer_type_t buft) {
+    // Host-pinned memory is limited by system RAM, not VRAM.
+    // Return a large value; allocation failure is handled at alloc time.
+    GGML_UNUSED(buft);
+    return SIZE_MAX;
+}
+
+static const ggml_backend_buffer_type_i ggml_backend_sycl_cpu_offload_compute_buffer_type_interface = {
+    /* .get_name         = */ ggml_backend_sycl_cpu_offload_compute_buffer_type_name,
+    /* .alloc_buffer     = */ ggml_backend_sycl_buffer_type_alloc_buffer,
+    /* .get_alignment    = */ ggml_backend_sycl_buffer_type_get_alignment,
+    /* .get_max_size     = */ ggml_backend_sycl_cpu_offload_compute_get_max_size,
+    /* .get_alloc_size   = */ ggml_backend_sycl_buffer_type_get_alloc_size,
+    /* .is_host          = */ ggml_backend_sycl_cpu_offload_compute_is_host,
+};
+
+ggml_backend_buffer_type_t ggml_backend_sycl_cpu_offload_compute_buffer_type(int device) {
+    static std::mutex           mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto dev_count = ggml_backend_sycl_get_device_count();
+    if (device >= dev_count || device < 0) {
+        GGML_LOG_ERROR("ggml_backend_sycl_cpu_offload_compute_buffer_type: device %d out of range [0, %d]\n",
+                       device, dev_count - 1);
+        GGML_ASSERT(device < dev_count);
+    }
+    static struct ggml_backend_buffer_type ggml_backend_sycl_cpu_offload_compute_buffer_types[GGML_SYCL_MAX_DEVICES];
+    static bool                            initialized = false;
+    if (!initialized) {
+        for (int i = 0; i < dev_count; i++) {
+            auto &    device_i = ggml_sycl_get_device(i);
+            queue_ptr stream   = &(device_i.default_queue());
+            ggml_backend_sycl_cpu_offload_compute_buffer_types[i] = {
+                /* .iface    = */ ggml_backend_sycl_cpu_offload_compute_buffer_type_interface,
+                /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), i),
+                /* .context  = */
+                new ggml_backend_sycl_buffer_type_context{ i, GGML_SYCL_NAME "_CpuOffload" + std::to_string(i),
+                                                           GGML_SYCL_MEM_HOST, GGML_SYCL_MEM_POLICY_STATIC,
+                                                           false, true, 0, stream },
+            };
+        }
+        initialized = true;
+    }
+    return &ggml_backend_sycl_cpu_offload_compute_buffer_types[device];
+}
+
 // buffer pool for sycl (legacy)
 struct ggml_sycl_alloc_trace_entry {
     uint64_t count = 0;
@@ -23858,10 +23919,10 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
     ggml_backend_buffer_t       buf      = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
-    // Accept both regular SYCL buffer type and TP host compute buffer type
+    // Accept regular SYCL, TP host compute, and CPU-offload compute buffer types
     GGML_ASSERT((buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
-                 buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)) &&
-
+                 buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device) ||
+                 buf->buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device)) &&
                 "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy((char *) tensor->data + offset, data, size)));
@@ -23881,9 +23942,10 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
     ggml_backend_buffer_t       buf      = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
-    // Accept both regular SYCL buffer type and TP host compute buffer type
+    // Accept regular SYCL, TP host compute, and CPU-offload compute buffer types
     GGML_ASSERT((buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
-                 buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)) &&
+                 buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device) ||
+                 buf->buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device)) &&
                 "unsupported buffer type");
 
     // Fast path: direct memcpy on the backend's in-order queue (matches master).
@@ -23911,7 +23973,8 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
 }
 static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst) try {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
-    bool is_cpy_supported                = dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) &&
+    bool is_cpy_supported                = (dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
+                             dst->buffer->buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device)) &&
                             ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": dst", dst).c_str());
@@ -24790,7 +24853,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
         auto is_supported_buft = [&](ggml_backend_buffer_type_t buft) {
             return buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
-                   buft == ggml_backend_sycl_host_buffer_type();
+                   buft == ggml_backend_sycl_host_buffer_type() ||
+                   buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device);
         };
         if (!is_supported_buft(node->buffer->buft)) {
             fprintf(stderr,
@@ -31579,6 +31643,11 @@ static bool ggml_backend_sycl_device_supports_buft(ggml_backend_dev_t dev, ggml_
     // Host compute buffer type (SYCL interface) - all SYCL devices can access host memory
     // This is used for TP compute buffers to allow cross-device data sharing
     if (buft->iface.get_name == ggml_backend_sycl_host_compute_buffer_type_name) {
+        return true;
+    }
+
+    // CPU-offload compute buffer type - host-pinned with is_host=true
+    if (buft->iface.get_name == ggml_backend_sycl_cpu_offload_compute_buffer_type_name) {
         return true;
     }
 

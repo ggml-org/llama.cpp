@@ -64,6 +64,10 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type(v
 // Unlike host_buffer_type, this uses the SYCL buffer interface so it works with SYCL kernels.
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffer_type(int device);
 
+// CPU-offload compute buffer: host-pinned memory with SYCL interface and is_host=true.
+// Eliminates staging overhead for CPU-dispatched layers in cpu-dispatch.cpp.
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_cpu_offload_compute_buffer_type(int device);
+
 // Weight residency policy: true when dense weights should remain host-backed and streamed via unified cache.
 GGML_BACKEND_API bool ggml_backend_sycl_weights_evictable(void);
 // Set unified cache budget as a percentage of free VRAM (clamped 1..100).

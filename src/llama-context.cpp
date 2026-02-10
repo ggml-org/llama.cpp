@@ -355,6 +355,19 @@ llama_context::llama_context(
                 // Weights are duplicated on each device for fast kernel access.
                 buft = ggml_backend_sycl_host_compute_buffer_type(gpu_idx);
                 LLAMA_LOG_DEBUG("%s: using host compute buffer type for GPU %d in TP mode\n", __func__, gpu_idx);
+            } else if (backend_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                // Host-pinned compute buffer: when enabled, cpu-dispatch.cpp fast-paths
+                // bypass staging memcpy entirely.  GPU kernels access host memory via PCIe
+                // (slower than VRAM), so this is only beneficial when most/all layers are
+                // on CPU and GPU compute is minimal.  Opt-in via GGML_SYCL_HOST_COMPUTE=1.
+                static bool sycl_host_compute = [] {
+                    const char * env = std::getenv("GGML_SYCL_HOST_COMPUTE");
+                    return env != nullptr && std::atoi(env) != 0;
+                }();
+                if (sycl_host_compute) {
+                    buft = ggml_backend_sycl_cpu_offload_compute_buffer_type(gpu_idx);
+                    LLAMA_LOG_INFO("%s: using host-pinned compute buffer for GPU %d (CPU offload)\n", __func__, gpu_idx);
+                }
             }
 #endif
             if (backend_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
