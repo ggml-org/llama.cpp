@@ -392,28 +392,28 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
     cb(b, "b_in", il);
     cb(g, "g_in", il);
 
-    ggml_tensor * g_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, g), 1, 1, H_v, n_seqs);
-    ggml_tensor * b_t = ggml_reshape_4d(ctx0, ggml_transpose(ctx0, b), 1, 1, H_v, n_seqs);
+    ggml_tensor * g_t = ggml_reshape_4d(ctx0, g, 1, 1, H_v, n_seqs);
+    ggml_tensor * b_t = ggml_reshape_4d(ctx0, b, 1, 1, H_v, n_seqs);
 
     g_t = ggml_exp(ctx0, g_t);
     s   = ggml_mul(ctx0, s, g_t);
 
-    s = ggml_cont(ctx0, ggml_transpose(ctx0, s));
+    ggml_tensor * s_t = ggml_cont(ctx0, ggml_transpose(ctx0, s));
 
-    ggml_tensor * kv_mem = ggml_mul(ctx0, s, k);
+    ggml_tensor * kv_mem = ggml_mul(ctx0, s_t, k);
     kv_mem = ggml_sum_rows(ctx0, kv_mem);
 
     ggml_tensor * v_diff = ggml_sub(ctx0, v, ggml_transpose(ctx0, kv_mem));
     ggml_tensor * delta  = ggml_mul(ctx0, v_diff, b_t);
 
-    ggml_tensor * k_t_delta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, k, S_v, S_v, H_v, n_seqs), ggml_transpose(ctx0, delta));
-    s = ggml_add(ctx0, s, k_t_delta);
+    ggml_tensor * k_d = ggml_mul(ctx0, ggml_repeat(ctx0, k, s), ggml_transpose(ctx0, delta));
+    s_t = ggml_add(ctx0, s_t, k_d);
 
-    ggml_tensor * s_q = ggml_mul(ctx0, s, q);
+    ggml_tensor * s_q = ggml_mul(ctx0, s_t, q);
     ggml_tensor * output = ggml_sum_rows(ctx0, s_q);
 
     output = ggml_permute(ctx0, output, 2, 0, 1, 3);
-    s = ggml_transpose(ctx0, s);
+    s = ggml_transpose(ctx0, s_t);
 
     cb(output, "output_tokens", il);
     cb(s, "new_state", il);
