@@ -4266,6 +4266,19 @@ class Qwen3Model(Qwen2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("WeDLMForCausalLM")
+class WeDLMModel(Qwen3Model):
+    """
+    WeDLM model converter.
+    WeDLM is architecturally similar to Qwen3 with QK Norm support.
+    Developed by Tencent.
+    """
+    model_arch = gguf.MODEL_ARCH.WEDLM
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
