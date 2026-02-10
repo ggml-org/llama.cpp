@@ -79,6 +79,11 @@ struct clip_hparams {
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 
+    // ernie4.5-vl-moe
+    int32_t spatial_conv_size  = 0;
+    int32_t temporal_conv_size = 0;
+    bool    use_temporal_conv  = false;
+
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;
@@ -358,6 +363,23 @@ struct clip_model {
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
+
+    // ernie4.5-vl-moe
+    ggml_tensor * mm_spatial_0_w    = nullptr;
+    ggml_tensor * mm_spatial_0_b    = nullptr;
+    ggml_tensor * mm_spatial_2_w    = nullptr;
+    ggml_tensor * mm_spatial_2_b    = nullptr;
+    ggml_tensor * mm_spatial_norm_w = nullptr;
+    ggml_tensor * mm_spatial_norm_b = nullptr;
+    ggml_tensor * mm_temp_0_w       = nullptr;
+    ggml_tensor * mm_temp_0_b       = nullptr;
+    ggml_tensor * mm_temp_2_w       = nullptr;
+    ggml_tensor * mm_temp_2_b       = nullptr;
+    ggml_tensor * mm_temp_norm_w    = nullptr;
+    ggml_tensor * mm_temp_norm_b    = nullptr;
+    ggml_tensor * mm_mlp_w          = nullptr;
+    ggml_tensor * mm_mlp_b          = nullptr;
+    ggml_tensor * mm_after_norm_w   = nullptr;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

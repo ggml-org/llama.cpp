@@ -116,6 +116,7 @@ enum llm_type {
     LLM_TYPE_8B_A1B, // lfm2moe
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
+    LLM_TYPE_28B_A3B, // Ernie MoE vl small
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_48B_A3B, // Kimi Linear
@@ -286,6 +287,12 @@ struct llama_layer {
     struct ggml_tensor * ffn_down_exps_b = nullptr;
     struct ggml_tensor * ffn_up_exps_b   = nullptr;
 
+    // ff Vision expert MoE
+    struct ggml_tensor * v_ffn_gate_inp  = nullptr;
+    struct ggml_tensor * v_ffn_gate_exps = nullptr;
+    struct ggml_tensor * v_ffn_down_exps = nullptr;
+    struct ggml_tensor * v_ffn_up_exps   = nullptr;
+
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
     struct ggml_tensor * ffn_gate_shexp     = nullptr;
@@ -303,6 +310,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+    struct ggml_tensor * v_ffn_exp_probs_b = nullptr;
 
     // mamba proj
     struct ggml_tensor * ssm_in  = nullptr;
