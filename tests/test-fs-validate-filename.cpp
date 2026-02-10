@@ -9,6 +9,17 @@
 static int n_tests  = 0;
 static int n_failed = 0;
 
+static const char SEP = DIRECTORY_SEPARATOR;
+
+static void test_normalize(const char * desc, const std::string & expected, const std::string & input) {
+    std::string result = fs_normalize_filepath(input);
+    n_tests++;
+    if (result != expected) {
+        n_failed++;
+        printf("  FAIL: %s (got \"%s\", expected \"%s\")\n", desc, result.c_str(), expected.c_str());
+    }
+}
+
 static void test(const char * desc, bool expected, const std::string & filename, bool allow_subdirs = false) {
     bool result = fs_validate_filename(filename, allow_subdirs);
     n_tests++;
@@ -40,6 +51,7 @@ int main(void) {
     test("leading space",           false, " foo");
     test("trailing space",          false, "foo ");
     test("trailing dot",            false, "foo.");
+    test("dot path",                false, "./././");
 
     // --- Double dots ---
     test("contains double dot",     true,  "foo..bar");
@@ -104,6 +116,7 @@ int main(void) {
     test("trailing slash",          true,  "foo/bar/",          true);
     test("colon in path",           false, "foo/b:r/baz",       true);
     test("control char in path",    false, "foo/b\nar/baz",     true);
+    test("dot path",                false, "./././",            true);
 
     // --- Leading separators ---
     test("leading slash",           false, "/foo/bar",          true);
@@ -124,6 +137,23 @@ int main(void) {
     test("leading space after slash",       false, "foo/ bar",         true);
     test("trailing space before slash",     false, "bar /baz",         true);
     test("trailing dot before slash",       false, "bar./baz",         true);
+
+    // --- fs_normalize_filepath ---
+    test_normalize("passthrough simple",        "foo.txt",                              "foo.txt");
+    test_normalize("passthrough subdir",        std::string("foo") + SEP + "bar.txt",   "foo/bar.txt");
+    test_normalize("backslash to sep",          std::string("foo") + SEP + "bar.txt",   "foo\\bar.txt");
+    test_normalize("mixed separators",          std::string("a") + SEP + "b" + SEP + "c", "a/b\\c");
+    test_normalize("duplicate slashes",         std::string("foo") + SEP + "bar",       "foo//bar");
+    test_normalize("duplicate backslashes",     std::string("foo") + SEP + "bar",       "foo\\\\bar");
+    test_normalize("triple slashes",            std::string("foo") + SEP + "bar",       "foo///bar");
+    test_normalize("leading slash stripped",     "foo",                                  "/foo");
+    test_normalize("leading backslash stripped", "foo",                                  "\\foo");
+    test_normalize("multiple leading slashes",   "foo",                                 "///foo");
+    test_normalize("leading dot-slash stripped",  "foo",                                "./foo");
+    test_normalize("leading dot-backslash stripped", "foo",                             ".\\foo");
+    test_normalize("deep path normalized",
+        std::string("a") + SEP + "b" + SEP + "c" + SEP + "d.txt",
+        "/a//b\\c/d.txt");
 
     if (n_failed) {
         printf("\n%d/%d tests failed\n", n_failed, n_tests);

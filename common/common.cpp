@@ -692,6 +692,49 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
 // Filesystem utils
 //
 
+// Normalizes a relative filepath
+// - Replaces backslashes and forward slashes with the system path separator
+// - Trims leading './' or '.\' segments
+// - Trims leading '/' or '\' (treat 'root' as relative)
+// - Trims duplicate directory separators
+// - Does not resolve '..' segments
+// - Does not ensure the path is valid or safe
+// Use in conjunction with `fs_validate_filename`, calling `fs_validate_filename` after `fs_normalize_filepath`
+std::string fs_normalize_filepath(const std::string & path) {
+    std::string result;
+    result.reserve(path.size());
+
+    bool leading = true;
+    char prev = 0;
+    for (size_t i = 0; i < path.size(); ++i) {
+        char c = path[i];
+        if (c == '/' || c == '\\') {
+            c = DIRECTORY_SEPARATOR;
+        }
+        if (leading) {
+            if (c == DIRECTORY_SEPARATOR) {
+                continue; // Skip leading separators
+            } else if (c == '.') {
+                if (i + 1 < path.size()) {
+                    char next = path[i + 1];
+                    if (next == '/' || next == '\\') {
+                        ++i;
+                        continue; // Skip leading dot segments
+                    }
+                }
+            }
+            leading = false;
+        }
+        if (prev == DIRECTORY_SEPARATOR && c == DIRECTORY_SEPARATOR) {
+            continue; // Skip duplicate separators
+        }
+        prev = c;
+        result += c;
+    }
+
+    return result;
+}
+
 // Validate if a filename or path is safe to use
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
