@@ -52,34 +52,68 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         argv[0]);
 }
 
-// Stream state shared between generation thread and content provider
-struct StreamState {
-    std::unique_lock<std::mutex> request_lock;  // Held until generation completes
-    std::mutex                   mutex;
-    std::condition_variable      cv;
-    std::deque<std::string>      chunks;
-    std::atomic<bool>            done{ false };
-    std::atomic<bool>            aborted{ false };
-    std::thread                  thread;
-
-    explicit StreamState(std::unique_lock<std::mutex> && lock) : request_lock(std::move(lock)) {}
-
-    ~StreamState() {
-        if (thread.joinable()) {
-            thread.join();
-        }
-    }
+// Per-request output buffer shared between worker thread and content provider
+struct OutputBuffer {
+    std::mutex              mutex;
+    std::condition_variable cv;
+    std::deque<std::string> chunks;
+    std::atomic<bool>       done{ false };
+    std::atomic<bool>       aborted{ false };
 
     void push(const std::string & chunk) {
-        std::lock_guard<std::mutex> lock(mutex);
-        chunks.push_back(chunk);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            chunks.push_back(chunk);
+        }
         cv.notify_one();
     }
 
     void finish() {
-        std::lock_guard<std::mutex> lock(mutex);
         done = true;
         cv.notify_one();
+    }
+};
+
+// A work item: parsed request + output buffer for streaming back
+struct WorkItem {
+    std::vector<liquid::audio::Runner::Message> messages;
+    std::vector<mtmd_output_modality>           modalities;
+    int                                         n_predict;
+    bool                                        reset_context;
+    std::shared_ptr<OutputBuffer>               output;
+    std::function<void()>                       check_abort;
+    int                                         output_sample_rate;
+};
+
+// Thread-safe work queue
+struct WorkQueue {
+    std::mutex              mutex;
+    std::condition_variable cv;
+    std::deque<WorkItem>    items;
+    std::atomic<bool>       stopped{ false };
+
+    void push(WorkItem && item) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            items.push_back(std::move(item));
+        }
+        cv.notify_one();
+    }
+
+    bool pop(WorkItem & item) {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [this]() { return !items.empty() || stopped.load(); });
+        if (stopped.load() && items.empty()) {
+            return false;
+        }
+        item = std::move(items.front());
+        items.pop_front();
+        return true;
+    }
+
+    void stop() {
+        stopped = true;
+        cv.notify_all();
     }
 };
 
@@ -109,13 +143,93 @@ int main(int argc, char ** argv) {
         { "Server", "lfm2-audio-server" }
     });
 
-    std::mutex        request_mutex;  // Serializes requests
     std::atomic<bool> is_server_running(true);
+    WorkQueue         work_queue;
 
-    // Set up shutdown handler (captures locals, called from signal handler)
+    // Single worker thread — processes one request at a time, no mutexes needed
+    std::thread worker([&]() {
+        WorkItem item;
+        while (work_queue.pop(item)) {
+            auto & output = item.output;
+
+            if (output->aborted.load()) {
+                continue;
+            }
+
+            if (item.reset_context) {
+                LOG_INF("Resetting model context\n");
+                runner.reset();
+            }
+
+            auto text_cb = [&output, &item](const std::string & text) {
+                item.check_abort();
+                if (output->aborted.load()) {
+                    return;
+                }
+                json chunk = {
+                    { "object",  "chat.completion.chunk"                                                              },
+                    { "created", std::time(0)                                                                         },
+                    { "choices",
+                     json::array(
+                          { { { "index", 0 }, { "delta", { { "content", text } } }, { "finish_reason", nullptr } } }) }
+                };
+                output->push("data: " + chunk.dump() + "\n\n");
+            };
+
+            auto audio_cb = [&output, &item](const std::vector<int16_t> & audio) {
+                item.check_abort();
+                if (output->aborted.load()) {
+                    return;
+                }
+                std::string audio_base64 =
+                    base64::encode(reinterpret_cast<const char *>(audio.data()), audio.size() * sizeof(audio.front()));
+                json chunk = {
+                    { "object",  "chat.completion.chunk"                                                           },
+                    { "created", std::time(0)                                                                      },
+                    { "choices", json::array({ { { "index", 0 },
+                                                 { "delta",
+                                                   { { "audio",
+                                                       { { "data", audio_base64 },
+                                                         { "format", "pcm" },
+                                                         { "sample_rate", item.output_sample_rate } } } } },
+                                                 { "finish_reason", nullptr } } }) }
+                };
+                output->push("data: " + chunk.dump() + "\n\n");
+            };
+
+            std::optional<std::string> err;
+            if (runner.generate(item.messages, item.n_predict, text_cb, audio_cb, item.modalities)) {
+                err = runner.get_last_error();
+            }
+
+            if (!output->aborted.load()) {
+                if (err) {
+                    json error_chunk = {
+                        { "error", { { "message", *err }, { "type", "server_error" } } }
+                    };
+                    output->push("data: " + error_chunk.dump() + "\n\n");
+                } else {
+                    json final_chunk = {
+                        { "object",  "chat.completion.chunk"                                                    },
+                        { "created", std::time(0)                                                               },
+                        { "choices",
+                         json::array(
+                              { { { "index", 0 }, { "delta", json::object() }, { "finish_reason", "stop" } } }) }
+                    };
+                    output->push("data: " + final_chunk.dump() + "\n\n");
+                    output->push("data: [DONE]\n\n");
+                }
+            }
+
+            output->finish();
+        }
+    });
+
+    // Set up shutdown handler
     g_shutdown = [&]() {
         is_server_running = false;
         runner.stop();
+        work_queue.stop();
         svr.stop();
     };
 
@@ -155,9 +269,6 @@ int main(int argc, char ** argv) {
 
     // Chat completions endpoint
     svr.Post("/v1/chat/completions", [&](const httplib::Request & req, httplib::Response & res) {
-        // Acquire lock - will be moved to StreamState to hold until generation completes
-        std::unique_lock<std::mutex> request_lock(request_mutex);
-
         if (!is_server_running.load()) {
             res_error(res, "Server is shutting down", 503);
             return;
@@ -240,122 +351,57 @@ int main(int argc, char ** argv) {
                 return;
             }
 
-            // Create shared stream state - takes ownership of the request lock
-            auto state = std::make_shared<StreamState>(std::move(request_lock));
+            // Create output buffer and enqueue work
+            auto output = std::make_shared<OutputBuffer>();
 
-            auto check_abort = [&req, state, &runner, &is_server_running]() {
-                if (state->aborted.load()) {
+            auto check_abort = [&req, output, &runner, &is_server_running]() {
+                if (output->aborted.load()) {
                     return;
                 }
                 bool should_abort = !is_server_running.load();
                 if (!should_abort && req.is_connection_closed) {
                     should_abort = req.is_connection_closed();
                 }
-                if (should_abort && !state->aborted.exchange(true)) {
+                if (should_abort && !output->aborted.exchange(true)) {
                     LOG_INF("Aborting generation\n");
                     runner.stop();
                 }
             };
 
-            auto text_cb = [state, check_abort](const std::string & text) {
-                check_abort();
-                if (state->aborted.load()) {
-                    return;
-                }
-                json chunk = {
-                    { "object",  "chat.completion.chunk"                                                              },
-                    { "created", std::time(0)                                                                         },
-                    { "choices",
-                     json::array(
-                          { { { "index", 0 }, { "delta", { { "content", text } } }, { "finish_reason", nullptr } } }) }
-                };
-                state->push("data: " + chunk.dump() + "\n\n");
-            };
-
-            auto audio_cb = [state, check_abort, &runner](const std::vector<int16_t> & audio) {
-                check_abort();
-                if (state->aborted.load()) {
-                    return;
-                }
-                std::string audio_base64 =
-                    base64::encode(reinterpret_cast<const char *>(audio.data()), audio.size() * sizeof(audio.front()));
-                json chunk = {
-                    { "object",  "chat.completion.chunk"                                                           },
-                    { "created", std::time(0)                                                                      },
-                    { "choices", json::array({ { { "index", 0 },
-                                                 { "delta",
-                                                   { { "audio",
-                                                       { { "data", audio_base64 },
-                                                         { "format", "pcm" },
-                                                         { "sample_rate", runner.get_output_sample_rate() } } } } },
-                                                 { "finish_reason", nullptr } } }) }
-                };
-                state->push("data: " + chunk.dump() + "\n\n");
-            };
-
-            // Start generation in background thread
-            state->thread = std::thread([state, &runner, messages, n_predict, reset_context, text_cb, audio_cb,
-                                         modalities]() {
-                if (reset_context) {
-                    LOG_INF("Resetting model context\n");
-                    runner.reset();
-                }
-
-                std::optional<std::string> err;
-                if (runner.generate(messages, n_predict, text_cb, audio_cb, modalities)) {
-                    err = runner.get_last_error();
-                }
-
-                if (!state->aborted.load()) {
-                    if (err) {
-                        json error_chunk = {
-                            { "error", { { "message", *err }, { "type", "server_error" } } }
-                        };
-                        state->push("data: " + error_chunk.dump() + "\n\n");
-                    } else {
-                        json final_chunk = {
-                            { "object",  "chat.completion.chunk"                                                    },
-                            { "created", std::time(0)                                                               },
-                            { "choices",
-                             json::array(
-                                  { { { "index", 0 }, { "delta", json::object() }, { "finish_reason", "stop" } } }) }
-                        };
-                        state->push("data: " + final_chunk.dump() + "\n\n");
-                        state->push("data: [DONE]\n\n");
-                    }
-                }
-
-                state->finish();
+            work_queue.push({
+                std::move(messages),
+                std::move(modalities),
+                n_predict,
+                reset_context,
+                output,
+                check_abort,
+                runner.get_output_sample_rate(),
             });
 
-            // Stream chunks as they arrive
+            // Stream chunks as the worker produces them
             res.set_content_provider(
-                "text/event-stream", [state, &is_server_running](size_t, httplib::DataSink & sink) {
-                    std::unique_lock<std::mutex> lock(state->mutex);
+                "text/event-stream", [output, &is_server_running](size_t, httplib::DataSink & sink) {
+                    std::unique_lock<std::mutex> lock(output->mutex);
 
-                    // Wait for data or completion
-                    state->cv.wait_for(lock, std::chrono::milliseconds(100), [&state, &is_server_running]() {
-                        return !state->chunks.empty() || state->done.load() || state->aborted.load() ||
+                    output->cv.wait_for(lock, std::chrono::milliseconds(100), [&output, &is_server_running]() {
+                        return !output->chunks.empty() || output->done.load() || output->aborted.load() ||
                                !is_server_running.load();
                     });
 
-                    // Check if we should abort
-                    if (state->aborted.load() || !is_server_running.load()) {
+                    if (output->aborted.load() || !is_server_running.load()) {
                         return false;
                     }
 
-                    // Send all available chunks
-                    while (!state->chunks.empty()) {
-                        const std::string & data = state->chunks.front();
+                    while (!output->chunks.empty()) {
+                        const std::string & data = output->chunks.front();
                         if (!sink.write(data.c_str(), data.size())) {
-                            state->aborted = true;
+                            output->aborted = true;
                             return false;
                         }
-                        state->chunks.pop_front();
+                        output->chunks.pop_front();
                     }
 
-                    // Done?
-                    if (state->done.load() && state->chunks.empty()) {
+                    if (output->done.load() && output->chunks.empty()) {
                         sink.done();
                         return false;
                     }
@@ -382,6 +428,10 @@ int main(int argc, char ** argv) {
 
     LOG_INF("\nShutting down...\n");
     g_shutdown = nullptr;  // Clear before locals go out of scope
+    work_queue.stop();
+    if (worker.joinable()) {
+        worker.join();
+    }
 
     return 0;
 }
