@@ -5325,7 +5325,7 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
     // Track persistent buffers in cache budget (4 buffers + sync_block)
     const size_t total_bytes = 4 * required_size + 3 * sizeof(int);
     if (device_id_ >= 0) {
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, total_bytes);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, total_bytes, ggml_sycl::runtime_category::GRAPH);
         runtime_tracked_bytes_ += total_bytes;
         GGML_SYCL_DEBUG("[UNIFIED-KERNEL] Tracked persistent buffers: %.1f MB on device %d\n",
                         total_bytes / (1024.0f * 1024.0f), device_id_);
@@ -5335,7 +5335,7 @@ void UnifiedKernel::allocate_persistent_buffers(int hidden_dim, int intermediate
 void UnifiedKernel::free_persistent_buffers() {
     // Untrack from cache budget before freeing
     if (runtime_tracked_bytes_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, runtime_tracked_bytes_);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, runtime_tracked_bytes_, ggml_sycl::runtime_category::GRAPH);
         GGML_SYCL_DEBUG("[UNIFIED-KERNEL] Untracked persistent buffers: %.1f MB on device %d\n",
                         runtime_tracked_bytes_ / (1024.0f * 1024.0f), device_id_);
         runtime_tracked_bytes_ = 0;
@@ -5354,7 +5354,7 @@ void UnifiedKernel::free_persistent_buffers() {
     if (d_ops_pool_) { sycl::free(d_ops_pool_, queue_); d_ops_pool_ = nullptr; d_ops_pool_size_ = 0; }
     if (get_rows_pool_) {
         if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
         }
         sycl::free(get_rows_pool_, queue_);
         get_rows_pool_ = nullptr;
@@ -5851,7 +5851,7 @@ void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
         current_plan_->temp_device_allocs.push_back({ptr, bytes});
         current_plan_->temp_device_alloc_bytes += bytes;
         if (device_id_ >= 0) {
-            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, bytes);
+            ggml_sycl::unified_cache_add_runtime_bytes(device_id_, bytes, ggml_sycl::runtime_category::GRAPH);
         }
     }
 }
@@ -5859,7 +5859,7 @@ void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
 void UnifiedKernel::cancel_persistent() {
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
             sycl::free(ptr, queue_);
@@ -5910,7 +5910,7 @@ void UnifiedKernel::begin_plan_update() {
     // Cancel any in-flight plan but DON'T free cached data
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
             sycl::free(ptr, queue_);
@@ -6005,7 +6005,7 @@ void UnifiedKernel::invalidate_plan_cache() {
     cached_ops_.clear();
     cached_plan_template_ = {};
     if (cached_temp_device_alloc_bytes_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_, ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : cached_temp_device_allocs_) {
         if (ptr) {
@@ -6024,14 +6024,14 @@ void * UnifiedKernel::get_rows_stable_ptr(size_t bytes) {
     if (get_rows_pool_) {
         sycl::free(get_rows_pool_, queue_);
         if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
         }
     }
     get_rows_pool_ = sycl::malloc_device(bytes, queue_);
     get_rows_pool_size_ = get_rows_pool_ ? bytes : 0;
     // Track new pool
     if (get_rows_pool_size_ > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, get_rows_pool_size_);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, get_rows_pool_size_, ggml_sycl::runtime_category::GRAPH);
     }
     return get_rows_pool_;
 }
@@ -6064,7 +6064,7 @@ void UnifiedKernel::execute_persistent() {
 
     // Free non-cached temp allocs
     if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
         sycl::free(ptr, queue_);

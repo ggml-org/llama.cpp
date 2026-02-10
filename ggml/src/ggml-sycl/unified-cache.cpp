@@ -3978,8 +3978,15 @@ void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
         }
         const size_t used = used_.load();
         if (used > budget_) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cache usage (%.1f MB) exceeds budget (%.1f MB) after reserving %.1f MB\n",
-                          used / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f), reserved_ / (1024.0f * 1024.0f));
+            if (!budget_exceeded_) {
+                GGML_LOG_WARN("[UNIFIED-CACHE] Budget exceeded: used %.1f MB > budget %.1f MB, "
+                              "eviction exhausted (reserved %.1f MB)\n",
+                              used / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f),
+                              reserved_ / (1024.0f * 1024.0f));
+            }
+            budget_exceeded_ = true;
+        } else {
+            budget_exceeded_ = false;
         }
     }
     // Recalculate model placement decision based on new effective budget.
@@ -4822,6 +4829,20 @@ void unified_cache_log_budget_summary(int device) {
                       implied_reserved / (1024.0f * 1024.0f),
                       device);
     }
+}
+
+bool unified_cache_is_budget_exceeded(int device) {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    unified_cache_mode mode             = get_effective_mode();
+    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device;
+    if (effective_device < 0 || effective_device >= GGML_SYCL_MAX_DEVICES) {
+        return false;
+    }
+    auto it = g_device_caches.find(effective_device);
+    if (it == g_device_caches.end() || !it->second) {
+        return false;
+    }
+    return it->second->is_budget_exceeded();
 }
 
 // === MoE Cache Helpers ===

@@ -403,6 +403,8 @@ class host_cache {
 
     size_t budget() const { return budget_; }
 
+    bool is_budget_exceeded() const { return budget_exceeded_; }
+
     size_t evict(size_t bytes_needed);
 
     // Reserve non-cache runtime buffers (compute, KV, etc.)
@@ -433,6 +435,7 @@ class host_cache {
     size_t               budget_ = 0;
     size_t               base_budget_ = 0;
     size_t               reserved_ = 0;
+    bool                 budget_exceeded_ = false;
     std::atomic<size_t>  used_{ 0 };
     std::atomic<int64_t> time_{ 0 };
 
@@ -632,6 +635,9 @@ class unified_cache {
 
     // Total budget
     size_t budget() const { return budget_; }
+
+    // Check if budget is exceeded (used > budget after eviction)
+    bool is_budget_exceeded() const { return budget_exceeded_; }
 
     // Available memory
     size_t available() const {
@@ -846,6 +852,7 @@ class unified_cache {
     size_t               budget_;       // Total GPU memory budget (after reservations)
     size_t               base_budget_;  // Raw cache budget before reservations
     size_t               reserved_;     // Runtime reservation applied to budget_
+    bool                 budget_exceeded_ = false;  // Set when used > budget after eviction
     std::atomic<size_t>  used_{ 0 };    // Current usage
     std::atomic<int64_t> time_{ 0 };    // Monotonic counter
 
@@ -1040,6 +1047,9 @@ size_t unified_cache_weight_bytes(int device);
 
 // Log budget summary (weights, runtime, available) for diagnostics
 void unified_cache_log_budget_summary(int device);
+
+// Check if the cache budget is exceeded (eviction exhausted but used > budget)
+bool unified_cache_is_budget_exceeded(int device);
 
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);

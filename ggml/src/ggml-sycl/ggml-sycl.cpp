@@ -3006,7 +3006,7 @@ struct ggml_backend_sycl_buffer_context {
                     if (q == nullptr) {
                         q = &(ggml_sycl_get_device(dev_id).default_queue());
                     }
-                    ggml_sycl::unified_cache_sub_runtime_bytes(dev_id, size_bytes);
+                    ggml_sycl::unified_cache_sub_runtime_bytes(dev_id, size_bytes, ggml_sycl::runtime_category::KV_CACHE);
                     SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *q)));
                     tp_dev_ptrs[dev_id] = nullptr;
                 }
@@ -3022,7 +3022,7 @@ struct ggml_backend_sycl_buffer_context {
             ggml_sycl_set_device(device);
 
             if (counts_runtime_bytes) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, size_bytes);
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, size_bytes, ggml_sycl::runtime_category::KV_CACHE);
             }
             if (counts_runtime_host_bytes) {
                 ggml_sycl::unified_cache_sub_runtime_host_bytes(size_bytes);
@@ -6145,7 +6145,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     const bool reserve_device = (effective_mem_type == GGML_SYCL_MEM_DEVICE || effective_mem_type == GGML_SYCL_MEM_SHARED);
     const bool reserve_host   = (effective_mem_type == GGML_SYCL_MEM_HOST);
     if (reserve_device) {
-        ggml_sycl::unified_cache_add_runtime_bytes(buft_ctx->device, size);
+        ggml_sycl::unified_cache_add_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
     }
     if (reserve_host) {
         ggml_sycl::unified_cache_add_runtime_host_bytes(size);
@@ -6160,7 +6160,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
                 if (!dev_ptr) {
                     GGML_LOG_ERROR("[SYCL] KV pinned pool allocation failed (size=%zu)\n", size);
                     if (reserve_device) {
-                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size);
+                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
                     }
                     if (reserve_host) {
                         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
@@ -6208,7 +6208,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
 
                 if (!buft_ctx->allow_shared_fallback) {
                     if (reserve_device) {
-                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size);
+                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
                     }
                     if (reserve_host) {
                         ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
@@ -6261,7 +6261,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
     if (!dev_ptr) {
         GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
         if (reserve_device) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size);
+            ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
         }
         if (reserve_host) {
             ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
@@ -9224,6 +9224,19 @@ static void ggml_sycl_alloc_trace_dump_if_requested(const char * reason) {
     std::call_once(once, [reason]() { ggml_sycl_alloc_trace_dump(reason); });
 }
 void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag) {
+    // Strict mode: refuse allocation if budget is already exceeded
+    static const bool strict_mode = ([] {
+        const char * env = getenv("GGML_SYCL_MEMORY_STRICT");
+        return env && (env[0] == '1');
+    })();
+    if (strict_mode) {
+        int device = ggml_sycl_get_device_id_from_queue(const_cast<sycl::queue &>(queue));
+        if (ggml_sycl::unified_cache_is_budget_exceeded(device)) {
+            GGML_LOG_ERROR("[SYCL] MEMORY_STRICT: refusing allocation of %zu bytes on device %d "
+                           "(budget exceeded, tag=%s)\n", size, device, tag ? tag : "?");
+            return nullptr;
+        }
+    }
     void * ptr = nullptr;
     try {
         ptr = sycl::malloc_device(size, queue);
@@ -9566,18 +9579,18 @@ std::pair<void *, size_t> ggml_backend_sycl_context::get_staging_buffer(
     size_t alloc_size = std::min(needed_bytes, max_staging);
 
     // Reserve budget BEFORE allocating
-    ggml_sycl::unified_cache_add_runtime_bytes(device, alloc_size);
+    ggml_sycl::unified_cache_add_runtime_bytes(device, alloc_size, ggml_sycl::runtime_category::STAGING);
 
     void * ptr = nullptr;
     try {
         ptr = sycl::malloc_device(alloc_size, queue);
     } catch (const sycl::exception &) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size, ggml_sycl::runtime_category::STAGING);
         return {nullptr, 0};
     }
 
     if (!ptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device, alloc_size, ggml_sycl::runtime_category::STAGING);
         return {nullptr, 0};
     }
 
@@ -9595,7 +9608,7 @@ void ggml_backend_sycl_context::free_staging_buffer() {
     }
     sycl::queue & q = *stream(staging_buffer_device_, 0);
     sycl::free(staging_buffer_, q);
-    ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_);
+    ggml_sycl::unified_cache_sub_runtime_bytes(staging_buffer_device_, staging_buffer_size_, ggml_sycl::runtime_category::STAGING);
     GGML_LOG_INFO("[STAGING] Freed %zu MB staging buffer on device %d\n",
                   staging_buffer_size_ / (1024 * 1024), staging_buffer_device_);
     staging_buffer_        = nullptr;
@@ -20288,9 +20301,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             // This triggers weight eviction if needed, freeing physical VRAM
             // so the pool allocator inside ggml_sycl_op_mul_mat_sycl can succeed.
             const size_t f16_bytes = src0->ne[0] * src0->ne[1] * sizeof(sycl::half);
-            ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, f16_bytes);
+            ggml_sycl::unified_cache_add_runtime_bytes(ctx.device, f16_bytes, ggml_sycl::runtime_category::STAGING);
             ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, GGML_LAYOUT_AOS);
-            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, f16_bytes);
+            ggml_sycl::unified_cache_sub_runtime_bytes(ctx.device, f16_bytes, ggml_sycl::runtime_category::STAGING);
             return;
         }
         GGML_LOG_ERROR("[MUL_MAT] No eligible kernel variant for %s (type=%d)\n", src0->name ? src0->name : "?",

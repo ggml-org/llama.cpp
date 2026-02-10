@@ -249,16 +249,16 @@ ComputeBuffer * ComputeBufferManager::find_free_buffer(size_t size) {
 
 void * ComputeBufferManager::allocate_new_buffer(size_t size) {
     void * ptr = nullptr;
-    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size);
+    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
     try {
         ptr = ggml_sycl_malloc_device(size, queue_, "compute_buffer");
     } catch (const sycl::exception & e) {
         fprintf(stderr, "[ComputeBufferManager] SYCL allocation failed for %zu bytes: %s\n", size, e.what());
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
         return nullptr;
     }
     if (!ptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
     }
     return ptr;
 }
@@ -270,7 +270,7 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
 
     // Free old scratch if exists
     if (scratch_ptr_ != nullptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_, ggml_sycl::runtime_category::COMPUTE);
         try {
             sycl::free(scratch_ptr_, queue_);
         } catch (const sycl::exception & e) {
@@ -281,10 +281,10 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
 
     // Allocate new scratch
     try {
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_size);
+        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
         scratch_ptr_      = ggml_sycl_malloc_device(new_size, queue_, "compute_buffer_scratch");
         if (!scratch_ptr_) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size);
+            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
             scratch_capacity_ = 0;
             scratch_size_     = 0;
             return;
@@ -294,7 +294,7 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
     } catch (const sycl::exception & e) {
         fprintf(stderr, "[ComputeBufferManager] SYCL scratch allocation failed for %zu bytes: %s\n", new_size,
                 e.what());
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size);
+        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
         scratch_ptr_      = nullptr;
         scratch_capacity_ = 0;
         scratch_size_     = 0;
