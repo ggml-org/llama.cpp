@@ -153,8 +153,7 @@
 
 	let highlightAgenticTurns = $derived(
 		hasAgenticMarkers &&
-			(currentConfig.alwaysShowAgenticTurns ||
-				activeStatsView === ChatMessageStatsView.SUMMARY)
+			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
 	);
 
 	let displayedModel = $derived(message.model ?? null);
@@ -288,7 +287,10 @@
 
 	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel}
-			<div bind:this={statsContainerEl} class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+			<div
+				bind:this={statsContainerEl}
+				class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground"
+			>
 				{#if isRouter}
 					<ModelsSelector
 						currentModel={displayedModel}

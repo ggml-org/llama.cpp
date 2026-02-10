@@ -29,7 +29,7 @@ sequenceDiagram
     loop For each enabled server
         mcpStore->>mcpStore: runHealthCheck(serverId)
         mcpStore->>mcpStore: updateHealthCheck(id, CONNECTING)
-        
+
         mcpStore->>MCPSvc: connect(serverName, config, clientInfo, capabilities, onPhase)
         activate MCPSvc
 
