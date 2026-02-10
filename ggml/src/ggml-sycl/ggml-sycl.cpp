@@ -214,6 +214,9 @@ enum class ggml_sycl_host_weight_release_mode {
 
 static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode mode);
 
+// CPU compute path for data-local dispatch (defined in Task 3 implementation)
+bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst);
+
 // Layout-size helpers (defined later).
 static size_t ggml_sycl_layout_bytes_for_tensor(const ggml_tensor * tensor, layout_mode layout, int device);
 static size_t ggml_sycl_layout_bytes_for_dims(ggml_type   type,
@@ -2005,6 +2008,11 @@ std::atomic<bool>                                  g_tiered_enabled{ false };
 std::atomic<bool>                                  g_model_exceeds_vram{ false };  // True when model > VRAM budget
 
 static std::array<size_t, GGML_SYCL_MAX_DEVICES> g_tiered_headroom_reserve = {};
+
+// Layer-to-device map for CPU offload dispatch
+// Built lazily on first compute pass; maps layer_id -> true if layer's weights are host-resident
+static std::vector<bool>  g_layer_on_cpu;
+static std::atomic<bool>  g_layer_map_initialized{ false };
 
 // Helper: Get total system RAM in bytes
 static size_t get_system_memory_bytes() {
@@ -23208,6 +23216,128 @@ static void dump_non_fa_attention_tensor(ggml_backend_sycl_context & ctx, struct
     }
 }
 #endif
+
+// Build the layer device map from tensor inventory.
+// Initializes g_layer_on_cpu vector sized by max layer.
+// Actual CPU/GPU classification is done incrementally in should_dispatch_to_cpu()
+// when weight tensors are first seen (since cache keys require tensor pointers).
+static void build_layer_device_map(int device) {
+    (void) device;
+
+    // Determine max layer from tensor inventory
+    int max_layer = -1;
+    {
+        std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+        for (const auto & [name, size] : g_tensor_inventory) {
+            int lid = ggml_sycl::extract_layer_id(name.c_str());
+            if (lid > max_layer) {
+                max_layer = lid;
+            }
+        }
+    }
+
+    if (max_layer < 0) {
+        // No layers found — mark initialized with empty map
+        g_layer_map_initialized.store(true, std::memory_order_release);
+        return;
+    }
+
+    // Initialize all layers as GPU (false = not on CPU)
+    // Layer classification happens incrementally in should_dispatch_to_cpu()
+    g_layer_on_cpu.assign(static_cast<size_t>(max_layer + 1), false);
+    g_layer_map_initialized.store(true, std::memory_order_release);
+}
+
+// Mutex protecting g_layer_on_cpu writes during incremental classification
+static std::mutex g_layer_map_mutex;
+
+// Per-layer tracking: which layers have been classified (true = resolved)
+static std::vector<bool> g_layer_classified;
+
+// Check if a tensor's operation should be dispatched to CPU based on
+// weight residency. On first encounter of each layer, queries the unified
+// cache for the actual weight tensor's location and records the result.
+static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_tensor * dst) {
+    // Only dispatch when CPU offload is available
+    if (!ggml_sycl_cpu_offload_available()) {
+        return false;
+    }
+
+    // Only MUL_MAT operations benefit from CPU dispatch
+    if (dst->op != GGML_OP_MUL_MAT) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0 || !src0->name) {
+        return false;
+    }
+
+    // Extract layer ID from weight tensor name
+    int layer_id = ggml_sycl::extract_layer_id(src0->name);
+    if (layer_id < 0) {
+        return false;
+    }
+
+    // Initialize map structure lazily (sizes the vector, doesn't classify)
+    if (!g_layer_map_initialized.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(g_layer_map_mutex);
+        if (!g_layer_map_initialized.load(std::memory_order_relaxed)) {
+            build_layer_device_map(ctx.device);
+            g_layer_classified.assign(g_layer_on_cpu.size(), false);
+        }
+    }
+
+    // Bounds check
+    if (layer_id >= (int) g_layer_on_cpu.size()) {
+        return false;
+    }
+
+    // If this layer hasn't been classified yet, check the cache now
+    // (we have the actual weight tensor pointer to construct a valid cache key)
+    if (!g_layer_classified[layer_id]) {
+        std::lock_guard<std::mutex> lock(g_layer_map_mutex);
+        if (!g_layer_classified[layer_id]) {
+            bool on_cpu = false;
+
+            auto * cache = ggml_sycl::unified_cache_enabled()
+                               ? ggml_sycl::get_unified_cache_for_device(ctx.device)
+                               : nullptr;
+            if (cache) {
+                ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
+                if (key.valid) {
+                    const layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_AOS };
+                    for (layout_mode layout : layouts) {
+                        ggml_sycl::cache_ptr_view view = cache->get_view(key, layout);
+                        if (view.ptr) {
+                            on_cpu = (view.location != ggml_sycl::cache_location::DEVICE);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Fallback: if not in cache, check if weight buffer is host-resident
+            if (!on_cpu && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+                on_cpu = true;
+            }
+
+            g_layer_on_cpu[layer_id] = on_cpu;
+            g_layer_classified[layer_id] = true;
+
+            if (on_cpu) {
+                static int cpu_log_count = 0;
+                if (cpu_log_count++ < 64) {
+                    GGML_LOG_INFO("[SYCL-CPU] Layer %d routed to CPU (weight %s is host-resident)\n",
+                                  layer_id, src0->name);
+                }
+            }
+        }
+    }
+
+    return g_layer_on_cpu[layer_id];
+}
+
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) {
         return false;
@@ -23248,6 +23378,10 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                 return true;  // Op "succeeded" by being skipped
             }
         }
+    }
+    // Data-local compute: dispatch to CPU when weight tensor is host-resident
+    if (should_dispatch_to_cpu(ctx, dst)) {
+        return ggml_sycl_compute_forward_cpu(ctx, dst);
     }
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
