@@ -6855,7 +6855,6 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_tiered_kv_buffer_type(int de
 // === End Tiered KV Buffer Type ===
 
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
-    fprintf(stderr, "[TRACE] ggml_backend_sycl_kv_buffer_type called, dev=%d\n", device);
     // Cache the offload decision per device.  This function is called once per KV
     // layer (e.g. 32 times for Mistral-7B).  Between calls the unified cache loads
     // weight tensors, shrinking the apparent VRAM margin.  By caching the result of
