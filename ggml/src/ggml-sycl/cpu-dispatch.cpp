@@ -28,6 +28,9 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#include <cmath>
+#include <cstring>
+
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"
 #endif
@@ -436,6 +439,581 @@ static bool cpu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 }
 
 // ---------------------------------------------------------------------------
+// SILU  (x * sigmoid(x), element-wise)
+// ---------------------------------------------------------------------------
+
+static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+
+    if (!src_data || !dst_data) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(dst);
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(n)), [=](sycl::id<1> i) {
+            const float x = src_data[i];
+            dst_data[i] = x / (1.0f + sycl::exp(-x));
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// GLU  (SWIGLU, REGLU, GEGLU variants — fused gate*up)
+// ---------------------------------------------------------------------------
+
+static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    if (!src0) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (src1 && !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    const enum ggml_glu_op glu_op = ggml_get_glu_op(dst);
+    const int32_t swapped = ((const int32_t *)(dst->op_params))[1];
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+
+    const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    const float * src1_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q))
+                                   : src0_data;
+
+    if (!src0_data || !src1_data) {
+        return false;
+    }
+
+    float * dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+    if (!dst_data) {
+        return false;
+    }
+
+    const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
+    const int64_t nrows = ggml_nrows(src0);
+
+    // For single-source GLU, gate and up are split halves of src0
+    // swapped controls which half is gate vs up
+    const int64_t src0_row_stride = src0->nb[1] / sizeof(float);
+    const int64_t src1_row_stride = src1 ? (src1->nb[1] / sizeof(float)) : src0_row_stride;
+    const int64_t dst_row_stride  = dst->nb[1] / sizeof(float);
+
+    const int64_t gate_offset = (!src1 && swapped) ? nc : 0;
+    const int64_t up_offset   = (!src1 && swapped) ? 0 : nc;
+    const bool has_src1 = (src1 != nullptr);
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows * nc)), [=](sycl::id<1> idx) {
+            const int64_t row = static_cast<int64_t>(idx[0]) / nc;
+            const int64_t col = static_cast<int64_t>(idx[0]) % nc;
+
+            float gate_val, up_val;
+            if (has_src1) {
+                gate_val = src0_data[row * src0_row_stride + col];
+                up_val   = src1_data[row * src1_row_stride + col];
+            } else {
+                gate_val = src0_data[row * src0_row_stride + gate_offset + col];
+                up_val   = src0_data[row * src0_row_stride + up_offset + col];
+            }
+
+            float activated;
+            switch (glu_op) {
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
+                    activated = gate_val / (1.0f + sycl::exp(-gate_val));  // silu
+                    break;
+                case GGML_GLU_OP_REGLU:
+                    activated = gate_val > 0.0f ? gate_val : 0.0f;  // relu
+                    break;
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                    activated = 0.5f * gate_val * (1.0f + sycl::erf(gate_val * 0.7071067811865475f));  // gelu
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    activated = gate_val / (1.0f + sycl::exp(-1.702f * gate_val));  // quick_gelu
+                    break;
+                default:
+                    activated = gate_val;
+                    break;
+            }
+
+            dst_data[row * dst_row_stride + col] = activated * up_val;
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// SOFT_MAX  (row-wise softmax with scale and optional mask)
+// ---------------------------------------------------------------------------
+
+static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    // Optional mask (src1) — F32 only for CPU path
+    const ggml_tensor * src1 = dst->src[1];
+    if (src1 && src1->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    float scale    = 1.0f;
+    float max_bias = 0.0f;
+    memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+
+    // ALiBi not supported on CPU path for simplicity
+    if (max_bias != 0.0f) {
+        return false;
+    }
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+
+    const float * src_data  = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    const float * mask_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q))
+                                   : nullptr;
+    float *       dst_data  = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+
+    if (!src_data || !dst_data) {
+        return false;
+    }
+
+    const int64_t ne00  = src0->ne[0];  // row width
+    const int64_t nrows = ggml_nrows(src0);
+
+    const int64_t mask_ne1 = src1 ? src1->nb[1] / sizeof(float) : 0;
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows)), [=](sycl::id<1> row_id) {
+            const int64_t row = static_cast<int64_t>(row_id[0]);
+            const float * sp  = src_data + row * ne00;
+            float *       dp  = dst_data + row * ne00;
+
+            // Mask row — broadcast across rows within each head
+            const float * mp = nullptr;
+            if (mask_data) {
+                const int64_t mask_row = row % (mask_ne1 > 0 ? (nrows) : 1);
+                mp = mask_data + mask_row * ne00;
+            }
+
+            // 1. Scale + mask + find max
+            float max_val = -INFINITY;
+            for (int64_t j = 0; j < ne00; j++) {
+                float v = sp[j] * scale;
+                if (mp) {
+                    v += mp[j];
+                }
+                dp[j] = v;
+                if (v > max_val) {
+                    max_val = v;
+                }
+            }
+
+            // 2. exp(x - max) and sum
+            float sum = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                dp[j] = sycl::exp(dp[j] - max_val);
+                sum += dp[j];
+            }
+
+            // 3. Normalize
+            const float inv_sum = 1.0f / sum;
+            for (int64_t j = 0; j < ne00; j++) {
+                dp[j] *= inv_sum;
+            }
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// NORM  (layer normalization: mean-subtract, variance-normalize)
+// ---------------------------------------------------------------------------
+
+static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0)) {
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+
+    if (!src_data || !dst_data) {
+        return false;
+    }
+
+    const int64_t ne00  = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows)), [=](sycl::id<1> row_id) {
+            const int64_t row     = static_cast<int64_t>(row_id[0]);
+            const float * src_row = src_data + row * ne00;
+            float *       dst_row = dst_data + row * ne00;
+
+            // Compute mean
+            float sum = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                sum += src_row[j];
+            }
+            const float mean = sum / static_cast<float>(ne00);
+
+            // Compute variance and mean-subtract
+            float var = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                float d = src_row[j] - mean;
+                dst_row[j] = d;
+                var += d * d;
+            }
+            var /= static_cast<float>(ne00);
+
+            // Normalize
+            const float scale = 1.0f / sycl::sqrt(var + eps);
+            for (int64_t j = 0; j < ne00; j++) {
+                dst_row[j] *= scale;
+            }
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// SCALE  (multiply all elements by a scalar)
+// ---------------------------------------------------------------------------
+
+static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0) {
+        return false;
+    }
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    float scale;
+    memcpy(&scale, dst->op_params, sizeof(float));
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+
+    if (!src_data || !dst_data) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(dst);
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(n)), [=](sycl::id<1> i) {
+            dst_data[i] = src_data[i] * scale;
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// CPY / CONT  (copy or contiguify tensor data)
+// ---------------------------------------------------------------------------
+
+static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];
+    if (!src0) {
+        return false;
+    }
+
+    // Simple case: both contiguous, same type → memcpy
+    if (src0->type != dst->type) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+    const void * src_data = get_host_ptr(src0, device, 0, gpu_q);
+    void *       dst_data = get_host_output_ptr(dst, device, gpu_q);
+
+    if (!src_data || !dst_data) {
+        return false;
+    }
+
+    const size_t nbytes = ggml_nbytes(dst);
+    memcpy(dst_data, src_data, nbytes);
+
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// ROPE  (rotary positional embeddings — NEOX and NORMAL modes, F32 only)
+// ---------------------------------------------------------------------------
+
+static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
+    if (!cpu_q) {
+        return false;
+    }
+
+    const ggml_tensor * src0 = dst->src[0];  // input tensor
+    const ggml_tensor * src1 = dst->src[1];  // positions (int32)
+    const ggml_tensor * src2 = dst->src[2];  // freq_factors (optional)
+
+    if (!src0 || !src1) {
+        return false;
+    }
+    // F32 only for CPU path
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    // Extract op_params
+    const int n_dims     = ((int32_t *) dst->op_params)[1];
+    const int mode       = ((int32_t *) dst->op_params)[2];
+    const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+
+    float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
+    memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
+    memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
+    memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
+    memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
+    memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
+
+    // Only support NORMAL and NEOX modes on CPU
+    const bool is_neox   = (mode & GGML_ROPE_TYPE_NEOX) != 0;
+    const bool is_normal = (mode == GGML_ROPE_TYPE_NORMAL);
+    if (!is_neox && !is_normal) {
+        return false;  // MROPE, VISION, IMROPE not supported
+    }
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+
+    const float *   src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+    const int32_t * pos_data = static_cast<const int32_t *>(get_host_ptr(src1, device, 1, gpu_q));
+    float *         dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
+
+    if (!src_data || !pos_data || !dst_data) {
+        return false;
+    }
+
+    // Freq factors (optional src2)
+    const float * freq_factors_data = nullptr;
+    if (src2) {
+        // freq_factors usually lives in host memory — use src0 slot since we're done with src0
+        freq_factors_data = static_cast<const float *>(get_host_ptr(src2, device, 0, gpu_q));
+        if (!freq_factors_data) {
+            return false;
+        }
+    }
+
+    const int64_t ne0 = src0->ne[0];  // head dim
+    const int64_t ne1 = src0->ne[1];  // num heads
+    const int64_t ne2 = src0->ne[2];  // seq len
+    const int64_t ne3 = src0->ne[3];  // batch
+
+    // Strides in float units
+    const int64_t s01 = src0->nb[1] / sizeof(float);
+    const int64_t s02 = src0->nb[2] / sizeof(float);
+    const int64_t s03 = src0->nb[3] / sizeof(float);
+    const int64_t d01 = dst->nb[1] / sizeof(float);
+    const int64_t d02 = dst->nb[2] / sizeof(float);
+    const int64_t d03 = dst->nb[3] / sizeof(float);
+
+    // YaRN correction dims
+    float corr_dims[2];
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+
+    const float theta_scale = powf(freq_base, -2.0f / n_dims);
+
+    // Total work items = ne3 * ne2 * ne1 (one per row)
+    const int64_t total_rows = ne3 * ne2 * ne1;
+
+    // Capture locals for kernel
+    const float cd0 = corr_dims[0];
+    const float cd1 = corr_dims[1];
+
+    cpu_q->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total_rows)), [=](sycl::id<1> work_id) {
+            const int64_t idx = static_cast<int64_t>(work_id[0]);
+            const int64_t i3  = idx / (ne2 * ne1);
+            const int64_t i2  = (idx / ne1) % ne2;
+            const int64_t i1  = idx % ne1;
+
+            const float * src_row = src_data + i3 * s03 + i2 * s02 + i1 * s01;
+            float *       dst_row = dst_data + i3 * d03 + i2 * d02 + i1 * d01;
+
+            const int32_t p = pos_data[i2];
+            const float theta_base = static_cast<float>(p);
+
+            float theta = theta_base;
+            for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                const float ff = freq_factors_data ? freq_factors_data[i0 / 2] : 1.0f;
+
+                // YaRN rope_yarn inline
+                const float theta_extrap = theta / ff;
+                float theta_interp = freq_scale * theta_extrap;
+                float theta_val = theta_interp;
+                float mscale = attn_factor;
+
+                if (ext_factor != 0.0f) {
+                    const float y = (i0 / 2.0f - cd0) / sycl::fmax(0.001f, cd1 - cd0);
+                    const float ramp_mix = (1.0f - sycl::fmin(1.0f, sycl::fmax(0.0f, y))) * ext_factor;
+                    theta_val = theta_interp * (1.0f - ramp_mix) + theta_extrap * ramp_mix;
+                    mscale *= 1.0f + 0.1f * sycl::log(1.0f / freq_scale);
+                }
+
+                const float cos_theta = sycl::cos(theta_val) * mscale;
+                const float sin_theta = sycl::sin(theta_val) * mscale;
+
+                if (is_normal) {
+                    // NORMAL: pairs are adjacent (i0, i0+1)
+                    const float x0 = src_row[i0];
+                    const float x1 = src_row[i0 + 1];
+                    dst_row[i0]     = x0 * cos_theta - x1 * sin_theta;
+                    dst_row[i0 + 1] = x0 * sin_theta + x1 * cos_theta;
+                } else {
+                    // NEOX: pairs are (i0/2, i0/2 + n_dims/2)
+                    const int64_t ic = i0 / 2;
+                    const float x0 = src_row[ic];
+                    const float x1 = src_row[ic + n_dims / 2];
+                    dst_row[ic]              = x0 * cos_theta - x1 * sin_theta;
+                    dst_row[ic + n_dims / 2] = x0 * sin_theta + x1 * cos_theta;
+                }
+
+                theta *= theta_scale;
+            }
+
+            // Copy remaining dimensions beyond n_dims
+            if (!is_normal) {
+                for (int64_t i0 = n_dims; i0 < ne0; i0++) {
+                    dst_row[i0] = src_row[i0];
+                }
+            } else {
+                for (int64_t i0 = n_dims; i0 < ne0; i0++) {
+                    dst_row[i0] = src_row[i0];
+                }
+            }
+        });
+    });
+
+    cpu_q->wait();
+    flush_output(dst, device, 2, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// UNARY dispatch (SILU and others)
+// ---------------------------------------------------------------------------
+
+static bool cpu_unary(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const enum ggml_unary_op op = ggml_get_unary_op(dst);
+    switch (op) {
+        case GGML_UNARY_OP_SILU:
+            return cpu_silu(ctx, dst);
+        default:
+            GGML_SYCL_DEBUG("[SYCL-CPU] Unsupported unary op %d on CPU\n", static_cast<int>(op));
+            return false;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main dispatch entry point
 // ---------------------------------------------------------------------------
 
@@ -449,7 +1027,21 @@ bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_
             return cpu_add(ctx, dst);
         case GGML_OP_MUL:
             return cpu_mul(ctx, dst);
-        // TODO Phase 2: ROPE, SOFT_MAX, LAYER_NORM, SILU
+        case GGML_OP_UNARY:
+            return cpu_unary(ctx, dst);
+        case GGML_OP_GLU:
+            return cpu_glu(ctx, dst);
+        case GGML_OP_SOFT_MAX:
+            return cpu_soft_max(ctx, dst);
+        case GGML_OP_NORM:
+            return cpu_norm(ctx, dst);
+        case GGML_OP_SCALE:
+            return cpu_scale(ctx, dst);
+        case GGML_OP_CPY:
+        case GGML_OP_CONT:
+            return cpu_cpy(ctx, dst);
+        case GGML_OP_ROPE:
+            return cpu_rope(ctx, dst);
         default:
             GGML_SYCL_DEBUG("[SYCL-CPU] Unsupported op %s on CPU, falling back to GPU\n",
                             ggml_op_name(dst->op));
