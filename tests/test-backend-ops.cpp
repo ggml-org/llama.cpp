@@ -2994,13 +2994,7 @@ struct test_bin_bcast : public test_case {
             if (perm1) {
                 const int p[4] = { 1, 2, 0, 3 }; // hardcoded for now
 
-                int64_t ne_b[4];
-                ne_b[0] = ne[p[0]];
-                ne_b[1] = ne[p[1]];
-                ne_b[2] = ne[p[2]];
-                ne_b[3] = ne[p[3]];
-
-                b[i] = ggml_new_tensor_4d(ctx, type, ne_b[0], ne_b[1], ne_b[2], ne_b[3]);
+                b[i] = ggml_new_tensor_4d(ctx, type, ne[p[0]], ne[p[1]], ne[p[2]], ne[p[3]]);
                 b[i] = ggml_permute(ctx, b[i], p[0], p[1], p[2], p[3]);
             } else {
                 b[i] = ggml_new_tensor(ctx, type, 4, ne.data());
