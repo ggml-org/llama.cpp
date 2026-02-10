@@ -29468,6 +29468,13 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
         return false;
     }
 
+    // 1b. Model exceeds VRAM — persistent TG records weight pointers that become
+    // stale during double-buffered layer streaming. Disable to use per-op dispatch.
+    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: model exceeds VRAM, weight streaming active\n");
+        return false;
+    }
+
     if (!cgraph || cgraph->n_nodes == 0) {
         return false;
     }
@@ -29736,6 +29743,15 @@ normal_dispatch:
 
 
 #ifdef GGML_SYCL_GRAPH
+    // Disable graph replay when model exceeds VRAM — weight streaming rotates
+    // pointers between two device buffers, incompatible with baked graph pointers.
+    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: model exceeds VRAM, weight streaming active\n");
+        compute_impl();
+        record_completion(false);
+        return GGML_STATUS_SUCCESS;
+    }
+
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
     // check_graph_compatibility() validates that cache can hold all layer experts.
