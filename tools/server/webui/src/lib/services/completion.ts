@@ -231,11 +231,11 @@ export class CompletionService {
 							}
 
 							if (promptProgress) {
-								ChatService.notifyTimings(undefined, promptProgress, callbacks.onTimings);
+								callbacks.onTimings?.(undefined, promptProgress);
 							}
 
 							if (timings) {
-								ChatService.notifyTimings(timings, promptProgress, callbacks.onTimings);
+								callbacks.onTimings?.(timings, promptProgress);
 								lastTimings = timings;
 							}
 

@@ -14,11 +14,11 @@ export interface SettingsFieldConfig {
 
 export interface CompletionServiceCallbacks {
 	// Callbacks
-	onChunk?: (chunk: string) => void;
+	onChunk: (chunk: string) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
-	onComplete?: (response: string, timings?: ChatMessageTimings) => void;
-	onError?: (error: Error) => void;
+	onComplete: (response: string, timings?: ChatMessageTimings) => void;
+	onError: (error: Error) => void;
 }
 
 export interface SettingsChatServiceOptions {
