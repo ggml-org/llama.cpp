@@ -50,6 +50,14 @@ void quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_mxfp4_ref(x, y, k);
 }
 
+void quantize_row_mxfp6_e3m2(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp6_e3m2_ref(x, y, k);
+}
+
+void quantize_row_mxfp6_e2m3(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_mxfp6_e2m3_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -215,6 +223,109 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
     *s = sumf;
 }
+
+void ggml_vec_dot_mxfp6_e3m2_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc)
+{
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP6_E3M2 == 0);
+    static_assert(QK_MXFP6_E3M2 == QK8_0, "QK_MXFP6_E3M2 and QK8_0 must be the same");
+
+    const block_mxfp6_e3m2 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP6_E3M2;
+
+    int ib = 0;
+    float sumf = 0;
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_E8M0_TO_FP32_ANY(x[ib].e, 4);
+        int sumi = 0;
+        // Q8_0 (y) * MXFP6 (block_size = 32)
+        for (int j = 0; j < QK_MXFP6_E3M2/4; ++j) {
+            // Current Packed MXFP6
+            const uint8_t* q3 = x[ib].qs + 3 * j;
+            // Current Packed Q8_0
+            const int8_t* q8 = y[ib].qs + 4 * j;
+
+            const uint8_t b0 = q3[0];
+            const uint8_t b1 = q3[1];
+            const uint8_t b2 = q3[2];
+
+            const uint8_t v0_idx = b0 & 0x3F;
+            const uint8_t v1_idx = (b0 >> 6) | ((b1 & 0x0F) << 2);
+            const uint8_t v2_idx = (b1 >> 4) | ((b2 & 0x03) << 4);
+            const uint8_t v3_idx = b2 >> 2;
+
+            // (y[4*j + 0] * x[4*j + 0])
+            sumi += q8[0] * kvalues_mxfp6_e3m2[v0_idx];
+            // (y[4*j + 1] * x[4*j + 1])
+            sumi += q8[1] * kvalues_mxfp6_e3m2[v1_idx];
+            // (y[4*j + 2] * x[4*j + 2])
+            sumi += q8[2] * kvalues_mxfp6_e3m2[v2_idx];
+            // (y[4*j + 3] * x[4*j + 3])
+            sumi += q8[3] * kvalues_mxfp6_e3m2[v3_idx];
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_mxfp6_e2m3_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc)
+{
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP6_E2M3 == 0);
+    static_assert(QK_MXFP6_E2M3 == QK8_0, "QK_MXFP6_E2M3 and QK8_0 must be the same");
+
+    const block_mxfp6_e2m3 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP6_E2M3;
+
+    int ib = 0;
+    float sumf = 0;
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_E8M0_TO_FP32_ANY(x[ib].e, 3);
+        int sumi = 0;
+        // Q8_0 (y) * MXFP6 (block_size = 32)
+        for (int j = 0; j < QK_MXFP6_E2M3/4; ++j) {
+            // Current Packed MXFP6
+            const uint8_t* q3 = x[ib].qs + 3 * j;
+            // Current Packed Q8_0
+            const int8_t* q8 = y[ib].qs + 4 * j;
+
+            const uint8_t b0 = q3[0];
+            const uint8_t b1 = q3[1];
+            const uint8_t b2 = q3[2];
+
+            const uint8_t v0_idx = b0 & 0x3F;
+            const uint8_t v1_idx = (b0 >> 6) | ((b1 & 0x0F) << 2);
+            const uint8_t v2_idx = (b1 >> 4) | ((b2 & 0x03) << 4);
+            const uint8_t v3_idx = b2 >> 2;
+
+            // (y[4*j + 0] * x[4*j + 0])
+            sumi += q8[0] * kvalues_mxfp6_e2m3[v0_idx];
+            // (y[4*j + 1] * x[4*j + 1])
+            sumi += q8[1] * kvalues_mxfp6_e2m3[v1_idx];
+            // (y[4*j + 2] * x[4*j + 2])
+            sumi += q8[2] * kvalues_mxfp6_e2m3[v2_idx];
+            // (y[4*j + 3] * x[4*j + 3])
+            sumi += q8[3] * kvalues_mxfp6_e2m3[v3_idx];
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
 
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
