@@ -12412,9 +12412,17 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
 
     if (tier == ggml_sycl::memory_tier::VRAM) {
         extra->data_device[device] = cached_ptr;
+    } else if (tier == ggml_sycl::memory_tier::PINNED_HOST) {
+        // Host pinned (USM) — GPU can access directly via PCIe. Slow but correct.
+        extra->data_device[device] = cached_ptr;
+    } else {
+        // MMAP tier — not USM, GPU cannot access. Stage to pinned memory.
+        size_t nbytes = ggml_nbytes(src0);
+        void * staged = ggml_sycl_get_staged_ptr_device(cached_ptr, nbytes, device);
+        if (staged) {
+            extra->data_device[device] = staged;
+        }
     }
-    // For non-layer host-resident tensors, the normal pointer resolution
-    // path in get_data_ptr_slow handles the copy via unified cache.
 }
 
 static void ggml_sycl_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
