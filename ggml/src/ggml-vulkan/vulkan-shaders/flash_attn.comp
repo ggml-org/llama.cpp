@@ -457,27 +457,47 @@ void main() {
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
     if (p.k_num > 1) {
-        // note: O and Q have swapped coord 1,2.
-        uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
+        if (p.gqa_ratio > 1) {
+            // note: O and Q have swapped coord 1,2.
+            uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
 
-        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            const uint row = tile_row(r);
-            if (row < N) {
-                [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                    gqaStore(row, d * D_split + d_tid, Of[r][d], o_offset, iq2, N);
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                const uint row = tile_row(r);
+                if (row < N) {
+                    [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
+                        gqaStore(row, d * D_split + d_tid, Of[r][d], o_offset, iq2, N);
+                    }
+                }
+            }
+
+            o_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3));
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                const uint row = tile_row(r);
+                if (row < N) {
+                    perElemOpStoreCol0(row, 0u, ACC_TYPE(Lf[r]), o_offset, iq2, N);
+                    perElemOpStoreCol0(row, 0u, ACC_TYPE(Mf[r]), o_offset + p.ne1, iq2, N);
+                }
+            }
+        } else {
+            [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
+                const uint row = tile_row(r);
+                const uint global_row = i * Br + row;
+
+                if (global_row < N) {
+                    uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3)) / 4;
+
+                    [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
+                        data_ov4[o_offset + iq2 * HSV/4 + d * D_split + d_tid] = D_TYPEV4(Of[r][d]);
+                    }
+                }
+
+                if (global_row < N && d_tid == 0 && col_tid == 0) {
+                    uint32_t lm_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3));
+                    data_o[lm_offset + iq2] = D_TYPE(Lf[r]);
+                    data_o[lm_offset + p.ne1 + iq2] = D_TYPE(Mf[r]);
                 }
             }
         }
-
-        o_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3));
-        [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            const uint row = tile_row(r);
-            if (row < N) {
-                perElemOpStoreCol0(row, 0u, ACC_TYPE(Lf[r]), o_offset, iq2, N);
-                perElemOpStoreCol0(row, 0u, ACC_TYPE(Mf[r]), o_offset + p.ne1, iq2, N);
-            }
-        }
-
         return;
     }
 

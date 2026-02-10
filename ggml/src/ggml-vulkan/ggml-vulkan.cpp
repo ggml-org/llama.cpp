@@ -8696,17 +8696,28 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // Use a placeholder core count if one isn't available. split_k is a big help for perf.
     const uint32_t shader_core_count = ctx->device->shader_core_count ? ctx->device->shader_core_count : 16;
 
+    auto rows_cols = fa_rows_cols(ctx->device, path, HSK, HSV, !aligned, k->type, rows, small_cache);
+    const uint32_t Br = rows_cols[0];
+    const uint32_t Bc = rows_cols[1];
+
+    GGML_ASSERT(Br == pipeline->wg_denoms[0]);
+    const uint32_t Tr = CEIL_DIV(N, Br);
+
     // Try to use split_k when KV is large enough to be worth the overhead.
-    // Must either be a single batch or be using gqa, we can't mix the two.
-    if (workgroups_x <= pipeline->wg_denoms[0] && (workgroups_x == 1 || gqa_ratio > 1)) {
-        // Try to run two workgroups per SM.
+    if (gqa_ratio > 1 && workgroups_x <= Br) {
         split_k = shader_core_count * 2 / (workgroups_x * workgroups_y * workgroups_z);
-        if (split_k > 1) {
-            // Try to evenly split KV into split_k chunks, but it needs to be a multiple
-            // of "align", so recompute split_k based on that.
-            split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), alignment);
-            split_k = CEIL_DIV(KV, split_kv);
+    } else if (gqa_ratio <= 1) {
+        uint32_t total_wgs_no_split = Tr * workgroups_y * workgroups_z;
+        if (total_wgs_no_split < shader_core_count * 2) {
+            split_k = shader_core_count * 2 / total_wgs_no_split;
         }
+    }
+
+    if (split_k > 1) {
+        // Try to evenly split KV into split_k chunks, but it needs to be a multiple
+        // of "align", so recompute split_k based on that.
+        split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), alignment);
+        split_k = CEIL_DIV(KV, split_kv);
     }
 
     // Reserve space for split_k temporaries. For each split x batch, we need to store the O matrix (D x ne1)
@@ -8721,10 +8732,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         ctx->prealloc_size_split_k = split_k_size;
         ggml_vk_preallocate_buffers(ctx, subctx);
     }
-
-    auto rows_cols = fa_rows_cols(path, HSK, HSV, !aligned, k->type, rows, small_cache);
-    const uint32_t Br = rows_cols[0];
-    const uint32_t Bc = rows_cols[1];
 
     const uint32_t mask_opt_num_dwords = CEIL_DIV(nem0, 16 * Bc);
     const uint64_t mask_opt_size = sizeof(uint32_t) * mask_opt_num_dwords * CEIL_DIV(nem1, Br) * nem2 * nem3;
@@ -8805,15 +8812,21 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         if (ctx->prealloc_split_k_need_sync) {
             ggml_vk_sync_buffers(ctx, subctx);
         }
-        workgroups_x *= pipeline->wg_denoms[0];
+
+        // We reuse workgroups_x to mean the number of splits, so we need to
+        // cancel out the divide by wg_denoms[0].
+        uint32_t dispatch_x;
+        if (gqa_ratio > 1) {
+            workgroups_x *= pipeline->wg_denoms[0];
+            dispatch_x = split_k * workgroups_x;
+        } else {
+            dispatch_x = Tr * split_k * pipeline->wg_denoms[0];
+        }
+
         vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
                                     {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, mask_opt_buf},
-                                    // We only use split_k when group query attention is enabled, which means
-                                    // there's no more than one tile of rows (i.e. workgroups_x would have been
-                                    // one). We reuse workgroups_x to mean the number of splits, so we need to
-                                    // cancel out the divide by wg_denoms[0].
-                                    pc, { split_k * workgroups_x, workgroups_y, workgroups_z });
+                                    pc, { dispatch_x, workgroups_y, workgroups_z });
 
         ggml_vk_sync_buffers(ctx, subctx);
         const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3, split_k, (sinks != nullptr) };
