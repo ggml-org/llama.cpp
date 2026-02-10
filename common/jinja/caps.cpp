@@ -111,7 +111,7 @@ caps caps_get(jinja::program & prog) {
             // tools
             return json{nullptr};
         },
-        [&](bool success, value & messages, value &) {
+        [&](bool success, value & messages, value &, const std::string &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (has_op(content, "selectattr") || has_op(content, "array_access")) {
