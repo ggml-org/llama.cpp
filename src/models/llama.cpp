@@ -43,27 +43,78 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
             ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
             // compute Q and K and RoPE them
-            ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-            cb(Qcur, "Qcur", il);
-            if (model.layers[il].bq) {
-                Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+            ggml_tensor * Qcur;
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
+
+#if defined(GGML_USE_HIP)
+            if (model.layers[il].wqkv) {
+                // fused QKV path: single mul_mat + view_3d split
+                ggml_tensor * qkv_cur = ggml_mul_mat(ctx0, model.layers[il].wqkv, cur);
+                cb(qkv_cur, "qkv_cur", il);
+
+                const int64_t n_embd_q   = model.layers[il].wq ? model.layers[il].wq->ne[1] : (n_embd_head * n_head);
+                const int64_t n_embd_kgqa = hparams.n_embd_k_gqa(il);
+
+                Qcur = ggml_view_3d(ctx0, qkv_cur, n_embd_head, n_head,    n_tokens,
+                    n_embd_head * sizeof(float), qkv_cur->nb[1],
+                    0);
+                Kcur = ggml_view_3d(ctx0, qkv_cur, n_embd_head, n_head_kv, n_tokens,
+                    n_embd_head * sizeof(float), qkv_cur->nb[1],
+                    n_embd_q * sizeof(float));
+                Vcur = ggml_view_3d(ctx0, qkv_cur, n_embd_head, n_head_kv, n_tokens,
+                    n_embd_head * sizeof(float), qkv_cur->nb[1],
+                    (n_embd_q + n_embd_kgqa) * sizeof(float));
+
                 cb(Qcur, "Qcur", il);
-            }
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-            cb(Kcur, "Kcur", il);
-            if (model.layers[il].bk) {
-                Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                 cb(Kcur, "Kcur", il);
-            }
-            ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-            cb(Vcur, "Vcur", il);
-            if (model.layers[il].bv) {
-                Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
                 cb(Vcur, "Vcur", il);
+
+                // apply biases if present
+                if (model.layers[il].bq) {
+                    Qcur = ggml_reshape_2d(ctx0, Qcur, n_embd_q, n_tokens);
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                    cb(Qcur, "Qcur", il);
+                }
+                if (model.layers[il].bk) {
+                    Kcur = ggml_reshape_2d(ctx0, Kcur, n_embd_kgqa, n_tokens);
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                    cb(Kcur, "Kcur", il);
+                }
+                if (model.layers[il].bv) {
+                    Vcur = ggml_reshape_2d(ctx0, Vcur, n_embd_kgqa, n_tokens);
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                    cb(Vcur, "Vcur", il);
+                }
+            } else
+#endif // GGML_USE_HIP
+            {
+                // original separate Q/K/V path
+                Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
+                Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
+                Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
             }
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, rope_factors,
