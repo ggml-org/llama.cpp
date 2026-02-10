@@ -8544,8 +8544,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     // Skip during fit_params measurement probes (no_alloc) to avoid allocating
     // streaming buffers and polluting global state
     if (!ml.no_alloc) {
-    LLAMA_LOG_INFO("%s: [SYCL] Starting early tensor inventory collection (ctx_map size: %zu)\n", __func__, ctx_map.size());
-    {
+        LLAMA_LOG_INFO("%s: [SYCL] Starting early tensor inventory collection (ctx_map size: %zu)\n", __func__, ctx_map.size());
+
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         size_t                             total_size = 0;
 
@@ -8583,7 +8583,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 __func__, sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
         }
     }
-    } // !ml.no_alloc
 #endif
 
     // create the backend buffers
