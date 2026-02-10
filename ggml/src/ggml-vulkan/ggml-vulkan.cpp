@@ -661,6 +661,7 @@ struct vk_device_struct {
     bool use_ahb {};
 
     bool data_graph_support;
+#ifdef VK_ARM_data_graph
     PFN_vkCreateDataGraphPipelinesARM vkCreateDataGraphPipelinesARM;
     PFN_vkCreateDataGraphPipelineSessionARM vkCreateDataGraphPipelineSessionARM;
     PFN_vkGetDataGraphPipelineSessionBindPointRequirementsARM vkGetDataGraphPipelineSessionBindPointRequirementsARM;
@@ -670,6 +671,7 @@ struct vk_device_struct {
     PFN_vkCmdDispatchDataGraphARM vkCmdDispatchDataGraphARM;
     PFN_vkGetDataGraphPipelineAvailablePropertiesARM vkGetDataGraphPipelineAvailablePropertiesARM;
     PFN_vkGetDataGraphPipelinePropertiesARM vkGetDataGraphPipelinePropertiesARM;
+#endif
 
     bool pipeline_executable_properties_support {};
 
@@ -5250,6 +5252,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->device = device->physical_device.createDevice(device_create_info);
 
         if (device->data_graph_support) {
+#ifdef VK_ARM_data_graph
             device->vkCreateDataGraphPipelinesARM = (PFN_vkCreateDataGraphPipelinesARM) device->device.getProcAddr("vkCreateDataGraphPipelinesARM");
             device->vkCreateDataGraphPipelineSessionARM = (PFN_vkCreateDataGraphPipelineSessionARM) device->device.getProcAddr("vkCreateDataGraphPipelineSessionARM");
             device->vkGetDataGraphPipelineSessionBindPointRequirementsARM = (PFN_vkGetDataGraphPipelineSessionBindPointRequirementsARM) device->device.getProcAddr("vkGetDataGraphPipelineSessionBindPointRequirementsARM");
@@ -5259,6 +5262,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device->vkCmdDispatchDataGraphARM = (PFN_vkCmdDispatchDataGraphARM) device->device.getProcAddr("vkCmdDispatchDataGraphARM");
             device->vkGetDataGraphPipelineAvailablePropertiesARM = (PFN_vkGetDataGraphPipelineAvailablePropertiesARM) device->device.getProcAddr("vkGetDataGraphPipelineAvailablePropertiesARM");
             device->vkGetDataGraphPipelinePropertiesARM = (PFN_vkGetDataGraphPipelinePropertiesARM) device->device.getProcAddr("vkGetDataGraphPipelinePropertiesARM");
+#else
+            device->data_graph_support = false;
+#endif
         }
 
         // Queues
