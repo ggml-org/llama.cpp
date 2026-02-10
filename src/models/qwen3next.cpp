@@ -504,6 +504,9 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     cb(Qcur, "Qcur", il);
     cb(gate, "gate", il);
 
+    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+
     gate = ggml_sigmoid(ctx0, gate);
     cb(gate, "gate_sigmoid", il);
 
