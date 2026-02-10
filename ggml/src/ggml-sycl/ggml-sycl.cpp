@@ -2706,7 +2706,7 @@ static const ggml_backend_buffer_type_i ggml_backend_sycl_probe_buffer_type_inte
 };
 
 static ggml_sycl_device_info ggml_sycl_init() {
-    ggml_sycl_device_info info = {};
+    ggml_sycl_device_info info;
     const int raw_device_count = dpct::dev_mgr::instance().device_count();
 
     std::vector<int> device_map;
@@ -2830,11 +2830,40 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
     GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (Level Zero constraint)\n",
                   info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
+
+    // Create CPU SYCL device for data-local compute
+    if (ggml_sycl_cpu_offload_enabled()) {
+        try {
+            auto cpu_q = new sycl::queue{sycl::cpu_selector_v};
+            info.has_cpu_device = true;
+            info.cpu_queue      = cpu_q;
+            info.cpu_context    = cpu_q->get_context();
+            auto cpu_dev = cpu_q->get_device();
+            GGML_LOG_INFO("[SYCL-CPU] CPU offload enabled: %s (%d CUs, %s backend)\n",
+                          cpu_dev.get_info<sycl::info::device::name>().c_str(),
+                          cpu_dev.get_info<sycl::info::device::max_compute_units>(),
+                          cpu_q->get_backend() == sycl::backend::opencl ? "OpenCL" : "other");
+        } catch (sycl::exception & e) {
+            GGML_LOG_WARN("[SYCL-CPU] CPU offload requested but no CPU device available: %s\n", e.what());
+            info.has_cpu_device = false;
+            info.cpu_queue      = nullptr;
+        }
+    }
+
     return info;
 
 }
 size_t ggml_sycl_get_host_max_alloc_size() {
     return ggml_sycl_info().host_max_alloc_size;
+}
+
+bool ggml_sycl_cpu_offload_available() {
+    return ggml_sycl_info().has_cpu_device;
+}
+
+sycl::queue * ggml_sycl_get_cpu_queue() {
+    const auto & info = ggml_sycl_info();
+    return info.has_cpu_device ? info.cpu_queue : nullptr;
 }
 
 const ggml_sycl_device_info & ggml_sycl_info() {

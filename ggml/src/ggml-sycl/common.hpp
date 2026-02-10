@@ -549,7 +549,7 @@ struct sycl_device_info {
 };
 
 struct ggml_sycl_device_info {
-    int device_count;
+    int device_count = 0;
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
 
@@ -559,11 +559,30 @@ struct ggml_sycl_device_info {
 
     // Host pinned memory limit (probed at init, driver has per-allocation limit)
     size_t host_max_alloc_size = 0;
+
+    // CPU device for data-local compute (host-tier weight layers)
+    bool           has_cpu_device = false;
+    sycl::queue *  cpu_queue      = nullptr;  // OpenCL CPU queue (owned, allocated with new)
+    sycl::context  cpu_context;               // CPU context (for oneDNN engine creation)
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
 size_t                        ggml_sycl_get_safe_max_alloc_size(int device);
 size_t                        ggml_sycl_get_host_max_alloc_size();
+
+// CPU offload: route host-resident tensor compute to a CPU SYCL device.
+// Off by default; set GGML_SYCL_CPU_OFFLOAD=1 to enable.
+inline bool ggml_sycl_cpu_offload_enabled() {
+    static bool enabled = [] {
+        const char * env = std::getenv("GGML_SYCL_CPU_OFFLOAD");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    return enabled;
+}
+
+// CPU offload: query whether CPU SYCL device is available for data-local compute
+bool          ggml_sycl_cpu_offload_available();
+sycl::queue * ggml_sycl_get_cpu_queue();
 
 struct layout_policy {
     static layout_mode get_optimal(ggml_type qtype, tensor_usage usage, int device_id = -1) {
