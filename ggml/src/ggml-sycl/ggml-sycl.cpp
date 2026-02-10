@@ -2235,51 +2235,64 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
 // Called when runtime reservations (KV cache, compute buffers) change the available VRAM.
 // This ensures the model placement decision reflects actual available memory.
 void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
-    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
-    if (g_tensor_inventory_total_size == 0) {
-        // No inventory set yet, nothing to recalculate
-        return;
+    // Determine placement change under the inventory mutex, then release it
+    // BEFORE calling layer streaming init.  The streaming init chain calls
+    // unified_cache_add_runtime_bytes → update_reserved_bytes → recalc,
+    // which would deadlock if g_tensor_inventory_mutex were still held.
+    bool   need_streaming_init = false;
+    int    stream_device       = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+        if (g_tensor_inventory_total_size == 0) {
+            return;
+        }
+        const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
+        const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
+
+        if (!old_exceeds && new_exceeds) {
+            GGML_LOG_INFO("[SYCL-BUDGET] Recalc: model now exceeds effective budget "
+                          "(model=%.1f MB, effective_budget=%.1f MB) — enabling streaming gates\n",
+                          g_tensor_inventory_total_size / (1024.0 * 1024.0),
+                          effective_budget / (1024.0 * 1024.0));
+        }
+
+        if (old_exceeds != new_exceeds) {
+            g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
+            GGML_LOG_INFO("[SYCL-BUDGET] Recalculated g_model_exceeds_vram: %s -> %s "
+                          "(model=%.1f MB, effective_budget=%.1f MB)\n",
+                          old_exceeds ? "true" : "false",
+                          new_exceeds ? "true" : "false",
+                          g_tensor_inventory_total_size / (1024.0 * 1024.0),
+                          effective_budget / (1024.0 * 1024.0));
+
+            // Check if layer streaming init is needed — actual init deferred
+            // until after mutex release to avoid recursive deadlock.
+            const bool cpu_offload_avail = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
+            if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty() && !cpu_offload_avail) {
+                stream_device       = g_tensor_inventory_device;
+                need_streaming_init = true;
+            }
+        }
     }
-    const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
-    const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
 
-    // Allow false→true transitions when effective budget has been reduced
-    // (e.g., by GGML_SYCL_VRAM_BUDGET_PCT or runtime reservations).
-    // Previously this was blocked, but it prevented streaming activation when
-    // the cache is actively evicting weights to host.
-    if (!old_exceeds && new_exceeds) {
-        GGML_LOG_INFO("[SYCL-BUDGET] Recalc: model now exceeds effective budget "
-                      "(model=%.1f MB, effective_budget=%.1f MB) — enabling streaming gates\n",
-                      g_tensor_inventory_total_size / (1024.0 * 1024.0),
-                      effective_budget / (1024.0 * 1024.0));
-    }
-
-    if (old_exceeds != new_exceeds) {
-        g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
-        GGML_LOG_INFO("[SYCL-BUDGET] Recalculated g_model_exceeds_vram: %s -> %s "
-                      "(model=%.1f MB, effective_budget=%.1f MB)\n",
-                      old_exceeds ? "true" : "false",
-                      new_exceeds ? "true" : "false",
-                      g_tensor_inventory_total_size / (1024.0 * 1024.0),
-                      effective_budget / (1024.0 * 1024.0));
-
-        // Initialize layer streaming when transitioning to model_exceeds_vram
-        // Skip when CPU offload is available — CPU dispatch reads host weights directly
-        const bool cpu_offload_avail = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
-        if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty() && !cpu_offload_avail) {
-            int device = g_tensor_inventory_device;
-            auto & mgr = ggml_sycl::get_layer_stream_manager(device);
-            if (!mgr.is_active()) {
+    // g_tensor_inventory_mutex released — safe to call streaming init which
+    // triggers unified_cache_add_runtime_bytes → update_reserved_bytes → recalc
+    if (need_streaming_init) {
+        auto & mgr = ggml_sycl::get_layer_stream_manager(stream_device);
+        if (!mgr.is_active()) {
+            {
+                std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
                 mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
-                sycl::queue & q = ggml_sycl_get_device(device).default_queue();
-                if (mgr.allocate_buffers(q)) {
-                    ggml_sycl::unified_cache_add_runtime_bytes(device, mgr.allocated_bytes());
-                    GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers (%.1f MB budgeted)\n",
-                                  mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0),
-                                  mgr.allocated_bytes() / (1024.0 * 1024.0));
-                } else {
-                    GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
-                }
+            }
+            sycl::queue & q = ggml_sycl_get_device(stream_device).default_queue();
+            if (mgr.allocate_buffers(q)) {
+                ggml_sycl::unified_cache_add_runtime_bytes(stream_device, mgr.allocated_bytes());
+                GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers (%.1f MB budgeted)\n",
+                              mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0),
+                              mgr.allocated_bytes() / (1024.0 * 1024.0));
+            } else {
+                GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
             }
         }
     }
