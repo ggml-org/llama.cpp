@@ -23294,6 +23294,10 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
             if (!g_layer_classified[layer_id]) {
                 bool on_cpu = false;
 
+                // Strategy: query the unified cache for weight location.
+                // If found with location != DEVICE → host-resident → CPU.
+                // If NOT found (evicted by LRU during layout finalization) AND
+                // the model exceeds VRAM → weight only exists on host → CPU.
                 auto * cache = ggml_sycl::unified_cache_enabled()
                                    ? ggml_sycl::get_unified_cache_for_device(ctx.device)
                                    : nullptr;
@@ -23301,17 +23305,23 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
                     ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
                     if (key.valid) {
                         const layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_AOS };
+                        bool found_in_cache = false;
                         for (layout_mode layout : layouts) {
                             ggml_sycl::cache_ptr_view view = cache->get_view(key, layout);
                             if (view.ptr) {
                                 on_cpu = (view.location != ggml_sycl::cache_location::DEVICE);
+                                found_in_cache = true;
                                 break;
                             }
+                        }
+                        if (!found_in_cache && g_model_exceeds_vram.load(std::memory_order_relaxed)) {
+                            // Weight evicted from cache — only exists on host (mmap/pinned)
+                            on_cpu = true;
                         }
                     }
                 }
 
-                // Fallback: if not in cache, check if weight buffer is host-resident
+                // Fallback: check if weight buffer itself is host-resident
                 if (!on_cpu && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
                     on_cpu = true;
                 }
@@ -23388,9 +23398,13 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             }
         }
     }
-    // Data-local compute: dispatch to CPU when weight tensor is host-resident
+    // Data-local compute: dispatch to CPU when weight tensor is host-resident.
+    // If CPU path doesn't support this op, fall through to GPU dispatch.
     if (should_dispatch_to_cpu(ctx, dst)) {
-        return ggml_sycl_compute_forward_cpu(ctx, dst);
+        if (ggml_sycl_compute_forward_cpu(ctx, dst)) {
+            return true;
+        }
+        // Unsupported op (RESHAPE, PERMUTE, ROPE, etc.) — GPU handles it
     }
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -24627,6 +24641,17 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
         fprintf(stderr, "[RANK %d] GRAPH_COMPUTE_IMPL: after set_main_device\n", g_sycl_tp_config.mpi_rank);
     }
+    // Eagerly initialize layer device map for CPU offload so that the graph
+    // gate in graph_compute() can detect CPU layers on subsequent calls.
+    // Must also size g_layer_classified to match g_layer_on_cpu.
+    if (ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device &&
+        !g_layer_map_initialized.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(g_layer_map_mutex);
+        if (!g_layer_map_initialized.load(std::memory_order_relaxed)) {
+            build_layer_device_map(sycl_ctx->device);
+            g_layer_classified.assign(g_layer_on_cpu.size(), false);
+        }
+    }
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
     if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
         ggml_sycl_tp_new_pass();
@@ -24670,6 +24695,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             fflush(stderr);
         }
     }
+    // Data-local CPU offload: track device transitions for boundary sync
+    const bool cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
+    bool prev_on_cpu = false;
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
         ggml_tensor * node = cgraph->nodes[i];
@@ -24987,6 +25016,26 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 #endif
+        // Data-local compute: boundary sync at GPU↔CPU layer transitions.
+        // When switching from GPU to CPU layers, drain the GPU queue so that
+        // activation data in VRAM is ready for staging to host memory.
+        if (cpu_offload_active) {
+            bool node_on_cpu = should_dispatch_to_cpu(*sycl_ctx, node);
+            if (node_on_cpu != prev_on_cpu) {
+                if (node_on_cpu) {
+                    // GPU→CPU: ensure all queued GPU work is complete
+                    sycl_ctx->stream()->wait();
+                    GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU boundary sync at node %d (%s)\n",
+                                    i, node->name ? node->name : "(null)");
+                } else {
+                    // CPU→GPU: CPU ops are synchronous and staging flush already
+                    // copied results back to device, so no explicit wait needed.
+                    GGML_SYCL_DEBUG("[CPU-OFFLOAD] CPU→GPU transition at node %d (%s)\n",
+                                    i, node->name ? node->name : "(null)");
+                }
+            }
+            prev_on_cpu = node_on_cpu;
+        }
         if (g_ggml_sycl_graph_recording) {
             g_sycl_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
         }
@@ -30393,6 +30442,20 @@ normal_dispatch:
         compute_impl();
         record_completion(false);
         return GGML_STATUS_SUCCESS;
+    }
+
+    // Disable graph replay when data-local CPU offload is active.
+    // Graph replay records GPU commands only — CPU inline ops can't be replayed.
+    if (ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device) {
+        bool has_cpu_layers = g_layer_map_initialized.load(std::memory_order_acquire) &&
+                              std::any_of(g_layer_on_cpu.begin(), g_layer_on_cpu.end(),
+                                          [](bool v) { return v; });
+        if (has_cpu_layers) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: data-local CPU offload active\n");
+            compute_impl();
+            record_completion(false);
+            return GGML_STATUS_SUCCESS;
+        }
     }
 
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
