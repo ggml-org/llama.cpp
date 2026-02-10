@@ -12,12 +12,13 @@
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
+	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
-	import { MessageRole, KeyboardKey } from '$lib/enums';
+	import { MessageRole, KeyboardKey, ChatMessageStatsView } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -99,6 +100,62 @@
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let showRawOutput = $state(false);
+	let activeStatsView = $state<ChatMessageStatsView>(ChatMessageStatsView.GENERATION);
+	let statsContainerEl: HTMLDivElement | undefined = $state();
+
+	function getScrollParent(el: HTMLElement): HTMLElement | null {
+		let parent = el.parentElement;
+		while (parent) {
+			const style = getComputedStyle(parent);
+			if (/(auto|scroll)/.test(style.overflowY)) {
+				return parent;
+			}
+			parent = parent.parentElement;
+		}
+		return null;
+	}
+
+	async function handleStatsViewChange(view: ChatMessageStatsView) {
+		const el = statsContainerEl;
+		if (!el) {
+			activeStatsView = view;
+
+			return;
+		}
+
+		const scrollParent = getScrollParent(el);
+		if (!scrollParent) {
+			activeStatsView = view;
+
+			return;
+		}
+
+		const yBefore = el.getBoundingClientRect().top;
+
+		activeStatsView = view;
+
+		await tick();
+
+		const delta = el.getBoundingClientRect().top - yBefore;
+		if (delta !== 0) {
+			scrollParent.scrollTop += delta;
+		}
+
+		// Correct any drift after browser paint
+		requestAnimationFrame(() => {
+			const drift = el.getBoundingClientRect().top - yBefore;
+
+			if (Math.abs(drift) > 1) {
+				scrollParent.scrollTop += drift;
+			}
+		});
+	}
+
+	let highlightAgenticTurns = $derived(
+		hasAgenticMarkers &&
+			(currentConfig.alwaysShowAgenticTurns ||
+				activeStatsView === ChatMessageStatsView.SUMMARY)
+	);
 
 	let displayedModel = $derived(message.model ?? null);
 
@@ -205,6 +262,7 @@
 			<ChatMessageAgenticContent
 				content={messageContent || ''}
 				isStreaming={isChatStreaming()}
+				highlightTurns={highlightAgenticTurns}
 				{message}
 			/>
 		{:else}
@@ -230,7 +288,7 @@
 
 	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel}
-			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+			<div bind:this={statsContainerEl} class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelector
 						currentModel={displayedModel}
@@ -251,12 +309,14 @@
 				{/if}
 
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+					{@const agentic = message.timings.agentic}
 					<ChatMessageStatistics
-						promptTokens={message.timings.prompt_n}
-						promptMs={message.timings.prompt_ms}
-						predictedTokens={message.timings.predicted_n}
-						predictedMs={message.timings.predicted_ms}
-						agenticTimings={message.timings.agentic}
+						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
+						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
+						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
+						predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
+						agenticTimings={agentic}
+						onActiveViewChange={handleStatsViewChange}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
