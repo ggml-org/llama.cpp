@@ -655,11 +655,6 @@ ggml_tensor * clip_graph::build_rope_2d(
     const int64_t n_head = cur->ne[1];
     const int64_t n_pos  = cur->ne[2];
 
-    // Ensure input is contiguous (needed when using merged QKV with ggml_view)
-    if (!ggml_is_contiguous(cur)) {
-        cur = ggml_cont(ctx0, cur);
-    }
-
     // for example, if we have cur tensor of shape (n_dim=8, n_head, n_pos)
     // we will have a list of 4 inv_freq: 1e-0, 1e-1, 1e-2, 1e-3
     // first half of cur will use 1e-0, 1e-2 (even)
@@ -677,8 +672,8 @@ ggml_tensor * clip_graph::build_rope_2d(
     {
         first = ggml_view_3d(ctx0, cur,
             n_dim/2, n_head, n_pos,
-            ggml_row_size(cur->type, n_dim),
-            ggml_row_size(cur->type, n_dim*n_head),
+            cur->nb[1],
+            cur->nb[2],
             0);
         first = ggml_rope_ext(
             ctx0,
@@ -696,8 +691,8 @@ ggml_tensor * clip_graph::build_rope_2d(
     {
         second = ggml_view_3d(ctx0, cur,
             n_dim/2, n_head, n_pos,
-            ggml_row_size(cur->type, n_dim),
-            ggml_row_size(cur->type, n_dim*n_head),
+            cur->nb[1],
+            cur->nb[2],
             n_dim/2 * ggml_element_size(cur));
         second = ggml_rope_ext(
             ctx0,
