@@ -528,11 +528,11 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_binary_shader(
 
     defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
     ggml_webgpu_processed_shader result;
-    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
-    result.variant                                   = variant;
-    ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
-    decisions->wg_size                               = context.max_wg_size;
-    result.decisions                                 = decisions;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
     return result;
 }
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP

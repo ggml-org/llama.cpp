@@ -1444,8 +1444,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
         ctx->binary_pipelines.emplace(pipeline_key, pipeline);
     }
 
-    ggml_webgpu_generic_shader_decisions decisions =
-        *static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context);
+    auto * decisions = static_cast<ggml_webgpu_argsort_shader_decisions *>(pipeline.context.get());
 
     uint32_t ne = (uint32_t) ggml_nelements(dst);
 
@@ -1490,7 +1489,7 @@ static webgpu_command ggml_webgpu_binary_op(webgpu_context & ctx,
                             .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
     }
 
-    uint32_t wg_x = CEIL_DIV(ne, decisions.wg_size);
+    uint32_t wg_x = CEIL_DIV(ne, decisions->wg_size);
     return ggml_backend_webgpu_build(ctx->global_ctx, ctx->param_buf_pool, pipeline, params, entries, wg_x);
 }
 
