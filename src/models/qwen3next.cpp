@@ -221,7 +221,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     attn                     = ggml_add(ctx0, attn, identity);
     cb(attn, "attn_solved", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
-    v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)), attn);
+    v = ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)));
 
     ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
     ggml_tensor * gexp       = ggml_exp(ctx0, g_cumsum_t);
@@ -297,13 +297,12 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
         cb(attn_chunk, "attn_chunk", il);
 
         // v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
-        ggml_tensor * v_prime = ggml_mul_mat(ctx0, state, k_cumdecay_chunk);
+        ggml_tensor * v_prime = ggml_mul_mat(ctx0, k_cumdecay_chunk, state);
         cb(v_prime, "v_prime_chunk", il); // shape: (S_v, 1, H_v * n_seqs)
 
         // v_new = v_i - v_prime
-        ggml_tensor * v_new = ggml_sub(ctx0, ggml_repeat(ctx0, v_chunk, v_prime), v_prime);
-        ggml_tensor * v_new_t = ggml_cont(ctx0, ggml_transpose(ctx0, v_new));
-        cb(v_new, "v_new_chunk", il);
+        ggml_tensor * v_new_t = ggml_sub(ctx0, v_chunk, v_prime);
+        cb(v_new_t, "v_new_chunk_t", il);
 
         // attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
         ggml_tensor * q_g_exp    = ggml_mul(ctx0, gexp_chunk, q_chunk);
