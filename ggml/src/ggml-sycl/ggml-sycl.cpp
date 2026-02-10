@@ -2145,9 +2145,12 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Initialize double-buffered layer streaming when:
     // 1. Model exceeds effective VRAM budget (auto-activation)
     // 2. User forces streaming via GGML_SYCL_FORCE_STREAMING=1 (testing/override)
+    // Skip when CPU offload is available — CPU dispatch reads host weights directly,
+    // so layer streaming (host→device DMA) is unnecessary and conflicts with CPU dispatch.
     const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
     const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
-    if (model_exceeds_vram || streaming_forced) {
+    const bool cpu_offload_available = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
+    if ((model_exceeds_vram || streaming_forced) && !cpu_offload_available) {
         auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
         mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
         sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
@@ -2261,7 +2264,9 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
                       effective_budget / (1024.0 * 1024.0));
 
         // Initialize layer streaming when transitioning to model_exceeds_vram
-        if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty()) {
+        // Skip when CPU offload is available — CPU dispatch reads host weights directly
+        const bool cpu_offload_avail = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
+        if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty() && !cpu_offload_avail) {
             int device = g_tensor_inventory_device;
             auto & mgr = ggml_sycl::get_layer_stream_manager(device);
             if (!mgr.is_active()) {

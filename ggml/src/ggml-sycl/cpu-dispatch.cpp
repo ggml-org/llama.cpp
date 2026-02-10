@@ -81,17 +81,18 @@ static void * staging_ensure(int slot, size_t nbytes, sycl::queue * gpu_q) {
 // If tensor is in host-accessible memory, returns original pointer.
 // If tensor is in device memory, copies to staging slot and returns host ptr.
 static void * get_host_ptr(const ggml_tensor * t, int device, int slot, sycl::queue * gpu_q) {
+    // For host-accessible buffers (weight mmap, host-pinned), return tensor->data directly.
+    // DO NOT use ggml_sycl_get_data_ptr() for these — it returns the cached DEVICE copy
+    // from extra->data_device[device] (unified cache), which is not host-accessible.
+    if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
+        return t->data;
+    }
+
+    // Device-resident buffer (compute buffer for activations) → stage to host
     void * ptr = ggml_sycl_get_data_ptr(t, device);
     if (!ptr) {
         return nullptr;
     }
-
-    // Host-accessible buffer (host pinned, mmap, or no buffer) → use directly
-    if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return ptr;
-    }
-
-    // Device-resident → copy to host staging
     size_t nbytes = ggml_nbytes(t);
     void * host = staging_ensure(slot, nbytes, gpu_q);
     if (!host) {
@@ -120,12 +121,9 @@ static void flush_output(ggml_tensor * t, int device, int slot, sycl::queue * gp
 // If device-resident, ensures staging buffer is allocated but doesn't copy
 // (the kernel will write fresh data).
 static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu_q) {
-    void * ptr = ggml_sycl_get_data_ptr(t, device);
-    if (!ptr) {
-        return nullptr;
-    }
+    // Host-accessible buffer → use tensor->data directly (same logic as get_host_ptr)
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return ptr;
+        return t->data;
     }
     // Device-resident: allocate staging but don't copy (will be written by kernel)
     size_t nbytes = ggml_nbytes(t);
