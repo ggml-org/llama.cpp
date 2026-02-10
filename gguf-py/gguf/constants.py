@@ -142,6 +142,7 @@ class Keys:
         EMBEDDING_SCALE                   = "{arch}.embedding_scale"
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
+        FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
         ACTIVATION_SPARSITY_SCALE         = "{arch}.activation_sparsity_scale"
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"

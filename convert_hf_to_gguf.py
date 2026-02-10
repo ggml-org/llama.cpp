@@ -4298,6 +4298,7 @@ class Qwen3NextModel(Qwen2MoeModel):
         self.gguf_writer.add_ssm_group_count(self.hparams["linear_num_key_heads"])
         self.gguf_writer.add_ssm_time_step_rank(self.hparams["linear_num_value_heads"])
         self.gguf_writer.add_ssm_inner_size(self.hparams["linear_value_head_dim"] * self.hparams["linear_num_value_heads"])
+        self.gguf_writer.add_full_attention_interval(self.hparams.get("full_attention_interval", 4))
         if (rope_dim := self.hparams.get("head_dim")) is None:
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.25)))
