@@ -4394,6 +4394,12 @@ static unified_cache * create_cache_for_device(int device_id) {
         }
 
         int pct = g_unified_cache_budget_pct;
+        // Allow env var override for testing host fallback paths
+        const char * env_pct = getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+        if (env_pct) {
+            pct = std::atoi(env_pct);
+            GGML_LOG_INFO("[UNIFIED-CACHE] Budget override via GGML_SYCL_VRAM_BUDGET_PCT=%d%%\n", pct);
+        }
         if (pct < 1) {
             pct = 1;
         } else if (pct > 100) {
