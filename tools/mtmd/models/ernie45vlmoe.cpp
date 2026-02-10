@@ -152,9 +152,9 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     ggml_tensor * spatial_out = embeddings;
 
     // First linear
-    ggml_tensor * mm_spatial_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_spatial_0_w));
-    spatial_out = ggml_mul_mat(ctx0, mm_spatial_0_w, spatial_out);
-    spatial_out = ggml_add(ctx0, spatial_out, model.mm_spatial_0_b);
+    ggml_tensor * spatial_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_0_w));
+    spatial_out = ggml_mul_mat(ctx0, spatial_0_w, spatial_out);
+    spatial_out = ggml_add(ctx0, spatial_out, model.mm_0_b);
     cb(spatial_out, "spatial_linear_0", -1);
 
     // GELU
@@ -162,13 +162,13 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     cb(spatial_out, "spatial_gelu", -1);
 
     // Second linear
-    ggml_tensor * mm_spatial_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_spatial_2_w));
-    spatial_out = ggml_mul_mat(ctx0, mm_spatial_2_w, spatial_out);
-    spatial_out = ggml_add(ctx0, spatial_out, model.mm_spatial_2_b);
+    ggml_tensor * spatial_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_2_w));
+    spatial_out = ggml_mul_mat(ctx0, spatial_2_w, spatial_out);
+    spatial_out = ggml_add(ctx0, spatial_out, model.mm_2_b);
     cb(spatial_out, "spatial_linear_2", -1);
 
     // LayerNorm
-    spatial_out = build_norm(spatial_out, model.mm_spatial_norm_w, model.mm_spatial_norm_b, NORM_TYPE_NORMAL, eps, -1);
+    spatial_out = build_norm(spatial_out, model.mm_post_norm_w, model.mm_post_norm_b, NORM_TYPE_NORMAL, eps, -1);
     cb(spatial_out, "spatial_norm", -1);
 
     ggml_tensor * resampler_out = spatial_out;
@@ -183,9 +183,9 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     // Weights were transposed (.t()) during GGUF conversion, undo with ggml_transpose
 
     // First temporal linear
-    ggml_tensor * mm_temp_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_temp_0_w));
-    resampler_out = ggml_mul_mat(ctx0, mm_temp_0_w, resampler_out);
-    resampler_out = ggml_add(ctx0, resampler_out, model.mm_temp_0_b);
+    ggml_tensor * temp_0_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_1_w));
+    resampler_out = ggml_mul_mat(ctx0, temp_0_w, resampler_out);
+    resampler_out = ggml_add(ctx0, resampler_out, model.mm_1_b);
     cb(resampler_out, "temporal_linear_0", -1);
 
     // GELU
@@ -193,23 +193,23 @@ ggml_cgraph * clip_graph_ernie45vlmoe::build() {
     cb(resampler_out, "temporal_gelu", -1);
 
     // Second temporal linear
-    ggml_tensor * mm_temp_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_temp_2_w));
-    resampler_out = ggml_mul_mat(ctx0, mm_temp_2_w, resampler_out);
-    resampler_out = ggml_add(ctx0, resampler_out, model.mm_temp_2_b);
+    ggml_tensor * temp_2_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_3_w));
+    resampler_out = ggml_mul_mat(ctx0, temp_2_w, resampler_out);
+    resampler_out = ggml_add(ctx0, resampler_out, model.mm_3_b);
     cb(resampler_out, "temporal_linear_2", -1);
 
     // LayerNorm
-    resampler_out = build_norm(resampler_out, model.mm_temp_norm_w, model.mm_temp_norm_b, NORM_TYPE_NORMAL, eps, -1);
+    resampler_out = build_norm(resampler_out, model.mm_input_norm_w, model.mm_input_norm_b, NORM_TYPE_NORMAL, eps, -1);
     cb(resampler_out, "temporal_norm", -1);
 
     // Final MLP
-    ggml_tensor * mm_mlp_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_mlp_w));
-    resampler_out = ggml_mul_mat(ctx0, mm_mlp_w, resampler_out);
-    resampler_out = ggml_add(ctx0, resampler_out, model.mm_mlp_b);
+    ggml_tensor * mlp_w = ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_fc_w));
+    resampler_out = ggml_mul_mat(ctx0, mlp_w, resampler_out);
+    resampler_out = ggml_add(ctx0, resampler_out, model.mm_fc_b);
     cb(resampler_out, "mlp", -1);
 
     // RMS norm (final output normalization)
-    resampler_out = build_norm(resampler_out, model.mm_after_norm_w, nullptr, NORM_TYPE_RMS, eps, -1);
+    resampler_out = build_norm(resampler_out, model.mm_norm_mid_w, nullptr, NORM_TYPE_RMS, eps, -1);
     cb(resampler_out, "after_norm", -1);
 
     // Build the graph
