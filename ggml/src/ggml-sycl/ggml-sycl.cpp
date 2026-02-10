@@ -84,6 +84,7 @@
 #include "ggml-sycl/fused-ffn.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
+#include "ggml-sycl/kv-tier-manager.hpp"
 #include "ggml-sycl/layer-prefetch.hpp"
 #include "ggml-sycl/layer-streaming.hpp"
 #include "ggml-sycl/l2-prefetch.hpp"
@@ -6716,16 +6717,10 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
 
     size = std::max(size, size_t(1));
 
-    // Auto-compute hot/cold split from VRAM budget.
-    // The tier manager may not be configured yet (token counts unknown at alloc time),
-    // so we compute the byte split directly from budget info.
+    // Compute available VRAM for KV from unified cache budget.
     auto info = ggml_sycl::unified_cache_get_budget_info(device);
-
-    // Available VRAM = budget - weights - existing runtime allocations
     size_t used = info.weight_bytes + info.runtime_bytes;
     size_t available = (info.budget_bytes > used) ? info.budget_bytes - used : 0;
-
-    // Reserve space for compute scratch (256 MB or 10% of budget, whichever is larger)
     size_t compute_reserve = std::max(size_t(256) << 20, info.budget_bytes / 10);
     size_t kv_vram_cap = (available > compute_reserve) ? available - compute_reserve : 0;
 
@@ -6735,16 +6730,31 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
                    info.runtime_bytes / (1024.0 * 1024.0), kv_vram_cap / (1024.0 * 1024.0),
                    size / (1024.0 * 1024.0));
 
-    // Check env var override: GGML_SYCL_KV_HOT_PCT=N (percentage of KV to keep in VRAM)
+    // Use kv_tier_manager as the authority for the hot/cold split.
+    // At buffer alloc time, per-token byte count is unknown, so we treat bytes
+    // as units: hot_units = kv_vram_cap, total_units = size.
+    // This lets the manager handle env var overrides (GGML_SYCL_KV_HOT_TOKENS)
+    // and enforce the minimum 1024-unit hot window via configure().
+    uint32_t total_units = static_cast<uint32_t>(std::min(size, static_cast<size_t>(UINT32_MAX)));
+    uint32_t hot_units   = static_cast<uint32_t>(std::min(kv_vram_cap, static_cast<size_t>(UINT32_MAX)));
+    hot_units = std::min(hot_units, total_units);
+
+    auto & mgr = ggml_sycl::get_kv_tier_manager(device);
+    mgr.configure(device, hot_units, total_units);
+
     size_t hot_size = 0, cold_size = 0;
+
+    // Check env var override: GGML_SYCL_KV_HOT_PCT=N (percentage of KV to keep in VRAM)
     const char * hot_pct_env = std::getenv("GGML_SYCL_KV_HOT_PCT");
     if (hot_pct_env) {
         int pct = std::atoi(hot_pct_env);
         pct = std::max(0, std::min(100, pct));
-        hot_size = static_cast<size_t>(static_cast<double>(size) * pct / 100.0);
+        hot_size  = static_cast<size_t>(static_cast<double>(size) * pct / 100.0);
+        cold_size = size - hot_size;
     } else {
-        // Default: fill as much as VRAM allows
-        hot_size = std::min(size, kv_vram_cap);
+        // Delegate to manager: uses budget-derived hot window, GGML_SYCL_KV_HOT_TOKENS
+        // env var override, and enforces minimum 1024-unit hot window.
+        mgr.get_region_sizes(size, hot_size, cold_size);
     }
 
     // Align hot_size to 512 bytes (device allocation alignment)
@@ -6844,21 +6854,28 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_tiered_kv_buffer_type(int de
 // === End Tiered KV Buffer Type ===
 
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
-    // Estimate minimum KV cache size for the margin check in should_offload_kv.
-    // At buffer-type query time we don't know the exact size, so use a conservative
-    // 256 MB (enough for ~2048 tokens on a 7B model). This catches edge cases where
-    // weights barely fit but there's no room for KV. For models that clearly exceed
-    // VRAM, model_exceeds_vram already handles it without needing an estimate.
-    static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
+    // Cache the offload decision per device.  This function is called once per KV
+    // layer (e.g. 32 times for Mistral-7B).  Between calls the unified cache loads
+    // weight tensors, shrinking the apparent VRAM margin.  By caching the result of
+    // the *first* call (before weights are loaded) we get the true margin and avoid
+    // false-positive offload triggers on late layers.
+    struct kv_offload_decision {
+        bool decided = false;
+        bool offload = false;
+    };
+    static kv_offload_decision cache[GGML_SYCL_MAX_DEVICES];
 
-    if (ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate)) {
-        static bool logged = false;
-        if (!logged) {
+    if (!cache[device].decided) {
+        static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
+        cache[device].offload = ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate);
+        cache[device].decided = true;
+        if (cache[device].offload) {
             GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory "
                           "(%.1f MB estimate, preserving full context)\n",
                           kv_estimate / (1024.0 * 1024.0));
-            logged = true;
         }
+    }
+    if (cache[device].offload) {
         return ggml_backend_sycl_tiered_kv_buffer_type(device);
     }
 

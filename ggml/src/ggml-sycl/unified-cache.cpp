@@ -4876,7 +4876,7 @@ size_t compute_moe_effective_weight_bytes(size_t total_weight_bytes,
     double active_ratio    = static_cast<double>(n_expert_used) / n_expert;
     double effective_ratio = std::min(1.0, active_ratio * 1.5);
     size_t expert_savings  = static_cast<size_t>(expert_total_bytes * (1.0 - effective_ratio));
-    return total_weight_bytes - expert_savings;
+    return (expert_savings <= total_weight_bytes) ? total_weight_bytes - expert_savings : 0;
 }
 
 unified_budget_info unified_cache_get_budget_info(int device) {

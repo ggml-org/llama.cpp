@@ -20,6 +20,7 @@ message(STATUS "SYCL found")
 
 ggml_add_backend_library(ggml-sycl
                          ggml-sycl.cpp
+                         kv-tier-manager.cpp
                          ../../include/ggml-sycl.h
                         )
 
