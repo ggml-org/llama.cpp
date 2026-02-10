@@ -85,6 +85,7 @@
 #include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/layer-prefetch.hpp"
+#include "ggml-sycl/layer-streaming.hpp"
 #include "ggml-sycl/l2-prefetch.hpp"
 #include "ggml-sycl/persistent-tg-kernel.hpp"
 #include "ggml-sycl/unified-kernel.hpp"
@@ -1995,6 +1996,7 @@ static std::mutex                                  g_tensor_inventory_mutex;
 static std::vector<std::pair<std::string, size_t>> g_tensor_inventory;
 static std::unordered_map<std::string, size_t>     g_tensor_inventory_index;  // name -> index for O(1) lookup
 static size_t                                      g_tensor_inventory_total_size = 0;
+static int                                         g_tensor_inventory_device     = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
 std::atomic<bool>                                  g_model_exceeds_vram{ false };  // True when model > VRAM budget
 
@@ -2044,6 +2046,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     g_tensor_inventory_index.clear();
 
     g_tensor_inventory_total_size = 0;
+    g_tensor_inventory_device     = ctx->device;
     // Store tensor inventory with O(1) lookup index
     g_tensor_inventory.reserve(inventory->count);
     g_tensor_inventory_index.reserve(inventory->count);
@@ -2092,6 +2095,19 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     const bool model_exceeds_vram = g_tensor_inventory_total_size > vram_budget;
     g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
+
+    // Initialize double-buffered layer streaming when model exceeds VRAM
+    if (model_exceeds_vram) {
+        auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
+        mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+        sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
+        if (mgr.allocate_buffers(q)) {
+            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled: %d layers, 2 x %.1f MB buffers\n",
+                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+        } else {
+            GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
+        }
+    }
 
     // Diagnostic logging for VRAM budget calculation debugging
     GGML_LOG_INFO("[SYCL-BUDGET] base_mem=%.1f MB, already_allocated=%.1f MB, headroom=%.1f MB\n",
@@ -2177,6 +2193,22 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
                       new_exceeds ? "true" : "false",
                       g_tensor_inventory_total_size / (1024.0 * 1024.0),
                       effective_budget / (1024.0 * 1024.0));
+
+        // Initialize layer streaming when transitioning to model_exceeds_vram
+        if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty()) {
+            int device = g_tensor_inventory_device;
+            auto & mgr = ggml_sycl::get_layer_stream_manager(device);
+            if (!mgr.is_active()) {
+                mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+                sycl::queue & q = ggml_sycl_get_device(device).default_queue();
+                if (mgr.allocate_buffers(q)) {
+                    GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers\n",
+                                  mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+                } else {
+                    GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
+                }
+            }
+        }
     }
 }
 
@@ -2398,6 +2430,13 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             const bool is_weight = tensor->buffer && ggml_backend_buffer_is_valid(tensor->buffer) &&
                                    ggml_backend_buffer_get_usage(tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 
+            // Register host pointer with layer stream manager for DMA
+            if (is_weight && tensor->name && tensor->data &&
+                g_model_exceeds_vram.load(std::memory_order_acquire)) {
+                ggml_sycl::layer_streaming_register_host_ptr(
+                    device, tensor->name, tensor->data, ggml_nbytes(tensor));
+            }
+
             if (ggml_sycl::unified_cache_enabled() && is_weight) {
                 if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
                     ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
@@ -2410,6 +2449,15 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                             return cached;
                         }
                     }
+                }
+            }
+
+            // Check layer stream manager for host-resident weight
+            if (is_weight && ggml_sycl::layer_streaming_active(device) && tensor->name) {
+                void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+                if (streamed) {
+                    GGML_LOG_DEBUG("get_data_ptr_slow: %s from layer stream buffer\n", tensor->name);
+                    return streamed;
                 }
             }
 
@@ -5074,13 +5122,25 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
             break;
         }
     }
-    if (!had_exception && resolved != GGML_LAYOUT_AOS && result.host_resident) {
-        GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s is not usable; falling back to AoS\n",
-                      (int) resolved, tensor->name);
-        if (cache_key.valid) {
-            ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
+    if (!had_exception && result.host_resident) {
+        // Check layer stream manager for device pointer
+        if (ggml_sycl::layer_streaming_active(device)) {
+            void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+            if (streamed) {
+                GGML_LOG_DEBUG("[LAYER-STREAM] Using streamed ptr for %s (layout=%d)\n",
+                               tensor->name, (int) resolved);
+                return streamed;
+            }
         }
-        return nullptr;
+        // Not in layer buffer — fall back to AOS
+        if (resolved != GGML_LAYOUT_AOS) {
+            GGML_LOG_WARN("[UNIFIED-CACHE] Host-resident layout=%d for %s not streamable, falling back to AoS\n",
+                          (int) resolved, tensor->name);
+            if (cache_key.valid) {
+                ggml_sycl_force_layout_choice(cache_key, device, GGML_LAYOUT_AOS, tensor->name);
+            }
+            return nullptr;
+        }
     }
     if (had_exception || result.status != ggml_sycl::cache_layout_status::READY || result.device_ptr == nullptr) {
         // Log as warning rather than error - caller can fall back to AoS layout
@@ -11939,19 +11999,59 @@ static void ggml_sycl_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor *
 
     ggml_sycl_op_repeat_back(ctx, dst);
 }
+
+// Resolve weight pointer for streaming dispatch.
+// When model exceeds VRAM, checks layer stream manager first,
+// then falls back to tiered cache lookup + on-demand streaming.
+static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int device) {
+    if (!src0 || !src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra) {
+        return;
+    }
+
+    // Fast path: check layer stream manager
+    if (ggml_sycl::layer_streaming_active(device)) {
+        void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
+        if (streamed) {
+            extra->data_device[device] = streamed;
+            return;
+        }
+        // Layer not loaded — ensure it's loaded now
+        int layer_id = ggml_sycl::extract_layer_id(src0->name);
+        if (layer_id >= 0) {
+            sycl::queue & q = ggml_sycl_get_device(device).default_queue();
+            ggml_sycl::layer_streaming_ensure_layer(device, layer_id, q);
+            streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, src0->name);
+            if (streamed) {
+                extra->data_device[device] = streamed;
+                return;
+            }
+        }
+    }
+
+    // Fallback: tiered cache lookup (for non-layer tensors like embedding, output)
+    ggml_sycl::memory_tier tier;
+    bool                   in_inventory = false;
+    void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+    if (!cached_ptr || !in_inventory) {
+        return;
+    }
+
+    if (tier == ggml_sycl::memory_tier::VRAM) {
+        extra->data_device[device] = cached_ptr;
+    }
+    // For non-layer host-resident tensors, the normal pointer resolution
+    // path in get_data_ptr_slow handles the copy via unified cache.
+}
+
 static void ggml_sycl_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     const ggml_tensor *  src0 = dst->src[0];  // Weight tensor
-    // Check for tiered dispatch - only when model exceeds VRAM
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            GGML_LOG_DEBUG("[SYCL] get_rows tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-            // Future: use cached_ptr for tiered path
-        }
-    }
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
     ggml_sycl_op_get_rows(ctx, dst);
 
 }
@@ -15138,17 +15238,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    // Tiered dispatch check for batched matmul - only when model exceeds VRAM
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            GGML_LOG_DEBUG("[SYCL] batched_sycl tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            GGML_LOG_DEBUG("[SYCL] batched_sycl tiered pending: %s\n", src0->name);
-        }
-    }
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
 
     GGML_TENSOR_BINARY_OP_LOCALS
     // TODO: see https://github.com/ggml-org/llama.cpp/pull/13155
@@ -19335,6 +19425,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             && dst->type == GGML_TYPE_F32
             && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1)) {
 
+            // Ensure weight is on device before checking layout
+            ggml_sycl_ensure_weight_on_device(src0, ctx.device);
+
             ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
             const bool has_soa_reorder = extra && extra->optimized_feature.is_reordered()
                                          && ggml_sycl_supports_reorder_mmvq(src0->type);
@@ -19401,10 +19494,20 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         ggml_sycl::layer_prefetch_tracker::is_enabled()) {
         int next_layer_id = -1;
         if (ggml_sycl::get_prefetch_tracker().record_access(src0->name, next_layer_id)) {
-            // Layer transition detected - prefetch opportunity identified
-            // For now, just log the opportunity. Full prefetch requires cache_id lookup.
-            GGML_SYCL_DEBUG("[PREFETCH] Layer transition at %s -> prefetch layer %d\n",
-                            src0->name, next_layer_id);
+            if (ggml_sycl::layer_streaming_active(ctx.device) && next_layer_id >= 0) {
+                // Layer transition — start async DMA of next layer
+                sycl::queue & q = ggml_sycl_get_device(ctx.device).default_queue();
+                ggml_sycl::layer_streaming_prefetch_next(ctx.device, next_layer_id, q);
+                GGML_SYCL_DEBUG("[LAYER-STREAM] Prefetching layer %d (triggered by %s)\n",
+                                next_layer_id, src0->name);
+            }
+        }
+
+        // Ensure current layer is loaded before accessing weights
+        int current_layer = ggml_sycl::extract_layer_id(src0->name);
+        if (current_layer >= 0 && ggml_sycl::layer_streaming_active(ctx.device)) {
+            sycl::queue & q = ggml_sycl_get_device(ctx.device).default_queue();
+            ggml_sycl::layer_streaming_ensure_layer(ctx.device, current_layer, q);
         }
     }
 
@@ -19422,22 +19525,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
         }
     }
 
-    // Check if weight tensor is tracked for tiered memory dispatch.
-    // Only do this when model EXCEEDS VRAM - otherwise weights are already in device memory
-    // via the normal buffer system and this check is wasted overhead.
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            // Future: use cached_ptr for tiered dispatch
-            GGML_LOG_DEBUG("[SYCL] Tiered cache hit for %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            // Tensor tracked but not yet cached - use normal path
-            GGML_LOG_DEBUG("[SYCL] Tiered: tensor %s in inventory, pending cache\n", src0->name);
-        }
-    }
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
     // DEBUG: Check if TP sharded weights have correct dimensions
     if (is_tp_sharded_tensor(src0)) {
         static int tp_mm_dbg = 0;
@@ -20851,17 +20939,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[XMX MoE] %s is not marked as weights, skipping XMX path\n", src0->name);
         return false;
     }
-    // Check tiered dispatch for MoE expert weights - only when model exceeds VRAM
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            GGML_SYCL_DEBUG("[SYCL] moe_xmx tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            GGML_SYCL_DEBUG("[SYCL] moe_xmx tiered pending: %s\n", src0->name);
-        }
-    }
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
     // Select the required layout for XMX sorted path (single optimal layout per kernel)
     ggml_tensor_extra_gpu * src0_extra          = (ggml_tensor_extra_gpu *) src0->extra;
     const bool              host_weights        = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
@@ -21819,17 +21897,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                         src0->name);
         call_count++;
     }
-    // Check for tiered dispatch on expert weights - only when model exceeds VRAM
-    if (src0->name && g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool                   in_inventory = false;
-        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered pending: %s\n", src0->name);
-        }
-    }
+    ggml_sycl_ensure_weight_on_device(src0, ctx.device);
 
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer) && "mul_mat_id does not support split buffers");
     const ggml_tensor * ids = dst->src[2];
