@@ -171,7 +171,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     cb(g, "g_pad", il);
 
     ggml_tensor * v_beta = ggml_mul(ctx0, v, beta);
-    ggml_tensor * k_beta = ggml_mul(ctx0, ggml_repeat_4d(ctx0, beta, k->ne[0], beta->ne[1], beta->ne[2], beta->ne[3]), k);
+    ggml_tensor * k_beta = ggml_mul(ctx0, k, beta);
 
     cb(v_beta, "v_beta", il);
     cb(k_beta, "k_beta", il);
@@ -206,12 +206,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     ggml_tensor * attn    = ggml_neg(ctx0, ggml_mul(ctx0, k_decay, causal_mask));
     cb(attn, "attn_pre_solve", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
-    ggml_tensor * attn_lower = ggml_mul(ctx0, attn, causal_mask);
-    ggml_tensor * lhs        = ggml_sub(ctx0, ggml_repeat(ctx0, identity, attn_lower), attn_lower);
+    ggml_tensor * lhs        = ggml_sub(ctx0, ggml_repeat(ctx0, identity, attn), attn);
 
     ggml_tensor * lin_solve  = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
-    attn                     = ggml_mul(ctx0, lin_solve, causal_mask);
-    attn                     = ggml_add(ctx0, attn, identity);
+    attn                     = ggml_add(ctx0, lin_solve, identity);
     cb(attn, "attn_solved", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
     v = ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)));
@@ -710,6 +708,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
             nb1_qkv,
             nb1_qkv * n_seq_tokens,
             0);
+
     ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv_qkv_mix->type, head_k_dim),
             nb1_qkv,
