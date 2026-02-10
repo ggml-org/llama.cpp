@@ -1284,12 +1284,21 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     // extract sequence embeddings
                     auto & embd_seq_out = embd_seq;
 
+                    const uint32_t n_embd_out = (uint32_t) t_embd->ne[0];
+
                     for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                         const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                         const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                        embd_seq_out[seq_id].resize(n_embd);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                        GGML_ASSERT(seq_idx >= 0);
+
+                        embd_seq_out[seq_id].resize(n_embd_out);
+                        ggml_backend_tensor_get_async(
+                                backend_embd,
+                                t_embd,
+                                embd_seq_out[seq_id].data(),
+                                (size_t) seq_idx * t_embd->nb[1],
+                                (size_t) n_embd_out * sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_RANK:
@@ -1297,14 +1306,21 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     // extract the rerank score - n_cls_out floats per sequence
                     auto & embd_seq_out = embd_seq;
 
-                    const uint32_t n_cls_out = hparams.n_cls_out;
+                    const uint32_t n_cls_out = (uint32_t) t_embd->ne[0];
 
                     for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                         const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                         const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
+                        GGML_ASSERT(seq_idx >= 0);
+
                         embd_seq_out[seq_id].resize(n_cls_out);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
+                        ggml_backend_tensor_get_async(
+                                backend_embd,
+                                t_embd,
+                                embd_seq_out[seq_id].data(),
+                                (size_t) seq_idx * t_embd->nb[1],
+                                (size_t) n_cls_out * sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_UNSPECIFIED:
@@ -1711,12 +1727,21 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         // extract sequence embeddings (cleared before processing each batch)
                         auto & embd_seq_out = embd_seq;
 
+                        const uint32_t n_embd_out = (uint32_t) t_embd->ne[0];
+
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                            embd_seq_out[seq_id].resize(n_embd);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd*seq_idx)*sizeof(float), n_embd*sizeof(float));
+                            GGML_ASSERT(seq_idx >= 0);
+
+                            embd_seq_out[seq_id].resize(n_embd_out);
+                            ggml_backend_tensor_get_async(
+                                    backend_embd,
+                                    t_embd,
+                                    embd_seq_out[seq_id].data(),
+                                    (size_t) seq_idx * t_embd->nb[1],
+                                    (size_t) n_embd_out * sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
@@ -1724,14 +1749,21 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         // extract the rerank score - n_cls_out floats per sequence
                         auto & embd_seq_out = embd_seq;
 
-                        const uint32_t n_cls_out = hparams.n_cls_out;
+                        const uint32_t n_cls_out = (uint32_t) t_embd->ne[0];
 
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
+                            GGML_ASSERT(seq_idx >= 0);
+
                             embd_seq_out[seq_id].resize(n_cls_out);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
+                            ggml_backend_tensor_get_async(
+                                    backend_embd,
+                                    t_embd,
+                                    embd_seq_out[seq_id].data(),
+                                    (size_t) seq_idx * t_embd->nb[1],
+                                    (size_t) n_cls_out * sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_UNSPECIFIED:
@@ -1952,7 +1984,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
 void llama_context::output_reorder() {
     const uint64_t n_vocab = model.vocab.n_tokens();
-    const uint64_t n_embd  = model.hparams.n_embd;
+    const uint64_t n_embd  = model.hparams.get_n_embd_out();
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
@@ -2546,7 +2578,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     {
         LLAMA_LOG_DEBUG("%s: - writing embeddings\n", __func__);
 
-        const uint64_t embd_size = std::min((uint64_t) this->embd_size, (uint64_t) n_outputs * model.hparams.n_embd);
+        const uint64_t embd_size = std::min((uint64_t) this->embd_size, (uint64_t) n_outputs * model.hparams.get_n_embd_out());
 
         io.write(&embd_size, sizeof(embd_size));
 
