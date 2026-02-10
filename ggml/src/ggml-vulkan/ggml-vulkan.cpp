@@ -26,6 +26,10 @@ DispatchLoaderDynamic & ggml_vk_default_dispatcher();
 #include <vulkan/vulkan_android.h>
 #endif
 
+#if defined(__ANDROID__) && defined(GGML_VULKAN_SUPPORT_AHB)
+#include <android/hardware_buffer.h>
+#endif
+
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
@@ -652,9 +656,9 @@ struct vk_device_struct {
 
     bool coopmat2;
 
-    bool ahb_support;
-    bool standard_zero_copy_support;
-    bool use_ahb;
+    bool ahb_support {};
+    bool standard_zero_copy_support {};
+    bool use_ahb {};
 
     bool data_graph_support;
     PFN_vkCreateDataGraphPipelinesARM vkCreateDataGraphPipelinesARM;
