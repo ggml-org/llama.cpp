@@ -269,7 +269,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
-    { PROJECTOR_TYPE_ERNIE45VLMOE, "ernie45vlmoe"},
+    { PROJECTOR_TYPE_ERNIE45VLMOE, "ernie4.5vl_moe"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
