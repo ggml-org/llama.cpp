@@ -72,8 +72,7 @@ export class CompletionService {
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
-			// On the completion endpoint, max_tokens is called n_predict
-			requestBody.n_predict = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
 		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
@@ -83,7 +82,10 @@ export class CompletionService {
 		if (min_p !== undefined) requestBody.min_p = min_p;
 		if (xtc_probability !== undefined) requestBody.xtc_probability = xtc_probability;
 		if (xtc_threshold !== undefined) requestBody.xtc_threshold = xtc_threshold;
-		if (typ_p !== undefined) requestBody.typ_p = typ_p;
+		if (typ_p !== undefined) {
+			// On the completion endpoint, typ_p is called typical_p
+			requestBody.typical_p = typ_p;
+		}
 
 		if (repeat_last_n !== undefined) requestBody.repeat_last_n = repeat_last_n;
 		if (repeat_penalty !== undefined) requestBody.repeat_penalty = repeat_penalty;
