@@ -692,8 +692,7 @@ bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_over
 // Filesystem utils
 //
 
-// Validate if a filename is safe to use
-// To validate a full path, split the path by the OS-specific path separator, and validate each part with this function
+// Validate if a filename or path is safe to use
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
         // Empty filename invalid
@@ -744,6 +743,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     // - UTF-8 replacement character
     // - Byte order mark (BOM)
     // - Illegal characters: / \ : * ? " < > |
+    char32_t prev = 0;
     for (char32_t c : filename_utf32) {
         if (c <= 0x1F // Control characters (C0)
             || c == 0x7F // Control characters (DEL)
@@ -758,25 +758,32 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
             return false;
         }
-        if (!allow_subdirs && (c == '/' || c == '\\')) {
+        if (allow_subdirs) {
+            if ((prev == '.' || prev == ' ') && (c == '/' || c == '\\')) {
+                // Reject any trailing dot or whitespace, these are stripped on Windows
+                // This also matches path elements that equal '..' or '.'
+                return false;
+            }
+            if ((prev == '/' || prev == '\\') && (c == ' ')) {
+                // Reject any leading whitespace, these are stripped on Windows
+                return false;
+            }
+        } else if (c == '/' || c == '\\') {
             // Subdirectories not allowed, reject path separators
             return false;
         }
+        prev = c;
     }
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
     // Unicode and other whitespace is not affected, only 0x20 space
+    // This also matches path elements that equal '..' or '.'
     if (filename.front() == ' ' || filename.back() == ' ' || filename.back() == '.') {
         return false;
     }
 
-    // Reject any ".." (currently stricter than necessary, it should be fine to just check for == ".." instead)
-    if (filename.find("..") != std::string::npos) {
-        return false;
-    }
-
-    // Reject "."
-    if (filename == ".") {
+    // Reject any leading path separators
+    if (filename.front() == '/' || filename.front() == '\\') {
         return false;
     }
 
