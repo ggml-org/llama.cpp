@@ -235,7 +235,7 @@ static void llama_params_fit_impl(
                 "%s: cannot fulfill margin of %" PRId64 " MiB on all devices, need to use %" PRId64 " MiB less in total\n",
                 __func__, margin/MiB, -global_surplus/MiB);
             if (cparams->n_ctx == 0) {
-                if (hp_nct > n_ctx_min) {
+                if (hp_nct > n_ctx_min && sum_projected_ctx > 0) {
                     const int64_t bytes_per_ctx = sum_projected_ctx / hp_nct;
 
                     int64_t memory_reduction = -global_surplus;

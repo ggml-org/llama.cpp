@@ -1352,9 +1352,21 @@ common_init_result::common_init_result(common_params & params) :
         LOG_INF("%s: fitting params to device memory, to report bugs during this step use -fit off (or --verbose if you can't)\n", __func__);
         LOG_INF("%s: fit_params enabled, margin=%.1f MB, min_ctx=%d\n",
                 __func__, params.fit_params_target / (1024.0 * 1024.0), params.fit_params_min_ctx);
+
+        // Let fit_params freely adjust n_gpu_layers by setting it to the library default.
+        // common_params defaults to 99 which differs from llama_model_default_params (999),
+        // causing fit_params to treat it as a user override and refuse to reduce layers.
+        const auto saved_ngl = mparams.n_gpu_layers;
+        mparams.n_gpu_layers = llama_model_default_params().n_gpu_layers;
+
         llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
             params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+
+        // If fit_params didn't change n_gpu_layers, restore the original value
+        if (mparams.n_gpu_layers == llama_model_default_params().n_gpu_layers) {
+            mparams.n_gpu_layers = saved_ngl;
+        }
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);

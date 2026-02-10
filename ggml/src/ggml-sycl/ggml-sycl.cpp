@@ -6844,9 +6844,21 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_tiered_kv_buffer_type(int de
 // === End Tiered KV Buffer Type ===
 
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
-    // Check if KV should be offloaded to host pinned memory (Level 1 pressure hierarchy)
-    if (ggml_sycl::unified_cache_should_offload_kv(device)) {
-        // Use tiered buffer: hot window in VRAM, cold in host pinned
+    // Estimate minimum KV cache size for the margin check in should_offload_kv.
+    // At buffer-type query time we don't know the exact size, so use a conservative
+    // 256 MB (enough for ~2048 tokens on a 7B model). This catches edge cases where
+    // weights barely fit but there's no room for KV. For models that clearly exceed
+    // VRAM, model_exceeds_vram already handles it without needing an estimate.
+    static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
+
+    if (ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate)) {
+        static bool logged = false;
+        if (!logged) {
+            GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory "
+                          "(%.1f MB estimate, preserving full context)\n",
+                          kv_estimate / (1024.0 * 1024.0));
+            logged = true;
+        }
         return ggml_backend_sycl_tiered_kv_buffer_type(device);
     }
 
