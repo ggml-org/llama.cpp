@@ -192,10 +192,16 @@ void init_indices()
     KV = p.KV;
 
     if (p.k_num > 1) {
-        i = 0;
-        // batch and split_k share gl_WorkGroupID.x
-        gqa_iq1 = gl_WorkGroupID.x / p.k_num;
-        split_k_index = gl_WorkGroupID.x % p.k_num;
+        if (p.gqa_ratio > 1) {
+            i = 0;
+            // batch and split_k share gl_WorkGroupID.x
+            gqa_iq1 = gl_WorkGroupID.x / p.k_num;
+            split_k_index = gl_WorkGroupID.x % p.k_num;
+        } else {
+            gqa_iq1 = 0;
+            split_k_index = gl_WorkGroupID.x % p.k_num;
+            i = gl_WorkGroupID.x / p.k_num;
+        }
     } else if (p.gqa_ratio > 1) {
         i = 0;
         gqa_iq1 = gl_WorkGroupID.x;
