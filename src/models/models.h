@@ -17,6 +17,53 @@ struct llm_graph_context_mamba : public llm_graph_context {
 
 };
 
+struct llm_graph_context_delta : public llm_graph_context {
+    llm_graph_context_delta(const llm_graph_params & params);
+
+    virtual ~llm_graph_context_delta() = default;
+
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_unified_chunking(
+        ggml_context * ctx0,
+        ggml_tensor * q,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * g,
+        ggml_tensor * beta,
+        ggml_tensor * state,
+        ggml_tensor * causal_mask,
+        ggml_tensor * identity,
+        ggml_tensor * diag_mask,
+        int           il,
+        int64_t       chunk_size,
+        float         eps_norm);
+
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_unified_autoregressive(
+        ggml_context * ctx0,
+        ggml_tensor * q,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * g,
+        ggml_tensor * beta,
+        ggml_tensor * state,
+        int           il,
+        float         eps_norm);
+
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_unified(
+        ggml_context * ctx0,
+        ggml_tensor * q,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * g,
+        ggml_tensor * beta,
+        ggml_tensor * state,
+        ggml_tensor * causal_mask,
+        ggml_tensor * identity,
+        ggml_tensor * diag_mask,
+        int           il,
+        int64_t       chunk_size,
+        float         eps_norm);
+};
+
 // Base class for RWKV-related models
 struct llm_build_rwkv6_base : public llm_graph_context {
     const llama_model & model;
@@ -476,7 +523,7 @@ struct llm_build_qwen3vl : public llm_graph_context {
 struct llm_build_qwen3vlmoe : public llm_graph_context {
     llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params);
 };
-struct llm_build_qwen3next : public llm_graph_context_mamba {
+struct llm_build_qwen3next : public llm_graph_context_delta {
     llm_build_qwen3next(const llama_model & model, const llm_graph_params & params);
 private:
     ggml_tensor * build_layer_attn(
