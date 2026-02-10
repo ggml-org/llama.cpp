@@ -5,12 +5,11 @@
 // pinned memory (unified cache PINNED_HOST or MMAP tier).  Avoids unnecessary
 // host-to-device transfers for layers evicted from VRAM.
 //
-// MUL_MAT uses oneDNN via DnnlGemmWrapper (device-agnostic — passing a CPU
-// queue creates a CPU oneDNN engine automatically).  Element-wise ops
+// MUL_MAT uses dnnl_sgemm (pure CPU BLAS, no SYCL queue required) after
+// dequantizing weights to F32 via ggml type traits.  Element-wise ops
 // (RMS_NORM, ADD, MUL) use portable SYCL parallel_for on the CPU queue.
 //
-// Supports F32, F16, Q4_0 (via oneDNN WOQ), and other quantized types
-// (via dequantize-to-F32 fallback).
+// Supports F32, F16, and quantized types (via dequantize-to-F32 + sgemm).
 //
 // Activation staging: Intermediate tensors live in GPU VRAM (compute buffer).
 // CPU kernels can't access device memory directly.  Staging buffers copy
@@ -32,8 +31,7 @@
 #include <cstring>
 
 #if GGML_SYCL_DNNL
-#include "gemm.hpp"
-#include "onednn-woq.hpp"
+#include "gemm.hpp"          // Provides dnnl.hpp → dnnl_sgemm()
 #endif
 
 // ---------------------------------------------------------------------------
@@ -140,11 +138,6 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_UNUSED(dst);
     return false;
 #else
-    sycl::queue * cpu_q = ggml_sycl_get_cpu_queue();
-    if (!cpu_q) {
-        return false;
-    }
-
     const ggml_tensor * src0 = dst->src[0];  // weights
     const ggml_tensor * src1 = dst->src[1];  // activations
 
@@ -157,21 +150,17 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         return false;
     }
 
-    // Supported weight types
-    const bool src0_f32  = (src0->type == GGML_TYPE_F32);
-    const bool src0_f16  = (src0->type == GGML_TYPE_F16);
-    const bool src0_q4_0 = (src0->type == GGML_TYPE_Q4_0);
-    const bool src0_quantized = ggml_is_quantized(src0->type);
+    // Supported weight types: F32, F16, or any quantized type with to_float
+    const bool src0_f32       = (src0->type == GGML_TYPE_F32);
+    const bool src0_quantized = !src0_f32 && (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
 
-    // Accept F32, F16, Q4_0, and any quantized type with a dequantize function
-    if (!src0_f32 && !src0_f16 && !src0_quantized) {
+    if (!src0_f32 && !src0_quantized) {
         return false;
     }
-    if (src0_quantized && !src0_q4_0) {
-        const auto * traits = ggml_get_type_traits(src0->type);
-        if (!traits || !traits->to_float) {
-            return false;
-        }
+
+    const auto * type_traits = src0_quantized ? ggml_get_type_traits(src0->type) : nullptr;
+    if (src0_quantized && (!type_traits || !type_traits->to_float)) {
+        return false;
     }
 
     // ggml MUL_MAT convention:  C^T = A * B^T  =>  C = B * A^T
@@ -181,174 +170,32 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     //
     // We need: C[M,N] = src1[M,K] * src0^T[K,N]
 
-    const int64_t ne00 = src0->ne[0];  // K
-    const int64_t ne01 = src0->ne[1];  // N
-    const int64_t ne10 = src1->ne[0];  // K
-    const int64_t ne11 = src1->ne[1];  // M
+    GGML_ASSERT(src0->ne[0] == src1->ne[0]);
 
-    GGML_ASSERT(ne00 == ne10);
-
-    const int M = static_cast<int>(ne11);
-    const int N = static_cast<int>(ne01);
-    const int K = static_cast<int>(ne00);
+    const dnnl_dim_t M = static_cast<dnnl_dim_t>(src1->ne[1]);
+    const dnnl_dim_t N = static_cast<dnnl_dim_t>(src0->ne[1]);
+    const dnnl_dim_t K = static_cast<dnnl_dim_t>(src0->ne[0]);
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    // --- Q4_0 WOQ path: oneDNN weight-only-quantized GEMM ---
-    if (src0_q4_0 && ggml_is_contiguous(src0)) {
-        const void * src0_data = get_host_ptr(src0, device, 0, gpu_q);
-        const void * src1_data = get_host_ptr(src1, device, 1, gpu_q);
-        void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
-        if (!src0_data || !src1_data || !dst_data) {
-            return false;
-        }
-
-        // Batch dimensions
-        const int64_t ne02 = src0->ne[2];
-        const int64_t ne03 = src0->ne[3];
-        const int64_t ne12 = src1->ne[2];
-        const int64_t ne13 = src1->ne[3];
-
-        const int64_t nb02 = src0->nb[2];
-        const int64_t nb03 = src0->nb[3];
-        const int64_t nb12 = src1->nb[2];
-        const int64_t nb13 = src1->nb[3];
-        const int64_t nb1  = dst->nb[1];
-        const int64_t nb2  = dst->nb[2];
-        const int64_t nb3  = dst->nb[3];
-
-        for (int64_t i13 = 0; i13 < ne13; i13++) {
-            for (int64_t i12 = 0; i12 < ne12; i12++) {
-                const int64_t i02 = i12 % ne02;
-                const int64_t i03 = i13 % ne03;
-
-                const uint8_t * src0_batch = static_cast<const uint8_t *>(src0_data)
-                                             + i02 * nb02 + i03 * nb03;
-                const float * src1_batch = reinterpret_cast<const float *>(
-                    static_cast<const char *>(src1_data) + i12 * nb12 + i13 * nb13);
-                float * dst_batch = reinterpret_cast<float *>(
-                    static_cast<char *>(dst_data) + i12 * nb2 + i13 * nb3);
-
-                ggml_sycl::onednn_woq::packed_weights packed;
-                std::string error;
-                if (!ggml_sycl::onednn_woq::pack_q4_0_aos_to_s4(
-                        src0_batch, N, ne00, packed, &error)) {
-                    GGML_SYCL_DEBUG("[SYCL-CPU] WOQ pack_q4_0 failed: %s\n",
-                                    error.c_str());
-                    return false;
-                }
-
-                const int64_t ldc = static_cast<int64_t>(nb1 / sizeof(float));
-                if (!DnnlGemmWrapper::woq_gemm_q4_0(
-                        ctx, M, N, K,
-                        src1_batch, DnnlGemmWrapper::dt::f32,
-                        packed.s4.data(), packed.group_size,
-                        packed.scales.data(), packed.zero_points.data(),
-                        dst_batch, DnnlGemmWrapper::dt::f32,
-                        cpu_q, ldc, 1)) {
-                    GGML_SYCL_DEBUG("[SYCL-CPU] WOQ gemm failed\n");
-                    return false;
-                }
-            }
-        }
-
-        cpu_q->wait();
-        flush_output(dst, device, 2, gpu_q);
-        return true;
-    }
-
-    // --- Quantized dequant path: dequantize to F32, then F32 GEMM ---
-    if (src0_quantized) {
-        const void * src0_data = get_host_ptr(src0, device, 0, gpu_q);
-        const void * src1_data = get_host_ptr(src1, device, 1, gpu_q);
-        void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
-        if (!src0_data || !src1_data || !dst_data) {
-            return false;
-        }
-
-        const auto * traits = ggml_get_type_traits(src0->type);
-
-        // Temporary F32 buffer for dequantized weights (one batch slice)
-        std::vector<float> src0_f32_buf(static_cast<size_t>(N) * K);
-
-        // Batch dimensions
-        const int64_t ne02 = src0->ne[2];
-        const int64_t ne03 = src0->ne[3];
-        const int64_t ne12 = src1->ne[2];
-        const int64_t ne13 = src1->ne[3];
-
-        const int64_t nb01 = src0->nb[1];
-        const int64_t nb02 = src0->nb[2];
-        const int64_t nb03 = src0->nb[3];
-        const int64_t nb11 = src1->nb[1];
-        const int64_t nb12 = src1->nb[2];
-        const int64_t nb13 = src1->nb[3];
-        const int64_t nb1  = dst->nb[1];
-        const int64_t nb2  = dst->nb[2];
-        const int64_t nb3  = dst->nb[3];
-
-        const int64_t dst_elem_size  = static_cast<int64_t>(sizeof(float));
-        const int64_t src1_elem_size = static_cast<int64_t>(sizeof(float));
-
-        using dt = DnnlGemmWrapper::dt;
-
-        for (int64_t i13 = 0; i13 < ne13; i13++) {
-            for (int64_t i12 = 0; i12 < ne12; i12++) {
-                const int64_t i02 = i12 % ne02;
-                const int64_t i03 = i13 % ne03;
-
-                const char * src0_batch = static_cast<const char *>(src0_data)
-                                          + i02 * nb02 + i03 * nb03;
-
-                // Dequantize each row of weights to F32
-                for (int row = 0; row < N; row++) {
-                    const void * row_data = src0_batch + row * nb01;
-                    traits->to_float(row_data, src0_f32_buf.data() + row * K, K);
-                }
-
-                const char * src1_batch = static_cast<const char *>(src1_data)
-                                          + i12 * nb12 + i13 * nb13;
-                char * dst_batch = static_cast<char *>(dst_data)
-                                   + i12 * nb2 + i13 * nb3;
-
-                // A = src1 [M, K], row-major
-                const int64_t src1_stride_col = 1;
-                const int64_t src1_stride_row = nb11 / src1_elem_size;
-
-                // B = dequantized src0 [N, K], row-major → transpose via swapped strides
-                const int64_t src0_stride_col = K;   // row stride = col stride of transpose
-                const int64_t src0_stride_row = 1;   // col stride = row stride of transpose
-
-                DnnlGemmWrapper::gemm(ctx, M, N, K,
-                    src1_batch, dt::f32, src1_stride_col, src1_stride_row,
-                    static_cast<int64_t>(M) * K,
-                    src0_f32_buf.data(), dt::f32, src0_stride_col, src0_stride_row,
-                    static_cast<int64_t>(N) * K,
-                    dst_batch, dt::f32, cpu_q, 1, 1,
-                    static_cast<int>(nb1 / dst_elem_size));
-            }
-        }
-
-        cpu_q->wait();
-        flush_output(dst, device, 2, gpu_q);
-        return true;
-    }
-
-    // --- F32/F16 path: direct oneDNN GEMM ---
-    // Stage tensors: weights already host-pinned, activations may be in VRAM
+    // Stage all tensors to host-accessible memory.
+    // Weights (src0) are in SYCL device buffer (tensor->data = USM device ptr).
+    // get_host_ptr resolves via unified cache / staging and copies to host.
+    // Activations (src1) are in GPU compute buffer — also staged to host.
+    static int dbg = 0;
+    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] staging src0 %s data=%p buf=%p...\n", src0->name, src0->data, (void*)src0->buffer);
     const void * src0_data = get_host_ptr(src0, device, 0, gpu_q);
+    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] src0 staged to %p\n", src0_data);
+    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] staging src1 %s data=%p buf=%p...\n", src1->name, src1->data, (void*)src1->buffer);
     const void * src1_data = get_host_ptr(src1, device, 1, gpu_q);
+    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] src1 staged to %p\n", src1_data);
     void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
-
+    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] dst staged to %p, calling dequant+sgemm...\n", dst_data);
+    dbg++;
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
-
-    using dt = DnnlGemmWrapper::dt;
-    const dt a_type = dt::f32;                        // activations always F32
-    const dt b_type = src0_f16 ? dt::f16 : dt::f32;  // weights
-    const dt c_type = dt::f32;                        // output always F32
 
     // Batch dimensions (broadcast src0 if ne02/ne03 < ne12/ne13)
     const int64_t ne02 = src0->ne[2];
@@ -359,48 +206,64 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t nb01 = src0->nb[1];
     const int64_t nb02 = src0->nb[2];
     const int64_t nb03 = src0->nb[3];
-    const int64_t nb11 = src1->nb[1];
     const int64_t nb12 = src1->nb[2];
     const int64_t nb13 = src1->nb[3];
-    const int64_t nb1  = dst->nb[1];
     const int64_t nb2  = dst->nb[2];
     const int64_t nb3  = dst->nb[3];
 
-    const int64_t src0_elem_size = static_cast<int64_t>(ggml_type_size(src0->type));
-    const int64_t src1_elem_size = static_cast<int64_t>(ggml_type_size(src1->type));
-    const int64_t dst_elem_size  = static_cast<int64_t>(ggml_type_size(dst->type));
+    const dnnl_dim_t ldc = static_cast<dnnl_dim_t>(dst->nb[1] / sizeof(float));
 
-    // Compute byte offsets relative to staged base pointers.
-    // For staged tensors, nb values still reflect the original layout since
-    // we copied the full contiguous ggml_nbytes() block.
+    // Dequant/conversion buffer for non-F32 weights (reused across batch iters)
+    std::vector<float> src0_f32_buf;
+    if (src0_quantized) {
+        src0_f32_buf.resize(static_cast<size_t>(N) * K);
+    }
+
     for (int64_t i13 = 0; i13 < ne13; i13++) {
         for (int64_t i12 = 0; i12 < ne12; i12++) {
             const int64_t i02 = i12 % ne02;
             const int64_t i03 = i13 % ne03;
 
-            const char * src0_batch = static_cast<const char *>(src0_data) + i02 * nb02 + i03 * nb03;
-            const char * src1_batch = static_cast<const char *>(src1_data) + i12 * nb12 + i13 * nb13;
-            char *       dst_batch  = static_cast<char *>(dst_data) + i12 * nb2 + i13 * nb3;
+            const char * src0_batch = static_cast<const char *>(src0_data)
+                                      + i02 * nb02 + i03 * nb03;
+            const float * src1_batch = reinterpret_cast<const float *>(
+                static_cast<const char *>(src1_data) + i12 * nb12 + i13 * nb13);
+            float * dst_batch = reinterpret_cast<float *>(
+                static_cast<char *>(dst_data) + i12 * nb2 + i13 * nb3);
 
-            // A = src1 [M, K], row-major
-            const int64_t src1_stride_col = 1;
-            const int64_t src1_stride_row = nb11 / src1_elem_size;
+            const float * weight_f32;
+            dnnl_dim_t    weight_ld = K;
 
-            // B = src0^T [K, N] — transpose via swapped strides
-            const int64_t src0_stride_col = nb01 / src0_elem_size;  // row stride in memory = col stride of transpose
-            const int64_t src0_stride_row = 1;                      // col stride in memory = row stride of transpose
+            if (src0_f32) {
+                // F32 weights: use directly from mmap
+                weight_f32 = reinterpret_cast<const float *>(src0_batch);
+                weight_ld  = static_cast<dnnl_dim_t>(nb01 / sizeof(float));
+            } else {
+                // F16 / quantized → dequantize each row to F32
+                for (dnnl_dim_t row = 0; row < N; row++) {
+                    const void * row_data = src0_batch + row * nb01;
+                    type_traits->to_float(row_data, src0_f32_buf.data() + row * K, K);
+                }
+                weight_f32 = src0_f32_buf.data();
+            }
 
-            DnnlGemmWrapper::gemm(ctx, M, N, K,
-                src1_batch, a_type, src1_stride_col, src1_stride_row, static_cast<int64_t>(M) * K,
-                src0_batch, b_type, src0_stride_col, src0_stride_row, static_cast<int64_t>(N) * K,
-                dst_batch,  c_type, cpu_q, 1, 1,
-                static_cast<int>(nb1 / dst_elem_size));
+            // Pure CPU GEMM via oneDNN BLAS (no SYCL queue needed).
+            // Row-major C[M,N] = src1[M,K] * weight^T[K,N] is computed
+            // via Fortran-convention trick: C_f = weight_f * src1_f^T
+            //   transa='T': weight [N,K] row-major → Fortran [K,N], transposed = [N,K]
+            //   transb='N': src1   [M,K] row-major → Fortran [K,M], used as-is
+            //   result C:   dst    [M,N] row-major → Fortran [N,M]
+            dnnl_sgemm('T', 'N',
+                       N, M, K,
+                       1.0f,
+                       weight_f32, weight_ld,
+                       src1_batch, K,
+                       0.0f,
+                       dst_batch, ldc);
         }
     }
 
-    cpu_q->wait();
-
-    // Flush output from host staging back to device if needed
+    // Copy output from host staging back to device compute buffer
     flush_output(dst, device, 2, gpu_q);
     return true;
 #endif
@@ -524,7 +387,6 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
     const int64_t ne13 = src1->ne[3];
 
     // src1 strides in floats
-    const int64_t s10 = 1;  // nb[0] == sizeof(float), verified above
     const int64_t s11 = src1->nb[1] / sizeof(float);
     const int64_t s12 = src1->nb[2] / sizeof(float);
     const int64_t s13 = src1->nb[3] / sizeof(float);
