@@ -652,6 +652,10 @@ struct vk_device_struct {
 
     bool coopmat2;
 
+    bool ahb_support;
+    bool standard_zero_copy_support;
+    bool use_ahb;
+
     bool data_graph_support;
     PFN_vkCreateDataGraphPipelinesARM vkCreateDataGraphPipelinesARM;
     PFN_vkCreateDataGraphPipelineSessionARM vkCreateDataGraphPipelineSessionARM;
@@ -4602,6 +4606,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
         device->data_graph_support = false;
+        device->ahb_support = false;
+        device->standard_zero_copy_support = false;
+        device->use_ahb = false;
+
         bool bfloat16_support = false;
 
         for (const auto& properties : ext_props) {
@@ -4609,6 +4617,10 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 maintenance4_support = true;
             } else if (strcmp("VK_ARM_data_graph", properties.extensionName) == 0) {
                 device->data_graph_support = true;
+#if defined(GGML_VULKAN_SUPPORT_AHB)
+            } else if (strcmp(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, properties.extensionName) == 0) {
+                device->ahb_support = true;
+#endif
             } else if (strcmp("VK_KHR_16bit_storage", properties.extensionName) == 0) {
                 fp16_storage = true;
             } else if (strcmp("VK_KHR_shader_float16_int8", properties.extensionName) == 0) {
@@ -4768,6 +4780,23 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->subgroup_size = subgroup_props.subgroupSize;
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
+
+        // Check for standard zero-copy support (DEVICE_LOCAL + HOST_VISIBLE)
+        vk::PhysicalDeviceMemoryProperties mem_props = device->physical_device.getMemoryProperties();
+        for (uint32_t i = 0; i < mem_props.memoryTypeCount; i++) {
+            auto flags = mem_props.memoryTypes[i].propertyFlags;
+            if ((flags & vk::MemoryPropertyFlagBits::eDeviceLocal) && 
+                (flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+                device->standard_zero_copy_support = true;
+                break;
+            }
+        }
+
+        if (device->uma && !device->standard_zero_copy_support && device->ahb_support) {
+            device->use_ahb = true;
+            VK_LOG_INFO("ggml_vulkan: Integrated GPU detected without standard zero-copy support. Enabling AHB zero-copy.");
+        }
+
         if (sm_builtins) {
             device->shader_core_count = sm_props.shaderSMCount;
         } else if (amd_shader_core_properties2) {
