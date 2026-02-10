@@ -1301,6 +1301,38 @@ kernel void kernel_silu_f32_4(
     dst[tpig] = x / (1.0f + exp(-x));
 }
 
+kernel void kernel_floor_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]){
+    device const float & x = src0[tpig];
+    dst[tpig] = floor(x);
+}
+
+kernel void kernel_floor_f16(
+        device const half * src0,
+        device       half * dst,
+        uint tpig[[thread_position_in_grid]]){
+    device const half & x = src0[tpig];
+    dst[tpig] = floor(x);
+}
+
+kernel void kernel_floor_f16_4(
+        device const half4 * src0,
+        device       half4 * dst,
+        uint tpig[[thread_position_in_grid]]){
+    device const half4 & x = src0[tpig];
+    dst[tpig] = floor(x);
+}
+
+kernel void kernel_floor_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]){
+    device const float4 & x = src0[tpig];
+    dst[tpig] = floor(x); 
+}
+
 kernel void kernel_elu_f32(
         device const float * src0,
         device       float * dst,
