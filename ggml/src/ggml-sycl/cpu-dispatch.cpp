@@ -60,7 +60,11 @@ static void * staging_ensure(int slot, size_t nbytes, sycl::queue * gpu_q) {
     if (nbytes <= g_cpu_staging[slot].cap && g_cpu_staging[slot].ptr) {
         return g_cpu_staging[slot].ptr;
     }
+    // Free old buffer using the same queue context it was allocated with.
+    // Assert queue consistency — in practice ctx.stream() returns the same
+    // queue for a given device, but guard against stale-pointer bugs.
     if (g_cpu_staging[slot].ptr && g_cpu_staging_gpu_q) {
+        GGML_ASSERT(gpu_q == g_cpu_staging_gpu_q && "staging queue changed between calls");
         sycl::free(g_cpu_staging[slot].ptr, *g_cpu_staging_gpu_q);
     }
     g_cpu_staging_gpu_q = gpu_q;
@@ -107,7 +111,8 @@ static void flush_output(ggml_tensor * t, int device, int slot, sycl::queue * gp
     gpu_q->memcpy(dev_ptr, g_cpu_staging[slot].ptr, nbytes).wait();
 }
 
-// Get host pointer for output tensor (staging slot 2).
+// Get host pointer for output tensor.
+// Always uses staging slot 2 (by convention: slot 0 = src0, slot 1 = src1, slot 2 = dst).
 // If device-resident, ensures staging buffer is allocated but doesn't copy
 // (the kernel will write fresh data).
 static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu_q) {

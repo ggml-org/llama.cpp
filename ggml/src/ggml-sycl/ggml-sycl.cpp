@@ -23237,15 +23237,15 @@ static void build_layer_device_map(int device) {
     }
 
     if (max_layer < 0) {
-        // No layers found — mark initialized with empty map
-        g_layer_map_initialized.store(true, std::memory_order_release);
+        // No layers found — caller sets g_layer_map_initialized
         return;
     }
 
     // Initialize all layers as GPU (false = not on CPU)
     // Layer classification happens incrementally in should_dispatch_to_cpu()
+    // NOTE: caller must set g_layer_map_initialized AFTER g_layer_classified.assign()
+    // to avoid a race where another thread sees the flag but an unsized vector.
     g_layer_on_cpu.assign(static_cast<size_t>(max_layer + 1), false);
-    g_layer_map_initialized.store(true, std::memory_order_release);
 }
 
 // Mutex protecting g_layer_on_cpu writes during incremental classification
@@ -23266,12 +23266,24 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
         return false;
     }
 
-    // Initialize map structure lazily (sizes the vector, doesn't classify)
+    // Memoize: boundary sync in graph_compute_impl queries once per node,
+    // then compute_forward queries again for the same node — return cached result.
+    static const ggml_tensor * g_last_dispatch_query = nullptr;
+    static bool                g_last_dispatch_result = false;
+    if (dst == g_last_dispatch_query) {
+        return g_last_dispatch_result;
+    }
+
+    // Initialize map structure lazily (sizes the vector, doesn't classify).
+    // The release store must happen AFTER g_layer_classified is sized to
+    // prevent a race where a concurrent reader passes the acquire check
+    // but accesses an empty g_layer_classified vector.
     if (!g_layer_map_initialized.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(g_layer_map_mutex);
         if (!g_layer_map_initialized.load(std::memory_order_relaxed)) {
             build_layer_device_map(ctx.device);
             g_layer_classified.assign(g_layer_on_cpu.size(), false);
+            g_layer_map_initialized.store(true, std::memory_order_release);
         }
     }
 
@@ -23354,7 +23366,10 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
         }
     }
 
-    return g_layer_on_cpu[layer_id];
+    bool result = g_layer_on_cpu[layer_id];
+    g_last_dispatch_query = dst;
+    g_last_dispatch_result = result;
+    return result;
 }
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
@@ -24643,13 +24658,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
     // Eagerly initialize layer device map for CPU offload so that the graph
     // gate in graph_compute() can detect CPU layers on subsequent calls.
-    // Must also size g_layer_classified to match g_layer_on_cpu.
+    // The release store must happen AFTER g_layer_classified.assign() to
+    // prevent a race where a concurrent reader sees the flag but an unsized vector.
     if (ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device &&
         !g_layer_map_initialized.load(std::memory_order_acquire)) {
         std::lock_guard<std::mutex> lock(g_layer_map_mutex);
         if (!g_layer_map_initialized.load(std::memory_order_relaxed)) {
             build_layer_device_map(sycl_ctx->device);
             g_layer_classified.assign(g_layer_on_cpu.size(), false);
+            g_layer_map_initialized.store(true, std::memory_order_release);
         }
     }
     // Increment pass ID for TP FFN norm cache (detects stale cached data)
