@@ -33,6 +33,7 @@
 
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"
+#include "onednn-woq.hpp"
 #endif
 
 // ---------------------------------------------------------------------------
@@ -893,14 +894,18 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         return false;
     }
 
-    // Freq factors (optional src2)
+    // Freq factors (optional src2) — must be host-accessible (no staging slot available)
     const float * freq_factors_data = nullptr;
     if (src2) {
-        // freq_factors usually lives in host memory — use src0 slot since we're done with src0
-        freq_factors_data = static_cast<const float *>(get_host_ptr(src2, device, 0, gpu_q));
-        if (!freq_factors_data) {
+        void * src2_ptr = ggml_sycl_get_data_ptr(src2, device);
+        if (!src2_ptr) {
             return false;
         }
+        // Only handle host-accessible freq_factors (no staging available for 4th tensor)
+        if (src2->buffer && !ggml_backend_buffer_is_host(src2->buffer)) {
+            return false;
+        }
+        freq_factors_data = static_cast<const float *>(src2_ptr);
     }
 
     const int64_t ne0 = src0->ne[0];  // head dim
