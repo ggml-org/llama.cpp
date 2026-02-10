@@ -9622,9 +9622,8 @@ static bool ggml_backend_sycl_cpu_offload_compute_is_host(ggml_backend_buffer_ty
 
 static size_t ggml_backend_sycl_cpu_offload_compute_get_max_size(ggml_backend_buffer_type_t buft) {
     // Host-pinned memory is limited by system RAM, not VRAM.
-    // Return a large value; allocation failure is handled at alloc time.
-    GGML_UNUSED(buft);
-    return SIZE_MAX;
+    // Reuse the device max-alloc query which respects unified cache headroom.
+    return ggml_backend_sycl_buffer_type_get_max_size(buft);
 }
 
 static const ggml_backend_buffer_type_i ggml_backend_sycl_cpu_offload_compute_buffer_type_interface = {
@@ -9655,7 +9654,7 @@ ggml_backend_buffer_type_t ggml_backend_sycl_cpu_offload_compute_buffer_type(int
                 /* .iface    = */ ggml_backend_sycl_cpu_offload_compute_buffer_type_interface,
                 /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), i),
                 /* .context  = */
-                new ggml_backend_sycl_buffer_type_context{ i, GGML_SYCL_NAME "_CpuOffload" + std::to_string(i),
+                new ggml_backend_sycl_buffer_type_context{ i, GGML_SYCL_NAME "_CpuOffloadCompute" + std::to_string(i),
                                                            GGML_SYCL_MEM_HOST, GGML_SYCL_MEM_POLICY_STATIC,
                                                            false, true, 0, stream },
             };
@@ -23936,7 +23935,6 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
                                                void *              data,
                                                size_t              offset,
                                                size_t              size) try {
-    auto t_gta_start = std::chrono::high_resolution_clock::now();
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
@@ -23955,25 +23953,14 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t      backend,
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream->memcpy(data, (const char *) tensor->data + offset, size)));
-
-    // DIAG: report get_tensor_async timing
-    {
-        static int s_gta_count = 0;
-        s_gta_count++;
-        if (s_gta_count % 50 == 0) {
-            double gta_ms = std::chrono::duration<double, std::milli>(
-                std::chrono::high_resolution_clock::now() - t_gta_start).count();
-            fprintf(stderr, "[GTA-DIAG] call#%d get_tensor_async: %.2fms size=%zu tensor=%s\n",
-                    s_gta_count, gta_ms, size, tensor->name ? tensor->name : "(null)");
-        }
-    }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
 static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst) try {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
-    bool is_cpy_supported                = (dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
+    bool is_cpy_supported = (dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device)                    ||
+                             dst->buffer->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)        ||
                              dst->buffer->buft == ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device)) &&
                             ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);

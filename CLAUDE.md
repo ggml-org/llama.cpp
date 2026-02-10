@@ -240,6 +240,7 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 | `GGML_SYCL_KV_HOT_TOKENS=N` | auto | Hot window size in tokens for KV hot/cold tiering |
 | `GGML_SYCL_KV_HOT_PCT=N` | auto | Hot window as % of total KV buffer |
 | `GGML_SYCL_FORCE_STREAMING=1` | OFF | Enable GPU weight streaming (Level 5, last resort) |
+| `GGML_SYCL_HOST_COMPUTE=1` | OFF | Use host-pinned compute buffers (eliminates staging for CPU-dispatched layers) |
 
 **Cache and memory**:
 | Variable | Effect |
