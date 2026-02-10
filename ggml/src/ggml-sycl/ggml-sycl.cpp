@@ -2144,9 +2144,12 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
         sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
         if (mgr.allocate_buffers(q)) {
-            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled%s: %d layers, 2 x %.1f MB buffers\n",
+            // Register streaming buffer allocation with unified cache budget
+            ggml_sycl::unified_cache_add_runtime_bytes(ctx->device, mgr.allocated_bytes());
+            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled%s: %d layers, 2 x %.1f MB buffers (%.1f MB budgeted)\n",
                           streaming_forced ? " (forced)" : "",
-                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0),
+                          mgr.allocated_bytes() / (1024.0 * 1024.0));
         } else {
             GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
         }
@@ -2257,8 +2260,10 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
                 mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
                 sycl::queue & q = ggml_sycl_get_device(device).default_queue();
                 if (mgr.allocate_buffers(q)) {
-                    GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers\n",
-                                  mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+                    ggml_sycl::unified_cache_add_runtime_bytes(device, mgr.allocated_bytes());
+                    GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers (%.1f MB budgeted)\n",
+                                  mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0),
+                                  mgr.allocated_bytes() / (1024.0 * 1024.0));
                 } else {
                     GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
                 }
@@ -30201,11 +30206,11 @@ normal_dispatch:
     // Disable graph replay when weight pointers may be stale:
     // 1. Model exceeds VRAM → layer streaming rotates buffer pointers
     // 2. Cache has evictions → baked pointers reference freed device memory
-    if (g_model_exceeds_vram.load(std::memory_order_acquire) ||
-        ggml_sycl::unified_cache_has_evictions()) {
+    const bool exceeds   = g_model_exceeds_vram.load(std::memory_order_acquire);
+    const bool evictions = ggml_sycl::unified_cache_has_evictions();
+    if (exceeds || evictions) {
         GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
-                        (int)g_model_exceeds_vram.load(std::memory_order_acquire),
-                        (int)ggml_sycl::unified_cache_has_evictions());
+                        (int)exceeds, (int)evictions);
         compute_impl();
         record_completion(false);
         return GGML_STATUS_SUCCESS;
