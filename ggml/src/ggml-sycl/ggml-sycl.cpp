@@ -216,6 +216,7 @@ static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_m
 
 // CPU compute path for data-local dispatch (defined in cpu-dispatch.cpp)
 bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst);
+void ggml_sycl_cpu_staging_drain();
 
 // Layout-size helpers (defined later).
 static size_t ggml_sycl_layout_bytes_for_tensor(const ggml_tensor * tensor, layout_mode layout, int device);
@@ -25121,6 +25122,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         // Data-local compute: boundary sync at GPU↔CPU layer transitions.
         // When switching from GPU to CPU layers, drain the GPU queue so that
         // activation data in VRAM is ready for staging to host memory.
+        // With HOST_COMPUTE (host-pinned compute buffers), the GPU queue drain
+        // is still needed because GPU kernels write activations that CPU ops read,
+        // but staging drain is unnecessary (no device↔host copies).
         if (cpu_offload_active) {
             bool node_on_cpu = should_dispatch_to_cpu(*sycl_ctx, node);
             if (node_on_cpu != prev_on_cpu) {
@@ -25130,8 +25134,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU boundary sync at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
                 } else {
-                    // CPU→GPU: CPU ops are synchronous and staging flush already
-                    // copied results back to device, so no explicit wait needed.
+                    // CPU→GPU: drain pending async staging flushes before GPU reads
+                    ggml_sycl_cpu_staging_drain();
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] CPU→GPU transition at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
                 }

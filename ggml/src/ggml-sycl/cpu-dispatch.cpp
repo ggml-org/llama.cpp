@@ -11,11 +11,11 @@
 //
 // Supports F32, F16, and quantized types (via dequantize-to-F32 + sgemm).
 //
-// Activation staging: Intermediate tensors live in GPU VRAM (compute buffer).
-// CPU kernels can't access device memory directly.  Staging buffers copy
-// activations host↔device at each CPU op.  Weights are already host-pinned
-// so they need no staging.  Phase 2 will use host-pinned compute buffers
-// to eliminate staging overhead entirely.
+// Activation staging: When compute buffers are device-resident (no HOST_COMPUTE),
+// CPU kernels can't access device memory directly.  Double-buffered staging
+// copies activations host↔device with SYCL event-based overlap.  Weights are
+// already host-pinned so they need no staging.  With GGML_SYCL_HOST_COMPUTE=1,
+// compute buffers are host-pinned and staging is bypassed entirely.
 //
 // MIT license
 // Copyright (C) 2024-2026 Intel Corporation
@@ -37,7 +37,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Activation staging: reusable host-pinned buffers for device↔host transfer
+// Activation staging: double-buffered host-pinned buffers for device↔host transfer
 // ---------------------------------------------------------------------------
 //
 // GPU compute buffers use sycl::malloc_device() which CPU can't access.
@@ -45,54 +45,77 @@
 // Activation/output tensors need staging: copy device→host before CPU compute,
 // then host→device after CPU writes output.
 //
-// Three staging slots (grown on demand, never shrunk):
-//   slot 0: first source tensor (weights or activations)
-//   slot 1: second source tensor (activations)
-//   slot 2: output tensor
+// Double-buffered staging with SYCL events (adapted from layer-streaming.hpp):
+//   Two banks of 3 slots each (slot 0=src0, 1=src1, 2=dst).
+//   Ops alternate between banks.  The previous op's flush can overlap with
+//   the current op's stage-in because they use different buffers.
+//   Events replace synchronous .wait() — we wait only when data is needed.
+
+static constexpr int STAGING_SLOTS_PER_BANK = 3;
+static constexpr int STAGING_BANKS          = 2;
 
 static struct {
     void * ptr = nullptr;
     size_t cap = 0;
-} g_cpu_staging[3];
+} g_cpu_staging[STAGING_BANKS][STAGING_SLOTS_PER_BANK];
 
 static sycl::queue * g_cpu_staging_gpu_q = nullptr;
 
-static void * staging_ensure(int slot, size_t nbytes, sycl::queue * gpu_q) {
-    if (slot < 0 || slot > 2) {
+// Current bank index (alternates per op) and event tracking
+static int         g_staging_bank      = 0;
+static sycl::event g_staging_flush_evt;     // Event from previous op's flush_output
+static bool        g_staging_flush_pending = false;
+
+static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gpu_q) {
+    if (bank < 0 || bank >= STAGING_BANKS || slot < 0 || slot >= STAGING_SLOTS_PER_BANK) {
         return nullptr;
     }
-    if (nbytes <= g_cpu_staging[slot].cap && g_cpu_staging[slot].ptr) {
-        return g_cpu_staging[slot].ptr;
+    auto & entry = g_cpu_staging[bank][slot];
+    if (nbytes <= entry.cap && entry.ptr) {
+        return entry.ptr;
     }
     // Free old buffer using the same queue context it was allocated with.
-    // Assert queue consistency — in practice ctx.stream() returns the same
-    // queue for a given device, but guard against stale-pointer bugs.
-    if (g_cpu_staging[slot].ptr && g_cpu_staging_gpu_q) {
+    if (entry.ptr && g_cpu_staging_gpu_q) {
         GGML_ASSERT(gpu_q == g_cpu_staging_gpu_q && "staging queue changed between calls");
-        sycl::free(g_cpu_staging[slot].ptr, *g_cpu_staging_gpu_q);
+        sycl::free(entry.ptr, *g_cpu_staging_gpu_q);
     }
     g_cpu_staging_gpu_q = gpu_q;
-    g_cpu_staging[slot].ptr = sycl::malloc_host(nbytes, *gpu_q);
-    g_cpu_staging[slot].cap = nbytes;
-    return g_cpu_staging[slot].ptr;
+    entry.ptr = sycl::malloc_host(nbytes, *gpu_q);
+    entry.cap = nbytes;
+    return entry.ptr;
+}
+
+// Begin a new staging operation.  Alternates to the next bank and waits for
+// any pending flush from the previous op that used this bank.
+static void staging_begin_op() {
+    // Switch bank
+    g_staging_bank = 1 - g_staging_bank;
+
+    // Wait for previous flush that wrote into this bank's device memory.
+    // This ensures the GPU has finished reading from the staging buffer
+    // before we overwrite it with new staging data.
+    if (g_staging_flush_pending) {
+        g_staging_flush_evt.wait();
+        g_staging_flush_pending = false;
+    }
 }
 
 // Get host-accessible pointer for a tensor.
 // If tensor is in host-accessible memory, returns original pointer.
 // For weight tensors: tries host_cache first (AOS data, no device copy needed).
-// For activations/compute tensors: copies device→host via staging.
-static void * get_host_ptr(const ggml_tensor * t, int device, int slot, sycl::queue * gpu_q) {
+// For activations/compute tensors: copies device→host via staging (event-based).
+//
+// out_event: if non-null, set to the memcpy event that must complete before
+//            reading from the returned pointer.  If no staging was needed,
+//            the event is left unchanged.
+static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
+                           sycl::queue * gpu_q, sycl::event * out_event = nullptr) {
     // Host-accessible buffers (weight mmap, host-pinned) → use tensor->data directly
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return t->data;
     }
 
     // For weight tensors: look up the host_cache for AOS data.
-    // This avoids using ggml_sycl_get_data_ptr() which may return a stale device
-    // pointer after unified cache eviction (extra->data_device[dev] is not nulled).
-    // The host_cache retains host-pinned copies even after device eviction.
-    // If host_cache misses, return nullptr (GPU fallback) — CPU dispatch should
-    // only be called for layers whose weights are host-resident.
     if (ggml_sycl_tensor_is_weight(t)) {
         if (ggml_sycl::unified_cache_enabled()) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(t, device);
@@ -113,46 +136,62 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot, sycl::qu
     }
 
     // Non-weight tensors (activations, compute buffers) → stage device→host.
-    // These are in the compute buffer (never evicted), so device pointers are valid.
     void * ptr = ggml_sycl_get_data_ptr(t, device);
     if (!ptr) {
         return nullptr;
     }
     size_t nbytes = ggml_nbytes(t);
-    void * host = staging_ensure(slot, nbytes, gpu_q);
+    void * host = staging_ensure(g_staging_bank, slot, nbytes, gpu_q);
     if (!host) {
         return nullptr;
     }
-    gpu_q->memcpy(host, ptr, nbytes).wait();
+    sycl::event evt = gpu_q->memcpy(host, ptr, nbytes);
+    if (out_event) {
+        *out_event = evt;
+    } else {
+        // Fallback: if caller doesn't handle events, wait synchronously
+        evt.wait();
+    }
     return host;
 }
 
-// Copy output from host staging back to device memory.
+// Copy output from host staging back to device memory (event-based).
 // No-op if tensor is already in host-accessible memory.
-static void flush_output(ggml_tensor * t, int device, int slot, sycl::queue * gpu_q) {
+// Returns true if a flush was submitted (caller should NOT wait — the event
+// is tracked internally and awaited at the start of the next op).
+static bool flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q) {
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return;
+        return false;
     }
     void * dev_ptr = ggml_sycl_get_data_ptr(t, device);
-    if (!dev_ptr || slot < 0 || slot > 2 || !g_cpu_staging[slot].ptr) {
-        return;
+    auto & entry   = g_cpu_staging[g_staging_bank][2];
+    if (!dev_ptr || !entry.ptr) {
+        return false;
     }
     size_t nbytes = ggml_nbytes(t);
-    gpu_q->memcpy(dev_ptr, g_cpu_staging[slot].ptr, nbytes).wait();
+    g_staging_flush_evt     = gpu_q->memcpy(dev_ptr, entry.ptr, nbytes);
+    g_staging_flush_pending = true;
+    return true;
 }
 
 // Get host pointer for output tensor.
-// Always uses staging slot 2 (by convention: slot 0 = src0, slot 1 = src1, slot 2 = dst).
-// If device-resident, ensures staging buffer is allocated but doesn't copy
-// (the kernel will write fresh data).
+// Uses staging slot 2 of the current bank.
 static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu_q) {
-    // Host-accessible buffer → use tensor->data directly (same logic as get_host_ptr)
+    // Host-accessible buffer → use tensor->data directly
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return t->data;
     }
     // Device-resident: allocate staging but don't copy (will be written by kernel)
     size_t nbytes = ggml_nbytes(t);
-    return staging_ensure(2, nbytes, gpu_q);
+    return staging_ensure(g_staging_bank, 2, nbytes, gpu_q);
+}
+
+// Wait for all pending staging events (call at boundary sync points).
+void ggml_sycl_cpu_staging_drain() {
+    if (g_staging_flush_pending) {
+        g_staging_flush_evt.wait();
+        g_staging_flush_pending = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -206,15 +245,20 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    // Stage tensors to host-accessible memory.
-    // Weights (src0): resolved via host_cache (AOS, no copy) or device→host staging.
-    // Activations (src1): GPU compute buffer → staged to host.
-    const void * src0_data = get_host_ptr(src0, device, 0, gpu_q);
-    const void * src1_data = get_host_ptr(src1, device, 1, gpu_q);
+    staging_begin_op();
+
+    // Stage tensors to host-accessible memory (event-based).
+    sycl::event e0, e1;
+    const void * src0_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
+    const void * src1_data = get_host_ptr(src1, device, 1, gpu_q, &e1);
     void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
+
+    // Wait for staging to complete before CPU compute
+    e0.wait();
+    e1.wait();
 
     // Batch dimensions (broadcast src0 if ne02/ne03 < ne12/ne13)
     const int64_t ne02 = src0->ne[2];
@@ -282,8 +326,8 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
     }
 
-    // Copy output from host staging back to device compute buffer
-    flush_output(dst, device, 2, gpu_q);
+    // Copy output from host staging back to device compute buffer (async)
+    flush_output(dst, device, gpu_q);
     return true;
 #endif
 }
@@ -314,12 +358,18 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+
+    staging_begin_op();
+
+    sycl::event e0;
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
 
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
@@ -345,7 +395,7 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -385,13 +435,20 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
-    const float * src1_data = static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q));
+
+    staging_begin_op();
+
+    sycl::event e0, e1;
+    const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
+    const float * src1_data = static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q, &e1));
     float *       dst_data  = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
+    e1.wait();
 
     // dst/src0 dimensions
     const int64_t ne00 = src0->ne[0];
@@ -455,7 +512,7 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -490,12 +547,18 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+
+    staging_begin_op();
+
+    sycl::event e0;
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
 
     const int64_t n = ggml_nelements(dst);
 
@@ -507,7 +570,7 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -543,8 +606,11 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
-    const float * src1_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q))
+    staging_begin_op();
+
+    sycl::event e0, e1;
+    const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
+    const float * src1_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q, &e1))
                                    : src0_data;
 
     if (!src0_data || !src1_data) {
@@ -554,6 +620,11 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     float * dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
     if (!dst_data) {
         return false;
+    }
+
+    e0.wait();
+    if (src1) {
+        e1.wait();
     }
 
     const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
@@ -609,7 +680,7 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -653,13 +724,21 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    const float * src_data  = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
-    const float * mask_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q))
+    staging_begin_op();
+
+    sycl::event e0, e1;
+    const float * src_data  = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
+    const float * mask_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q, &e1))
                                    : nullptr;
     float *       dst_data  = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !dst_data) {
         return false;
+    }
+
+    e0.wait();
+    if (src1) {
+        e1.wait();
     }
 
     const int64_t ne00  = src0->ne[0];  // row width
@@ -709,7 +788,7 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -739,12 +818,18 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+
+    staging_begin_op();
+
+    sycl::event e0;
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
 
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
@@ -780,7 +865,7 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -810,12 +895,18 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
+
+    staging_begin_op();
+
+    sycl::event e0;
+    const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     float *       dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
 
     const int64_t n = ggml_nelements(dst);
 
@@ -826,7 +917,7 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -855,17 +946,23 @@ static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
-    const void * src_data = get_host_ptr(src0, device, 0, gpu_q);
+
+    staging_begin_op();
+
+    sycl::event e0;
+    const void * src_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
     void *       dst_data = get_host_output_ptr(dst, device, gpu_q);
 
     if (!src_data || !dst_data) {
         return false;
     }
 
+    e0.wait();
+
     const size_t nbytes = ggml_nbytes(dst);
     memcpy(dst_data, src_data, nbytes);
 
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 
@@ -914,13 +1011,19 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    const float *   src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q));
-    const int32_t * pos_data = static_cast<const int32_t *>(get_host_ptr(src1, device, 1, gpu_q));
+    staging_begin_op();
+
+    sycl::event e0, e1;
+    const float *   src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
+    const int32_t * pos_data = static_cast<const int32_t *>(get_host_ptr(src1, device, 1, gpu_q, &e1));
     float *         dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
 
     if (!src_data || !pos_data || !dst_data) {
         return false;
     }
+
+    e0.wait();
+    e1.wait();
 
     // Freq factors (optional src2) — must be host-accessible (no staging slot available)
     const float * freq_factors_data = nullptr;
@@ -1027,7 +1130,7 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     });
 
     cpu_q->wait();
-    flush_output(dst, device, 2, gpu_q);
+    flush_output(dst, device, gpu_q);
     return true;
 }
 

@@ -17,4 +17,7 @@
 // Returns true if handled, false if the op is unsupported on CPU.
 bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst);
 
+// Drain any pending async staging events (call at boundary sync points).
+void ggml_sycl_cpu_staging_drain();
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP
