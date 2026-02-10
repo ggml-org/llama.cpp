@@ -1096,6 +1096,7 @@ const func_builtins & value_undefined_t::get_builtins() const {
         {"strip", empty_value_fn<value_string>},
         {"sum", empty_value_fn<value_int>},
         {"title", empty_value_fn<value_string>},
+        {"tojson", tojson},
         {"truncate", empty_value_fn<value_string>},
         {"unique", empty_value_fn<value_array>},
         {"upper", empty_value_fn<value_string>},
