@@ -15,21 +15,31 @@ kv_tier_manager & get_kv_tier_manager(int device) {
     return g_kv_tier_managers[device];
 }
 
-bool kv_tier_manager::configure(int device, uint32_t hot_tokens, uint32_t total_tokens) {
-    device_       = device;
-    total_tokens_ = total_tokens;
+bool kv_tier_manager::configure(int device, size_t hot_bytes, size_t total_bytes, size_t kv_bytes_per_token) {
+    device_             = device;
+    kv_bytes_per_token_ = kv_bytes_per_token;
 
-    // Check env var override: GGML_SYCL_KV_HOT_TOKENS=N
+    // Convert byte counts to token counts
+    total_tokens_ = (kv_bytes_per_token > 0)
+                      ? static_cast<uint32_t>(std::min(total_bytes / kv_bytes_per_token,
+                                                       static_cast<size_t>(UINT32_MAX)))
+                      : static_cast<uint32_t>(std::min(total_bytes, static_cast<size_t>(UINT32_MAX)));
+
+    // Check env var override: GGML_SYCL_KV_HOT_TOKENS=N (token count)
     const char * env = std::getenv("GGML_SYCL_KV_HOT_TOKENS");
     if (env) {
         int val = std::atoi(env);
         if (val > 0) {
             hot_tokens_ = static_cast<uint32_t>(val);
         } else {
-            hot_tokens_ = hot_tokens;
+            hot_tokens_ = (kv_bytes_per_token > 0)
+                            ? static_cast<uint32_t>(hot_bytes / kv_bytes_per_token)
+                            : static_cast<uint32_t>(std::min(hot_bytes, static_cast<size_t>(UINT32_MAX)));
         }
     } else {
-        hot_tokens_ = hot_tokens;
+        hot_tokens_ = (kv_bytes_per_token > 0)
+                        ? static_cast<uint32_t>(hot_bytes / kv_bytes_per_token)
+                        : static_cast<uint32_t>(std::min(hot_bytes, static_cast<size_t>(UINT32_MAX)));
     }
 
     // Minimum hot window: 1024 tokens
@@ -82,9 +92,14 @@ void kv_tier_manager::get_region_sizes(size_t total_bytes, size_t & hot_bytes, s
         cold_bytes = 0;
         return;
     }
-    // Proportional split based on token counts
-    double hot_fraction = static_cast<double>(hot_tokens_) / total_tokens_;
-    hot_bytes  = static_cast<size_t>(total_bytes * hot_fraction);
+    // Convert hot token count back to bytes
+    if (kv_bytes_per_token_ > 0) {
+        hot_bytes = std::min(static_cast<size_t>(hot_tokens_) * kv_bytes_per_token_, total_bytes);
+    } else {
+        // Fallback: proportional split
+        double hot_fraction = static_cast<double>(hot_tokens_) / total_tokens_;
+        hot_bytes = static_cast<size_t>(total_bytes * hot_fraction);
+    }
     // Align hot_bytes to 512 bytes (device allocation alignment)
     hot_bytes  = (hot_bytes + 511) & ~size_t(511);
     if (hot_bytes > total_bytes) {

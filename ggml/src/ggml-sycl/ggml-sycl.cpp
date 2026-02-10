@@ -6731,16 +6731,16 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
                    size / (1024.0 * 1024.0));
 
     // Use kv_tier_manager as the authority for the hot/cold split.
-    // At buffer alloc time, per-token byte count is unknown, so we treat bytes
-    // as units: hot_units = kv_vram_cap, total_units = size.
-    // This lets the manager handle env var overrides (GGML_SYCL_KV_HOT_TOKENS)
-    // and enforce the minimum 1024-unit hot window via configure().
-    uint32_t total_units = static_cast<uint32_t>(std::min(size, static_cast<size_t>(UINT32_MAX)));
-    uint32_t hot_units   = static_cast<uint32_t>(std::min(kv_vram_cap, static_cast<size_t>(UINT32_MAX)));
-    hot_units = std::min(hot_units, total_units);
+    // Estimate kv_bytes_per_token so the manager can work in token units
+    // (required for GGML_SYCL_KV_HOT_TOKENS env var and 1024-token minimum).
+    // Default context is 32768 tokens; size / 32768 gives a conservative estimate.
+    size_t kv_bytes_per_token = size / 32768;
+    if (kv_bytes_per_token == 0) {
+        kv_bytes_per_token = 1;
+    }
 
     auto & mgr = ggml_sycl::get_kv_tier_manager(device);
-    mgr.configure(device, hot_units, total_units);
+    mgr.configure(device, kv_vram_cap, size, kv_bytes_per_token);
 
     size_t hot_size = 0, cold_size = 0;
 
@@ -6869,6 +6869,7 @@ ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
         static constexpr size_t kv_estimate = 256ull << 20;  // 256 MB
         cache[device].offload = ggml_sycl::unified_cache_should_offload_kv(device, kv_estimate);
         cache[device].decided = true;
+        GGML_LOG_WARN("[DBG] kv_buffer_type dev=%d offload=%d\n", device, (int)cache[device].offload);
         if (cache[device].offload) {
             GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory "
                           "(%.1f MB estimate, preserving full context)\n",

@@ -19,10 +19,11 @@ public:
     kv_tier_manager() = default;
 
     // Configure the tier split for a device.
-    // hot_tokens: number of recent tokens to keep in VRAM
-    // total_tokens: total KV cache size (n_ctx)
+    // hot_bytes: VRAM bytes available for the hot KV region
+    // total_bytes: total KV buffer size in bytes
+    // kv_bytes_per_token: bytes per KV token (all layers combined)
     // Returns true if tiering is active (hot < total)
-    bool configure(int device, uint32_t hot_tokens, uint32_t total_tokens);
+    bool configure(int device, size_t hot_bytes, size_t total_bytes, size_t kv_bytes_per_token);
 
     // Calculate optimal hot window size based on available VRAM.
     // kv_bytes_per_token: bytes per KV entry per token (sum across all layers)
@@ -45,10 +46,11 @@ public:
     void get_region_sizes(size_t total_bytes, size_t & hot_bytes, size_t & cold_bytes) const;
 
 private:
-    bool     active_       = false;
-    int      device_       = -1;
-    uint32_t hot_tokens_   = 0;
-    uint32_t total_tokens_ = 0;
+    bool     active_              = false;
+    int      device_              = -1;
+    uint32_t hot_tokens_          = 0;
+    uint32_t total_tokens_        = 0;
+    size_t   kv_bytes_per_token_  = 0;
 };
 
 // Per-device singleton accessor
