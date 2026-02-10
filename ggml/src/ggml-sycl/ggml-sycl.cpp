@@ -23255,27 +23255,14 @@ static std::mutex g_layer_map_mutex;
 static std::vector<bool> g_layer_classified;
 
 // Check if a tensor's operation should be dispatched to CPU based on
-// weight residency. On first encounter of each layer, queries the unified
-// cache for the actual weight tensor's location and records the result.
+// weight residency. For MUL_MAT, classifies the layer by querying the
+// unified cache for the weight tensor's location. For other ops (norm,
+// add, mul), checks if the layer was already classified as CPU-bound.
+// This ensures ALL ops in a CPU-bound layer run on CPU, avoiding
+// activation transfers between CPU and GPU within a single layer.
 static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_tensor * dst) {
     // Only dispatch when CPU offload is available
     if (!ggml_sycl_cpu_offload_available()) {
-        return false;
-    }
-
-    // Only MUL_MAT operations benefit from CPU dispatch
-    if (dst->op != GGML_OP_MUL_MAT) {
-        return false;
-    }
-
-    const ggml_tensor * src0 = dst->src[0];
-    if (!src0 || !src0->name) {
-        return false;
-    }
-
-    // Extract layer ID from weight tensor name
-    int layer_id = ggml_sycl::extract_layer_id(src0->name);
-    if (layer_id < 0) {
         return false;
     }
 
@@ -23288,50 +23275,72 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
         }
     }
 
-    // Bounds check
-    if (layer_id >= (int) g_layer_on_cpu.size()) {
-        return false;
-    }
+    int layer_id = -1;
 
-    // If this layer hasn't been classified yet, check the cache now
-    // (we have the actual weight tensor pointer to construct a valid cache key)
-    if (!g_layer_classified[layer_id]) {
-        std::lock_guard<std::mutex> lock(g_layer_map_mutex);
+    if (dst->op == GGML_OP_MUL_MAT) {
+        // MUL_MAT: extract layer from weight tensor (src[0]) and classify
+        const ggml_tensor * src0 = dst->src[0];
+        if (!src0 || !src0->name) {
+            return false;
+        }
+        layer_id = ggml_sycl::extract_layer_id(src0->name);
+        if (layer_id < 0 || layer_id >= (int) g_layer_on_cpu.size()) {
+            return false;
+        }
+
+        // Classify this layer on first encounter using actual tensor cache key
         if (!g_layer_classified[layer_id]) {
-            bool on_cpu = false;
+            std::lock_guard<std::mutex> lock(g_layer_map_mutex);
+            if (!g_layer_classified[layer_id]) {
+                bool on_cpu = false;
 
-            auto * cache = ggml_sycl::unified_cache_enabled()
-                               ? ggml_sycl::get_unified_cache_for_device(ctx.device)
-                               : nullptr;
-            if (cache) {
-                ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
-                if (key.valid) {
-                    const layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_AOS };
-                    for (layout_mode layout : layouts) {
-                        ggml_sycl::cache_ptr_view view = cache->get_view(key, layout);
-                        if (view.ptr) {
-                            on_cpu = (view.location != ggml_sycl::cache_location::DEVICE);
-                            break;
+                auto * cache = ggml_sycl::unified_cache_enabled()
+                                   ? ggml_sycl::get_unified_cache_for_device(ctx.device)
+                                   : nullptr;
+                if (cache) {
+                    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(src0, ctx.device);
+                    if (key.valid) {
+                        const layout_mode layouts[] = { GGML_LAYOUT_SOA, GGML_LAYOUT_COALESCED, GGML_LAYOUT_AOS };
+                        for (layout_mode layout : layouts) {
+                            ggml_sycl::cache_ptr_view view = cache->get_view(key, layout);
+                            if (view.ptr) {
+                                on_cpu = (view.location != ggml_sycl::cache_location::DEVICE);
+                                break;
+                            }
                         }
                     }
                 }
-            }
 
-            // Fallback: if not in cache, check if weight buffer is host-resident
-            if (!on_cpu && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
-                on_cpu = true;
-            }
+                // Fallback: if not in cache, check if weight buffer is host-resident
+                if (!on_cpu && src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+                    on_cpu = true;
+                }
 
-            g_layer_on_cpu[layer_id] = on_cpu;
-            g_layer_classified[layer_id] = true;
+                g_layer_on_cpu[layer_id] = on_cpu;
+                g_layer_classified[layer_id] = true;
 
-            if (on_cpu) {
-                static int cpu_log_count = 0;
-                if (cpu_log_count++ < 64) {
-                    GGML_LOG_INFO("[SYCL-CPU] Layer %d routed to CPU (weight %s is host-resident)\n",
-                                  layer_id, src0->name);
+                if (on_cpu) {
+                    static int cpu_log_count = 0;
+                    if (cpu_log_count++ < 64) {
+                        GGML_LOG_INFO("[SYCL-CPU] Layer %d routed to CPU (weight %s is host-resident)\n",
+                                      layer_id, src0->name);
+                    }
                 }
             }
+        }
+    } else {
+        // Non-MUL_MAT ops: extract layer from dst name (contains "blk.N.")
+        // and check if this layer was already classified as CPU-bound
+        if (!dst->name) {
+            return false;
+        }
+        layer_id = ggml_sycl::extract_layer_id(dst->name);
+        if (layer_id < 0 || layer_id >= (int) g_layer_on_cpu.size()) {
+            return false;
+        }
+        // Only route if layer was already classified — don't classify from non-weight ops
+        if (!g_layer_classified[layer_id]) {
+            return false;
         }
     }
 
