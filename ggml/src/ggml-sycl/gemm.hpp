@@ -216,9 +216,18 @@ public:
     using tag = dnnl::memory::format_tag;
 
     // Serialize oneDNN execution to avoid cross-thread primitive/memory races.
-    static std::mutex & exec_mutex() {
+    // GPU and CPU use separate mutexes so they don't serialize against each other
+    // (they have independent engines and streams).
+    static std::mutex & exec_mutex_gpu() {
         static std::mutex mutex;
         return mutex;
+    }
+    static std::mutex & exec_mutex_cpu() {
+        static std::mutex mutex;
+        return mutex;
+    }
+    static std::mutex & exec_mutex(const queue_ptr & q) {
+        return (q == ggml_sycl_get_cpu_queue()) ? exec_mutex_cpu() : exec_mutex_gpu();
     }
 
     template<typename T>
@@ -232,7 +241,7 @@ public:
         const void * a, dt at, dnnl_dim_t stra0, dnnl_dim_t stra1, dnnl_dim_t stra2,
         const void * b, dt bt, dnnl_dim_t strb0, dnnl_dim_t strb1, dnnl_dim_t strb2,
         void * c, dt ct, const queue_ptr & q, dnnl_dim_t batches_a, dnnl_dim_t batches_b, int ldc = -1) {
-        std::lock_guard<std::mutex> lock(exec_mutex());
+        std::lock_guard<std::mutex> lock(exec_mutex(q));
 
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
@@ -412,7 +421,7 @@ private:
 
         const int64_t groups = k / group_size;
 
-        std::lock_guard<std::mutex> lock(exec_mutex());
+        std::lock_guard<std::mutex> lock(exec_mutex(q));
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 
@@ -547,7 +556,7 @@ public:
         int batch_size,
         const queue_ptr & q)
     {
-        std::lock_guard<std::mutex> lock(exec_mutex());
+        std::lock_guard<std::mutex> lock(exec_mutex(q));
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 
