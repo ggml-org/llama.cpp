@@ -7390,6 +7390,93 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // QKV weight fusion: concat wq/wk/wv into wqkv for supported architectures
+    // This reduces 3 kernel launches to 1 per layer during inference
+    if (arch == LLM_ARCH_LLAMA || arch == LLM_ARCH_LLAMA_EMBED) {
+        const uint32_t n_layer_count = hparams.n_layer;
+
+        LLAMA_LOG_INFO("%s: fusing QKV weights for %u layers\n", __func__, n_layer_count);
+
+        for (uint32_t il = 0; il < n_layer_count; ++il) {
+            auto & layer = layers[il];
+
+            // skip if already fused or if any weight is missing
+            if (layer.wqkv || !layer.wq || !layer.wk || !layer.wv) {
+                continue;
+            }
+
+            // skip if types don't match (safety check)
+            if (layer.wq->type != layer.wk->type || layer.wq->type != layer.wv->type) {
+                LLAMA_LOG_WARN("%s: layer %u: QKV type mismatch, skipping fusion\n", __func__, il);
+                continue;
+            }
+
+            const int64_t n_embd     = layer.wq->ne[0]; // inner dimension (K)
+            const int64_t n_out_q    = layer.wq->ne[1]; // Q output rows
+            const int64_t n_out_k    = layer.wk->ne[1]; // K output rows
+            const int64_t n_out_v    = layer.wv->ne[1]; // V output rows
+            const int64_t n_out_qkv  = n_out_q + n_out_k + n_out_v;
+            const ggml_type wtype    = layer.wq->type;
+
+            // compute row size in bytes for the quantized type
+            const size_t row_size = ggml_row_size(wtype, n_embd);
+            const size_t qkv_nbytes = row_size * n_out_qkv;
+
+            // allocate host buffer for concat
+            std::vector<uint8_t> buf(qkv_nbytes);
+
+            // copy Q rows
+            ggml_backend_tensor_get(layer.wq, buf.data(), 0, row_size * n_out_q);
+            // copy K rows after Q
+            ggml_backend_tensor_get(layer.wk, buf.data() + row_size * n_out_q, 0, row_size * n_out_k);
+            // copy V rows after K
+            ggml_backend_tensor_get(layer.wv, buf.data() + row_size * (n_out_q + n_out_k), 0, row_size * n_out_v);
+
+            // allocate a new buffer for wqkv
+            ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(layer.wq->buffer);
+            ggml_backend_buffer_t qkv_buf = ggml_backend_buft_alloc_buffer(buft, qkv_nbytes + 512);
+            if (!qkv_buf) {
+                LLAMA_LOG_WARN("%s: layer %u: failed to allocate QKV buffer, skipping fusion\n", __func__, il);
+                continue;
+            }
+
+            // create a standalone ggml context for the qkv tensor
+            struct ggml_init_params ctx_params = {
+                /*.mem_size   =*/ ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context * ctx_qkv = ggml_init(ctx_params);
+            if (!ctx_qkv) {
+                ggml_backend_buffer_free(qkv_buf);
+                LLAMA_LOG_WARN("%s: layer %u: failed to create QKV context, skipping fusion\n", __func__, il);
+                continue;
+            }
+
+            ggml_tensor * wqkv = ggml_new_tensor_2d(ctx_qkv, wtype, n_embd, n_out_qkv);
+            ggml_set_name(wqkv, (std::string("blk.") + std::to_string(il) + ".attn_qkv.weight").c_str());
+
+            // allocate the tensor in the buffer
+            ggml_backend_tensor_alloc(qkv_buf, wqkv, ggml_backend_buffer_get_base(qkv_buf));
+
+            // copy concatenated data to device
+            ggml_backend_tensor_set(wqkv, buf.data(), 0, qkv_nbytes);
+
+            // store the fused tensor
+            layer.wqkv = wqkv;
+
+            // keep the context and buffer alive
+            pimpl->ctxs_bufs.emplace_back(ggml_context_ptr(ctx_qkv), std::vector<ggml_backend_buffer_ptr>());
+            pimpl->ctxs_bufs.back().second.emplace_back(qkv_buf);
+
+            if (il == 0) {
+                LLAMA_LOG_INFO("%s: QKV fused: Q[%lld,%lld] + K[%lld,%lld] + V[%lld,%lld] -> QKV[%lld,%lld] (%s)\n",
+                    __func__, (long long)n_embd, (long long)n_out_q, (long long)n_embd, (long long)n_out_k, (long long)n_embd, (long long)n_out_v,
+                    (long long)n_embd, (long long)n_out_qkv, ggml_type_name(wtype));
+            }
+        }
+    }
+
     return true;
 }
 
