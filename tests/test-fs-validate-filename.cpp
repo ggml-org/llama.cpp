@@ -26,6 +26,10 @@ int main(void) {
     test("multiple dots",           true,  "archive.tar.gz");
     test("leading dot (hidden)",    true,  ".gitignore");
     test("unicode filename",        true,  "\xc3\xa9\xc3\xa0\xc3\xbc.txt"); // éàü.txt
+    test("precomposed accent",      true,  "caf\xc3\xa9");                   // café (U+00E9)
+    test("combining accent",        true,  "cafe\xcc\x81");                  // café (e + U+0301)
+    test("japanese hiragana",       true,  "\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86.txt"); // あいう.txt
+    test("korean hangul",           true,  "\xed\x95\x9c\xea\xb8\x80.txt"); // 한글.txt
     test("max length (255 bytes)",  true,  std::string(255, 'a'));
 
     // --- Basic invalid filenames ---
