@@ -1,561 +1,611 @@
 #pragma once
 
-#include "llama.h"
-#include "llama-arch.h"
-#include "llama-graph.h"
-#include "llama-hparams.h"
-#include "llama-memory.h"
-#include "llama-vocab.h"
+#include "ggml.h" // ggml_op
 
-#include <map>
-#include <memory>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+#include <set>
 
-struct llama_cparams;
-struct llama_ubatch;
-struct llama_model_loader;
+//
+// gguf constants (sync with gguf.py)
+//
 
-// available models
-enum llm_type {
-    LLM_TYPE_UNKNOWN,
-    LLM_TYPE_14M,
-    LLM_TYPE_17M,
-    LLM_TYPE_22M,
-    LLM_TYPE_33M,
-    LLM_TYPE_47M,
-    LLM_TYPE_60M,
-    LLM_TYPE_70M,
-    LLM_TYPE_80M,
-    LLM_TYPE_109M,
-    LLM_TYPE_137M,
-    LLM_TYPE_140M,
-    LLM_TYPE_149M,
-    LLM_TYPE_160M,
-    LLM_TYPE_190M,
-    LLM_TYPE_220M,
-    LLM_TYPE_250M,
-    LLM_TYPE_256M,
-    LLM_TYPE_270M,
-    LLM_TYPE_335M,
-    LLM_TYPE_350M,
-    LLM_TYPE_360M,
-    LLM_TYPE_395M,
-    LLM_TYPE_410M,
-    LLM_TYPE_450M,
-    LLM_TYPE_475M,
-    LLM_TYPE_558M,
-    LLM_TYPE_700M,
-    LLM_TYPE_770M,
-    LLM_TYPE_780M,
-    LLM_TYPE_950M,
-    LLM_TYPE_0_3B,
-    LLM_TYPE_0_5B,
-    LLM_TYPE_0_6B,
-    LLM_TYPE_1B,
-    LLM_TYPE_1_2B,
-    LLM_TYPE_1_3B,
-    LLM_TYPE_1_4B,
-    LLM_TYPE_1_5B,
-    LLM_TYPE_1_6B,
-    LLM_TYPE_1_7B,
-    LLM_TYPE_1_8B,
-    LLM_TYPE_2B,
-    LLM_TYPE_2_6B,
-    LLM_TYPE_2_8B,
-    LLM_TYPE_2_9B,
-    LLM_TYPE_3B,
-    LLM_TYPE_4B,
-    LLM_TYPE_6B,
-    LLM_TYPE_6_9B,
-    LLM_TYPE_7B,
-    LLM_TYPE_8B,
-    LLM_TYPE_9B,
-    LLM_TYPE_11B,
-    LLM_TYPE_12B,
-    LLM_TYPE_13B,
-    LLM_TYPE_14B,
-    LLM_TYPE_15B,
-    LLM_TYPE_16B,
-    LLM_TYPE_20B,
-    LLM_TYPE_26B,
-    LLM_TYPE_27B,
-    LLM_TYPE_30B,
-    LLM_TYPE_32B,
-    LLM_TYPE_34B,
-    LLM_TYPE_35B,
-    LLM_TYPE_36B,
-    LLM_TYPE_40B,
-    LLM_TYPE_65B,
-    LLM_TYPE_70B,
-    LLM_TYPE_120B,
-    LLM_TYPE_142B,
-    LLM_TYPE_236B,
-    LLM_TYPE_290B,
-    LLM_TYPE_314B,
-    LLM_TYPE_405B,
-    LLM_TYPE_671B,
-    LLM_TYPE_SMALL,
-    LLM_TYPE_MEDIUM,
-    LLM_TYPE_LARGE,
-    LLM_TYPE_XL,
-    LLM_TYPE_A1_7B,
-    LLM_TYPE_A2_7B,
-    LLM_TYPE_8x7B,
-    LLM_TYPE_8x22B,
-    LLM_TYPE_16x12B,
-    LLM_TYPE_16x3_8B,
-    LLM_TYPE_10B_128x3_66B,
-    LLM_TYPE_57B_A14B,
-    LLM_TYPE_17B_16E, // llama4 Scout
-    LLM_TYPE_17B_128E, // llama4 Maverick
-    LLM_TYPE_A13B,
-    LLM_TYPE_7B_A1B,
-    LLM_TYPE_8B_A1B, // lfm2moe
-    LLM_TYPE_16B_A1B,
-    LLM_TYPE_21B_A3B, // Ernie MoE small
-    LLM_TYPE_28B_A3B, // Ernie MoE vl small
-    LLM_TYPE_30B_A3B,
-    LLM_TYPE_31B_A3_5B,
-    LLM_TYPE_48B_A3B, // Kimi Linear
-    LLM_TYPE_80B_A3B, // Qwen3 Next
-    LLM_TYPE_100B_A6B,
-    LLM_TYPE_102B_A12B, // Solar-Open
-    LLM_TYPE_106B_A12B, // GLM-4.5-Air
-    LLM_TYPE_196B_A11B, // Step3.5-Flash
-    LLM_TYPE_230B_A10B, // Minimax M2
-    LLM_TYPE_235B_A22B,
-    LLM_TYPE_300B_A47B, // Ernie MoE big
-    LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
-    LLM_TYPE_355B_A32B, // GLM-4.5
-    LLM_TYPE_E2B,
-    LLM_TYPE_E4B,
+enum llm_arch {
+    LLM_ARCH_CLIP,
+    LLM_ARCH_LLAMA,
+    LLM_ARCH_LLAMA4,
+    LLM_ARCH_DECI,
+    LLM_ARCH_FALCON,
+    LLM_ARCH_BAICHUAN,
+    LLM_ARCH_GROK,
+    LLM_ARCH_GPT2,
+    LLM_ARCH_GPTJ,
+    LLM_ARCH_GPTNEOX,
+    LLM_ARCH_MPT,
+    LLM_ARCH_STARCODER,
+    LLM_ARCH_REFACT,
+    LLM_ARCH_BERT,
+    LLM_ARCH_MODERN_BERT,
+    LLM_ARCH_NOMIC_BERT,
+    LLM_ARCH_NOMIC_BERT_MOE,
+    LLM_ARCH_NEO_BERT,
+    LLM_ARCH_JINA_BERT_V2,
+    LLM_ARCH_JINA_BERT_V3,
+    LLM_ARCH_BLOOM,
+    LLM_ARCH_STABLELM,
+    LLM_ARCH_QWEN,
+    LLM_ARCH_QWEN2,
+    LLM_ARCH_QWEN2MOE,
+    LLM_ARCH_QWEN2VL,
+    LLM_ARCH_QWEN3,
+    LLM_ARCH_QWEN3MOE,
+    LLM_ARCH_QWEN3NEXT,
+    LLM_ARCH_QWEN3_5,
+    LLM_ARCH_QWEN3_5_MOE,
+    LLM_ARCH_QWEN3VL,
+    LLM_ARCH_QWEN3VLMOE,
+    LLM_ARCH_PHI2,
+    LLM_ARCH_PHI3,
+    LLM_ARCH_PHIMOE,
+    LLM_ARCH_PLAMO,
+    LLM_ARCH_PLAMO2,
+    LLM_ARCH_PLAMO3,
+    LLM_ARCH_CODESHELL,
+    LLM_ARCH_ORION,
+    LLM_ARCH_INTERNLM2,
+    LLM_ARCH_MINICPM,
+    LLM_ARCH_MINICPM3,
+    LLM_ARCH_GEMMA,
+    LLM_ARCH_GEMMA2,
+    LLM_ARCH_GEMMA3,
+    LLM_ARCH_GEMMA3N,
+    LLM_ARCH_GEMMA_EMBEDDING,
+    LLM_ARCH_STARCODER2,
+    LLM_ARCH_MAMBA,
+    LLM_ARCH_MAMBA2,
+    LLM_ARCH_JAMBA,
+    LLM_ARCH_FALCON_H1,
+    LLM_ARCH_XVERSE,
+    LLM_ARCH_COMMAND_R,
+    LLM_ARCH_COHERE2,
+    LLM_ARCH_DBRX,
+    LLM_ARCH_OLMO,
+    LLM_ARCH_OLMO2,
+    LLM_ARCH_OLMOE,
+    LLM_ARCH_OPENELM,
+    LLM_ARCH_ARCTIC,
+    LLM_ARCH_DEEPSEEK,
+    LLM_ARCH_DEEPSEEK2,
+    LLM_ARCH_CHATGLM,
+    LLM_ARCH_GLM4,
+    LLM_ARCH_GLM4_MOE,
+    LLM_ARCH_BITNET,
+    LLM_ARCH_T5,
+    LLM_ARCH_T5ENCODER,
+    LLM_ARCH_JAIS,
+    LLM_ARCH_NEMOTRON,
+    LLM_ARCH_NEMOTRON_H,
+    LLM_ARCH_NEMOTRON_H_MOE,
+    LLM_ARCH_EXAONE,
+    LLM_ARCH_EXAONE4,
+    LLM_ARCH_EXAONE_MOE,
+    LLM_ARCH_RWKV6,
+    LLM_ARCH_RWKV6QWEN2,
+    LLM_ARCH_RWKV7,
+    LLM_ARCH_ARWKV7,
+    LLM_ARCH_GRANITE,
+    LLM_ARCH_GRANITE_MOE,
+    LLM_ARCH_GRANITE_HYBRID,
+    LLM_ARCH_CHAMELEON,
+    LLM_ARCH_WAVTOKENIZER_DEC,
+    LLM_ARCH_PLM,
+    LLM_ARCH_BAILINGMOE,
+    LLM_ARCH_BAILINGMOE2,
+    LLM_ARCH_DOTS1,
+    LLM_ARCH_ARCEE,
+    LLM_ARCH_AFMOE,
+    LLM_ARCH_ERNIE4_5,
+    LLM_ARCH_ERNIE4_5_MOE,
+    LLM_ARCH_ERNIE4_5_VL_MOE,
+    LLM_ARCH_HUNYUAN_MOE,
+    LLM_ARCH_HUNYUAN_DENSE,
+    LLM_ARCH_SMOLLM3,
+    LLM_ARCH_OPENAI_MOE,
+    LLM_ARCH_LFM2,
+    LLM_ARCH_LFM2MOE,
+    LLM_ARCH_DREAM,
+    LLM_ARCH_SMALLTHINKER,
+    LLM_ARCH_LLADA,
+    LLM_ARCH_LLADA_MOE,
+    LLM_ARCH_SEED_OSS,
+    LLM_ARCH_GROVEMOE,
+    LLM_ARCH_APERTUS,
+    LLM_ARCH_MINIMAX_M2,
+    LLM_ARCH_COGVLM,
+    LLM_ARCH_RND1,
+    LLM_ARCH_PANGU_EMBED,
+    LLM_ARCH_MISTRAL3,
+    LLM_ARCH_MIMO2,
+    LLM_ARCH_STEP35,
+    LLM_ARCH_LLAMA_EMBED,
+    LLM_ARCH_MAINCODER,
+    LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_UNKNOWN,
 };
 
-std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+enum llm_kv {
+    LLM_KV_GENERAL_TYPE,
+    LLM_KV_GENERAL_ARCHITECTURE,
+    LLM_KV_GENERAL_QUANTIZATION_VERSION,
+    LLM_KV_GENERAL_ALIGNMENT,
+    LLM_KV_GENERAL_FILE_TYPE,
+    LLM_KV_GENERAL_SAMPLING_SEQUENCE,
+    LLM_KV_GENERAL_SAMPLING_TOP_K,
+    LLM_KV_GENERAL_SAMPLING_TOP_P,
+    LLM_KV_GENERAL_SAMPLING_MIN_P,
+    LLM_KV_GENERAL_SAMPLING_XTC_PROBABILITY,
+    LLM_KV_GENERAL_SAMPLING_XTC_THRESHOLD,
+    LLM_KV_GENERAL_SAMPLING_TEMP,
+    LLM_KV_GENERAL_SAMPLING_PENALTY_LAST_N,
+    LLM_KV_GENERAL_SAMPLING_PENALTY_REPEAT,
+    LLM_KV_GENERAL_SAMPLING_MIROSTAT,
+    LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,
+    LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,
+    LLM_KV_GENERAL_NAME,
+    LLM_KV_GENERAL_AUTHOR,
+    LLM_KV_GENERAL_VERSION,
+    LLM_KV_GENERAL_URL,
+    LLM_KV_GENERAL_DESCRIPTION,
+    LLM_KV_GENERAL_LICENSE,
+    LLM_KV_GENERAL_SOURCE_URL,
+    LLM_KV_GENERAL_SOURCE_HF_REPO,
 
-struct llama_layer_posnet {
-    // resnet
-    struct ggml_tensor * norm1   = nullptr;
-    struct ggml_tensor * norm1_b = nullptr;
+    LLM_KV_VOCAB_SIZE,
+    LLM_KV_CONTEXT_LENGTH,
+    LLM_KV_EMBEDDING_LENGTH,
+    LLM_KV_EMBEDDING_LENGTH_OUT,
+    LLM_KV_FEATURES_LENGTH,
+    LLM_KV_BLOCK_COUNT,
+    LLM_KV_LEADING_DENSE_BLOCK_COUNT,
+    LLM_KV_FEED_FORWARD_LENGTH,
+    LLM_KV_EXPERT_FEED_FORWARD_LENGTH,
+    LLM_KV_VISION_EXPERT_FEED_FORWARD_LENGTH,
+    LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH,
+    LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,
+    LLM_KV_SWIGLU_CLAMP_EXP,
+    LLM_KV_SWIGLU_CLAMP_SHEXP,
+    LLM_KV_USE_PARALLEL_RESIDUAL,
+    LLM_KV_TENSOR_DATA_LAYOUT,
+    LLM_KV_EXPERT_COUNT,
+    LLM_KV_EXPERT_USED_COUNT,
+    LLM_KV_EXPERT_SHARED_COUNT,
+    LLM_KV_EXPERT_GROUP_COUNT,
+    LLM_KV_EXPERT_GROUP_USED_COUNT,
+    LLM_KV_EXPERT_WEIGHTS_SCALE,
+    LLM_KV_EXPERT_WEIGHTS_NORM,
+    LLM_KV_EXPERT_GATING_FUNC,
+    LLM_KV_EXPERT_GROUP_SCALE,
+    LLM_KV_EXPERTS_PER_GROUP,
+    LLM_KV_MOE_EVERY_N_LAYERS,
+    LLM_KV_NEXTN_PREDICT_LAYERS,
+    LLM_KV_NUM_DEEPSTACK_LAYERS,
+    LLM_KV_POOLING_TYPE,
+    LLM_KV_LOGIT_SCALE,
+    LLM_KV_DECODER_START_TOKEN_ID,
+    LLM_KV_DECODER_BLOCK_COUNT,
+    LLM_KV_ATTN_LOGIT_SOFTCAPPING,
+    LLM_KV_ROUTER_LOGIT_SOFTCAPPING,
+    LLM_KV_FINAL_LOGIT_SOFTCAPPING,
+    LLM_KV_SWIN_NORM,
+    LLM_KV_RESCALE_EVERY_N_LAYERS,
+    LLM_KV_TIME_MIX_EXTRA_DIM,
+    LLM_KV_TIME_DECAY_EXTRA_DIM,
+    LLM_KV_RESIDUAL_SCALE,
+    LLM_KV_EMBEDDING_SCALE,
+    LLM_KV_TOKEN_SHIFT_COUNT,
+    LLM_KV_INTERLEAVE_MOE_LAYER_STEP,
 
-    struct ggml_tensor * conv1   = nullptr;
-    struct ggml_tensor * conv1_b = nullptr;
+    LLM_KV_ATTENTION_HEAD_COUNT,
+    LLM_KV_ATTENTION_HEAD_COUNT_KV,
+    LLM_KV_ATTENTION_MAX_ALIBI_BIAS,
+    LLM_KV_ATTENTION_CLAMP_KQV,
+    LLM_KV_ATTENTION_KEY_LENGTH,
+    LLM_KV_ATTENTION_VALUE_LENGTH,
+    LLM_KV_ATTENTION_LAYERNORM_EPS,
+    LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,
+    LLM_KV_ATTENTION_GROUPNORM_EPS,
+    LLM_KV_ATTENTION_GROUPNORM_GROUPS,
+    LLM_KV_ATTENTION_CAUSAL,
+    LLM_KV_ATTENTION_Q_LORA_RANK,
+    LLM_KV_ATTENTION_KV_LORA_RANK,
+    LLM_KV_ATTENTION_DECAY_LORA_RANK,
+    LLM_KV_ATTENTION_ICLR_LORA_RANK,
+    LLM_KV_ATTENTION_VALUE_RESIDUAL_MIX_LORA_RANK,
+    LLM_KV_ATTENTION_GATE_LORA_RANK,
+    LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,
+    LLM_KV_ATTENTION_SLIDING_WINDOW,
+    LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,
+    LLM_KV_ATTENTION_SCALE,
+    LLM_KV_ATTENTION_OUTPUT_SCALE,
+    LLM_KV_ATTENTION_TEMPERATURE_LENGTH,
+    LLM_KV_ATTENTION_TEMPERATURE_SCALE,
+    LLM_KV_ATTENTION_KEY_LENGTH_MLA,
+    LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
 
-    struct ggml_tensor * norm2   = nullptr;
-    struct ggml_tensor * norm2_b = nullptr;
+    LLM_KV_ROPE_DIMENSION_COUNT,
+    LLM_KV_ROPE_DIMENSION_SECTIONS,
+    LLM_KV_ROPE_FREQ_BASE,
+    LLM_KV_ROPE_FREQ_BASE_SWA,
+    LLM_KV_ROPE_SCALE_LINEAR,
+    LLM_KV_ROPE_SCALING_TYPE,
+    LLM_KV_ROPE_SCALING_FACTOR,
+    LLM_KV_ROPE_SCALING_ATTN_FACTOR,
+    LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,
+    LLM_KV_ROPE_SCALING_FINETUNED,
+    LLM_KV_ROPE_SCALING_YARN_LOG_MUL,
+    LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,
+    LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR,
+    LLM_KV_ROPE_SCALING_YARN_BETA_FAST,
+    LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,
 
-    struct ggml_tensor * conv2   = nullptr;
-    struct ggml_tensor * conv2_b = nullptr;
+    LLM_KV_SPLIT_NO,
+    LLM_KV_SPLIT_COUNT,
+    LLM_KV_SPLIT_TENSORS_COUNT,
 
-    // attention
-    struct ggml_tensor * attn_norm   = nullptr;
-    struct ggml_tensor * attn_norm_b = nullptr;
+    LLM_KV_SSM_INNER_SIZE,
+    LLM_KV_SSM_CONV_KERNEL,
+    LLM_KV_SSM_STATE_SIZE,
+    LLM_KV_SSM_TIME_STEP_RANK,
+    LLM_KV_SSM_GROUP_COUNT,
+    LLM_KV_SSM_DT_B_C_RMS,
 
-    struct ggml_tensor * attn_q   = nullptr;
-    struct ggml_tensor * attn_q_b = nullptr;
+    LLM_KV_KDA_HEAD_DIM,
 
-    struct ggml_tensor * attn_k   = nullptr;
-    struct ggml_tensor * attn_k_b = nullptr;
+    LLM_KV_WKV_HEAD_SIZE,
 
-    struct ggml_tensor * attn_v   = nullptr;
-    struct ggml_tensor * attn_v_b = nullptr;
+    LLM_KV_TOKENIZER_MODEL,
+    LLM_KV_TOKENIZER_PRE,
+    LLM_KV_TOKENIZER_LIST,
+    LLM_KV_TOKENIZER_TOKEN_TYPE,
+    LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT,
+    LLM_KV_TOKENIZER_SCORES,
+    LLM_KV_TOKENIZER_MERGES,
+    LLM_KV_TOKENIZER_BOS_ID,
+    LLM_KV_TOKENIZER_EOS_ID,
+    LLM_KV_TOKENIZER_EOT_ID,
+    LLM_KV_TOKENIZER_EOM_ID,
+    LLM_KV_TOKENIZER_UNK_ID,
+    LLM_KV_TOKENIZER_SEP_ID,
+    LLM_KV_TOKENIZER_PAD_ID,
+    LLM_KV_TOKENIZER_CLS_ID,
+    LLM_KV_TOKENIZER_MASK_ID,
+    LLM_KV_TOKENIZER_ADD_BOS,
+    LLM_KV_TOKENIZER_ADD_EOS,
+    LLM_KV_TOKENIZER_ADD_SEP,
+    LLM_KV_TOKENIZER_ADD_PREFIX,
+    LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,
+    LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,
+    LLM_KV_TOKENIZER_HF_JSON,
+    LLM_KV_TOKENIZER_RWKV,
+    LLM_KV_TOKENIZER_CHAT_TEMPLATE,
+    LLM_KV_TOKENIZER_FIM_PRE_ID,
+    LLM_KV_TOKENIZER_FIM_SUF_ID,
+    LLM_KV_TOKENIZER_FIM_MID_ID,
+    LLM_KV_TOKENIZER_FIM_PAD_ID,
+    LLM_KV_TOKENIZER_FIM_REP_ID,
+    LLM_KV_TOKENIZER_FIM_SEP_ID,
 
-    struct ggml_tensor * attn_o   = nullptr;
-    struct ggml_tensor * attn_o_b = nullptr;
+    LLM_KV_ADAPTER_TYPE,
+    LLM_KV_ADAPTER_LORA_ALPHA,
+    LLM_KV_ADAPTER_LORA_TASK_NAME,
+    LLM_KV_ADAPTER_LORA_PROMPT_PREFIX,
+    LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS,
 
-    // normalize
-    struct ggml_tensor * norm   = nullptr;
-    struct ggml_tensor * norm_b = nullptr;
+    LLM_KV_POSNET_EMBEDDING_LENGTH,
+    LLM_KV_POSNET_BLOCK_COUNT,
+
+    LLM_KV_CONVNEXT_EMBEDDING_LENGTH,
+    LLM_KV_CONVNEXT_BLOCK_COUNT,
+
+    LLM_KV_CLASSIFIER_OUTPUT_LABELS,
+
+    LLM_KV_SHORTCONV_L_CACHE,
+
+    LLM_KV_XIELU_ALPHA_N,
+    LLM_KV_XIELU_ALPHA_P,
+    LLM_KV_XIELU_BETA,
+    LLM_KV_XIELU_EPS,
+
+    // deprecated:
+    LLM_KV_TOKENIZER_PREFIX_ID,
+    LLM_KV_TOKENIZER_SUFFIX_ID,
+    LLM_KV_TOKENIZER_MIDDLE_ID,
+
+    // sentence-transformers dense layers in and out features
+    LLM_KV_DENSE_2_FEAT_IN,
+    LLM_KV_DENSE_2_FEAT_OUT,
+    LLM_KV_DENSE_3_FEAT_IN,
+    LLM_KV_DENSE_3_FEAT_OUT,
 };
 
-struct llama_layer_convnext {
-    struct ggml_tensor * dw   = nullptr;
-    struct ggml_tensor * dw_b = nullptr;
-
-    struct ggml_tensor * norm   = nullptr;
-    struct ggml_tensor * norm_b = nullptr;
-
-    struct ggml_tensor * pw1   = nullptr;
-    struct ggml_tensor * pw1_b = nullptr;
-
-    struct ggml_tensor * pw2   = nullptr;
-    struct ggml_tensor * pw2_b = nullptr;
-
-    struct ggml_tensor * gamma = nullptr;
+enum llm_tensor {
+    LLM_TENSOR_TOKEN_EMBD,
+    LLM_TENSOR_TOKEN_EMBD_NORM,
+    LLM_TENSOR_TOKEN_TYPES,
+    LLM_TENSOR_POS_EMBD,
+    LLM_TENSOR_DENSE_2_OUT,
+    LLM_TENSOR_DENSE_3_OUT,
+    LLM_TENSOR_OUTPUT,
+    LLM_TENSOR_OUTPUT_NORM,
+    LLM_TENSOR_OUTPUT_NORM_LFM2, // fix for wrong tensor name
+    LLM_TENSOR_ROPE_FREQS,
+    LLM_TENSOR_ROPE_FACTORS_LONG,
+    LLM_TENSOR_ROPE_FACTORS_SHORT,
+    LLM_TENSOR_ATTN_Q,
+    LLM_TENSOR_ATTN_K,
+    LLM_TENSOR_ATTN_V,
+    LLM_TENSOR_ATTN_QKV,
+    LLM_TENSOR_ATTN_OUT,
+    LLM_TENSOR_ATTN_NORM,
+    LLM_TENSOR_ATTN_NORM_2,
+    LLM_TENSOR_ATTN_OUT_NORM,
+    LLM_TENSOR_ATTN_POST_NORM,
+    LLM_TENSOR_ATTN_ROT_EMBD,
+    LLM_TENSOR_ATTN_SINKS,
+    LLM_TENSOR_ATTN_GATE,
+    LLM_TENSOR_FFN_GATE_INP,
+    LLM_TENSOR_V_FFN_GATE_INP,
+    LLM_TENSOR_FFN_GATE_INP_SHEXP,
+    LLM_TENSOR_FFN_NORM,
+    LLM_TENSOR_FFN_POST_NORM,
+    LLM_TENSOR_FFN_GATE,
+    LLM_TENSOR_FFN_DOWN,
+    LLM_TENSOR_FFN_UP,
+    LLM_TENSOR_FFN_ACT,
+    LLM_TENSOR_FFN_DOWN_EXP,  // split experts for backward compatibility
+    LLM_TENSOR_FFN_GATE_EXP,
+    LLM_TENSOR_FFN_UP_EXP,
+    LLM_TENSOR_FFN_NORM_EXPS,
+    LLM_TENSOR_FFN_DOWN_EXPS, // merged experts
+    LLM_TENSOR_V_FFN_DOWN_EXPS, // merged experts
+    LLM_TENSOR_FFN_GATE_EXPS,
+    LLM_TENSOR_V_FFN_GATE_EXPS,
+    LLM_TENSOR_FFN_UP_EXPS,
+    LLM_TENSOR_V_FFN_UP_EXPS,
+    LLM_TENSOR_FFN_DOWN_SHEXP,
+    LLM_TENSOR_FFN_GATE_SHEXP,
+    LLM_TENSOR_FFN_UP_SHEXP,
+    LLM_TENSOR_FFN_DOWN_CHEXPS,
+    LLM_TENSOR_FFN_GATE_CHEXPS,
+    LLM_TENSOR_FFN_UP_CHEXPS,
+    LLM_TENSOR_FFN_EXP_PROBS_B,
+    LLM_TENSOR_V_FFN_EXP_PROBS_B,
+    LLM_TENSOR_ATTN_Q_NORM,
+    LLM_TENSOR_ATTN_K_NORM,
+    LLM_TENSOR_LAYER_OUT_NORM,
+    LLM_TENSOR_POST_ATTN_NORM,
+    LLM_TENSOR_POST_MLP_NORM,
+    LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
+    LLM_TENSOR_PER_LAYER_MODEL_PROJ, // gemma3n
+    LLM_TENSOR_PER_LAYER_INP_GATE,   // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ,       // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ_NORM,  // gemma3n
+    LLM_TENSOR_PER_LAYER_POST_NORM,  // gemma3n
+    LLM_TENSOR_ALTUP_PROJ,           // gemma3n
+    LLM_TENSOR_ALTUP_UNEMBD_PROJ,    // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_COEF,   // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_SCALE,  // gemma3n
+    LLM_TENSOR_ALTUP_PREDICT_COEF,   // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER,         // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER_NORM,    // gemma3n
+    LLM_TENSOR_LAUREL_L,             // gemma3n
+    LLM_TENSOR_LAUREL_R,             // gemma3n
+    LLM_TENSOR_LAUREL_POST_NORM,     // gemma3n
+    LLM_TENSOR_SSM_IN,
+    LLM_TENSOR_SSM_CONV1D,
+    LLM_TENSOR_SSM_X,
+    LLM_TENSOR_SSM_DT,
+    LLM_TENSOR_SSM_DT_NORM,
+    LLM_TENSOR_SSM_A,
+    LLM_TENSOR_SSM_A_NOSCAN,        // qwen3next special case with MUL instead of SSM_SCAN
+    LLM_TENSOR_SSM_B_NORM,
+    LLM_TENSOR_SSM_C_NORM,
+    LLM_TENSOR_SSM_D,
+    LLM_TENSOR_SSM_NORM,
+    LLM_TENSOR_SSM_OUT,
+    LLM_TENSOR_SSM_BETA_ALPHA,      // qwen3next
+    // Kimi Linear KDA (using SSM_ prefix for consistency)
+    LLM_TENSOR_SSM_CONV1D_Q,        // kimi: Q conv1d weight
+    LLM_TENSOR_SSM_CONV1D_K,        // kimi: K conv1d weight
+    LLM_TENSOR_SSM_CONV1D_V,        // kimi: V conv1d weight
+    LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
+    LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
+    LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient
+    LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
+    LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
+    LLM_TENSOR_TIME_MIX_W0,
+    LLM_TENSOR_TIME_MIX_W1,
+    LLM_TENSOR_TIME_MIX_W2,
+    LLM_TENSOR_TIME_MIX_A0,
+    LLM_TENSOR_TIME_MIX_A1,
+    LLM_TENSOR_TIME_MIX_A2,
+    LLM_TENSOR_TIME_MIX_V0,
+    LLM_TENSOR_TIME_MIX_V1,
+    LLM_TENSOR_TIME_MIX_V2,
+    LLM_TENSOR_TIME_MIX_G1,
+    LLM_TENSOR_TIME_MIX_G2,
+    LLM_TENSOR_TIME_MIX_K_K,
+    LLM_TENSOR_TIME_MIX_K_A,
+    LLM_TENSOR_TIME_MIX_R_K,
+    LLM_TENSOR_TIME_MIX_LERP_X,
+    LLM_TENSOR_TIME_MIX_LERP_W,
+    LLM_TENSOR_TIME_MIX_LERP_K,
+    LLM_TENSOR_TIME_MIX_LERP_V,
+    LLM_TENSOR_TIME_MIX_LERP_R,
+    LLM_TENSOR_TIME_MIX_LERP_G,
+    LLM_TENSOR_TIME_MIX_LERP_FUSED,
+    LLM_TENSOR_TIME_MIX_FIRST,
+    LLM_TENSOR_TIME_MIX_DECAY,
+    LLM_TENSOR_TIME_MIX_DECAY_W1,
+    LLM_TENSOR_TIME_MIX_DECAY_W2,
+    LLM_TENSOR_TIME_MIX_KEY,
+    LLM_TENSOR_TIME_MIX_VALUE,
+    LLM_TENSOR_TIME_MIX_RECEPTANCE,
+    LLM_TENSOR_TIME_MIX_GATE,
+    LLM_TENSOR_TIME_MIX_LN,
+    LLM_TENSOR_TIME_MIX_OUTPUT,
+    LLM_TENSOR_CHANNEL_MIX_LERP_K,
+    LLM_TENSOR_CHANNEL_MIX_LERP_R,
+    LLM_TENSOR_CHANNEL_MIX_KEY,
+    LLM_TENSOR_CHANNEL_MIX_RECEPTANCE,
+    LLM_TENSOR_CHANNEL_MIX_VALUE,
+    LLM_TENSOR_ATTN_Q_A,
+    LLM_TENSOR_ATTN_Q_B,
+    LLM_TENSOR_ATTN_KV_A_MQA,
+    LLM_TENSOR_ATTN_KV_B,
+    LLM_TENSOR_ATTN_K_B,
+    LLM_TENSOR_ATTN_V_B,
+    LLM_TENSOR_ATTN_Q_A_NORM,
+    LLM_TENSOR_ATTN_KV_A_NORM,
+    LLM_TENSOR_ATTN_SUB_NORM,
+    LLM_TENSOR_FFN_SUB_NORM,
+    LLM_TENSOR_DEC_ATTN_NORM,
+    LLM_TENSOR_DEC_ATTN_Q,
+    LLM_TENSOR_DEC_ATTN_K,
+    LLM_TENSOR_DEC_ATTN_V,
+    LLM_TENSOR_DEC_ATTN_OUT,
+    LLM_TENSOR_DEC_ATTN_REL_B,
+    LLM_TENSOR_DEC_CROSS_ATTN_NORM,
+    LLM_TENSOR_DEC_CROSS_ATTN_Q,
+    LLM_TENSOR_DEC_CROSS_ATTN_K,
+    LLM_TENSOR_DEC_CROSS_ATTN_V,
+    LLM_TENSOR_DEC_CROSS_ATTN_OUT,
+    LLM_TENSOR_DEC_CROSS_ATTN_REL_B,
+    LLM_TENSOR_DEC_FFN_NORM,
+    LLM_TENSOR_DEC_FFN_GATE,
+    LLM_TENSOR_DEC_FFN_DOWN,
+    LLM_TENSOR_DEC_FFN_UP,
+    LLM_TENSOR_DEC_OUTPUT_NORM,
+    LLM_TENSOR_ENC_ATTN_NORM,
+    LLM_TENSOR_ENC_ATTN_Q,
+    LLM_TENSOR_ENC_ATTN_K,
+    LLM_TENSOR_ENC_ATTN_V,
+    LLM_TENSOR_ENC_ATTN_OUT,
+    LLM_TENSOR_ENC_ATTN_REL_B,
+    LLM_TENSOR_ENC_FFN_NORM,
+    LLM_TENSOR_ENC_FFN_GATE,
+    LLM_TENSOR_ENC_FFN_DOWN,
+    LLM_TENSOR_ENC_FFN_UP,
+    LLM_TENSOR_ENC_OUTPUT_NORM,
+    LLM_TENSOR_CLS,
+    LLM_TENSOR_CLS_OUT,
+    LLM_TENSOR_CONV1D,
+    LLM_TENSOR_CONVNEXT_DW,
+    LLM_TENSOR_CONVNEXT_NORM,
+    LLM_TENSOR_CONVNEXT_PW1,
+    LLM_TENSOR_CONVNEXT_PW2,
+    LLM_TENSOR_CONVNEXT_GAMMA,
+    LLM_TENSOR_POS_NET_CONV1,
+    LLM_TENSOR_POS_NET_CONV2,
+    LLM_TENSOR_POS_NET_NORM,
+    LLM_TENSOR_POS_NET_NORM1,
+    LLM_TENSOR_POS_NET_NORM2,
+    LLM_TENSOR_POS_NET_ATTN_NORM,
+    LLM_TENSOR_POS_NET_ATTN_Q,
+    LLM_TENSOR_POS_NET_ATTN_K,
+    LLM_TENSOR_POS_NET_ATTN_V,
+    LLM_TENSOR_POS_NET_ATTN_OUT,
+    LLM_TENSOR_SHORTCONV_CONV,
+    LLM_TENSOR_SHORTCONV_INPROJ,
+    LLM_TENSOR_SHORTCONV_OUTPROJ,
+    LLM_TENSOR_VISEXP_ATTN_QKV,
+    LLM_TENSOR_VISEXP_ATTN_OUT,
+    LLM_TENSOR_VISEXP_FFN_GATE,
+    LLM_TENSOR_VISEXP_FFN_DOWN,
+    LLM_TENSOR_VISEXP_FFN_UP,
+    LLM_TENSOR_NEXTN_EH_PROJ,
+    LLM_TENSOR_NEXTN_EMBED_TOKENS,
+    LLM_TENSOR_NEXTN_ENORM,
+    LLM_TENSOR_NEXTN_HNORM,
+    LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
+    LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
 };
 
-struct llama_layer_shortconv {
-    struct ggml_tensor * in_proj  = nullptr;
-    struct ggml_tensor * conv     = nullptr;
-    struct ggml_tensor * out_proj = nullptr;
+enum llm_tensor_layer {
+    LLM_TENSOR_LAYER_INPUT,
+    LLM_TENSOR_LAYER_REPEATING,
+    LLM_TENSOR_LAYER_OUTPUT,
 };
 
-struct llama_layer_nextn {
-    struct ggml_tensor * eh_proj          = nullptr;
-    struct ggml_tensor * embed_tokens     = nullptr;
-    struct ggml_tensor * enorm            = nullptr;
-    struct ggml_tensor * hnorm            = nullptr;
-    struct ggml_tensor * shared_head_head = nullptr;
-    struct ggml_tensor * shared_head_norm = nullptr;
+struct LLM_KV {
+    LLM_KV(llm_arch arch, const char * suffix = nullptr);
+
+    llm_arch arch;
+    const char * suffix;
+
+    std::string operator()(llm_kv kv) const;
 };
 
-struct llama_layer {
-    // normalization
-    struct ggml_tensor * attn_norm       = nullptr;
-    struct ggml_tensor * attn_norm_b     = nullptr;
-    struct ggml_tensor * attn_norm_2     = nullptr;
-    struct ggml_tensor * attn_norm_2_b   = nullptr;
-    struct ggml_tensor * attn_q_norm     = nullptr;
-    struct ggml_tensor * attn_q_norm_b   = nullptr;
-    struct ggml_tensor * attn_k_norm     = nullptr;
-    struct ggml_tensor * attn_k_norm_b   = nullptr;
-    struct ggml_tensor * attn_out_norm   = nullptr;
-    struct ggml_tensor * attn_out_norm_b = nullptr;
-    struct ggml_tensor * attn_q_a_norm   = nullptr;
-    struct ggml_tensor * attn_kv_a_norm  = nullptr;
-    struct ggml_tensor * attn_sub_norm   = nullptr;
-    struct ggml_tensor * attn_post_norm  = nullptr;
-    struct ggml_tensor * ffn_sub_norm    = nullptr;
-    struct ggml_tensor * attn_norm_cross = nullptr;
-    struct ggml_tensor * attn_norm_enc   = nullptr;
-    struct ggml_tensor * ssm_norm        = nullptr;
-    struct ggml_tensor * ssm_dt_norm     = nullptr;
-    struct ggml_tensor * ssm_b_norm      = nullptr;
-    struct ggml_tensor * ssm_c_norm      = nullptr;
+// helper to handle gguf constants
+// usage:
+//
+//   const auto tn = LLM_TN(LLM_ARCH_LLAMA);
+//
+//   std::string name = tn(LLM_TENSOR_OUTPUT);                     -> "output"
+//   std::string name = tn(LLM_TENSOR_TOKEN_EMBD, "bias");         -> "token_embd.bias"
+//   std::string name = tn(LLM_TENSOR_ATTN_NORM, "weight", 3);     -> "blk.3.attn_norm.weight"
+//
+struct LLM_TN_IMPL {
+    const llm_arch arch;
+    const llm_tensor tensor;
+    const char * const suffix;
+    const int bid;
+    const int xid;
 
-    // attention
-    struct ggml_tensor * wq        = nullptr;
-    struct ggml_tensor * wk        = nullptr;
-    struct ggml_tensor * wv        = nullptr;
-    struct ggml_tensor * wo        = nullptr;
-    struct ggml_tensor * wqkv      = nullptr;
-    struct ggml_tensor * wq_a      = nullptr;
-    struct ggml_tensor * wq_b      = nullptr;
-    struct ggml_tensor * wkv_a_mqa = nullptr;
-    struct ggml_tensor * wkv_b     = nullptr;
-    struct ggml_tensor * wk_b      = nullptr;
-    struct ggml_tensor * wv_b      = nullptr;
-    struct ggml_tensor * wq_cross  = nullptr;
-    struct ggml_tensor * wk_cross  = nullptr;
-    struct ggml_tensor * wv_cross  = nullptr;
-    struct ggml_tensor * wo_cross  = nullptr;
-    struct ggml_tensor * wq_enc    = nullptr;
-    struct ggml_tensor * wk_enc    = nullptr;
-    struct ggml_tensor * wv_enc    = nullptr;
-    struct ggml_tensor * wo_enc    = nullptr;
-    struct ggml_tensor * wqkv_gate = nullptr;
+    const std::set<llm_tensor> model_tensors;
 
-    // attention bias
-    struct ggml_tensor * bq   = nullptr;
-    struct ggml_tensor * bk   = nullptr;
-    struct ggml_tensor * bv   = nullptr;
-    struct ggml_tensor * bo   = nullptr;
-    struct ggml_tensor * bqkv = nullptr;
+    LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
-    // relative position bias
-    struct ggml_tensor * attn_rel_b       = nullptr;
-    struct ggml_tensor * attn_rel_b_enc   = nullptr;
-    struct ggml_tensor * attn_rel_b_cross = nullptr;
+    std::string str() const;
 
-    // normalization
-    struct ggml_tensor * ffn_norm         = nullptr;
-    struct ggml_tensor * ffn_norm_b       = nullptr;
-    struct ggml_tensor * ffn_post_norm    = nullptr;
-    struct ggml_tensor * layer_out_norm   = nullptr;
-    struct ggml_tensor * layer_out_norm_b = nullptr;
-    struct ggml_tensor * ffn_norm_exps    = nullptr;
-    struct ggml_tensor * ffn_norm_enc     = nullptr;
+    operator std::string() const {
+        return str();
+    }
 
-    // ff
-    struct ggml_tensor * ffn_gate     = nullptr; // w1
-    struct ggml_tensor * ffn_down     = nullptr; // w2
-    struct ggml_tensor * ffn_up       = nullptr; // w3
-    struct ggml_tensor * ffn_gate_enc = nullptr;
-    struct ggml_tensor * ffn_down_enc = nullptr;
-    struct ggml_tensor * ffn_up_enc   = nullptr;
+    friend bool operator==(const std::string & str, const LLM_TN_IMPL & tn) {
+        return str == tn.str();
+    }
 
-    // ff MoE
-    struct ggml_tensor * ffn_gate_inp    = nullptr;
-    struct ggml_tensor * ffn_gate_exps   = nullptr;
-    struct ggml_tensor * ffn_down_exps   = nullptr;
-    struct ggml_tensor * ffn_up_exps     = nullptr;
-    struct ggml_tensor * ffn_gate_inp_b  = nullptr;
-    struct ggml_tensor * ffn_gate_exps_b = nullptr;
-    struct ggml_tensor * ffn_down_exps_b = nullptr;
-    struct ggml_tensor * ffn_up_exps_b   = nullptr;
-
-    // ff shared expert (shexp)
-    struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
-    struct ggml_tensor * ffn_gate_shexp     = nullptr;
-    struct ggml_tensor * ffn_down_shexp     = nullptr;
-    struct ggml_tensor * ffn_up_shexp       = nullptr;
-
-    // ff adjugate experts (chexps)
-    struct ggml_tensor * ffn_gate_chexps     = nullptr;
-    struct ggml_tensor * ffn_down_chexps     = nullptr;
-    struct ggml_tensor * ffn_up_chexps       = nullptr;
-
-    // ff bias
-    struct ggml_tensor * ffn_gate_b = nullptr;
-    struct ggml_tensor * ffn_down_b = nullptr; // b2
-    struct ggml_tensor * ffn_up_b   = nullptr; // b3
-    struct ggml_tensor * ffn_act    = nullptr;
-    struct ggml_tensor * ffn_exp_probs_b = nullptr;
-    struct ggml_tensor * v_ffn_exp_probs_b = nullptr;
-
-    // mamba proj
-    struct ggml_tensor * ssm_in  = nullptr;
-    struct ggml_tensor * ssm_x   = nullptr;
-    struct ggml_tensor * ssm_dt  = nullptr;
-    struct ggml_tensor * ssm_out = nullptr;
-
-    // mamba
-    struct ggml_tensor * ssm_conv1d = nullptr;
-    struct ggml_tensor * ssm_a      = nullptr;
-    struct ggml_tensor * ssm_d      = nullptr;
-
-    // mamba bias
-    struct ggml_tensor * ssm_conv1d_b = nullptr;
-    struct ggml_tensor * ssm_dt_b     = nullptr;
-
-    // qwen3next
-    struct ggml_tensor * ssm_beta_alpha = nullptr;
-
-    // rwkv
-    struct ggml_tensor * time_mix_w1         = nullptr;
-    struct ggml_tensor * time_mix_w2         = nullptr;
-    struct ggml_tensor * time_mix_lerp_x     = nullptr;
-    struct ggml_tensor * time_mix_lerp_w     = nullptr;
-    struct ggml_tensor * time_mix_lerp_k     = nullptr;
-    struct ggml_tensor * time_mix_lerp_v     = nullptr;
-    struct ggml_tensor * time_mix_lerp_r     = nullptr;
-    struct ggml_tensor * time_mix_lerp_g     = nullptr;
-    struct ggml_tensor * time_mix_lerp_fused = nullptr;
-
-    struct ggml_tensor * time_mix_first        = nullptr;
-    struct ggml_tensor * time_mix_decay        = nullptr;
-    struct ggml_tensor * time_mix_decay_w1     = nullptr;
-    struct ggml_tensor * time_mix_decay_w2     = nullptr;
-    struct ggml_tensor * time_mix_key          = nullptr;
-    struct ggml_tensor * time_mix_key_b        = nullptr;
-    struct ggml_tensor * time_mix_value        = nullptr;
-    struct ggml_tensor * time_mix_value_b      = nullptr;
-    struct ggml_tensor * time_mix_receptance   = nullptr;
-    struct ggml_tensor * time_mix_receptance_b = nullptr;
-    struct ggml_tensor * time_mix_gate         = nullptr;
-
-    // rwkv7
-    struct ggml_tensor * time_mix_w0         = nullptr;
-    struct ggml_tensor * time_mix_a0         = nullptr;
-    struct ggml_tensor * time_mix_a1         = nullptr;
-    struct ggml_tensor * time_mix_a2         = nullptr;
-    struct ggml_tensor * time_mix_v0         = nullptr;
-    struct ggml_tensor * time_mix_v1         = nullptr;
-    struct ggml_tensor * time_mix_v2         = nullptr;
-    struct ggml_tensor * time_mix_g1         = nullptr;
-    struct ggml_tensor * time_mix_g2         = nullptr;
-    struct ggml_tensor * time_mix_k_k        = nullptr;
-    struct ggml_tensor * time_mix_k_a        = nullptr;
-    struct ggml_tensor * time_mix_r_k        = nullptr;
-
-    struct ggml_tensor * time_mix_ln     = nullptr;
-    struct ggml_tensor * time_mix_ln_b   = nullptr;
-    struct ggml_tensor * time_mix_output = nullptr;
-
-    struct ggml_tensor * channel_mix_lerp_k = nullptr;
-    struct ggml_tensor * channel_mix_lerp_r = nullptr;
-
-    struct ggml_tensor * channel_mix_key        = nullptr;
-    struct ggml_tensor * channel_mix_receptance = nullptr;
-    struct ggml_tensor * channel_mix_value      = nullptr;
-
-    // long rope factors
-    struct ggml_tensor * rope_long  = nullptr;
-    struct ggml_tensor * rope_short = nullptr;
-    struct ggml_tensor * rope_freqs = nullptr;
-
-    // bitnet scale
-    struct ggml_tensor * wq_scale       = nullptr;
-    struct ggml_tensor * wk_scale       = nullptr;
-    struct ggml_tensor * wv_scale       = nullptr;
-    struct ggml_tensor * wo_scale       = nullptr;
-    struct ggml_tensor * ffn_gate_scale = nullptr;
-    struct ggml_tensor * ffn_up_scale   = nullptr;
-    struct ggml_tensor * ffn_down_scale = nullptr;
-
-    // altup & laurel
-    struct ggml_tensor * per_layer_inp_gate   = nullptr;
-    struct ggml_tensor * per_layer_proj       = nullptr;
-    struct ggml_tensor * per_layer_post_norm  = nullptr;
-    struct ggml_tensor * altup_correct_coef   = nullptr;
-    struct ggml_tensor * altup_correct_scale  = nullptr;
-    struct ggml_tensor * altup_predict_coef   = nullptr;
-    struct ggml_tensor * altup_router         = nullptr;
-    struct ggml_tensor * altup_router_norm    = nullptr;
-    struct ggml_tensor * laurel_l             = nullptr;
-    struct ggml_tensor * laurel_r             = nullptr;
-    struct ggml_tensor * laurel_post_norm     = nullptr;
-
-    // openai-moe
-    struct ggml_tensor * attn_sinks = nullptr;
-
-    // cogvlm
-    struct ggml_tensor * visexp_attn_wqkv = nullptr;
-    struct ggml_tensor * visexp_attn_wo   = nullptr;
-    struct ggml_tensor * visexp_ffn_gate  = nullptr;
-    struct ggml_tensor * visexp_ffn_down  = nullptr;
-    struct ggml_tensor * visexp_ffn_up    = nullptr;
-
-    // xIELU activation parameters for Apertus
-    struct ggml_tensor * ffn_act_alpha_n = nullptr;
-    struct ggml_tensor * ffn_act_alpha_p = nullptr;
-    struct ggml_tensor * ffn_act_beta    = nullptr;
-    struct ggml_tensor * ffn_act_eps     = nullptr;
-
-    // Kimi Linear KDA (using ssm_ prefix for consistency)
-    // Note: ssm_dt_b already exists above (mamba bias), reused for Kimi dt_bias
-    struct ggml_tensor * ssm_q_conv = nullptr;
-    struct ggml_tensor * ssm_k_conv = nullptr;
-    struct ggml_tensor * ssm_v_conv = nullptr;
-    struct ggml_tensor * ssm_f_a    = nullptr;
-    struct ggml_tensor * ssm_f_b    = nullptr;
-    struct ggml_tensor * ssm_beta   = nullptr;
-    struct ggml_tensor * ssm_g_a    = nullptr;
-    struct ggml_tensor * ssm_g_b    = nullptr;
-    struct ggml_tensor * ssm_o_norm = nullptr;
-
-    struct llama_layer_posnet posnet;
-
-    struct llama_layer_convnext convnext;
-
-    struct llama_layer_shortconv shortconv;
-
-    struct llama_layer_nextn nextn;
+    friend bool operator!=(const std::string & str, const LLM_TN_IMPL & tn) {
+        return str != tn.str();
+    }
 };
 
-struct llama_model {
-    llm_type type = LLM_TYPE_UNKNOWN;
-    llm_arch arch = LLM_ARCH_UNKNOWN;
+struct LLM_TN {
+    LLM_TN(llm_arch arch) : arch(arch) {}
 
-    std::string name = "n/a";
+    llm_arch arch;
 
-    llama_hparams hparams = {};
-    llama_vocab   vocab;
+    LLM_TN_IMPL operator()(llm_tensor tensor, const char * suffix, int bid = -1, int xid = -1) const {
+        return LLM_TN_IMPL(arch, tensor, suffix, bid, xid);
+    }
 
-    // for classifier models
-    std::vector<std::string> classifier_labels;
-
-    struct ggml_tensor * tok_embd   = nullptr;
-    struct ggml_tensor * type_embd  = nullptr;
-    struct ggml_tensor * pos_embd   = nullptr;
-    struct ggml_tensor * tok_norm   = nullptr;
-    struct ggml_tensor * tok_norm_b = nullptr;
-
-    struct ggml_tensor * output_norm     = nullptr;
-    struct ggml_tensor * output_norm_b   = nullptr;
-    struct ggml_tensor * output          = nullptr;
-    struct ggml_tensor * output_b        = nullptr;
-    struct ggml_tensor * output_norm_enc = nullptr;
-
-    // classifier
-    struct ggml_tensor * cls       = nullptr;
-    struct ggml_tensor * cls_b     = nullptr;
-    struct ggml_tensor * cls_out   = nullptr;
-    struct ggml_tensor * cls_out_b = nullptr;
-
-    struct ggml_tensor * conv1d   = nullptr;
-    struct ggml_tensor * conv1d_b = nullptr;
-
-    // gemma3n altup
-    struct ggml_tensor * tok_embd_per_layer   = nullptr;
-    struct ggml_tensor * altup_proj           = nullptr;
-    struct ggml_tensor * altup_unembd_proj    = nullptr;
-    struct ggml_tensor * per_layer_model_proj = nullptr;
-    struct ggml_tensor * per_layer_proj_norm  = nullptr;
-
-    std::vector<llama_layer> layers;
-
-    //Dense linear projections for SentenceTransformers models like embeddinggemma
-    // For Sentence Transformers models structure see
-    // https://sbert.net/docs/sentence_transformer/usage/custom_models.html#structure-of-sentence-transformer-models
-    struct ggml_tensor * dense_2_out_layers = nullptr;
-    struct ggml_tensor * dense_3_out_layers = nullptr;
-
-    // gguf metadata
-    std::unordered_map<std::string, std::string> gguf_kv;
-
-    // list of devices used in this model
-    std::vector<ggml_backend_dev_t> devices;
-
-    // for quantize-stats only
-    std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
-
-    // for keeping track of associated LoRA adapters
-    std::unordered_set<llama_adapter_lora *> loras;
-
-    int64_t t_load_us  = 0;
-    int64_t t_start_us = 0;
-
-    explicit llama_model(const struct llama_model_params & params);
-    ~llama_model();
-
-    void load_stats  (llama_model_loader & ml);
-    void load_arch   (llama_model_loader & ml);
-    void load_hparams(llama_model_loader & ml);
-    void load_vocab  (llama_model_loader & ml);
-    bool load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
-
-    std::string arch_name() const;
-    std::string type_name() const;
-
-    std::string desc() const;
-
-    size_t size() const; // file size
-    size_t n_tensors() const;
-    size_t n_devices() const;
-
-    uint32_t n_gpu_layers() const;
-    llama_split_mode split_mode() const;
-
-    std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
-
-    // total number of parameters in the model
-    uint64_t n_elements() const;
-
-    void print_info() const;
-
-    ggml_backend_dev_t dev_layer(int il) const;
-    ggml_backend_dev_t dev_output() const;
-
-    ggml_backend_buffer_type_t select_buft(int il) const;
-
-    bool has_tensor_overrides() const;
-
-    const struct ggml_tensor * get_tensor(const char * name) const;
-
-    float get_rope_freq_base (const llama_cparams & cparams, int il) const;
-    float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
-
-    ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
-
-    // TODO: move this to new llm_arch_model_i interface
-    llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
-
-    // TODO: move this to new llm_arch_model_i interface
-    ggml_cgraph * build_graph(const llm_graph_params & params) const;
-
-private:
-    llama_model_params params;
-
-    struct impl;
-    std::unique_ptr<impl> pimpl;
+    LLM_TN_IMPL operator()(llm_tensor tensor, int bid = -1, int xid = -1) const {
+        return LLM_TN_IMPL(arch, tensor, nullptr, bid, xid);
+    }
 };
 
-const char * llm_type_name(llm_type type);
 
-// For internal test use
-// TODO: remove
-const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
+struct llm_tensor_info {
+    llm_tensor_layer layer;
+    ggml_op op;
+};
+
+const char * llm_arch_name(llm_arch arch);
+
+llm_arch llm_arch_from_string(const std::string & name);
+
+const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
+
+bool llm_arch_is_recurrent(const llm_arch & arch);
+bool llm_arch_is_hybrid   (const llm_arch & arch);
+bool llm_arch_is_diffusion(const llm_arch & arch);

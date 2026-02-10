@@ -101,6 +101,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_AFMOE,            "afmoe"            },
     { LLM_ARCH_ERNIE4_5,         "ernie4_5"         },
     { LLM_ARCH_ERNIE4_5_MOE,     "ernie4_5-moe"     },
+    { LLM_ARCH_ERNIE4_5_VL_MOE,  "ernie4_5-vl-moe"  },
     { LLM_ARCH_HUNYUAN_MOE,      "hunyuan-moe"      },
     { LLM_ARCH_HUNYUAN_DENSE,    "hunyuan-dense"    },
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
@@ -2107,6 +2108,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_EXP_PROBS_B,
             };
         case LLM_ARCH_ERNIE4_5_MOE:
+        case LLM_ARCH_ERNIE4_5_VL_MOE:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,
@@ -2128,6 +2130,11 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_DOWN_EXPS,
                 LLM_TENSOR_FFN_UP_EXPS,
                 LLM_TENSOR_FFN_EXP_PROBS_B,
+                LLM_TENSOR_V_FFN_GATE_INP,
+                LLM_TENSOR_V_FFN_GATE_EXPS,
+                LLM_TENSOR_V_FFN_DOWN_EXPS,
+                LLM_TENSOR_V_FFN_UP_EXPS,
+                LLM_TENSOR_V_FFN_EXP_PROBS_B,
             };
         case LLM_ARCH_HUNYUAN_MOE:
             return {
