@@ -1039,6 +1039,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            fprintf(stderr, "ggml version: %s\n", llama_ggml_version());
             exit(0);
         }
     ));
