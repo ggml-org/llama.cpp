@@ -30,6 +30,10 @@ static void test(const char * desc, bool expected, const std::string & filename,
     }
 }
 
+static void test_combined(const char * desc, bool expected, const std::string & path) {
+    test(desc, expected, fs_normalize_filepath(path), true);
+}
+
 int main(void) {
     // --- Basic valid filenames ---
     test("simple ascii",            true,  "hello.txt");
@@ -160,6 +164,17 @@ int main(void) {
     test_normalize("dotdot at start retained",  std::string("..") + SEP + "bar",               "../bar");
     test_normalize("dotdot at end retained",    std::string("foo") + SEP + "..",               "foo/..");
     test_normalize("dot component retained mid", std::string("foo") + SEP + "." + SEP + "bar", "foo/./bar");
+
+    // --- combined tests validating normalized paths ---
+    test_combined("absolute windows path",  false, "C:\\Tools\\secrets.txt"); // absolute path
+    test_combined("root is relative",       true,  "/meow/image.jpg");        // root separators are normalized to relative
+    test_combined("relative dot path",      true,  "././meow/image.jpg");     // ok because no effect
+    test_combined("inner dot path",         false, "././meow/./image.jpg");   // blocked because plausibly a downstream traversal attempt
+    test_combined("double dot path",        false,  "../meow/image.jpg");     // direct traversal attempt
+    test_combined("mid double dot path",    false,  "meow/../image.jpg");     // technically a subpath but plausibly a downstream traversal attempt
+    test_combined("end double dot path",    false,  "meow/..");               // blank path
+    test_combined("triple single dot root", false,  "./././");                // blank path
+    test_combined("triple single dot file", true,   "./././image.jpg");       // weird but okay
 
     if (n_failed) {
         printf("\n%d/%d tests failed\n", n_failed, n_tests);
