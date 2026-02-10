@@ -2,8 +2,8 @@ import { getJsonHeaders } from '$lib/utils';
 import { ChatService } from '$lib/services/chat';
 
 import type { ApiCompletionRequest, ApiCompletionStreamChunk } from '$lib/types/api';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
-import type { SettingsChatServiceOptions } from '$lib/types/settings';
+import type { ChatMessageTimings } from '$lib/types/chat';
+import type { CompletionServiceCallbacks, SettingsChatServiceOptions } from '$lib/types/settings';
 
 /**
  * CompletionService - Low-level API communication layer for raw text completions.
@@ -15,21 +15,18 @@ export class CompletionService {
 	 * Supports only streaming responses.
 	 *
 	 * @param prompt - The text prompt to complete
+	 * @param callbacks - Callbacks methods (onChunk, onComplete, ...)
 	 * @param options - Configuration options for the completion request
 	 * @returns {Promise<void>} that resolves to void
 	 * @throws {Error} if the request fails or is aborted
 	 */
 	static async sendCompletion(
 		prompt: string,
+		callbacks: CompletionServiceCallbacks,
 		options: SettingsChatServiceOptions = {},
 		signal?: AbortSignal
 	): Promise<string | void> {
 		const {
-			onChunk,
-			onComplete,
-			onError,
-			onModel,
-			onTimings,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -126,21 +123,13 @@ export class CompletionService {
 
 			if (!response.ok) {
 				const error = await ChatService.parseErrorResponse(response);
-				if (onError) {
-					onError(error);
+				if (callbacks.onError) {
+					callbacks.onError(error);
 				}
 				throw error;
 			}
 
-			await CompletionService.handleCompletionStreamResponse(
-				response,
-				onChunk,
-				onComplete,
-				onError,
-				onModel,
-				onTimings,
-				signal
-			);
+			await CompletionService.handleCompletionStreamResponse(response, callbacks, signal);
 			return;
 		} catch (error) {
 			if (error instanceof Error && error.name === 'AbortError') {
@@ -170,8 +159,8 @@ export class CompletionService {
 			}
 
 			console.error('Error in sendCompletion:', error);
-			if (onError) {
-				onError(userFriendlyError);
+			if (callbacks.onError) {
+				callbacks.onError(userFriendlyError);
 			}
 			throw userFriendlyError;
 		}
@@ -182,16 +171,7 @@ export class CompletionService {
 	 */
 	private static async handleCompletionStreamResponse(
 		response: Response,
-		onChunk?: (chunk: string) => void,
-		onComplete?: (
-			response: string,
-			reasoningContent?: string,
-			timings?: ChatMessageTimings,
-			toolCalls?: string
-		) => void,
-		onError?: (error: Error) => void,
-		onModel?: (model: string) => void,
-		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
+		callbacks: CompletionServiceCallbacks,
 		abortSignal?: AbortSignal
 	): Promise<void> {
 		const reader = response.body?.getReader();
@@ -247,22 +227,22 @@ export class CompletionService {
 
 							if (model && !modelEmitted) {
 								modelEmitted = true;
-								onModel?.(model);
+								callbacks.onModel?.(model);
 							}
 
 							if (promptProgress) {
-								ChatService.notifyTimings(undefined, promptProgress, onTimings);
+								ChatService.notifyTimings(undefined, promptProgress, callbacks.onTimings);
 							}
 
 							if (timings) {
-								ChatService.notifyTimings(timings, promptProgress, onTimings);
+								ChatService.notifyTimings(timings, promptProgress, callbacks.onTimings);
 								lastTimings = timings;
 							}
 
 							if (content) {
 								aggregatedContent += content;
 								if (!abortSignal?.aborted) {
-									onChunk?.(content);
+									callbacks.onChunk?.(content);
 								}
 							}
 						} catch (e) {
@@ -281,11 +261,11 @@ export class CompletionService {
 			}
 
 			if (streamFinished) {
-				onComplete?.(aggregatedContent, undefined, lastTimings, undefined);
+				callbacks.onComplete?.(aggregatedContent, lastTimings);
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
-			onError?.(err);
+			callbacks.onError?.(err);
 			throw err;
 		} finally {
 			reader.releaseLock();

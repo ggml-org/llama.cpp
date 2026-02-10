@@ -48,50 +48,52 @@ export class NotebookStore {
 
 		try {
 			const currentConfig = config();
+			const callbacks = {
+				onChunk: (chunk: string) => {
+					this.content += chunk;
+				},
+				onTimings: (timings: ChatMessageTimings, promptProgress: ChatMessagePromptProgress) => {
+					if (timings) {
+						if (timings.cache_n) this.cacheTokens = timings.cache_n;
+						if (timings.prompt_n) this.promptTokens = timings.prompt_n;
+						if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
+						if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
+						if (timings.predicted_ms) this.predictedMs = timings.predicted_ms;
+					}
+
+					if (promptProgress) {
+						// Update prompt stats from progress
+						const { processed, time_ms } = promptProgress;
+						if (processed > 0) this.promptTokens = processed;
+						if (time_ms > 0) this.promptMs = time_ms;
+					}
+
+					// Update totalTokens live
+					this.totalTokens = this.cacheTokens + this.promptTokens + this.predictedTokens;
+				},
+				onComplete: () => {
+					this.isGenerating = false;
+				},
+				onError: (error: unknown) => {
+					if (error instanceof Error && error.name === 'AbortError') {
+						// aborted by user
+					} else {
+						console.error('Notebook generation error:', error);
+						this.error = {
+							message: error instanceof Error ? error.message : String(error),
+							type: 'server'
+						};
+					}
+					this.isGenerating = false;
+				}
+			};
 			await CompletionService.sendCompletion(
 				this.content,
+				callbacks,
 				{
 					...currentConfig,
 					model,
-					stream: true,
-					timings_per_token: true,
-					onChunk: (chunk: string) => {
-						this.content += chunk;
-					},
-					onTimings: (timings: ChatMessageTimings, promptProgress: ChatMessagePromptProgress) => {
-						if (timings) {
-							if (timings.cache_n) this.cacheTokens = timings.cache_n;
-							if (timings.prompt_n) this.promptTokens = timings.prompt_n;
-							if (timings.prompt_ms) this.promptMs = timings.prompt_ms;
-							if (timings.predicted_n) this.predictedTokens = timings.predicted_n;
-							if (timings.predicted_ms) this.predictedMs = timings.predicted_ms;
-						}
-
-						if (promptProgress) {
-							// Update prompt stats from progress
-							const { processed, time_ms } = promptProgress;
-							if (processed > 0) this.promptTokens = processed;
-							if (time_ms > 0) this.promptMs = time_ms;
-						}
-
-						// Update totalTokens live
-						this.totalTokens = this.cacheTokens + this.promptTokens + this.predictedTokens;
-					},
-					onComplete: () => {
-						this.isGenerating = false;
-					},
-					onError: (error: unknown) => {
-						if (error instanceof Error && error.name === 'AbortError') {
-							// aborted by user
-						} else {
-							console.error('Notebook generation error:', error);
-							this.error = {
-								message: error instanceof Error ? error.message : String(error),
-								type: 'server'
-							};
-						}
-						this.isGenerating = false;
-					}
+					timings_per_token: true
 				},
 				this.abortController.signal
 			);
