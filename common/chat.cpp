@@ -3090,6 +3090,13 @@ static common_chat_params common_chat_templates_apply_jinja(
         }
     }
 
+    // DeepSeek V3.2: the same as v3.1, adapt third-party gguf such as unsloth
+    if ((src.find("Converted from official DeepSeek-V3") != std::string::npos)
+        && params.json_schema.is_null())
+    {
+        return common_chat_params_init_deepseek_v3_1(tmpl, params);
+    }
+
     // DeepSeek V3.1: detect based on specific patterns in the template
     if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos &&
         params.json_schema.is_null()) {
