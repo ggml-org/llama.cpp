@@ -738,7 +738,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
 
     // Check for forbidden codepoints:
     // - Control characters
-    // - Unicode equivalents of illegal characters
+    // - Unicode equivalents of path traversal characters
     // - UTF-16 surrogate pairs
     // - UTF-8 replacement character
     // - Byte order mark (BOM)
@@ -749,8 +749,17 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == 0x7F // Control characters (DEL)
             || (c >= 0x80 && c <= 0x9F) // Control characters (C1)
             || c == 0xFF0E // Fullwidth Full Stop (period equivalent)
-            || c == 0x2215 // Division Slash (forward slash equivalent)
-            || c == 0x2216 // Set Minus (backslash equivalent)
+            || c == 0xFF0F // Fullwidth Solidus (forward slash equivalent, CP 874, 1250-1258)
+            || c == 0xFF3C // Fullwidth Reverse Solidus (backslash equivalent, CP 874, 1250-1258)
+            || c == 0xFF1A // Fullwidth Colon (colon equivalent, CP 874, 1250-1258)
+            || c == 0x2215 // Division Slash (forward slash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2216 // Set Minus (backslash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2044 // Fraction Slash (forward slash equivalent, CP 1250, 1252, 1254)
+            || c == 0x2236 // Ratio (colon equivalent, CP 1250, 1252, 1254)
+            || c == 0x0589 // Armenian Full Stop (colon equivalent, CP 1250, 1252, 1254)
+            || c == 0x00A5 // Yen Sign (backslash equivalent, CP 932 Japanese)
+            || c == 0x20A9 // Won Sign (backslash equivalent, CP 949, 1361 Korean)
+            || c == 0x00B4 // Acute Accent (forward slash equivalent, CP 1253 Greek)
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
             || c == 0xFFFD // Replacement Character (UTF-8)
             || c == 0xFEFF // Byte Order Mark (BOM)

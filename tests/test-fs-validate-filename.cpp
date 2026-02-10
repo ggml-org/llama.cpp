@@ -64,10 +64,21 @@ int main(void) {
 
     // --- Unicode special codepoints ---
     test("fullwidth period U+FF0E", false, "foo\xef\xbc\x8e""bar");
-    test("division slash U+2215",   false, "foo\xe2\x88\x95""bar");
-    test("set minus U+2216",        false, "foo\xe2\x88\x96""bar");
     test("replacement char U+FFFD", false, "foo\xef\xbf\xbd""bar");
     test("BOM U+FEFF",              false, "foo\xef\xbb\xbf""bar");
+
+    // --- Windows bestfit characters (map to path traversal chars under WideCharToMultiByte) ---
+    test("fullwidth solidus U+FF0F",    false, "foo\xef\xbc\x8f""bar"); // / on CP 874, 1250-1258
+    test("fullwidth rev solidus U+FF3C",false, "foo\xef\xbc\xbc""bar"); // \ on CP 874, 1250-1258
+    test("fullwidth colon U+FF1A",      false, "foo\xef\xbc\x9a""bar"); // : on CP 874, 1250-1258
+    test("division slash U+2215",       false, "foo\xe2\x88\x95""bar"); // / on CP 1250, 1252, 1254
+    test("set minus U+2216",            false, "foo\xe2\x88\x96""bar"); // \ on CP 1250, 1252, 1254
+    test("fraction slash U+2044",       false, "foo\xe2\x81\x84""bar"); // / on CP 1250, 1252, 1254
+    test("ratio U+2236",               false, "foo\xe2\x88\xb6""bar"); // : on CP 1250, 1252, 1254
+    test("armenian full stop U+0589",   false, "foo\xd6\x89""bar");     // : on CP 1250, 1252, 1254
+    test("yen sign U+00A5",             false, "foo\xc2\xa5""bar");     // \ on CP 932 (Japanese)
+    test("won sign U+20A9",             false, "foo\xe2\x82\xa9""bar"); // \ on CP 949 (Korean)
+    test("acute accent U+00B4",         false, "foo\xc2\xb4""bar");     // / on CP 1253 (Greek)
 
     // --- Invalid UTF-8 ---
     test("invalid continuation",    false, std::string("foo\x80""bar"));
