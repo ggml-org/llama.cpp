@@ -1008,7 +1008,7 @@
 	/* Disable hover effects when rendering user messages */
 	.markdown-user-content :global(a),
 	.markdown-user-content :global(a:hover) {
-		color: var(--primary-foreground);
+		color: inherit;
 	}
 
 	.markdown-user-content :global(table:hover) {
