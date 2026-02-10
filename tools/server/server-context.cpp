@@ -148,10 +148,10 @@ struct server_slot {
     llama_tokens drafted;
 
     // use of checkpoints in speculative mode
-    uint16_t    spec_n_denials = 0;    // number of drafts not accepted at the current position
-    int         spec_n_accepted = 0;   // number of accepted tokens at current position
-    bool        spec_has_ckpt = false; // true if a checkpoint for rollback after partial speculation has been created
-    size_t      spec_ckpt_size_part;   // size of partial checkpoint
+    bool        spec_has_ckpt        = false; // true if a checkpoint for rollback after partial speculation has been created
+    uint16_t    spec_ckpt_n_denials  = 0;     // number of drafts not accepted at the current position
+    int         spec_ckpt_n_accepted = 0;     // number of accepted tokens at current position
+    size_t      spec_ckpt_size_part  = 0;     // size of partial checkpoint
 
 
     // stats
@@ -192,10 +192,10 @@ struct server_slot {
         n_draft_total = 0;
         n_draft_accepted = 0;
 
-        spec_n_denials = 0;
-        spec_n_accepted = 0;
-        spec_has_ckpt = false;
-        spec_ckpt_size_part = 0;
+        spec_ckpt_n_denials  = 0;
+        spec_ckpt_n_accepted = 0;
+        spec_has_ckpt        = false;
+        spec_ckpt_size_part  = 0;
 
         task_prev = std::move(task);
         task.reset();
@@ -2060,9 +2060,9 @@ private:
             // generate draft tokens in speculative decoding mode
             // TODO: rework to have a single draft llama_context shared across all slots [TAG_SERVER_SPEC_REWORK]
             //       perform the speculative drafting for all sequences at the same time in a single batch
-            const int n_draft_max = (slot.spec_n_accepted > 0) ? slot.spec_n_accepted : slot.get_n_draft_max();
+            const int n_draft_max = (slot.spec_ckpt_n_accepted > 0) ? slot.spec_ckpt_n_accepted : slot.get_n_draft_max();
             if (n_draft_max > 0 && (params_base.speculative.ckpt_num_tries == 0
-                                    || slot.spec_n_denials < params_base.speculative.ckpt_num_tries)) {
+                                    || slot.spec_ckpt_n_denials < params_base.speculative.ckpt_num_tries)) {
                 if (mctx) {
                     // we should never reach this, as speculative is automatically disabled if mmproj is loaded
                     GGML_ABORT("not supported by multimodal");
@@ -2085,7 +2085,7 @@ private:
                     && slot.prompt.checkpoints.size() < (size_t) params_base.n_ctx_checkpoints;
                 if (do_checkpoint && cached_text_tokens.size() > 5) {
                     SLT_DBG(slot, "draft.size = %zu, n_spec_denials = %d, #ckpts=%zu, do_checkpoint = %s, pos_min = %d, pos_max = %d, tokens=[..., %d, %d, %d]\n",
-                        draft.size(), slot.spec_n_denials,
+                        draft.size(), slot.spec_ckpt_n_denials,
                         slot.prompt.checkpoints.size(),
                         do_checkpoint ? "yes" : "no", pos_min, pos_max,
                         cached_text_tokens[cached_text_tokens.size() - 3],
@@ -2136,8 +2136,8 @@ private:
                     slot.i_batch_dft.clear();
 
                     if (slot.spec_has_ckpt) {
-                        slot.spec_n_accepted = 0;
-                        slot.spec_n_denials = 0;
+                        slot.spec_ckpt_n_accepted = 0;
+                        slot.spec_ckpt_n_denials  = 0;
 
                         // Delete Checkpoint
                         slot.prompt.checkpoints.pop_back();
@@ -2159,8 +2159,8 @@ private:
                 // no speculative decoding
                 slot.i_batch = batch.n_tokens;
 
-                slot.spec_n_denials = 0;
-                slot.spec_n_accepted = 0;
+                slot.spec_ckpt_n_denials  = 0;
+                slot.spec_ckpt_n_accepted = 0;
 
                 common_batch_add(batch, slot.sampled, slot.prompt.tokens.pos_next(), { slot.id }, true);
 
@@ -2903,8 +2903,8 @@ private:
                     // Inform the speculative implementation of the number of valid tokens.
                     // common_speculative_accept(slot.spec, ids.size() - 1);
 
-                    slot.spec_n_denials++;
-                    slot.spec_n_accepted = (slot.spec_n_denials < params_base.speculative.ckpt_num_tries) ? (int) (ids.size() - 1) : 0;
+                    slot.spec_ckpt_n_denials++;
+                    slot.spec_ckpt_n_accepted = (slot.spec_ckpt_n_denials < params_base.speculative.ckpt_num_tries) ? (int) (ids.size() - 1) : 0;
 
                     common_batch_clear(batch);
 
@@ -2916,7 +2916,7 @@ private:
 
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
-                slot.spec_n_accepted = 0;
+                slot.spec_ckpt_n_accepted = 0;
 
                 // inform the speculative decoding about the number of accepted tokens
                 common_speculative_accept(slot.spec, ids.size() - 1);
@@ -2928,7 +2928,7 @@ private:
                 slot.prompt.tokens.insert({ids.begin(), ids.end() - 1});
                 slot.sampled = ids.back(); // last accepted token
 
-                slot.spec_n_denials = 0;
+                slot.spec_ckpt_n_denials = 0;
                 if (slot.spec_has_ckpt) {
                     // Delete Checkpoint
                     if (slot.prompt.checkpoints.empty()) {
