@@ -677,7 +677,7 @@ enum llama_pooling_type llama_context::pooling_type() const {
 float * llama_context::get_logits() {
     output_reorder();
 
-    return logits;
+    return logits.data;
 }
 
 int64_t llama_context::output_resolve_row(int32_t i) const {
@@ -715,7 +715,7 @@ float * llama_context::get_logits_ith(int32_t i) {
     output_reorder();
 
     try {
-        if (logits == nullptr) {
+        if (logits.data == nullptr) {
             throw std::runtime_error("no logits");
         }
 
@@ -739,7 +739,7 @@ float * llama_context::get_logits_ith(int32_t i) {
             throw std::runtime_error(format("corrupt output buffer (j=%" PRId64 ", n_outputs=%d)", j, n_outputs));
         }
 
-        return logits + j*model.vocab.n_tokens();
+        return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -753,7 +753,7 @@ float * llama_context::get_logits_ith(int32_t i) {
 float * llama_context::get_embeddings() {
     output_reorder();
 
-    return embd;
+    return embd.data;
 }
 
 llama_token * llama_context::get_sampled_tokens()  const{
@@ -766,7 +766,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
     output_reorder();
 
     try {
-        if (embd == nullptr) {
+        if (embd.data == nullptr) {
             throw std::runtime_error("no embeddings");
         }
 
@@ -791,7 +791,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
         }
 
         const uint32_t n_embd_out = model.hparams.n_embd_out();
-        return embd + j*n_embd_out;
+        return embd.data + j*n_embd_out;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1254,16 +1254,16 @@ int llama_context::encode(const llama_batch & batch_inp) {
     auto * t_embd = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
 
     // extract logits
-    if (logits && t_logits) {
+    if (logits.data && t_logits) {
         ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
         GGML_ASSERT(backend_res != nullptr);
-        GGML_ASSERT(logits != nullptr);
+        GGML_ASSERT(logits.data != nullptr);
 
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits, 0, n_tokens*n_vocab*sizeof(float));
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
     }
 
     // extract embeddings
-    if (embd && t_embd) {
+    if (embd.data && t_embd) {
         ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
         GGML_ASSERT(backend_embd != nullptr);
 
@@ -1271,11 +1271,11 @@ int llama_context::encode(const llama_batch & batch_inp) {
             case LLAMA_POOLING_TYPE_NONE:
                 {
                     // extract token embeddings
-                    GGML_ASSERT(embd != nullptr);
+                    GGML_ASSERT(embd.data != nullptr);
                     const uint32_t n_embd_out = hparams.n_embd_out();
 
-                    GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd_size);
-                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd, 0, n_tokens*n_embd_out*sizeof(float));
+                    GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd.size);
+                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_embd_out*sizeof(float));
                 } break;
             case LLAMA_POOLING_TYPE_MEAN:
             case LLAMA_POOLING_TYPE_CLS:
@@ -1323,7 +1323,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
         cross.n_embd = t_embd->ne[0];
         cross.n_enc  = t_embd->ne[1];
         cross.v_embd.resize(cross.n_embd*cross.n_enc);
-        memcpy(cross.v_embd.data(), embd, ggml_nbytes(t_embd));
+        memcpy(cross.v_embd.data(), embd.data, ggml_nbytes(t_embd));
 
         const auto & batch = balloc->get_batch();
 
@@ -1670,22 +1670,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        if (logits && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
-            GGML_ASSERT(logits != nullptr);
+            GGML_ASSERT(logits.data != nullptr);
 
-            float * logits_out = logits + n_outputs_prev*n_vocab;
+            float * logits_out = logits.data + n_outputs_prev*n_vocab;
 
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
+                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
                 ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
             }
         }
 
         // extract embeddings
-        if (embd && t_embd && n_outputs > 0) {
+        if (embd.data && t_embd && n_outputs > 0) {
             ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
             GGML_ASSERT(backend_embd != nullptr);
 
@@ -1693,13 +1693,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 case LLAMA_POOLING_TYPE_NONE:
                     {
                         // extract token embeddings
-                        GGML_ASSERT(embd != nullptr);
+                        GGML_ASSERT(embd.data != nullptr);
                         const uint32_t n_embd_out = hparams.n_embd_out();
-                        float * embd_out = embd + n_outputs_prev*n_embd_out;
+                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;
 
                         if (n_outputs) {
                             GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd_size);
+                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);
                             ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));
                         }
                     } break;
@@ -1840,8 +1840,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
-    logits_size = has_logits ? n_vocab*n_outputs_max : 0;
-    embd_size   = has_embd ? n_embd_out*n_outputs_max : 0;
+    logits.size = has_logits ? n_vocab*n_outputs_max : 0;
+    embd.size   = has_embd ? n_embd_out*n_outputs_max : 0;
 
     // Allocate backend sampling output buffers if there are backend samplers configured.
     const bool has_sampling = !sampling.samplers.empty();
@@ -1857,7 +1857,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
-        (logits_size + embd_size + backend_float_count) * sizeof(float) +
+        (logits.size + embd.size + backend_float_count) * sizeof(float) +
         (                          backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
@@ -1872,8 +1872,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
             // TODO: not needed?
             buf_output = nullptr;
-            logits = nullptr;
-            embd = nullptr;
+            logits = {nullptr, 0};
+            embd = {nullptr, 0};
         }
 
         auto * buft = ggml_backend_cpu_buffer_type();
@@ -1892,17 +1892,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     float * output_base = (float *) ggml_backend_buffer_get_base(buf_output.get());
 
-    logits = nullptr;
-    embd   = nullptr;
-
     size_t offset = 0;
     uint8_t * base = (uint8_t *) output_base;
 
-    logits = has_logits ? output_base : nullptr;
-    offset += logits_size * sizeof(float);
+    logits = has_logits ? buffer_view<float>{output_base, logits.size} : buffer_view<float>{nullptr, 0};
+    offset += logits.size * sizeof(float);
 
-    embd = has_embd ? (float *) (base + offset) : nullptr;
-    offset += embd_size * sizeof(float);
+    embd = has_embd ? buffer_view<float>{(float *) (base + offset), embd.size} : buffer_view<float>{nullptr, 0};
+    offset += embd.size * sizeof(float);
 
     sampling.logits     = {nullptr, 0};
     sampling.probs      = {nullptr, 0};
@@ -1952,15 +1949,15 @@ void llama_context::output_reorder() {
         const uint64_t i0 = output_swaps[s].i0;
         const uint64_t i1 = output_swaps[s].i1;
 
-        if (logits_size > 0) {
+        if (logits.size > 0) {
             for (uint64_t k = 0; k < n_vocab; k++) {
-                std::swap(logits[i0*n_vocab + k], logits[i1*n_vocab + k]);
+                std::swap(logits.data[i0*n_vocab + k], logits.data[i1*n_vocab + k]);
             }
         }
 
-        if (embd_size > 0) {
+        if (embd.size > 0) {
             for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd[i0*n_embd + k], embd[i1*n_embd + k]);
+                std::swap(embd.data[i0*n_embd + k], embd.data[i1*n_embd + k]);
             }
         }
 
@@ -2527,12 +2524,12 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     {
         LLAMA_LOG_DEBUG("%s: - writing logits\n", __func__);
 
-        const uint64_t logits_size = std::min((uint64_t) this->logits_size, (uint64_t) n_outputs * model.vocab.n_tokens());
+        const uint64_t logits_size = std::min((uint64_t) this->logits.size, (uint64_t) n_outputs * model.vocab.n_tokens());
 
         io.write(&logits_size, sizeof(logits_size));
 
         if (logits_size) {
-            io.write(logits, logits_size * sizeof(float));
+            io.write(logits.data, logits_size * sizeof(float));
         }
     }
 
@@ -2540,12 +2537,12 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     {
         LLAMA_LOG_DEBUG("%s: - writing embeddings\n", __func__);
 
-        const uint64_t embd_size = std::min((uint64_t) this->embd_size, (uint64_t) n_outputs * model.hparams.n_embd);
+        const uint64_t embd_size = std::min((uint64_t) this->embd.size, (uint64_t) n_outputs * model.hparams.n_embd);
 
         io.write(&embd_size, sizeof(embd_size));
 
         if (embd_size) {
-            io.write(embd, embd_size * sizeof(float));
+            io.write(embd.data, embd_size * sizeof(float));
         }
     }
 
@@ -2613,12 +2610,12 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         uint64_t logits_size;
         io.read_to(&logits_size, sizeof(logits_size));
 
-        if (this->logits_size < logits_size) {
+        if (this->logits.size < logits_size) {
             throw std::runtime_error("logits buffer too small");
         }
 
         if (logits_size) {
-            io.read_to(this->logits, logits_size * sizeof(float));
+            io.read_to(this->logits.data, logits_size * sizeof(float));
         }
     }
 
@@ -2629,12 +2626,12 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         uint64_t embd_size;
         io.read_to(&embd_size, sizeof(embd_size));
 
-        if (this->embd_size < embd_size) {
+        if (this->embd.size < embd_size) {
             throw std::runtime_error("embeddings buffer too small");
         }
 
         if (embd_size) {
-            io.read_to(this->embd, embd_size * sizeof(float));
+            io.read_to(this->embd.data, embd_size * sizeof(float));
         }
     }
 

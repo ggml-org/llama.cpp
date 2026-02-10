@@ -270,13 +270,11 @@ private:
     std::unique_ptr<llama_memory_i> memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
-    size_t  logits_size = 0; // capacity (of floats) for logits
-    float * logits      = nullptr;
+    struct buffer_view<float>  logits = {nullptr, 0};
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
-    size_t  embd_size = 0; // capacity (of floats) for embeddings
-    float * embd      = nullptr;
+    struct buffer_view<float>  embd = {nullptr, 0};
 
     struct sampling_info {
         std::map<llama_seq_id, llama_sampler *> samplers;
