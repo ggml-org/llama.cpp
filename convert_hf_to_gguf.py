@@ -11140,16 +11140,15 @@ class KimiK25Model(MmprojModel):
             head_dim = qkv_dim // n_head
 
             if "weight" in name:
-                wq, wk, wv = data_torch[:qkv_dim, :], data_torch[qkv_dim:2*qkv_dim, :], data_torch[2*qkv_dim:, :]
+                wq, wk, wv = data_torch[:qkv_dim, :], data_torch[qkv_dim:2 * qkv_dim, :], data_torch[2 * qkv_dim:, :]
                 wq = self.permute(wq, n_head)
                 wk = self.permute(wk, n_head)
                 data_torch = torch.cat([wq, wk, wv], dim=0)
             elif "bias" in name:
-                bq, bk, bv = data_torch[:qkv_dim], data_torch[qkv_dim:2*qkv_dim], data_torch[2*qkv_dim:]
+                bq, bk, bv = data_torch[:qkv_dim], data_torch[qkv_dim:2 * qkv_dim], data_torch[2 * qkv_dim:]
                 bq = bq.reshape(n_head, head_dim // 4, 2, 2).permute(0, 2, 1, 3).reshape(-1)
                 bk = bk.reshape(n_head, head_dim // 4, 2, 2).permute(0, 2, 1, 3).reshape(-1)
                 data_torch = torch.cat([bq, bk, bv], dim=0)
-
 
         # Temporal embeddings: (T, 1, C) → (T, C)
         if "pos_emb.time_weight" in name:
