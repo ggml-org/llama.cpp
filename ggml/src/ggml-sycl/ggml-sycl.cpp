@@ -2097,15 +2097,25 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
     // Initialize double-buffered layer streaming when model exceeds VRAM
+    // BUT only if fit_params didn't already handle the overflow via CPU offload
     if (model_exceeds_vram) {
-        auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
-        mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
-        sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
-        if (mgr.allocate_buffers(q)) {
-            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled: %d layers, 2 x %.1f MB buffers\n",
-                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+        // Check if user forces streaming via GGML_SYCL_FORCE_STREAMING=1
+        // Otherwise, CPU offload via fit_params is preferred (faster)
+        const char * force_stream = getenv("GGML_SYCL_FORCE_STREAMING");
+        const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
+        if (streaming_forced) {
+            auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
+            mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+            sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
+            if (mgr.allocate_buffers(q)) {
+                GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (forced): %d layers, 2 x %.1f MB buffers\n",
+                              mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+            } else {
+                GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
+            }
         } else {
-            GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
+            GGML_LOG_INFO("[SYCL-BUDGET] Model exceeds VRAM by %.1f MB — CPU offload via fit_params preferred over streaming\n",
+                          (g_tensor_inventory_total_size - vram_budget) / (1024.0 * 1024.0));
         }
     }
 
@@ -2226,6 +2236,22 @@ bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
 bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
     return g_model_exceeds_vram.load(std::memory_order_acquire);
+}
+
+// Export unified cache budget for llama_params_fit integration
+size_t ggml_backend_sycl_get_vram_budget(ggml_backend_t backend) {
+    if (!backend) return 0;
+    ggml_backend_sycl_context * ctx = (ggml_backend_sycl_context *) backend->context;
+    if (!ctx) return 0;
+    auto info = ggml_sycl::unified_cache_get_budget_info(ctx->device);
+    return info.available_for_weights;
+}
+
+size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend) {
+    if (!backend) return 0;
+    ggml_backend_sycl_context * ctx = (ggml_backend_sycl_context *) backend->context;
+    if (!ctx) return 0;
+    return ggml_sycl::unified_cache_get_margin_bytes(ctx->device);
 }
 
 bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {

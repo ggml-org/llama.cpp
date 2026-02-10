@@ -4851,6 +4851,58 @@ bool unified_cache_is_budget_exceeded(int device) {
     return it->second->is_budget_exceeded();
 }
 
+// === Budget Export API ===
+
+unified_budget_info unified_cache_get_budget_info(int device) {
+    unified_budget_info info = {};
+    info.device_id = device;
+
+    size_t free_mem = 0, total_mem = 0;
+    ggml_backend_sycl_get_device_memory(device, &free_mem, &total_mem);
+    info.total_vram = ggml_sycl_info().devices[device].total_vram;
+    if (info.total_vram == 0) {
+        info.total_vram = total_mem > 0 ? total_mem : free_mem;
+    }
+
+    auto * cache = get_unified_cache_for_device(device);
+    if (cache) {
+        info.budget_bytes   = unified_cache_total_managed(device);
+        info.weight_bytes   = unified_cache_weight_bytes(device);
+        info.runtime_bytes  = unified_cache_get_runtime_bytes(device);
+        info.available_for_weights = info.budget_bytes > info.runtime_bytes
+                                       ? info.budget_bytes - info.runtime_bytes : 0;
+    } else {
+        // Cache not yet initialized — use raw calculation
+        int pct = 90;
+        const char * env_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+        if (env_pct) pct = std::atoi(env_pct);
+        pct = std::max(1, std::min(100, pct));
+
+        info.budget_bytes = static_cast<size_t>(info.total_vram * (static_cast<double>(pct) / 100.0));
+        const size_t headroom = std::max(size_t(256) << 20, info.total_vram / 10);
+        if (info.total_vram > headroom && info.budget_bytes > info.total_vram - headroom) {
+            info.budget_bytes = info.total_vram - headroom;
+        }
+        info.available_for_weights = info.budget_bytes;
+    }
+
+    info.budget_pct = 90;
+    const char * env_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+    if (env_pct) info.budget_pct = std::atoi(env_pct);
+
+    info.model_exceeds_vram = ggml_backend_sycl_model_exceeds_vram(nullptr);
+
+    return info;
+}
+
+size_t unified_cache_get_margin_bytes(int device) {
+    auto info = unified_cache_get_budget_info(device);
+    if (info.available_for_weights > info.weight_bytes) {
+        return info.available_for_weights - info.weight_bytes;
+    }
+    return 0;
+}
+
 // === MoE Cache Helpers ===
 
 void unpin_all_experts() {

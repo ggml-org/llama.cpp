@@ -159,6 +159,14 @@ GGML_BACKEND_API bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend
 // when weights are streamed, as it triggers unnecessary host->device copies).
 GGML_BACKEND_API bool ggml_backend_sycl_model_exceeds_vram(ggml_backend_t backend);
 
+// Get VRAM budget available for weights (budget minus runtime reservations).
+// Returns 0 if backend is NULL or cache is not initialized.
+GGML_BACKEND_API size_t ggml_backend_sycl_get_vram_budget(ggml_backend_t backend);
+
+// Get free margin in bytes after weights + runtime allocations.
+// Returns 0 if budget is exceeded. Used by llama_params_fit.
+GGML_BACKEND_API size_t ggml_backend_sycl_get_vram_margin(ggml_backend_t backend);
+
 // Check if the unified tensor cache instance is available.
 // Returns true if tiered mode is enabled AND the cache has been created.
 GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend);

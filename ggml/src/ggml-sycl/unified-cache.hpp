@@ -1051,6 +1051,25 @@ void unified_cache_log_budget_summary(int device);
 // Check if the cache budget is exceeded (eviction exhausted but used > budget)
 bool unified_cache_is_budget_exceeded(int device);
 
+// Budget information exported for external consumers (e.g., llama_params_fit)
+struct unified_budget_info {
+    int    device_id;
+    size_t total_vram;            // Total device memory
+    size_t budget_bytes;          // Managed budget (total * pct - headroom)
+    size_t weight_bytes;          // Current weight cache usage
+    size_t runtime_bytes;         // KV + compute + staging + graph
+    size_t available_for_weights; // budget - runtime (what can hold weights)
+    int    budget_pct;            // GGML_SYCL_VRAM_BUDGET_PCT value used
+    bool   model_exceeds_vram;    // True if model > available_for_weights
+};
+
+// Get budget info for a device (thread-safe snapshot)
+unified_budget_info unified_cache_get_budget_info(int device);
+
+// Get margin in bytes for llama_params_fit (how much free space after weights + runtime)
+// Returns 0 if budget is exceeded
+size_t unified_cache_get_margin_bytes(int device);
+
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
 host_cache * get_host_cache_for_device(int device_id);
