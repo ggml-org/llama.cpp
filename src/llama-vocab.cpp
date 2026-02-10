@@ -468,6 +468,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_JINA_V2_ZH:
+                // ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-zh
+                // whitespace pre-tokenizer
+                regex_exprs = {
+                    "\\S+",
+                };
+                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
@@ -525,7 +532,20 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs);
+
+        std::string text_normalized;
+        if (vocab.get_apply_lowercase()) {
+            for (uint32_t cpt : unicode_cpts_from_utf8(text)) {
+                text_normalized += unicode_cpt_to_utf8(unicode_tolower(cpt));
+            }
+        } else {
+            text_normalized = text;
+        }
+
+        auto word_collection = unicode_regex_split(text_normalized, tokenizer.regex_exprs);
+        if (vocab.get_use_byte_encoding()) {
+            word_collection = unicode_words_byte_encode(word_collection);
+        }
 
         symbols_final.clear();
 
@@ -1598,6 +1618,8 @@ struct llama_vocab::impl {
     bool remove_extra_whitespaces   = false;
     bool escape_whitespaces         = true;
     bool treat_whitespace_as_suffix = false;
+    bool apply_lowercase            = false;  // lowercase normalization
+    bool use_byte_encoding          = true;
 
     std::unordered_map<std::string, llama_token> token_to_id;
     std::vector<token_data>                      id_to_token;
@@ -1747,7 +1769,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_mask_id = 103;
 
             add_sep = true;
-        } else if (tokenizer_model == "gpt2") {
+        } else if (
+            tokenizer_model == "gpt2" ||
+            tokenizer_model == "whitespace") {
             type = LLAMA_VOCAB_TYPE_BPE;
 
             // read bpe merges and populate bpe ranks
@@ -1782,12 +1806,21 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
 
             // default special tokens
-            special_bos_id  = 11;
-            special_eos_id  = 11;
-            special_unk_id  = LLAMA_TOKEN_NULL;
-            special_sep_id  = LLAMA_TOKEN_NULL;
-            special_pad_id  = LLAMA_TOKEN_NULL;
-            special_mask_id = LLAMA_TOKEN_NULL;
+            if (tokenizer_model == "gpt2") {
+                special_bos_id  = 11;
+                special_eos_id  = 11;
+                special_unk_id  = LLAMA_TOKEN_NULL;
+                special_sep_id  = LLAMA_TOKEN_NULL;
+                special_pad_id  = LLAMA_TOKEN_NULL;
+                special_mask_id = LLAMA_TOKEN_NULL;
+            } else if (tokenizer_model == "whitespace") {
+                special_bos_id  = 0;   // <s>
+                special_eos_id  = 2;   // </s>
+                special_unk_id  = 3;   // <unk>
+                special_sep_id  = 2;   // </s> (same as eos)
+                special_pad_id  = 1;   // <pad>
+                special_mask_id = 4;   // <mask>
+            }
         } else if (tokenizer_model == "t5") {
             type = LLAMA_VOCAB_TYPE_UGM;
 
@@ -2048,6 +2081,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "solar-open") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN;
                 clean_spaces = false;
+            } else if (
+                tokenizer_pre == "jina-v2-zh") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_JINA_V2_ZH;
+                clean_spaces = true;
+                add_bos = true;
+                add_sep = true;
+                use_byte_encoding = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2078,8 +2118,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
         }
 
-        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
-        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
+        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,           add_space_prefix,         false);
+        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,      remove_extra_whitespaces, false);
+        ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_LOWERCASE, apply_lowercase,          true);
     }
 
     const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());
@@ -3157,6 +3198,9 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                     return _try_copy(token_text.data(), token_text.size());
                 }
                 if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
+                    if (!use_byte_encoding) {
+                        return _try_copy(token_text.data(), token_text.size());
+                    }
                     std::string result = llama_decode_text(token_text);
                     return _try_copy(result.data(), result.size());
                 }
@@ -3579,6 +3623,14 @@ bool llama_vocab::get_escape_whitespaces() const {
 
 bool llama_vocab::get_treat_whitespace_as_suffix() const {
     return pimpl->treat_whitespace_as_suffix;
+}
+
+bool llama_vocab::get_apply_lowercase() const {
+    return pimpl->apply_lowercase;
+}
+
+bool llama_vocab::get_use_byte_encoding() const {
+    return pimpl->use_byte_encoding;
 }
 
 int llama_vocab::max_token_len() const {

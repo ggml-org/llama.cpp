@@ -52,6 +52,7 @@ class SpecialVocab:
     add_special_token: dict[str, bool]
     special_token_ids: dict[str, int]
     chat_template: str | Sequence[Mapping[str, str]] | None
+    normalizer_lowercase: bool
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -64,6 +65,7 @@ class SpecialVocab:
         self.load_merges = load_merges
         self.merges = []
         self.chat_template = None
+        self.normalizer_lowercase = False
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -102,6 +104,10 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting chat_template to {self.chat_template}')
             gw.add_chat_template(self.chat_template)
+        if self.normalizer_lowercase:
+            if not quiet:
+                logger.info('Setting normalizer_lowercase to True')
+            gw.add_normalizer_lowercase(True)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -146,6 +152,24 @@ class SpecialVocab:
             return
         logger.warning(f'Special token type {typ}, id {tid} out of range, must be under {self.n_vocab} - skipping')
 
+    def _parse_normalizer(self, normalizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/normalizers
+        #
+        # Detects lowercase normalization in three possible formats:
+        # 1. Standalone: {"type": "Lowercase"}
+        # 2. BertNormalizer attribute: {"type": "BertNormalizer", "lowercase": true, ...}
+        # 3. Nested in Sequence: {"type": "Sequence", "normalizers": [...]}
+
+        normalizer_type = normalizer.get('type')
+        if normalizer_type == 'Lowercase':
+            self.normalizer_lowercase = True
+        elif normalizer_type == 'BertNormalizer':
+            if normalizer.get('lowercase', True):
+                self.normalizer_lowercase = True
+        elif normalizer_type == 'Sequence':
+            for norm in normalizer.get('normalizers', []):
+                self._parse_normalizer(norm)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -178,6 +202,9 @@ class SpecialVocab:
                         ]
                     else:
                         raise ValueError("Unknown tokenizer merges format")
+            # Parse normalizer configuration
+            if normalizer := tokenizer.get('normalizer'):
+                self._parse_normalizer(normalizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}

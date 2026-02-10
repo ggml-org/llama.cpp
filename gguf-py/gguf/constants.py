@@ -256,6 +256,8 @@ class Keys:
         CHAT_TEMPLATE        = "tokenizer.chat_template"
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
+        # Normalizer constants
+        NORMALIZER_LOWERCASE = "tokenizer.ggml.normalizer.lowercase"
         # FIM/Infill special tokens constants
         FIM_PRE_ID           = "tokenizer.ggml.fim_pre_token_id"
         FIM_SUF_ID           = "tokenizer.ggml.fim_suf_token_id"

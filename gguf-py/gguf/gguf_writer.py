@@ -1081,6 +1081,9 @@ class GGUFWriter:
     def add_eom_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOM_ID, id)
 
+    def add_normalizer_lowercase(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.NORMALIZER_LOWERCASE, value)
+
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
 
