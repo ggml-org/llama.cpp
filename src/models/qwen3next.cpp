@@ -226,11 +226,13 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
     ggml_tensor * gexp       = ggml_exp(ctx0, g_cumsum_t);
 
+    // explicitly broadcast, so we can chunk it later
+    gexp = ggml_repeat(ctx0, gexp, k_beta);
+
     ggml_tensor * kbeta_gexp = ggml_mul(ctx0, k_beta, gexp);
     cb(kbeta_gexp, "kbeta_gexp", il); // shape: (S_k, chunk_size, n_chunks, H_v * n_seqs)
 
-    ggml_tensor * k_cumdecay =
-        ggml_cont(ctx0, ggml_transpose(ctx0, ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)))));
+    ggml_tensor * k_cumdecay = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)), attn);
     cb(k_cumdecay, "k_cumdecay", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
     ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
@@ -274,6 +276,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     // shape after loop of chunks: (S_v, chunk_size, n_chunks, H_v * n_seqs)
     ggml_tensor * core_attn_out = nullptr;
 
+    state = ggml_cont_4d(ctx0, ggml_transpose(ctx0, state), S_v, S_v, 1, H_v * n_seqs);
+
     for (int64_t chunk = 0; chunk < n_chunks; chunk++) {
         // shape: (S_k, chunk_size, 1, H_k * n_seqs)
         ggml_tensor * q_chunk = get_slice_2d(ctx0, q, chunk); // (no cont), next op: ggml_mul
@@ -292,10 +296,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
         ggml_tensor * attn_chunk = get_slice_2d(ctx0, attn_kq, chunk);
         cb(attn_chunk, "attn_chunk", il);
 
-        ggml_tensor * state_t = ggml_cont_4d(ctx0, ggml_transpose(ctx0, state), S_v, S_v, 1, H_v * n_seqs);
-
         // v_prime = (k_cumdecay[:, :, i]) @ last_recurrent_state
-        ggml_tensor * v_prime = ggml_mul_mat(ctx0, state_t, k_cumdecay_chunk);
+        ggml_tensor * v_prime = ggml_mul_mat(ctx0, state, k_cumdecay_chunk);
         cb(v_prime, "v_prime_chunk", il); // shape: (S_v, 1, H_v * n_seqs)
 
         // v_new = v_i - v_prime
@@ -304,8 +306,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
         cb(v_new, "v_new_chunk", il);
 
         // attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-        ggml_tensor * q_g_exp    = ggml_mul(ctx0, ggml_repeat_4d(ctx0, gexp_chunk, q_chunk->ne[0], gexp_chunk->ne[1], gexp_chunk->ne[2], gexp_chunk->ne[3]), q_chunk);
-        ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state_t, q_g_exp);
+        ggml_tensor * q_g_exp    = ggml_mul(ctx0, gexp_chunk, q_chunk);
+        ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state, q_g_exp);
         cb(attn_inter, "attn_inter_chunk", il);
 
         // core_attn_out[:, :, i] = attn_inter + attn @ v_new
@@ -321,15 +323,16 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
 
         // kgdmulvnew = (key_gdiff).transpose(-1, -2) @ v_new
         ggml_tensor * k_gdiff_t = get_slice_2d(ctx0, key_gdiff_t, chunk);
-        //ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, k_gdiff, v_new); // this is slower on metal, why?
-        ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, v_new_t, k_gdiff_t);
+        ggml_tensor * kgdmulvnew = ggml_mul_mat(ctx0, k_gdiff_t, v_new_t);
 
         // last_recurrent_state = last_recurrent_state * g_last + kgdmulvnew
-        ggml_tensor * gexp_last_chunk = ggml_cont(ctx0, get_slice_2d(ctx0, g_last_exp, chunk));
-        state = ggml_add(ctx0,
-            ggml_mul(ctx0, state, ggml_reshape_4d(ctx0, gexp_last_chunk, gexp_last_chunk->ne[0], gexp_last_chunk->ne[1], H_v, n_seqs)),
-            ggml_reshape_4d(ctx0, kgdmulvnew, kgdmulvnew->ne[0], kgdmulvnew->ne[1], H_v, n_seqs));
+        ggml_tensor * gexp_last_chunk = get_slice_2d(ctx0, g_last_exp, chunk);
+        state = ggml_mul(ctx0, state, gexp_last_chunk);
+        state = ggml_add(ctx0, state, kgdmulvnew);
     }
+
+    state = ggml_reshape_4d(ctx0, state, S_v, S_v, H_v, n_seqs);
+    state = ggml_transpose(ctx0, state);
 
     // truncate padded tokens
     ggml_tensor * output_tokens = ggml_view_4d(ctx0, core_attn_out,
