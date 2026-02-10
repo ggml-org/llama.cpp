@@ -2123,26 +2123,24 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
     // Initialize double-buffered layer streaming when model exceeds VRAM
-    // BUT only if fit_params didn't already handle the overflow via CPU offload
-    if (model_exceeds_vram) {
-        // Check if user forces streaming via GGML_SYCL_FORCE_STREAMING=1
-        // Otherwise, CPU offload via fit_params is preferred (faster)
-        const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
-        const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
-        if (streaming_forced) {
-            auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
-            mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
-            sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
-            if (mgr.allocate_buffers(q)) {
-                GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (forced): %d layers, 2 x %.1f MB buffers\n",
-                              mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
-            } else {
-                GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
-            }
+    // OR when user explicitly forces streaming via GGML_SYCL_FORCE_STREAMING=1
+    const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
+    const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
+    if (streaming_forced) {
+        // FORCE_STREAMING=1 enables streaming regardless of model size
+        auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
+        mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+        sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
+        if (mgr.allocate_buffers(q)) {
+            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (forced): %d layers, 2 x %.1f MB buffers\n",
+                          mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
         } else {
-            GGML_LOG_INFO("[SYCL-BUDGET] Model exceeds VRAM by %.1f MB — CPU offload via fit_params preferred over streaming\n",
-                          (g_tensor_inventory_total_size - vram_budget) / (1024.0 * 1024.0));
+            GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
         }
+    } else if (model_exceeds_vram) {
+        // Model exceeds VRAM but streaming not forced — CPU offload via fit_params is preferred
+        GGML_LOG_INFO("[SYCL-BUDGET] Model exceeds VRAM by %.1f MB — CPU offload via fit_params preferred over streaming\n",
+                      (g_tensor_inventory_total_size - vram_budget) / (1024.0 * 1024.0));
     }
 
     // Diagnostic logging for VRAM budget calculation debugging
@@ -2221,6 +2219,21 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
     }
     const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
     const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
+
+    // Only allow recalc to flip true→false (model now fits after reservations decrease).
+    // Never flip false→true: the initial set_tensor_inventory determination (using 90% budget)
+    // is authoritative. When GGML_SYCL_VRAM_BUDGET_PCT reduces the budget further,
+    // fit_params handles the overflow via ngl/context reduction — we should NOT
+    // independently start streaming or offloading KV based on the reduced budget.
+    if (!old_exceeds && new_exceeds) {
+        GGML_LOG_DEBUG("[SYCL-BUDGET] Recalc: model exceeds effective budget "
+                      "(model=%.1f MB, effective_budget=%.1f MB) but initial determination was false — "
+                      "deferring to fit_params for ngl/context reduction\n",
+                      g_tensor_inventory_total_size / (1024.0 * 1024.0),
+                      effective_budget / (1024.0 * 1024.0));
+        return;
+    }
+
     if (old_exceeds != new_exceeds) {
         g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
         GGML_LOG_INFO("[SYCL-BUDGET] Recalculated g_model_exceeds_vram: %s -> %s "
@@ -6580,14 +6593,261 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
     }
     return &ggml_backend_sycl_buffer_types[device];
 }
+// === Tiered KV Buffer Type ===
+// Hot region in device memory (fast), cold region in host pinned memory (PCIe via USM).
+// SYCL USM makes both regions accessible from GPU kernels transparently.
+
+struct tiered_kv_buffer_context {
+    void *     hot_base;    // device memory (fast)
+    void *     cold_base;   // host pinned memory (PCIe access)
+    size_t     hot_size;
+    size_t     cold_size;
+    int        device;
+    queue_ptr  stream;
+};
+
+static void tiered_kv_buffer_free(ggml_backend_buffer_t buffer) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    ggml_sycl_set_device(ctx->device);
+    if (ctx->hot_base) {
+        ggml_sycl::unified_cache_sub_runtime_bytes(ctx->device, ctx->hot_size,
+                                                    ggml_sycl::runtime_category::KV_CACHE);
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->hot_base, *ctx->stream)));
+    }
+    if (ctx->cold_base) {
+        ggml_sycl::unified_cache_sub_runtime_host_bytes(ctx->cold_size);
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ctx->cold_base, *ctx->stream)));
+    }
+    delete ctx;
+}
+
+static void * tiered_kv_buffer_get_base(ggml_backend_buffer_t buffer) {
+    // Return device base — allocator uses this for offset calculation.
+    // init_tensor remaps cold tensors to host base.
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    return ctx->hot_base;
+}
+
+static enum ggml_status tiered_kv_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    if (tensor->view_src != nullptr) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    // Compute offset from device base (set by allocator)
+    ptrdiff_t offset = static_cast<char *>(tensor->data) - static_cast<char *>(ctx->hot_base);
+
+    if (offset >= 0 && static_cast<size_t>(offset) < ctx->hot_size) {
+        // Tensor is in hot region — pointer already correct (device memory)
+    } else {
+        // Tensor is in cold region — remap to host pinned memory
+        size_t cold_offset = static_cast<size_t>(offset) - ctx->hot_size;
+        tensor->data = static_cast<char *>(ctx->cold_base) + cold_offset;
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+static void tiered_kv_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor,
+                                           uint8_t value, size_t offset, size_t size) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    ggml_sycl_set_device(ctx->device);
+    // queue.memset works for both device and host USM pointers
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        ctx->stream->memset(static_cast<char *>(tensor->data) + offset, value, size).wait()));
+}
+
+static void tiered_kv_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor,
+                                        const void * data, size_t offset, size_t size) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    ggml_sycl_set_device(ctx->device);
+    // queue.memcpy works for both device and host USM pointers
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        ctx->stream->memcpy(static_cast<char *>(tensor->data) + offset, data, size).wait()));
+}
+
+static void tiered_kv_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor,
+                                        void * data, size_t offset, size_t size) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    ggml_sycl_set_device(ctx->device);
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        ctx->stream->memcpy(data, static_cast<const char *>(tensor->data) + offset, size).wait()));
+}
+
+static void tiered_kv_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    auto * ctx = static_cast<tiered_kv_buffer_context *>(buffer->context);
+    ggml_sycl_set_device(ctx->device);
+    // Clear both regions
+    if (ctx->hot_base && ctx->hot_size > 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(ctx->hot_base, value, ctx->hot_size).wait()));
+    }
+    if (ctx->cold_base && ctx->cold_size > 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(ctx->stream->memset(ctx->cold_base, value, ctx->cold_size).wait()));
+    }
+}
+
+static const ggml_backend_buffer_i tiered_kv_buffer_interface = {
+    /* .free_buffer     = */ tiered_kv_buffer_free,
+    /* .get_base        = */ tiered_kv_buffer_get_base,
+    /* .init_tensor     = */ tiered_kv_buffer_init_tensor,
+    /* .memset_tensor   = */ tiered_kv_buffer_memset_tensor,
+    /* .set_tensor      = */ tiered_kv_buffer_set_tensor,
+    /* .get_tensor      = */ tiered_kv_buffer_get_tensor,
+    /* .cpy_tensor      = */ NULL,
+    /* .clear           = */ tiered_kv_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
+// Buffer type: allocates tiered buffer with hot (device) + cold (host pinned) regions
+static const char * tiered_kv_buft_get_name(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return GGML_SYCL_NAME "_KV_Tiered";
+}
+
+struct tiered_kv_buft_context {
+    int       device;
+    queue_ptr stream;
+};
+
+static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    auto * buft_ctx = static_cast<tiered_kv_buft_context *>(buft->context);
+    int device = buft_ctx->device;
+    ggml_sycl_set_device(device);
+
+    size = std::max(size, size_t(1));
+
+    // Auto-compute hot/cold split from VRAM budget.
+    // The tier manager may not be configured yet (token counts unknown at alloc time),
+    // so we compute the byte split directly from budget info.
+    auto info = ggml_sycl::unified_cache_get_budget_info(device);
+
+    // Available VRAM = budget - weights - existing runtime allocations
+    size_t used = info.weight_bytes + info.runtime_bytes;
+    size_t available = (info.budget_bytes > used) ? info.budget_bytes - used : 0;
+
+    // Reserve space for compute scratch (256 MB or 10% of budget, whichever is larger)
+    size_t compute_reserve = std::max(size_t(256) << 20, info.budget_bytes / 10);
+    size_t kv_vram_cap = (available > compute_reserve) ? available - compute_reserve : 0;
+
+    GGML_LOG_DEBUG("[KV-TIER] budget=%.0f MB, weights=%.0f MB, runtime=%.0f MB, "
+                   "kv_cap=%.0f MB, requested=%.0f MB\n",
+                   info.budget_bytes / (1024.0 * 1024.0), info.weight_bytes / (1024.0 * 1024.0),
+                   info.runtime_bytes / (1024.0 * 1024.0), kv_vram_cap / (1024.0 * 1024.0),
+                   size / (1024.0 * 1024.0));
+
+    // Check env var override: GGML_SYCL_KV_HOT_PCT=N (percentage of KV to keep in VRAM)
+    size_t hot_size = 0, cold_size = 0;
+    const char * hot_pct_env = std::getenv("GGML_SYCL_KV_HOT_PCT");
+    if (hot_pct_env) {
+        int pct = std::atoi(hot_pct_env);
+        pct = std::max(0, std::min(100, pct));
+        hot_size = static_cast<size_t>(static_cast<double>(size) * pct / 100.0);
+    } else {
+        // Default: fill as much as VRAM allows
+        hot_size = std::min(size, kv_vram_cap);
+    }
+
+    // Align hot_size to 512 bytes (device allocation alignment)
+    hot_size = (hot_size + 511) & ~size_t(511);
+    if (hot_size > size) {
+        hot_size = size;
+    }
+    cold_size = size - hot_size;
+
+    // Ensure hot_size > 0 — the allocator requires a non-NULL base pointer
+    if (hot_size == 0 && size > 0) {
+        hot_size  = 512;  // Minimal device allocation for base pointer
+        cold_size = size - hot_size;
+    }
+
+    // If everything fits in VRAM, no tiering needed
+    if (cold_size == 0) {
+        GGML_LOG_INFO("[KV-TIER] Device %d: entire KV (%.1f MB) fits in VRAM, no tiering\n",
+                      device, size / (1024.0 * 1024.0));
+    }
+
+    void * hot_base  = nullptr;
+    void * cold_base = nullptr;
+
+    // Allocate hot region (device memory)
+    if (hot_size > 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(hot_base = sycl::malloc_device(hot_size, *buft_ctx->stream)));
+        if (!hot_base) {
+            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes device memory for hot region\n", hot_size);
+            return nullptr;
+        }
+        ggml_sycl::unified_cache_add_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
+    }
+
+    // Allocate cold region (host pinned memory)
+    if (cold_size > 0) {
+        SYCL_CHECK(CHECK_TRY_ERROR(cold_base = sycl::malloc_host(cold_size, *buft_ctx->stream)));
+        if (!cold_base) {
+            GGML_LOG_ERROR("[KV-TIER] Failed to allocate %zu bytes host pinned memory for cold region\n", cold_size);
+            if (hot_base) {
+                ggml_sycl::unified_cache_sub_runtime_bytes(device, hot_size, ggml_sycl::runtime_category::KV_CACHE);
+                sycl::free(hot_base, *buft_ctx->stream);
+            }
+            return nullptr;
+        }
+        ggml_sycl::unified_cache_add_runtime_host_bytes(cold_size);
+    }
+
+    GGML_LOG_INFO("[KV-TIER] Device %d: tiered KV buffer %.1f MB total — hot=%.1f MB (device), cold=%.1f MB (host pinned)\n",
+                  device, size / (1024.0 * 1024.0), hot_size / (1024.0 * 1024.0), cold_size / (1024.0 * 1024.0));
+
+    auto * ctx     = new tiered_kv_buffer_context{ hot_base, cold_base, hot_size, cold_size, device, buft_ctx->stream };
+    auto * buffer  = ggml_backend_buffer_init(buft, tiered_kv_buffer_interface, ctx, size);
+    return buffer;
+}
+
+static size_t tiered_kv_buft_get_alignment(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return 128;  // Standard SYCL device alignment
+}
+
+static size_t tiered_kv_buft_get_max_size(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return SIZE_MAX;  // No artificial limit — split across device + host
+}
+
+static const ggml_backend_buffer_type_i tiered_kv_buft_interface = {
+    /* .get_name         = */ tiered_kv_buft_get_name,
+    /* .alloc_buffer     = */ tiered_kv_buft_alloc_buffer,
+    /* .get_alignment    = */ tiered_kv_buft_get_alignment,
+    /* .get_max_size     = */ tiered_kv_buft_get_max_size,
+    /* .get_alloc_size   = */ NULL,
+    /* .is_host          = */ NULL,
+};
+
+// Get tiered KV buffer type for a device (returns static per-device instance)
+static ggml_backend_buffer_type_t ggml_backend_sycl_tiered_kv_buffer_type(int device) {
+    static struct ggml_backend_buffer_type tiered_kv_buft[GGML_SYCL_MAX_DEVICES];
+    static bool                            initialized = false;
+    static std::mutex                      init_mutex;
+    std::lock_guard<std::mutex>            lock(init_mutex);
+    if (!initialized) {
+        auto dev_count = ggml_backend_sycl_get_device_count();
+        for (int i = 0; i < dev_count; i++) {
+            auto & device_i = ggml_sycl_get_device(i);
+            tiered_kv_buft[i] = {
+                /* .iface    = */ tiered_kv_buft_interface,
+                /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), i),
+                /* .context  = */ new tiered_kv_buft_context{ i, &(device_i.default_queue()) },
+            };
+        }
+        initialized = true;
+    }
+    return &tiered_kv_buft[device];
+}
+
+// === End Tiered KV Buffer Type ===
+
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
     // Check if KV should be offloaded to host pinned memory (Level 1 pressure hierarchy)
     if (ggml_sycl::unified_cache_should_offload_kv(device)) {
-        static std::atomic<bool> logged{false};
-        if (!logged.exchange(true, std::memory_order_relaxed)) {
-            GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory for device %d\n", device);
-        }
-        return ggml_backend_sycl_host_buffer_type();
+        // Use tiered buffer: hot window in VRAM, cold in host pinned
+        return ggml_backend_sycl_tiered_kv_buffer_type(device);
     }
 
     static std::mutex           mutex;
@@ -30478,6 +30738,25 @@ static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t *
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
     ggml_sycl_set_device(ctx->device);
     SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(ctx->device).get_memory_info(*free, *total)));
+
+    // Apply VRAM budget percentage so llama_params_fit sees the same budget
+    // as the unified cache, preventing over-allocation that triggers streaming fallback.
+    const char * env_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+    if (env_pct) {
+        int pct = std::atoi(env_pct);
+        if (pct >= 1 && pct <= 100) {
+            size_t base_mem    = *total;
+            size_t budget      = static_cast<size_t>(base_mem * (static_cast<double>(pct) / 100.0));
+            const size_t min_headroom = 256ull * 1024ull * 1024ull;
+            const size_t headroom     = std::max(min_headroom, base_mem / 10);
+            if (base_mem > headroom && budget > base_mem - headroom) {
+                budget = base_mem - headroom;
+            }
+            if (*free > budget) {
+                *free = budget;
+            }
+        }
+    }
 }
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
@@ -30952,6 +31231,13 @@ static bool ggml_backend_sycl_device_supports_buft(ggml_backend_dev_t dev, ggml_
         return false;
 
     }
+    // Tiered KV buffer type - check device match
+    if (buft->iface.get_name == tiered_kv_buft_get_name) {
+        auto * buft_ctx = static_cast<tiered_kv_buft_context *>(buft->context);
+        ggml_backend_sycl_device_context * sycl_ctx = (ggml_backend_sycl_device_context *) dev->context;
+        return buft_ctx->device == sycl_ctx->device;
+    }
+
     // Host buffer type (CPU interface) - all SYCL devices can access host memory
     if (buft->iface.get_name == ggml_backend_sycl_host_buffer_type_name) {
         return true;
