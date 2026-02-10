@@ -4768,18 +4768,30 @@ void unified_cache_log_budget_summary(int device) {
     const size_t eff  = cache.budget();
     const size_t avl  = cache.available();
 
+    const size_t avail_for_wt = base > rt ? base - rt : 0;
+    int budget_pct = 90;
+    const char * env_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+    if (env_pct) budget_pct = std::atoi(env_pct);
+    const bool exceeds = ggml_backend_sycl_model_exceeds_vram(nullptr);
+
     GGML_LOG_INFO("[UNIFIED-CACHE] Budget summary for device %d:\n"
                   "  Total VRAM budget:    %8.1f MB\n"
                   "  Weight bytes (used_): %8.1f MB\n"
                   "  Runtime reserved:     %8.1f MB\n"
                   "  Effective budget:     %8.1f MB\n"
-                  "  Available for alloc:  %8.1f MB\n",
+                  "  Available for alloc:  %8.1f MB\n"
+                  "  Avail for weights:    %8.1f MB\n"
+                  "  Budget pct:           %8d %%\n"
+                  "  Model exceeds VRAM:   %8s\n",
                   device,
                   base / (1024.0f * 1024.0f),
                   wt / (1024.0f * 1024.0f),
                   rt / (1024.0f * 1024.0f),
                   eff / (1024.0f * 1024.0f),
-                  avl / (1024.0f * 1024.0f));
+                  avl / (1024.0f * 1024.0f),
+                  avail_for_wt / (1024.0f * 1024.0f),
+                  budget_pct,
+                  exceeds ? "yes" : "no");
 
     // Per-category runtime breakdown
     static const char * cat_names[] = {"KV_CACHE", "COMPUTE", "STAGING", "GRAPH", "OTHER"};
