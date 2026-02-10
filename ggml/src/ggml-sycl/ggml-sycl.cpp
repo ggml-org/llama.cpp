@@ -2706,7 +2706,7 @@ static const ggml_backend_buffer_type_i ggml_backend_sycl_probe_buffer_type_inte
 };
 
 static ggml_sycl_device_info ggml_sycl_init() {
-    ggml_sycl_device_info info;
+    ggml_sycl_device_info info = {};
     const int raw_device_count = dpct::dev_mgr::instance().device_count();
 
     std::vector<int> device_map;
@@ -2837,7 +2837,6 @@ static ggml_sycl_device_info ggml_sycl_init() {
             auto cpu_q = new sycl::queue{sycl::cpu_selector_v};
             info.has_cpu_device = true;
             info.cpu_queue      = cpu_q;
-            info.cpu_context    = cpu_q->get_context();
             auto cpu_dev = cpu_q->get_device();
             GGML_LOG_INFO("[SYCL-CPU] CPU offload enabled: %s (%d CUs, %s backend)\n",
                           cpu_dev.get_info<sycl::info::device::name>().c_str(),

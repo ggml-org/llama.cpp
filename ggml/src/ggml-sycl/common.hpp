@@ -549,7 +549,7 @@ struct sycl_device_info {
 };
 
 struct ggml_sycl_device_info {
-    int device_count = 0;
+    int device_count;
 
     sycl_device_info devices[GGML_SYCL_MAX_DEVICES] = {};
 
@@ -561,9 +561,8 @@ struct ggml_sycl_device_info {
     size_t host_max_alloc_size = 0;
 
     // CPU device for data-local compute (host-tier weight layers)
-    bool           has_cpu_device = false;
-    sycl::queue *  cpu_queue      = nullptr;  // OpenCL CPU queue (owned, allocated with new)
-    sycl::context  cpu_context;               // CPU context (for oneDNN engine creation)
+    bool          has_cpu_device = false;
+    sycl::queue * cpu_queue      = nullptr;  // OpenCL CPU queue (owned, allocated with new)
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
