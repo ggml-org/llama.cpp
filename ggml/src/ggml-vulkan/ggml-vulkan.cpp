@@ -4618,7 +4618,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_ARM_data_graph", properties.extensionName) == 0) {
                 device->data_graph_support = true;
 #if defined(GGML_VULKAN_SUPPORT_AHB)
-            } else if (strcmp(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME, properties.extensionName) == 0) {
+            } else if (strcmp("VK_ANDROID_external_memory_android_hardware_buffer", properties.extensionName) == 0) {
                 device->ahb_support = true;
 #endif
             } else if (strcmp("VK_KHR_16bit_storage", properties.extensionName) == 0) {
