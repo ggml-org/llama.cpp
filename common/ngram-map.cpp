@@ -47,21 +47,15 @@ static std::string common_tokens_to_str(const llama_tokens & inp, size_t start, 
  * @return Vector of draft tokens, empty if no matching pattern is found
  */
 llama_tokens common_ngram_simple_draft(
-        common_ngram_simple_state & state,
+        const common_ngram_simple_config & config,
         const llama_tokens & tokens, llama_token sampled) {
 
     // Simple implementation of self-speculative decoding without a draft model.
     //
     const size_t cur_len = tokens.size();
-    // Only check every check_rate tokens to save compute
-    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (state.idx_last_check + state.config.check_rate > cur_len) {
-        llama_tokens draft_tokens;
-        return draft_tokens;
-    }
 
-    size_t n_draft_min = state.config.size_ngram; // size of n-gram to lookup in token history
-    size_t n_draft_max = state.config.size_mgram; // the m-gram following the found n-gram is used for draft
+    const size_t n_draft_min = config.size_ngram; // size of n-gram to lookup in token history
+    const size_t n_draft_max = config.size_mgram; // the m-gram following the found n-gram is used for draft
 
     // vector for tokens we want to verify.
     // return empty vector if there is no match.
@@ -79,9 +73,6 @@ llama_tokens common_ngram_simple_draft(
         pattern.push_back(tokens[j]);
     }
     pattern.push_back(sampled); // add the last token to the pattern
-
-    // We do a search in the token history.
-    state.idx_last_check = cur_len;
 
     size_t match_pos = 0; // we ignore position 0, position 0 == no match
                           // search backwards, but skip the current match (we are currently there)
@@ -240,10 +231,9 @@ void common_ngram_map_draft(common_ngram_map & map,
         GGML_ABORT("%s: cur_len exceeds UINT32_MAX: %zu", __func__, cur_len);
     }
 
-    // Only check every check_rate tokens to save compute
-    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
-    if (map.idx_last_check + map.check_rate > cur_len) {
-        return;
+    if (map.idx_last_check  > cur_len) {
+        // Should not happen because of common_ngram_map_begin().
+        GGML_ABORT("%s: map.idx_last_check > cur_len: %zu > %zu", __func__, map.idx_last_check, cur_len);
     }
     map.idx_last_check = cur_len;
 

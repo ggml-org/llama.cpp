@@ -293,7 +293,9 @@ jobs:
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Build (no OpenMP)
@@ -303,8 +305,10 @@ jobs:
           cmake -B build \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DGGML_SANITIZE_${{ matrix.sanitizer }}=ON \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DGGML_OPENMP=OFF
+
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Test
@@ -466,7 +470,7 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 4200
+          ctest -L main --verbose --timeout 4800
 
   ubuntu-24-cmake-webgpu:
     runs-on: ubuntu-24.04

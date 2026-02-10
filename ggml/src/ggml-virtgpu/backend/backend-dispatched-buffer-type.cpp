@@ -36,18 +36,22 @@ uint32_t backend_buffer_type_get_max_size(apir_encoder * enc, apir_decoder * dec
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
-    size_t value = buft->iface.get_max_size(buft);
+    size_t value = SIZE_MAX;
+    if (buft->iface.get_max_size) {
+        value = buft->iface.get_max_size(buft);
+    }
+
     apir_encode_size_t(enc, &value);
 
     return 0;
 }
 
+/* APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST is deprecated. Keeping the handler for backward compatibility. */
 uint32_t backend_buffer_type_is_host(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     GGML_UNUSED(ctx);
-    ggml_backend_buffer_type_t buft;
-    buft = apir_decode_ggml_buffer_type(dec);
+    GGML_UNUSED(dec);
+    const bool is_host = false;
 
-    bool is_host = buft->iface.is_host(buft);
     apir_encode_bool_t(enc, &is_host);
 
     return 0;

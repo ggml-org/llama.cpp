@@ -24,26 +24,11 @@
 struct common_ngram_simple_config {
     uint16_t   size_ngram;      // size of n-grams to lookup in self-mode
     uint16_t   size_mgram;      // size of m-grams to draft in self-mode
-    uint16_t   check_rate;      // check for speculative decoding without draft model for each check_rate token
-};
-
-// current state (and config) of n-gram simple.
-struct common_ngram_simple_state {
-    common_ngram_simple_config config;
-
-    size_t idx_last_check = 0; // index of last check in context history (mutable)
-
-    common_ngram_simple_state(const common_ngram_simple_config & config)
-        : config(config) {}
 };
 
 // Searches for a n-gram in the history and checks whether a draft sequence should be generated.
-// state:              the ngram simple state to search in.
-// inp:                the tokens generated so far.
-// sampled:            the token that was just sampled.
-// draft:              vector to store the draft tokens, initially empty.
 llama_tokens common_ngram_simple_draft(
-        common_ngram_simple_state & state,
+        const common_ngram_simple_config & config,
         const llama_tokens & tokens, llama_token sampled);
 
 
@@ -80,15 +65,14 @@ struct common_ngram_map {
     bool key_only;       // true if only key n-grams are used, no values.
 
     std::vector<common_ngram_map_key> keys; // key n-grams which occur several times in token-history
-    uint16_t check_rate; // check for speculative decoding without draft model for each check_rate token
     uint16_t min_hits;   // minimum number of key hits to consider a draft
 
-    bool     show_key_map_stats = false; // true, if statitics of the key_map should be printed.
+    bool     show_key_map_stats = false; // true, if statistics of the key_map should be printed.
 
     common_ngram_map(uint16_t sz_key, uint16_t sz_value, bool only_keys,
-                     uint16_t check_rate, uint16_t min_hits)
+                     uint16_t min_hits)
         : size_key(sz_key), size_value(sz_value), key_only(only_keys),
-          check_rate(check_rate), min_hits(min_hits) {
+          min_hits(min_hits) {
         key_map.resize(COMMON_NGRAM_HASH_MAP_SIZE); // 2^18 hash entries, 0 entries if key_map shouldn't be used
     }
 
