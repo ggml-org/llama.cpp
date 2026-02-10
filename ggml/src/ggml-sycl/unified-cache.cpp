@@ -4865,6 +4865,20 @@ bool unified_cache_is_budget_exceeded(int device) {
 
 // === Budget Export API ===
 
+size_t compute_moe_effective_weight_bytes(size_t total_weight_bytes,
+                                          size_t expert_total_bytes,
+                                          int n_expert, int n_expert_used) {
+    if (n_expert <= 0 || n_expert_used <= 0 || expert_total_bytes == 0) {
+        return total_weight_bytes;  // Dense model, no savings
+    }
+    // Active expert fraction + headroom for expert cache churn
+    // Use 1.5x active ratio to account for recently-used experts still in cache
+    double active_ratio    = static_cast<double>(n_expert_used) / n_expert;
+    double effective_ratio = std::min(1.0, active_ratio * 1.5);
+    size_t expert_savings  = static_cast<size_t>(expert_total_bytes * (1.0 - effective_ratio));
+    return total_weight_bytes - expert_savings;
+}
+
 unified_budget_info unified_cache_get_budget_info(int device) {
     unified_budget_info info = {};
     info.device_id = device;
@@ -4904,6 +4918,16 @@ unified_budget_info unified_cache_get_budget_info(int device) {
 
     info.model_exceeds_vram = ggml_backend_sycl_model_exceeds_vram(nullptr);
 
+    // Populate MoE fields from tensor inventory
+    size_t moe_total = 0;
+    int    n_exp = 0, n_exp_used = 0;
+    ggml_sycl_get_moe_info(&moe_total, &n_exp, &n_exp_used);
+    info.expert_weight_bytes = moe_total;
+    info.n_expert_total      = n_exp;
+    info.n_expert_used       = n_exp_used;
+    info.active_expert_bytes = compute_moe_effective_weight_bytes(
+        moe_total, moe_total, n_exp, n_exp_used);
+
     return info;
 }
 
@@ -4913,6 +4937,36 @@ size_t unified_cache_get_margin_bytes(int device) {
         return info.available_for_weights - info.weight_bytes;
     }
     return 0;
+}
+
+bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
+    // Check env var override first
+    static std::atomic<int> cached_env{-2};  // -2 = not checked
+    int env_val = cached_env.load(std::memory_order_acquire);
+    if (env_val == -2) {
+        const char * env_kv = std::getenv("GGML_SYCL_KV_HOST");
+        env_val = env_kv ? std::atoi(env_kv) : -1;
+        cached_env.store(env_val, std::memory_order_release);
+    }
+    if (env_val == 1) return true;
+    if (env_val == 0) return false;
+
+    auto info = unified_cache_get_budget_info(device);
+
+    // If model already exceeds VRAM, definitely offload KV
+    if (info.model_exceeds_vram) {
+        return true;
+    }
+
+    // If KV estimate provided, check if it would push us over budget
+    if (kv_estimate_bytes > 0 && info.available_for_weights > info.weight_bytes) {
+        size_t margin = info.available_for_weights - info.weight_bytes;
+        if (kv_estimate_bytes > margin) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 // === MoE Cache Helpers ===
@@ -4929,28 +4983,25 @@ void unpin_all_experts() {
 
 // === Routing-Aware Expert Pre-staging ===
 
-// Helper: Create a cache ID from expert pointer and metadata
-// This is used for routing-aware pre-staging where we don't have a tensor object
-static ggml_sycl_cache_id make_expert_ptr_cache_id(const void * expert_ptr,
-                                                   size_t       expert_size,
-                                                   int          layer_id,
-                                                   int          expert_id) {
+// Helper: Create a cache ID for an expert that matches the dispatch path's key generation.
+// Uses tensor name hash + cache_uuid + model_id (same as ggml_sycl_get_moe_expert_cache_key
+// in ggml-sycl.cpp) so prestaged entries are found during dispatch.
+static ggml_sycl_cache_id make_expert_cache_id(const char * tensor_name,
+                                               uint64_t     cache_uuid,
+                                               uint32_t     model_id,
+                                               int          expert_id) {
     ggml_sycl_cache_id id{};
-    if (!expert_ptr) {
-        return id;
-    }
 
-    // Use pointer address as unique identifier
-    // Combined with layer_id and expert_id for full uniqueness
-    const uint64_t ptr_hash = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(expert_ptr));
+    uint64_t name_hash = static_cast<uint64_t>(
+        std::hash<std::string>()(tensor_name ? tensor_name : "unknown"));
 
     id.valid         = true;
-    id.model_id      = 0;  // Not model-specific for ptr-based keys
+    id.model_id      = model_id;
     id.has_gguf      = false;
     id.file_idx      = 0;
     id.file_offs     = 0;
-    id.nbytes        = expert_size;
-    id.name_hash     = ptr_hash;  // Use pointer as hash for uniqueness
+    id.nbytes        = 0;
+    id.name_hash     = name_hash;
     id.type          = GGML_TYPE_COUNT;
     id.tp_sharded    = false;
     id.tp_rank       = 0;
@@ -4961,10 +5012,9 @@ static ggml_sycl_cache_id make_expert_ptr_cache_id(const void * expert_ptr,
         id.tp_offset_ne[i] = 0;
     }
 
-    // Combine layer_id and expert_id into aux_id for uniqueness
-    uint64_t aux = static_cast<uint64_t>(layer_id);
+    // Combine cache_uuid with expert_id — matches ggml_sycl_get_moe_expert_cache_key
+    uint64_t aux = cache_uuid;
     aux          = detail::cache_hash_combine(aux, static_cast<uint64_t>(expert_id));
-    aux          = detail::cache_hash_combine(aux, ptr_hash);
     id.aux_id    = aux;
 
     return id;
@@ -4979,7 +5029,10 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
                                         size_t          expert_size,
                                         int             layer_id,
                                         int             n_experts_total,
-                                        int             device_id) {
+                                        int             device_id,
+                                        const char *    tensor_name,
+                                        uint64_t        cache_uuid,
+                                        uint32_t        model_id) {
     prestage_result result{};
     result.n_staged  = 0;
     result.n_pinned  = 0;
@@ -5027,7 +5080,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
 
     for (int32_t expert_id : unique_experts) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+        ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
         // Check if already cached (any layout)
         if (!cache->is_cached_any(key)) {
@@ -5043,7 +5096,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     // For now, we just use ensure_cached with AOS layout (passthrough)
     for (int32_t expert_id : experts_to_stage) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+        ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
         // Stage expert with AOS layout (passthrough - no reorder)
         void * cached_ptr = cache->ensure_cached(key,
@@ -5065,7 +5118,7 @@ prestage_result prestage_routed_experts(void *          queue_ptr,
     // Step 4: Pin all unique experts (including those already cached)
     for (int32_t expert_id : unique_experts) {
         const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_size, layer_id, expert_id);
+        ggml_sycl_cache_id key        = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
         cache->pin(key, GGML_LAYOUT_AOS);
         result.n_pinned++;
@@ -5089,7 +5142,10 @@ void unpin_routed_experts(const int32_t * expert_ids,
                           size_t          expert_stride,
                           int             layer_id,
                           int             n_experts_total,
-                          int             device_id) {
+                          int             device_id,
+                          const char *    tensor_name,
+                          uint64_t        cache_uuid,
+                          uint32_t        model_id) {
     // Validate inputs
     if (!expert_ids || n_expert_used <= 0 || n_tokens <= 0 || !weight_base_ptr) {
         return;
@@ -5114,8 +5170,7 @@ void unpin_routed_experts(const int32_t * expert_ids,
 
     // Unpin all unique experts
     for (int32_t expert_id : unique_experts) {
-        const void *       expert_ptr = static_cast<const char *>(weight_base_ptr) + expert_id * expert_stride;
-        ggml_sycl_cache_id key        = make_expert_ptr_cache_id(expert_ptr, expert_stride, layer_id, expert_id);
+        ggml_sycl_cache_id key = make_expert_cache_id(tensor_name, cache_uuid, model_id, expert_id);
 
         cache->unpin(key, GGML_LAYOUT_AOS);
     }

@@ -6581,6 +6581,15 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
     return &ggml_backend_sycl_buffer_types[device];
 }
 ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device) {
+    // Check if KV should be offloaded to host pinned memory (Level 1 pressure hierarchy)
+    if (ggml_sycl::unified_cache_should_offload_kv(device)) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+            GGML_LOG_INFO("[SYCL-BUDGET] KV cache offloaded to host pinned memory for device %d\n", device);
+        }
+        return ggml_backend_sycl_host_buffer_type();
+    }
+
     static std::mutex           mutex;
     std::lock_guard<std::mutex> lock(mutex);
     auto dev_count = ggml_backend_sycl_get_device_count();

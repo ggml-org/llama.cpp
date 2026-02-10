@@ -1061,6 +1061,11 @@ struct unified_budget_info {
     size_t available_for_weights; // budget - runtime (what can hold weights)
     int    budget_pct;            // GGML_SYCL_VRAM_BUDGET_PCT value used
     bool   model_exceeds_vram;    // True if model > available_for_weights
+    // MoE expert breakdown (non-zero only for MoE models)
+    size_t expert_weight_bytes;   // Total bytes for ALL expert tensors
+    size_t active_expert_bytes;   // Estimated bytes for active experts only
+    int    n_expert_total;        // Total experts per layer (e.g., 8, 128)
+    int    n_expert_used;         // Experts per token (e.g., 2, 4)
 };
 
 // Get budget info for a device (thread-safe snapshot)
@@ -1069,6 +1074,18 @@ unified_budget_info unified_cache_get_budget_info(int device);
 // Get margin in bytes for llama_params_fit (how much free space after weights + runtime)
 // Returns 0 if budget is exceeded
 size_t unified_cache_get_margin_bytes(int device);
+
+// Check if KV cache should be offloaded to host pinned memory.
+// Returns true when VRAM is too tight to hold both weights and KV cache.
+// Override: GGML_SYCL_KV_HOST=1 forces host, GGML_SYCL_KV_HOST=0 forces device.
+// kv_estimate_bytes: estimated KV cache size (0 = skip margin check, use model_exceeds_vram only)
+bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes = 0);
+
+// Calculate effective weight bytes accounting for MoE expert sparsity.
+// For an 8-expert top-2 model, only ~37.5% (1.5x active ratio) of expert weights are needed.
+size_t compute_moe_effective_weight_bytes(size_t total_weight_bytes,
+                                          size_t expert_total_bytes,
+                                          int n_expert, int n_expert_used);
 
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
@@ -1169,7 +1186,10 @@ prestage_result prestage_routed_experts(void *          queue,
                                         size_t          expert_size,
                                         int             layer_id,
                                         int             n_experts_total,
-                                        int             device_id);
+                                        int             device_id,
+                                        const char *    tensor_name,
+                                        uint64_t        cache_uuid,
+                                        uint32_t        model_id);
 
 // Unpin routed experts after MoE computation completes.
 // Call this after the MoE kernel finishes to allow eviction of these experts.
@@ -1190,7 +1210,10 @@ void unpin_routed_experts(const int32_t * expert_ids,
                           size_t          expert_stride,
                           int             layer_id,
                           int             n_experts_total,
-                          int             device_id);
+                          int             device_id,
+                          const char *    tensor_name,
+                          uint64_t        cache_uuid,
+                          uint32_t        model_id);
 
 // === Shutdown API ===
 
@@ -1211,5 +1234,8 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget);
 
 // Get the total model size from tensor inventory (for budget calculations)
 size_t ggml_sycl_get_model_size();
+
+// Get MoE expert memory breakdown (for budget calculations)
+void ggml_sycl_get_moe_info(size_t * expert_total_bytes, int * n_expert, int * n_expert_used);
 
 #endif  // GGML_SYCL_UNIFIED_CACHE_HPP

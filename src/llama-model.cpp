@@ -8560,9 +8560,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         LLAMA_LOG_INFO("%s: [SYCL] Collected %zu tensors, %.2f GB total\n", __func__, sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
         if (!sycl_tensors.empty()) {
             ggml_sycl_tensor_inventory inventory;
-            inventory.tensors    = sycl_tensors.data();
-            inventory.count      = sycl_tensors.size();
-            inventory.total_size = total_size;
+            inventory.tensors       = sycl_tensors.data();
+            inventory.count         = sycl_tensors.size();
+            inventory.total_size    = total_size;
+            inventory.n_expert      = hparams.n_expert;
+            inventory.n_expert_used = hparams.n_expert_used;
 
             // Set inventory for each SYCL backend device BEFORE allocation
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {
@@ -8720,9 +8722,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
         if (!sycl_tensors.empty()) {
             ggml_sycl_tensor_inventory inventory;
-            inventory.tensors    = sycl_tensors.data();
-            inventory.count      = sycl_tensors.size();
-            inventory.total_size = total_size;
+            inventory.tensors       = sycl_tensors.data();
+            inventory.count         = sycl_tensors.size();
+            inventory.total_size    = total_size;
+            inventory.n_expert      = hparams.n_expert;
+            inventory.n_expert_used = hparams.n_expert_used;
 
             // Refresh inventory for each SYCL backend device (post-allocation)
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {

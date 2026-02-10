@@ -139,6 +139,8 @@ struct ggml_sycl_tensor_inventory {
     struct ggml_sycl_tensor_info * tensors;
     size_t                         count;
     size_t                         total_size;
+    int                            n_expert;       // Total experts per layer (0 for dense models)
+    int                            n_expert_used;  // Experts activated per token (0 for dense models)
 };
 
 // Set tensor inventory for tiered memory placement.
