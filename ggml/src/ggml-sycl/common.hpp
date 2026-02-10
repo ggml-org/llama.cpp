@@ -16,6 +16,7 @@
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
 #include "kv-offload.hpp"
+#include "layer-streaming.hpp"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
 #include "tensor-types.hpp"
@@ -1802,6 +1803,14 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
             }
         }
         if (host_weights) {
+            // Check layer stream manager first
+            if (ggml_sycl::layer_streaming_active(device) && tensor->name) {
+                void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
+                if (streamed) {
+                    ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK);
+                    return streamed;
+                }
+            }
             const ggml_tensor_layout * layout = ggml_sycl_get_layout_info(tensor);
             if (layout != nullptr && layout->data_ptr != nullptr) {
                 if (layout->device_id < 0 || layout->device_id == device) {

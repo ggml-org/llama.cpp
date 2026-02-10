@@ -26042,6 +26042,14 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
             }
         }
 
+        // Check layer stream manager for host-resident weights
+        if (ggml_sycl_tensor_is_weight(tensor) &&
+            g_model_exceeds_vram.load(std::memory_order_acquire) &&
+            ggml_sycl::layer_streaming_active(ctx.device) && tensor->name) {
+            void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(ctx.device, tensor->name);
+            if (streamed) return streamed;
+        }
+
         if (tensor->data != nullptr) {
             return tensor->data;
         }
