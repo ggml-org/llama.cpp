@@ -267,6 +267,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
             case GGML_OP_SUM_ROWS:
             case GGML_OP_MUL:
             case GGML_OP_ADD:
+            case GGML_OP_SUB:
             case GGML_OP_DIV:
             case GGML_OP_GLU:
             case GGML_OP_SCALE:
