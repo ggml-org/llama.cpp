@@ -23372,6 +23372,22 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
     }
 
     bool result = g_layer_on_cpu[layer_id];
+
+    // Cost model: for large batches (prompt processing), GPU is faster even with
+    // streaming overhead.  Only dispatch to CPU for small batches (token generation).
+    // dst->ne[1] reflects the token count for MUL_MAT, RMS_NORM, ADD, etc.
+    if (result) {
+        static int cpu_batch_threshold = -1;
+        if (cpu_batch_threshold < 0) {
+            const char * env = getenv("GGML_SYCL_CPU_BATCH_THRESHOLD");
+            cpu_batch_threshold = env ? std::max(1, atoi(env)) : 4;
+        }
+        int64_t batch = dst->ne[1];
+        if (batch > cpu_batch_threshold) {
+            result = false;
+        }
+    }
+
     g_last_dispatch_query = dst;
     g_last_dispatch_result = result;
     return result;
