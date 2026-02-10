@@ -10,7 +10,6 @@
 #include "ggml-impl.h"
 
 #include <algorithm>
-#include <cstring>
 
 namespace ggml_sycl {
 
@@ -84,6 +83,9 @@ bool layer_stream_manager::allocate_buffers(sycl::queue & queue) {
     const size_t align = 2 * 1024 * 1024;
     buffer_size_ = ((max_layer_size_ + align - 1) / align) * align;
 
+    // Store context for sycl::free() in shutdown()
+    ctx_ = queue.get_context();
+
     for (int i = 0; i < 2; i++) {
         buffers_[i] = sycl::malloc_device(buffer_size_, queue);
         if (!buffers_[i]) {
@@ -114,15 +116,14 @@ void layer_stream_manager::shutdown() {
         prefetch_pending_ = false;
     }
 
-    // Note: we can't free here because we don't have a queue reference.
-    // The buffers are freed when the SYCL context is destroyed.
-    // In practice, shutdown() is called from the backend destructor
-    // which happens during process exit.
-    buffers_[0] = nullptr;
-    buffers_[1] = nullptr;
+    for (int i = 0; i < 2; i++) {
+        if (buffers_[i]) {
+            sycl::free(buffers_[i], ctx_);
+            buffers_[i] = nullptr;
+        }
+        loaded_layers_[i] = -1;
+    }
     buffer_size_ = 0;
-    loaded_layers_[0] = -1;
-    loaded_layers_[1] = -1;
 }
 
 void layer_stream_manager::register_host_ptr(
@@ -232,16 +233,8 @@ void layer_stream_manager::prefetch_next_layer(int layer_id, sycl::queue & queue
         return;  // Already prefetching this layer
     }
 
-    // Pick the buffer not currently in use
-    int buf = -1;
-    for (int i = 0; i < 2; i++) {
-        if (loaded_layers_[i] != loaded_layers_[0] || i == 1) {
-            // Pick the buffer with the older layer (or any free buffer)
-            buf = (loaded_layers_[0] == -1) ? 0 : (loaded_layers_[1] == -1) ? 1 : (layer_id % 2);
-            break;
-        }
-    }
-    if (buf < 0) buf = layer_id % 2;
+    // Pick the buffer not currently in use (prefer empty, then alternate by parity)
+    int buf = (loaded_layers_[0] == -1) ? 0 : (loaded_layers_[1] == -1) ? 1 : (layer_id % 2);
 
     // Don't evict a layer that's currently being computed
     // The "other" buffer is the safe one to overwrite
@@ -257,6 +250,7 @@ void layer_stream_manager::prefetch_next_layer(int layer_id, sycl::queue & queue
     char * dst_base = static_cast<char *>(buffers_[buf]);
 
     // Submit async copies
+    // In-order queue: last event implies all prior copies complete
     sycl::event last_event;
     for (const auto & w : layer.weights) {
         if (!w.host_ptr) continue;
@@ -316,10 +310,9 @@ static std::mutex g_layer_managers_mutex;
 
 layer_stream_manager & get_layer_stream_manager(int device_id) {
     std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
-    auto it = g_layer_managers.find(device_id);
-    if (it == g_layer_managers.end()) {
-        g_layer_managers[device_id] = std::make_unique<layer_stream_manager>();
-        return *g_layer_managers[device_id];
+    auto [it, inserted] = g_layer_managers.try_emplace(device_id);
+    if (inserted) {
+        it->second = std::make_unique<layer_stream_manager>();
     }
     return *it->second;
 }
@@ -338,35 +331,47 @@ void * layer_streaming_get_weight_ptr(int device_id, const char * name) {
 }
 
 void layer_streaming_ensure_layer(int device_id, int layer_id, sycl::queue & queue) {
-    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
-    auto it = g_layer_managers.find(device_id);
-    if (it != g_layer_managers.end()) {
-        it->second->ensure_layer(layer_id, queue);
+    layer_stream_manager * mgr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+        auto it = g_layer_managers.find(device_id);
+        if (it == g_layer_managers.end()) return;
+        mgr = it->second.get();
     }
+    mgr->ensure_layer(layer_id, queue);
 }
 
 void layer_streaming_prefetch_next(int device_id, int layer_id, sycl::queue & queue) {
-    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
-    auto it = g_layer_managers.find(device_id);
-    if (it != g_layer_managers.end()) {
-        it->second->prefetch_next_layer(layer_id, queue);
+    layer_stream_manager * mgr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+        auto it = g_layer_managers.find(device_id);
+        if (it == g_layer_managers.end()) return;
+        mgr = it->second.get();
     }
+    mgr->prefetch_next_layer(layer_id, queue);
 }
 
 void layer_streaming_await_prefetch(int device_id) {
-    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
-    auto it = g_layer_managers.find(device_id);
-    if (it != g_layer_managers.end()) {
-        it->second->await_prefetch();
+    layer_stream_manager * mgr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+        auto it = g_layer_managers.find(device_id);
+        if (it == g_layer_managers.end()) return;
+        mgr = it->second.get();
     }
+    mgr->await_prefetch();
 }
 
 void layer_streaming_register_host_ptr(int device_id, const char * name, const void * ptr, size_t size) {
-    std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
-    auto it = g_layer_managers.find(device_id);
-    if (it != g_layer_managers.end()) {
-        it->second->register_host_ptr(name, ptr, size);
+    layer_stream_manager * mgr = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_layer_managers_mutex);
+        auto it = g_layer_managers.find(device_id);
+        if (it == g_layer_managers.end()) return;
+        mgr = it->second.get();
     }
+    mgr->register_host_ptr(name, ptr, size);
 }
 
 }  // namespace ggml_sycl

@@ -7,7 +7,6 @@
 #ifndef GGML_SYCL_LAYER_STREAMING_HPP
 #define GGML_SYCL_LAYER_STREAMING_HPP
 
-#include <atomic>
 #include <cstddef>
 #include <mutex>
 #include <string>
@@ -58,7 +57,6 @@ class layer_stream_manager {
     // Synchronously ensure a layer's weights are loaded into a device buffer.
     // If the layer is already loaded (from a previous prefetch or ensure call), this is a no-op.
     // If not loaded, performs synchronous DMA from host pointers to the buffer.
-    // host_ptrs: map from tensor name to host pointer (from tensor->data or host cache).
     // Returns true if the layer is now loaded.
     bool ensure_layer(int layer_id, sycl::queue & queue);
 
@@ -120,9 +118,10 @@ class layer_stream_manager {
     std::unordered_map<std::string, std::pair<int, size_t>> name_to_location_;  // name -> (layer_id, weight_idx)
 
     // Double buffers
-    void *  buffers_[2]       = {nullptr, nullptr};
-    size_t  buffer_size_      = 0;
-    int     loaded_layers_[2] = {-1, -1};  // Which layer is in each buffer (-1 = empty)
+    void *        buffers_[2]       = {nullptr, nullptr};
+    size_t        buffer_size_      = 0;
+    int           loaded_layers_[2] = {-1, -1};  // Which layer is in each buffer (-1 = empty)
+    sycl::context ctx_;              // Stored at allocation time for sycl::free()
 
     // Async prefetch state
     int         prefetch_target_layer_ = -1;
