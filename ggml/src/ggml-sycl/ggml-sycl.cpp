@@ -2096,7 +2096,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // This is the difference between total and free at this point
     const size_t already_allocated = base_mem > free_mem ? base_mem - free_mem : 0;
 
-    // Budget for weight cache = 90% of total VRAM minus headroom
+    // Budget for weight cache = effective_pct% of total VRAM minus headroom
     // Headroom = max(256MB, 10% of total) for runtime scratch space
     // NOTE: We do NOT subtract already_allocated here. The unified cache tracks all
     // allocations and will stream from host if VRAM is exhausted. Pre-subtracting
@@ -2105,8 +2105,17 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     const size_t min_headroom = 256ull * 1024ull * 1024ull;
     const size_t base_headroom = std::max<size_t>(min_headroom, base_mem / 10);
 
-    // Tiered mode budget: total * 0.9 - headroom (no already_allocated subtraction)
-    size_t vram_budget_base = static_cast<size_t>(base_mem * 0.9);
+    // Apply GGML_SYCL_VRAM_BUDGET_PCT if set (same env var as unified cache and get_memory)
+    int budget_pct = 90;  // Default: 90% of total VRAM
+    const char * env_budget_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
+    if (env_budget_pct) {
+        int pct = std::atoi(env_budget_pct);
+        if (pct >= 1 && pct <= 100) {
+            budget_pct = pct;
+        }
+    }
+
+    size_t vram_budget_base = static_cast<size_t>(base_mem * (static_cast<double>(budget_pct) / 100.0));
     size_t vram_budget = 0;
     if (vram_budget_base > base_headroom) {
         vram_budget = vram_budget_base - base_headroom;
@@ -2122,6 +2131,11 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     const bool model_exceeds_vram = effective_model_size > vram_budget;
     g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
+
+    GGML_LOG_INFO("[SYCL-BUDGET] budget_pct=%d%%, vram_budget=%.1f MB, model_size=%.1f MB, exceeds=%s\n",
+                  budget_pct, vram_budget / (1024.0 * 1024.0),
+                  effective_model_size / (1024.0 * 1024.0),
+                  model_exceeds_vram ? "true" : "false");
 
     // Initialize double-buffered layer streaming when model exceeds VRAM
     // OR when user explicitly forces streaming via GGML_SYCL_FORCE_STREAMING=1
@@ -2221,18 +2235,15 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
     const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
     const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
 
-    // Only allow recalc to flip true→false (model now fits after reservations decrease).
-    // Never flip false→true: the initial set_tensor_inventory determination (using 90% budget)
-    // is authoritative. When GGML_SYCL_VRAM_BUDGET_PCT reduces the budget further,
-    // fit_params handles the overflow via ngl/context reduction — we should NOT
-    // independently start streaming or offloading KV based on the reduced budget.
+    // Allow false→true transitions when effective budget has been reduced
+    // (e.g., by GGML_SYCL_VRAM_BUDGET_PCT or runtime reservations).
+    // Previously this was blocked, but it prevented streaming activation when
+    // the cache is actively evicting weights to host.
     if (!old_exceeds && new_exceeds) {
-        GGML_LOG_DEBUG("[SYCL-BUDGET] Recalc: model exceeds effective budget "
-                      "(model=%.1f MB, effective_budget=%.1f MB) but initial determination was false — "
-                      "deferring to fit_params for ngl/context reduction\n",
+        GGML_LOG_INFO("[SYCL-BUDGET] Recalc: model now exceeds effective budget "
+                      "(model=%.1f MB, effective_budget=%.1f MB) — enabling streaming gates\n",
                       g_tensor_inventory_total_size / (1024.0 * 1024.0),
                       effective_budget / (1024.0 * 1024.0));
-        return;
     }
 
     if (old_exceeds != new_exceeds) {
@@ -29924,10 +29935,11 @@ static bool should_use_persistent_tg(ggml_backend_sycl_context & ctx, ggml_cgrap
         return false;
     }
 
-    // 1b. Model exceeds VRAM — persistent TG records weight pointers that become
-    // stale during double-buffered layer streaming. Disable to use per-op dispatch.
-    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: model exceeds VRAM, weight streaming active\n");
+    // 1b. Model exceeds VRAM or cache has evictions — persistent TG records weight
+    // pointers that become stale. Disable to use per-op dispatch.
+    if (g_model_exceeds_vram.load(std::memory_order_acquire) ||
+        ggml_sycl::unified_cache_has_evictions()) {
+        GGML_SYCL_DEBUG("[PERSISTENT-TG] Disabled: weight pointers may be stale\n");
         return false;
     }
 
@@ -30199,10 +30211,14 @@ normal_dispatch:
 
 
 #ifdef GGML_SYCL_GRAPH
-    // Disable graph replay when model exceeds VRAM — weight streaming rotates
-    // pointers between two device buffers, incompatible with baked graph pointers.
-    if (g_model_exceeds_vram.load(std::memory_order_acquire)) {
-        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: model exceeds VRAM, weight streaming active\n");
+    // Disable graph replay when weight pointers may be stale:
+    // 1. Model exceeds VRAM → layer streaming rotates buffer pointers
+    // 2. Cache has evictions → baked pointers reference freed device memory
+    if (g_model_exceeds_vram.load(std::memory_order_acquire) ||
+        ggml_sycl::unified_cache_has_evictions()) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
+                        (int)g_model_exceeds_vram.load(std::memory_order_acquire),
+                        (int)ggml_sycl::unified_cache_has_evictions());
         compute_impl();
         record_completion(false);
         return GGML_STATUS_SUCCESS;
