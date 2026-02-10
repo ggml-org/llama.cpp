@@ -1997,6 +1997,9 @@ static std::vector<std::pair<std::string, size_t>> g_tensor_inventory;
 static std::unordered_map<std::string, size_t>     g_tensor_inventory_index;  // name -> index for O(1) lookup
 static size_t                                      g_tensor_inventory_total_size = 0;
 static int                                         g_tensor_inventory_device     = 0;
+static size_t                                      g_moe_expert_total_bytes     = 0;
+static int                                         g_moe_n_experts_total        = 0;
+static int                                         g_moe_n_experts_used         = 0;
 std::atomic<bool>                                  g_tiered_enabled{ false };
 std::atomic<bool>                                  g_model_exceeds_vram{ false };  // True when model > VRAM budget
 
@@ -2060,6 +2063,25 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
         }
 
     }
+
+    // Detect MoE expert tensors and store MoE hparams
+    g_moe_n_experts_total    = inventory->n_expert;
+    g_moe_n_experts_used     = inventory->n_expert_used;
+    g_moe_expert_total_bytes = 0;
+    if (g_moe_n_experts_total > 0) {
+        for (const auto & [name, size] : g_tensor_inventory) {
+            // Expert tensors match patterns like "blk.N.ffn_up_exps.weight" or "blk.N.ffn_gate_exps.weight"
+            if (name.find("_exps") != std::string::npos) {
+                g_moe_expert_total_bytes += size;
+            }
+        }
+        if (g_moe_expert_total_bytes > 0) {
+            GGML_LOG_INFO("[SYCL-BUDGET] MoE model detected: %d experts, %d active, %.1f MB expert weights\n",
+                          g_moe_n_experts_total, g_moe_n_experts_used,
+                          g_moe_expert_total_bytes / (1024.0 * 1024.0));
+        }
+    }
+
     // Check if tiered mode should be enabled based on VRAM budget
     size_t free_mem = 0, total_mem = 0;
 
@@ -2092,7 +2114,11 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Enable tiered mode when unified cache is active (needed to upload weights to VRAM).
     // Previously only enabled when model > VRAM, but that left small models in host memory.
     // Now always enabled so the cache can manage VRAM placement for all model sizes.
-    const bool model_exceeds_vram = g_tensor_inventory_total_size > vram_budget;
+    // For MoE models, use effective weight size (only active experts needed in VRAM)
+    const size_t effective_model_size = ggml_sycl::compute_moe_effective_weight_bytes(
+        g_tensor_inventory_total_size, g_moe_expert_total_bytes,
+        g_moe_n_experts_total, g_moe_n_experts_used);
+    const bool model_exceeds_vram = effective_model_size > vram_budget;
     g_model_exceeds_vram.store(model_exceeds_vram, std::memory_order_release);
     g_tiered_enabled.store(ggml_sycl::unified_cache_enabled(), std::memory_order_release);
 
@@ -2101,7 +2127,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     if (model_exceeds_vram) {
         // Check if user forces streaming via GGML_SYCL_FORCE_STREAMING=1
         // Otherwise, CPU offload via fit_params is preferred (faster)
-        const char * force_stream = getenv("GGML_SYCL_FORCE_STREAMING");
+        const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
         const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
         if (streaming_forced) {
             auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
@@ -2207,7 +2233,7 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
         // Initialize layer streaming when transitioning to model_exceeds_vram
         // Only if GGML_SYCL_FORCE_STREAMING=1 (CPU offload via fit_params is preferred)
         if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty()) {
-            const char * force_stream = getenv("GGML_SYCL_FORCE_STREAMING");
+            const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
             const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
             if (streaming_forced) {
                 int device = g_tensor_inventory_device;
@@ -2233,6 +2259,14 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
 size_t ggml_sycl_get_model_size() {
     std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
     return g_tensor_inventory_total_size;
+}
+
+// Get MoE expert memory breakdown (for budget calculations)
+void ggml_sycl_get_moe_info(size_t * expert_total_bytes, int * n_expert, int * n_expert_used) {
+    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+    if (expert_total_bytes) *expert_total_bytes = g_moe_expert_total_bytes;
+    if (n_expert)           *n_expert           = g_moe_n_experts_total;
+    if (n_expert_used)      *n_expert_used      = g_moe_n_experts_used;
 }
 
 bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
@@ -22239,7 +22273,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
 
     // Routing-aware pre-staging: stage only needed experts for large MoE models (>64 experts)
     // This avoids blind preloading all experts which is wasteful for 128+ expert models
-    const bool use_routing_prestage = false; // DISABLED: cache key mismatch causes DEVICE_LOST
+    const bool use_routing_prestage = (n_experts > 64);  // Enable for large MoE models
     if (use_routing_prestage) {
         // Get expert indices from IDs tensor (already copied to ids_host)
         const int32_t * expert_ids_ptr = ids_host.data();
@@ -22250,6 +22284,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const size_t expert_stride = src0->nb[2];  // bytes between experts
         const size_t expert_size_prestage =
             static_cast<size_t>(src0->ne[0]) * static_cast<size_t>(src0->ne[1]) * ggml_type_size(src0->type);
+
+        // Get cache key info from tensor extra to match dispatch path keys
+        const uint64_t uuid     = src0_extra ? ggml_sycl_assign_cache_uuid(src0_extra) : 0;
+        const uint32_t mod_id   = src0_extra ? src0_extra->model_id : 0;
+        const char *   ten_name = ggml_get_name(src0);
 
         // Pre-stage only needed experts
         ggml_sycl::prestage_result prestage_res = ggml_sycl::prestage_routed_experts(
@@ -22262,7 +22301,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
             expert_size_prestage,               // Size of each expert
             layer_id,                           // Layer ID
             static_cast<int>(n_experts),        // Total experts for bounds checking
-            ctx.device);                        // Device ID
+            ctx.device,                         // Device ID
+            ten_name,                           // Tensor name (for key matching)
+            uuid,                               // Cache UUID (for key matching)
+            mod_id);                            // Model ID (for key matching)
 
         GGML_SYCL_DEBUG("[MOE-PRESTAGE] Layer %d: %d unique experts, %d staged, %d pinned (threshold=%d, n_experts=%ld)\n",
                         layer_id, prestage_res.n_unique, prestage_res.n_staged, prestage_res.n_pinned,
@@ -22585,6 +22627,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         const int       n_tokens_ids   = static_cast<int>(ids->ne[1]);
         const size_t    expert_stride  = src0->nb[2];
 
+        const uint64_t uuid_unpin   = src0_extra ? ggml_sycl_assign_cache_uuid(src0_extra) : 0;
+        const uint32_t mod_id_unpin = src0_extra ? src0_extra->model_id : 0;
+
         ggml_sycl::unpin_routed_experts(expert_ids_ptr,
                                         n_expert_used,
                                         n_tokens_ids,
@@ -22592,7 +22637,10 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
                                         expert_stride,
                                         layer_id,
                                         static_cast<int>(n_experts),
-                                        ctx.device);
+                                        ctx.device,
+                                        ggml_get_name(src0),
+                                        uuid_unpin,
+                                        mod_id_unpin);
 
         GGML_SYCL_DEBUG("[MOE-UNPIN] Layer %d: Unpinned routed experts\n", layer_id);
     }
