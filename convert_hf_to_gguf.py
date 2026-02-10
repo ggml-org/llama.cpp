@@ -1088,6 +1088,9 @@ class TextModel(ModelBase):
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
+        if chkhsh == "bc5108ee1eb6a3d600cadd065f63190fbd0554dbc9e4bbd6a0d977970afc8d2a":
+            # ref: https://huggingface.co/inceptionai/Jais-2-8B-Chat
+            res = "jais-2"
         if chkhsh == "049ecf7629871e3041641907f3de7c733e4dbfdc736f57d882ba0b0845599754":
             # ref: https://huggingface.co/deepseek-ai/deepseek-llm-7b-base
             res = "deepseek-llm"
@@ -8631,6 +8634,32 @@ class T5EncoderModel(TextModel):
                 return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Jais2ForCausalLM")
+class Jais2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.JAIS2
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        head_dim = hparams.get("head_dim", hparams["hidden_size"] // hparams["num_attention_heads"])
+        self.gguf_writer.add_rope_dimension_count(head_dim)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Jais2 uses LLaMA-style RoPE (rotate_half), requiring Q/K permutation
+        n_head = self.hparams["num_attention_heads"]
+        n_kv_head = self.hparams.get("num_key_value_heads", n_head)
+
+        if name.endswith(("q_proj.weight", "q_proj.bias")):
+            data_torch = LlamaModel.permute(data_torch, n_head, n_head)
+        if name.endswith(("k_proj.weight", "k_proj.bias")):
+            data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("JAISLMHeadModel")
