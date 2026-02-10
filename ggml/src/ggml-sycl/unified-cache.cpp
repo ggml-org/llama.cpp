@@ -4349,8 +4349,12 @@ static size_t runtime_reserved_host_bytes_nolock() {
     return g_runtime_reserved_host_bytes.load(std::memory_order_relaxed);
 }
 
-// Helper: Create cache for a device
-static unified_cache * create_cache_for_device(int device_id) {
+// Helper: Create cache for a device.
+// deferred_reserved_out: if non-null, stores the reserved bytes that the
+// caller must apply via update_reserved_bytes() AFTER releasing g_cache_mutex.
+// This prevents a deadlock: update_reserved_bytes() → recalc → layer streaming
+// → unified_cache_add_runtime_bytes() → tries to re-lock g_cache_mutex.
+static unified_cache * create_cache_for_device(int device_id, size_t * deferred_reserved_out = nullptr) {
     // Get queue for this device
     sycl::queue & queue = ggml_sycl_get_device(device_id).default_queue();
 
@@ -4448,7 +4452,12 @@ static unified_cache * create_cache_for_device(int device_id) {
         const size_t baseline       = budget_capped_to_free ? reserved_total : 0;
         g_runtime_reserved_baseline[device_id].store(baseline, std::memory_order_relaxed);
         const size_t reserved_adjusted = runtime_reserved_adjusted_nolock(device_id);
-        if (reserved_adjusted > 0) {
+        // Defer update_reserved_bytes to caller (after releasing g_cache_mutex)
+        // to avoid deadlock: update_reserved_bytes → recalc → layer streaming
+        // → unified_cache_add_runtime_bytes → re-lock g_cache_mutex
+        if (deferred_reserved_out) {
+            *deferred_reserved_out = reserved_adjusted;
+        } else if (reserved_adjusted > 0) {
             g_device_caches[device_id]->update_reserved_bytes(reserved_adjusted);
         }
         return g_device_caches[device_id].get();
@@ -4520,18 +4529,27 @@ static host_cache * create_host_cache_for_device(int device_id) {
 }
 
 unified_cache * get_unified_cache(sycl::queue & queue) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    g_cache_mode_locked = true;
+    unified_cache * result           = nullptr;
+    size_t          deferred_reserve = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_cache_mode_locked = true;
 
-    unified_cache_mode mode      = get_effective_mode();
-    int                device_id = (mode == unified_cache_mode::GLOBAL) ? 0 : get_device_id_from_queue(queue);
+        unified_cache_mode mode      = get_effective_mode();
+        int                device_id = (mode == unified_cache_mode::GLOBAL) ? 0 : get_device_id_from_queue(queue);
 
-    auto it = g_device_caches.find(device_id);
-    if (it != g_device_caches.end()) {
-        return it->second.get();
+        auto it = g_device_caches.find(device_id);
+        if (it != g_device_caches.end()) {
+            return it->second.get();
+        }
+
+        result = create_cache_for_device(device_id, &deferred_reserve);
     }
-
-    return create_cache_for_device(device_id);
+    // Apply deferred reserved bytes outside the mutex to avoid deadlock
+    if (result && deferred_reserve > 0) {
+        result->update_reserved_bytes(deferred_reserve);
+    }
+    return result;
 }
 
 host_cache * get_host_cache(sycl::queue & queue) {
@@ -4543,18 +4561,27 @@ host_cache * get_host_cache(sycl::queue & queue) {
 }
 
 unified_cache * get_unified_cache_for_device(int device_id) {
-    std::lock_guard<std::mutex> lock(g_cache_mutex);
-    g_cache_mode_locked = true;
+    unified_cache * result           = nullptr;
+    size_t          deferred_reserve = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_cache_mutex);
+        g_cache_mode_locked = true;
 
-    unified_cache_mode mode             = get_effective_mode();
-    int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device_id;
+        unified_cache_mode mode             = get_effective_mode();
+        int                effective_device = (mode == unified_cache_mode::GLOBAL) ? 0 : device_id;
 
-    auto it = g_device_caches.find(effective_device);
-    if (it != g_device_caches.end()) {
-        return it->second.get();
+        auto it = g_device_caches.find(effective_device);
+        if (it != g_device_caches.end()) {
+            return it->second.get();
+        }
+
+        result = create_cache_for_device(effective_device, &deferred_reserve);
     }
-
-    return create_cache_for_device(effective_device);
+    // Apply deferred reserved bytes outside the mutex to avoid deadlock
+    if (result && deferred_reserve > 0) {
+        result->update_reserved_bytes(deferred_reserve);
+    }
+    return result;
 }
 
 host_cache * get_host_cache_for_device(int device_id) {

@@ -23,6 +23,8 @@
 //
 
 #include "cpu-dispatch.hpp"
+#include "unified-cache.hpp"
+#include "tensor-types.hpp"
 
 #include "ggml.h"
 #include "ggml-backend.h"
@@ -77,16 +79,41 @@ static void * staging_ensure(int slot, size_t nbytes, sycl::queue * gpu_q) {
 
 // Get host-accessible pointer for a tensor.
 // If tensor is in host-accessible memory, returns original pointer.
-// If tensor is in device memory, copies to staging slot and returns host ptr.
+// For weight tensors: tries host_cache first (AOS data, no device copy needed).
+// For activations/compute tensors: copies device→host via staging.
 static void * get_host_ptr(const ggml_tensor * t, int device, int slot, sycl::queue * gpu_q) {
-    // For host-accessible buffers (weight mmap, host-pinned), return tensor->data directly.
-    // DO NOT use ggml_sycl_get_data_ptr() for these — it returns the cached DEVICE copy
-    // from extra->data_device[device] (unified cache), which is not host-accessible.
+    // Host-accessible buffers (weight mmap, host-pinned) → use tensor->data directly
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return t->data;
     }
 
-    // Device-resident buffer (compute buffer for activations) → stage to host
+    // For weight tensors: look up the host_cache for AOS data.
+    // This avoids using ggml_sycl_get_data_ptr() which may return a stale device
+    // pointer after unified cache eviction (extra->data_device[dev] is not nulled).
+    // The host_cache retains host-pinned copies even after device eviction.
+    // If host_cache misses, return nullptr (GPU fallback) — CPU dispatch should
+    // only be called for layers whose weights are host-resident.
+    if (ggml_sycl_tensor_is_weight(t)) {
+        if (ggml_sycl::unified_cache_enabled()) {
+            ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(t, device);
+            if (key.valid) {
+                auto * hcache = ggml_sycl::get_host_cache_for_device(device);
+                if (hcache) {
+                    int layer_id  = ggml_sycl::extract_layer_id(t->name);
+                    int expert_id = ggml_sycl::extract_expert_id(t->name);
+                    void * hp = hcache->get(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                            layer_id, expert_id, GGML_LAYOUT_AOS);
+                    if (hp) {
+                        return hp;
+                    }
+                }
+            }
+        }
+        return nullptr;
+    }
+
+    // Non-weight tensors (activations, compute buffers) → stage device→host.
+    // These are in the compute buffer (never evicted), so device pointers are valid.
     void * ptr = ggml_sycl_get_data_ptr(t, device);
     if (!ptr) {
         return nullptr;
@@ -179,20 +206,12 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int device = ctx.device;
     sycl::queue * gpu_q = ctx.stream();
 
-    // Stage all tensors to host-accessible memory.
-    // Weights (src0) are in SYCL device buffer (tensor->data = USM device ptr).
-    // get_host_ptr resolves via unified cache / staging and copies to host.
-    // Activations (src1) are in GPU compute buffer — also staged to host.
-    static int dbg = 0;
-    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] staging src0 %s data=%p buf=%p...\n", src0->name, src0->data, (void*)src0->buffer);
+    // Stage tensors to host-accessible memory.
+    // Weights (src0): resolved via host_cache (AOS, no copy) or device→host staging.
+    // Activations (src1): GPU compute buffer → staged to host.
     const void * src0_data = get_host_ptr(src0, device, 0, gpu_q);
-    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] src0 staged to %p\n", src0_data);
-    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] staging src1 %s data=%p buf=%p...\n", src1->name, src1->data, (void*)src1->buffer);
     const void * src1_data = get_host_ptr(src1, device, 1, gpu_q);
-    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] src1 staged to %p\n", src1_data);
     void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
-    if (dbg < 5) GGML_LOG_INFO("[CPU-MM-DBG] dst staged to %p, calling dequant+sgemm...\n", dst_data);
-    dbg++;
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
