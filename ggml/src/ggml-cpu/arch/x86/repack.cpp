@@ -1971,8 +1971,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const __m256i m32s = _mm256_set1_epi8(32);
 
     //Mask to get appropriate scales
-    __m128i scalemask1 = _mm_set_epi8(14,14,6,6,12,12,4,4,10,10,2,2,8,8,0,0);
-    __m128i scalemask2 = _mm_set_epi8(15,15,7,7,13,13,5,5,11,11,3,3,9,9,1,1);
+    __m128i scalemask1 = _mm_set_epi8(7,7,3,3,6,6,2,2,5,5,1,1,4,4,0,0);
+    __m128i scalemask2 = _mm_set_epi8(15,15,11,11,14,14,10,10,13,13,9,9,12,12,8,8);
 
     int64_t b_nb = n / QK_K;
 
@@ -6717,8 +6717,8 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const __m256i m32s = _mm256_set1_epi8(32);
 
     //Mask to get appropriate scales
-    __m128i scalesmask1_sse = _mm_set_epi8(14,14,12,12,10,10,8,8,6,6,4,4,2,2,0,0);
-    __m128i scalesmask2_sse = _mm_set_epi8(15,15,13,13,11,11,9,9,7,7,5,5,3,3,1,1);
+    __m128i scalesmask1_sse = _mm_set_epi8(7,7,6,6,5,5,4,4,3,3,2,2,1,1,0,0);
+    __m128i scalesmask2_sse = _mm_set_epi8(15,15,14,14,13,13,12,12,11,11,10,10,9,9,8,8);
 
 #ifdef __AVX512F__
     int anc = nc - nc % 16; // Used to align nc with boundary of 16
