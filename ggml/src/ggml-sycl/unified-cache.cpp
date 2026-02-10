@@ -1491,6 +1491,8 @@ void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                 // Release old buffer after new allocation succeeds (only if it was on device)
                 if (!it->second.host_resident && it->second.device_ptr) {
                     enqueue_deferred_free(it->second.device_ptr, it->second.size);
+                    // Device pointer freed — baked graph pointers to this entry are now stale
+                    has_evictions_.store(true, std::memory_order_release);
                 }
 
                 // Copy new data (only if on device, host_cache already filled host buffer)
@@ -3451,6 +3453,9 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         if (!host_resident) {
             // Only free device memory; host-resident entries are managed by host_cache
             enqueue_deferred_free(ptr, entry_size);
+            // Signal that device-resident weight pointers may now be stale.
+            // Graph replay / persistent TG must check this before using baked pointers.
+            has_evictions_.store(true, std::memory_order_release);
         }
         // Note: For host-resident entries, we just remove tracking here.
         // The host_cache still owns the memory and will evict it via its own LRU policy.
@@ -4861,6 +4866,16 @@ bool unified_cache_is_budget_exceeded(int device) {
         return false;
     }
     return it->second->is_budget_exceeded();
+}
+
+bool unified_cache_has_evictions() {
+    std::lock_guard<std::mutex> lock(g_cache_mutex);
+    for (auto & [device_id, cache] : g_device_caches) {
+        if (cache && cache->has_evictions()) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // === Budget Export API ===

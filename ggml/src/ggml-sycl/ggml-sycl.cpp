@@ -2134,25 +2134,22 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
                   effective_model_size / (1024.0 * 1024.0),
                   model_exceeds_vram ? "true" : "false");
 
-    // Initialize double-buffered layer streaming when model exceeds VRAM
-    // OR when user explicitly forces streaming via GGML_SYCL_FORCE_STREAMING=1
+    // Initialize double-buffered layer streaming when:
+    // 1. Model exceeds effective VRAM budget (auto-activation)
+    // 2. User forces streaming via GGML_SYCL_FORCE_STREAMING=1 (testing/override)
     const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
     const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
-    if (streaming_forced) {
-        // FORCE_STREAMING=1 enables streaming regardless of model size
+    if (model_exceeds_vram || streaming_forced) {
         auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
         mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
         sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
         if (mgr.allocate_buffers(q)) {
-            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (forced): %d layers, 2 x %.1f MB buffers\n",
+            GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled%s: %d layers, 2 x %.1f MB buffers\n",
+                          streaming_forced ? " (forced)" : "",
                           mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
         } else {
             GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed\n");
         }
-    } else if (model_exceeds_vram) {
-        // Model exceeds VRAM but streaming not forced — CPU offload via fit_params is preferred
-        GGML_LOG_INFO("[SYCL-BUDGET] Model exceeds VRAM by %.1f MB — CPU offload via fit_params preferred over streaming\n",
-                      (g_tensor_inventory_total_size - vram_budget) / (1024.0 * 1024.0));
     }
 
     // Diagnostic logging for VRAM budget calculation debugging
@@ -2253,25 +2250,18 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
                       effective_budget / (1024.0 * 1024.0));
 
         // Initialize layer streaming when transitioning to model_exceeds_vram
-        // Only if GGML_SYCL_FORCE_STREAMING=1 (CPU offload via fit_params is preferred)
         if (!old_exceeds && new_exceeds && !g_tensor_inventory.empty()) {
-            const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
-            const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
-            if (streaming_forced) {
-                int device = g_tensor_inventory_device;
-                auto & mgr = ggml_sycl::get_layer_stream_manager(device);
-                if (!mgr.is_active()) {
-                    mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
-                    sycl::queue & q = ggml_sycl_get_device(device).default_queue();
-                    if (mgr.allocate_buffers(q)) {
-                        GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init, forced): %d layers, 2 x %.1f MB buffers\n",
-                                      mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
-                    } else {
-                        GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
-                    }
+            int device = g_tensor_inventory_device;
+            auto & mgr = ggml_sycl::get_layer_stream_manager(device);
+            if (!mgr.is_active()) {
+                mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
+                sycl::queue & q = ggml_sycl_get_device(device).default_queue();
+                if (mgr.allocate_buffers(q)) {
+                    GGML_LOG_INFO("[SYCL-BUDGET] Layer streaming enabled (late init): %d layers, 2 x %.1f MB buffers\n",
+                                  mgr.n_layers(), mgr.max_layer_size() / (1024.0 * 1024.0));
+                } else {
+                    GGML_LOG_ERROR("[SYCL-BUDGET] Layer streaming buffer allocation failed (late init)\n");
                 }
-            } else {
-                GGML_LOG_INFO("[SYCL-BUDGET] Model exceeds effective budget — CPU offload via fit_params preferred over streaming\n");
             }
         }
     }

@@ -639,6 +639,10 @@ class unified_cache {
     // Check if budget is exceeded (used > budget after eviction)
     bool is_budget_exceeded() const { return budget_exceeded_; }
 
+    // Returns true if any weight has been evicted from device memory.
+    // Once true, never resets. Used to disable graph replay with stale baked pointers.
+    bool has_evictions() const { return has_evictions_.load(std::memory_order_acquire); }
+
     // Available memory
     size_t available() const {
         const size_t used = used_.load();
@@ -957,6 +961,11 @@ class unified_cache {
     // The prefetch worker loop (runs on background thread)
     void prefetch_worker_loop();
 
+    // Set to true when any weight has been evicted from device to host.
+    // One-way flag (false → true, never reset). Used by graph replay / persistent TG
+    // to know that baked pointers may reference freed device memory.
+    std::atomic<bool> has_evictions_{false};
+
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };
     mutable std::atomic<size_t> misses_{ 0 };
@@ -1050,6 +1059,10 @@ void unified_cache_log_budget_summary(int device);
 
 // Check if the cache budget is exceeded (eviction exhausted but used > budget)
 bool unified_cache_is_budget_exceeded(int device);
+
+// Returns true if any unified cache instance has evicted weights from device memory.
+// Thread-safe. One-way flag (once true, never resets).
+bool unified_cache_has_evictions();
 
 // Budget information exported for external consumers (e.g., llama_params_fit)
 struct unified_budget_info {
