@@ -1879,12 +1879,6 @@ class TensorNameMap:
                 "model.layers.{bid}.post_attention_layernorm",
             ),
         },
-        MODEL_ARCH.QWEN35: {
-            MODEL_TENSOR.FFN_NORM: (),
-        },
-        MODEL_ARCH.QWEN35MOE: {
-            MODEL_TENSOR.FFN_NORM: (),
-        },
     }
 
     mapping: dict[str, tuple[MODEL_TENSOR, str]]
