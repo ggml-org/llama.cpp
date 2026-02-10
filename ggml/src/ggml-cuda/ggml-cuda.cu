@@ -322,6 +322,13 @@ static ggml_cuda_device_info ggml_cuda_init() {
             }
         }
     }
+
+    int dev_ids[GGML_CUDA_MAX_DEVICES];
+    for (int id = 0; id < info.device_count; ++id) {
+        dev_ids[id] = id;
+    }
+    NCCL_CHECK(ncclCommInitAll(info.comms, info.device_count, dev_ids));
+
     return info;
 }
 
@@ -1076,6 +1083,33 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
     /* .get_alloc_size   = */ ggml_backend_cuda_split_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_cuda_split_buffer_type_is_host,
 };
+
+bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends) {
+#ifdef GGML_USE_NCCL
+    const ggml_cuda_device_info info = ggml_cuda_info();
+
+    const size_t ne = ggml_nelements(tensors[0]);
+
+    NCCL_CHECK(ncclGroupStart());
+    for (size_t i = 0; i < n_backends; ++i) {
+        ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backends[i]->context;
+        NCCL_CHECK(ncclAllReduce(tensors[i]->data, tensors[i]->data, ne, ncclFloat, ncclSum, info.comms[cuda_ctx->device], cuda_ctx->stream()));
+    }
+    NCCL_CHECK(ncclGroupEnd());
+
+    return true;
+#else
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    static bool warning_printed = false;
+    if (!warning_printed) {
+        GGML_LOG_WARN("%s: NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal\n");
+        warning_printed = true;
+    }
+    GGML_UNUSED_VARS(backends, tensors, n_backends);
+    return false;
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif // GGML_USE_NCCL
+}
 
 ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(int main_device, const float * tensor_split) {
     static std::mutex mutex;
@@ -5049,6 +5083,9 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
+    if (strcmp(name, "ggml_backend_allreduce_tensor") == 0) {
+        return (void *)ggml_backend_cuda_allreduce_tensor;
+    }
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *)ggml_backend_cuda_split_buffer_type;
     }

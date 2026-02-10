@@ -186,6 +186,10 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
 
 #define CUBLAS_CHECK(err) CUDA_CHECK_GEN(err, CUBLAS_STATUS_SUCCESS, cublas_get_error_str)
 
+#ifdef GGML_USE_NCCL
+#define NCCL_CHECK(err) CUDA_CHECK_GEN(err, ncclSuccess, ncclGetErrorString)
+#endif // GGML_USE_NCCL
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)
 static const char * cu_get_error_str(CUresult err) {
     const char * err_str;
@@ -1050,6 +1054,8 @@ struct ggml_cuda_device_info {
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
 
     std::array<float, GGML_CUDA_MAX_DEVICES> default_tensor_split = {};
+
+    ncclComm_t comms[GGML_CUDA_MAX_DEVICES];
 };
 
 const ggml_cuda_device_info & ggml_cuda_info();

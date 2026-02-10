@@ -182,6 +182,16 @@ if (CUDAToolkit_FOUND)
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
     endif()
 
+    if (GGML_CUDA_NCCL)
+        find_package(NCCL)
+        if (NCCL_FOUND)
+            add_compile_definitions(GGML_USE_NCCL)
+            target_link_libraries(ggml-cuda PRIVATE NCCL::NCCL)
+        else()
+            message(STATUS "Warning: NCCL not found, performance for multiple CUDA GPUs will be suboptimal")
+        endif()
+    endif()
+
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)

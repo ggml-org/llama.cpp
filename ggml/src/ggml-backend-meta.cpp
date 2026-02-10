@@ -946,9 +946,11 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
-        if (i < n_subgraphs - 1) {
+        if (n_backends > 1 && i < n_subgraphs - 1) {
             bool backend_allreduce_success = false;
-            if (backend_ctx->backend_configs[0].backend->iface.allreduce_tensor_async) {
+            ggml_backend_allreduce_tensor_t allreduce_tensor = (ggml_backend_allreduce_tensor_t) ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_ctx->backend_configs[0].backend)), "ggml_backend_allreduce_tensor");
+            if (allreduce_tensor) {
                 std::vector<ggml_backend_t> backends;
                 backends.reserve(n_backends);
                 std::vector<ggml_tensor *> nodes;
@@ -957,11 +959,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                     auto & bcj = backend_ctx->backend_configs[j];
                     backends.push_back(bcj.backend);
                     nodes.push_back(bcj.cgraphs[i].cgraph_main.nodes[bcj.cgraphs[i].cgraph_main.n_nodes-1]);
-                    GGML_ASSERT(nodes.back()->type == GGML_TYPE_F32);
-                    GGML_ASSERT(ggml_is_contiguous(nodes.back()));
                 }
-                backend_allreduce_success = backend_ctx->backend_configs[0].backend->iface.allreduce_tensor_async(
-                    backends.data(), nodes.data(), n_backends);
+                backend_allreduce_success = allreduce_tensor(backends.data(), nodes.data(), n_backends);
             }
 
             if (!backend_allreduce_success) {
