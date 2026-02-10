@@ -223,23 +223,20 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
 
     v = ggml_mul_mat(ctx0, attn, ggml_cont(ctx0, ggml_transpose(ctx0, v_beta)));
 
-    ggml_tensor * g_cumsum_t = ggml_cont(ctx0, ggml_transpose(ctx0, g_cumsum));
-    ggml_tensor * gexp       = ggml_exp(ctx0, g_cumsum_t);
+    ggml_tensor * gexp = ggml_exp(ctx0, g_cumsum);
 
-    // explicitly broadcast, so we can chunk it later
-    gexp = ggml_repeat(ctx0, gexp, k_beta);
+    k_beta = ggml_cont(ctx0, ggml_transpose(ctx0, k_beta));
 
     ggml_tensor * kbeta_gexp = ggml_mul(ctx0, k_beta, gexp);
     cb(kbeta_gexp, "kbeta_gexp", il); // shape: (S_k, chunk_size, n_chunks, H_v * n_seqs)
 
-    ggml_tensor * k_cumdecay = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, kbeta_gexp)), attn);
+    ggml_tensor * k_cumdecay = ggml_mul_mat(ctx0, kbeta_gexp, attn);
     cb(k_cumdecay, "k_cumdecay", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
 
     ggml_tensor * attn_kq = ggml_mul_mat(ctx0, k, q);
     attn_kq = ggml_mul(ctx0, decay_mask, attn_kq);
     attn_kq = ggml_mul(ctx0, attn_kq,    diag_mask);
     cb(attn_kq, "attn_kq", il); // shape: (chunk_size, chunk_size, n_chunks, H_v * n_seqs)
-
 
     // vectorized calculation of key_gdiff
     // improved from the chunked version:
@@ -263,11 +260,10 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     ggml_tensor * g_diff = ggml_neg(ctx0, ggml_sub(ctx0, g_cumsum, g_last));
     cb(g_diff, "g_diff", il); // shape: (chunk_size, 1, n_chunks, H_v * n_seqs)
 
-    ggml_tensor * g_diff_exp = ggml_exp(ctx0, g_diff);
-    ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp,
-                                                 1, chunk_size, n_chunks, g_diff_exp->ne[3]);
+    ggml_tensor * g_diff_exp   = ggml_exp(ctx0, g_diff);
+    ggml_tensor * g_diff_exp_t = ggml_transpose(ctx0, g_diff_exp);
 
-    ggml_tensor * key_gdiff = ggml_mul(ctx0, ggml_repeat_4d(ctx0, g_diff_exp_t, k->ne[0], g_diff_exp_t->ne[1], g_diff_exp_t->ne[2], g_diff_exp_t->ne[3]), k);
+    ggml_tensor * key_gdiff = ggml_mul(ctx0, k, g_diff_exp_t);
     cb(key_gdiff, "key_gdiff", il); // shape: (S_k, chunk_size, n_chunks, H_v * n_seqs)
 
     ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
@@ -305,7 +301,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
         cb(v_new_t, "v_new_chunk_t", il);
 
         // attn_inter = (q_i * g[:, :, i, :, None].exp()) @ last_recurrent_state
-        ggml_tensor * q_g_exp    = ggml_mul(ctx0, gexp_chunk, q_chunk);
+        ggml_tensor * q_g_exp    = ggml_mul(ctx0, q_chunk, ggml_transpose(ctx0, gexp_chunk));
         ggml_tensor * attn_inter = ggml_mul_mat(ctx0, state, q_g_exp);
         cb(attn_inter, "attn_inter_chunk", il);
 
