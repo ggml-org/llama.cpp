@@ -9804,7 +9804,7 @@ static void ggml_vk_acc(ggml_backend_vk_context * ctx, vk_context& subctx, const
     int nb1 = dst->op_params[0] / src0_type_size; // 4 bytes of float32
     int nb2 = dst->op_params[1] / src0_type_size; // 4 bytes of float32
     int nb3 = dst->op_params[2] / src0_type_size; // 4 bytes of float32
-    int offset = dst->op_params[3] / src0_type_size; // offset in bytes
+    int offset = dst->op_params[3] / src1_type_size; // offset in bytes
 
     ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_ACC, {
         (uint32_t)ggml_nelements(src0),
