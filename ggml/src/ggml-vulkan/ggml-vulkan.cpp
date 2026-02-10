@@ -4798,7 +4798,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (device->uma && !device->standard_zero_copy_support && device->ahb_support) {
             device->use_ahb = true;
-            std::cerr << "ggml_vulkan: Integrated GPU detected without standard zero-copy support. Enabling AHB zero-copy." << std::endl;
+            std::cerr << "ggml_vulkan: [OK] Standard zero-copy unavailable, but AHB zero-copy is supported. Enabling AHB." << std::endl;
+        }
+
+        if (device->uma && !device->standard_zero_copy_support && !device->use_ahb && !device->external_memory_host) {
+            std::cerr << "ggml_vulkan: [X] Warning: Integrated GPU detected but NO zero-copy path available (Standard/AHB/HostMem all failed)." << std::endl;
         }
 
         if (sm_builtins) {
