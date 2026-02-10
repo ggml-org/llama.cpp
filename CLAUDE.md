@@ -203,9 +203,11 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 
 | Metric | tok/s | Notes |
 |--------|-------|-------|
-| PP512 (unified kernel) | ~1242 | oneDNN FP16 path for M>=64 |
+| PP512 (Level 0, all VRAM) | ~1242 | oneDNN FP16 path for M>=64 |
+| TG128 (Level 0, all VRAM) | ~70.5 | MMVQ fast-path with SOA layout |
+| PP512 (Level 3, 30% budget) | ~269 | 15/33 GPU layers, rest on CPU |
+| TG128 (Level 3, 30% budget) | ~14 | CPU offload via fit_params |
 | PP512 (legacy) | ~159 | `GGML_SYCL_UNIFIED_FORCE_LEGACY=1` |
-| TG128 (unified kernel) | ~70.5 | MMVQ fast-path with SOA layout |
 | TG128 (no graph) | ~5.7 | `GGML_SYCL_DISABLE_GRAPH=1` |
 | Multi-device | HANGS | Unified cache sync issues, avoid |
 
@@ -229,6 +231,15 @@ ONEAPI_DEVICE_SELECTOR=level_zero:0 ./build/bin/llama-bench ...
 | `GGML_SYCL_FORCE_DMMV=1` | Force DMMV kernels |
 | `GGML_SYCL_ESIMD_MIN_BATCH=N` | Min batch size for ESIMD dispatch |
 | `GGML_SYCL_ONEDNN_PP_MIN_BATCH=N` | Min batch for oneDNN PP path |
+
+**Memory budget and pressure hierarchy**:
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `GGML_SYCL_VRAM_BUDGET_PCT=N` | 90 | VRAM budget as % of total (triggers CPU offload when model exceeds) |
+| `GGML_SYCL_KV_HOST=1` | OFF | Force KV cache to host pinned memory (Level 1 offload) |
+| `GGML_SYCL_KV_HOT_TOKENS=N` | auto | Hot window size in tokens for KV hot/cold tiering |
+| `GGML_SYCL_KV_HOT_PCT=N` | auto | Hot window as % of total KV buffer |
+| `GGML_SYCL_FORCE_STREAMING=1` | OFF | Enable GPU weight streaming (Level 5, last resort) |
 
 **Cache and memory**:
 | Variable | Effect |
