@@ -273,13 +273,13 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen35moe::build_delta_net_chu
     cb(g_diff, "g_diff", il); // shape: (chunk_size, 1, n_chunks, H_v * n_seqs)
 
     ggml_tensor * g_diff_exp = ggml_exp(ctx0, g_diff);
-    ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp, 
+    ggml_tensor * g_diff_exp_t = ggml_reshape_4d(ctx0, g_diff_exp,
                                                  1, chunk_size, n_chunks, g_diff_exp->ne[3]);
 
     ggml_tensor * key_gdiff = ggml_mul(ctx0, k, g_diff_exp_t);
     cb(key_gdiff, "key_gdiff", il); // shape: (S_k, chunk_size, n_chunks, H_v * n_seqs)
 
-    ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff)); 
+    ggml_tensor * key_gdiff_t = ggml_cont(ctx0, ggml_transpose(ctx0, key_gdiff));
     cb(key_gdiff_t, "key_gdiff_t", il); // shape: (chunk_size, S_k, n_chunks, H_v * n_seqs)
 
 
@@ -481,7 +481,7 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
-        int *                     sections,        
+        int *                     sections,
         int                       il) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);

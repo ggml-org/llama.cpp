@@ -7230,7 +7230,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp     = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,     "weight", i), { n_ff_shexp, n_embd }, 0);
                     }
                 } break;
-            
             case LLM_ARCH_QWEN35:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);

@@ -4571,47 +4571,10 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 class Qwen3_5TextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Skip vision tensors - they go in the mmproj file
-        if name.startswith("model.visual."):
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
-
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration")
-class Qwen3_5MoeTextModel(Qwen3_5TextModel):
+class Qwen3_5MoeTextModel(Qwen3NextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        name = name.replace("language_model.", "")
-
-        if name.startswith("mtp."):
-            return
-
-        # NOTE: Qwen3.5MOE has native 3d experts FFN format, so no need to permute
-        if name.endswith("mlp.experts.down_proj") or name.endswith("mlp.experts.down_proj.weight"):
-            mapped = f"{name}.weight" if not name.endswith(".weight") else name
-            # Input: (n_expert=128, n_embd=2048, n_ff_exp=768)
-            # Want GGML ne: {n_ff_exp, n_embd, n_expert} = {768, 2048, 128}
-            yield (self.map_tensor_name(mapped), data_torch)
-            return
-
-        if name.endswith("mlp.experts.gate_up_proj") or name.endswith("mlp.experts.gate_up_proj.weight"):
-            if data_torch.ndim < 3 or data_torch.shape[-2] % 2 != 0:
-                raise ValueError(f"Unexpected gate_up_proj shape for {name}: {tuple(data_torch.shape)}")
-            split_dim = data_torch.shape[-2] // 2
-            gate = data_torch[..., :split_dim, :].contiguous()
-            up = data_torch[..., split_dim:, :].contiguous()
-            base_name = name.removesuffix(".weight")
-            base = base_name.rsplit('.', 1)[0]
-            mapped_gate = f"{base}.gate_proj.weight"
-            mapped_up = f"{base}.up_proj.weight"
-            yield (self.map_tensor_name(mapped_gate), gate)
-            yield (self.map_tensor_name(mapped_up), up)
-            return
-        
-        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("GPT2LMHeadModel")
