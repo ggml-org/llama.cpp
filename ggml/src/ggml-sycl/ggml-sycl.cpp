@@ -2109,10 +2109,7 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     int budget_pct = 90;  // Default: 90% of total VRAM
     const char * env_budget_pct = std::getenv("GGML_SYCL_VRAM_BUDGET_PCT");
     if (env_budget_pct) {
-        int pct = std::atoi(env_budget_pct);
-        if (pct >= 1 && pct <= 100) {
-            budget_pct = pct;
-        }
+        budget_pct = std::max(1, std::min(100, std::atoi(env_budget_pct)));
     }
 
     size_t vram_budget_base = static_cast<size_t>(base_mem * (static_cast<double>(budget_pct) / 100.0));
