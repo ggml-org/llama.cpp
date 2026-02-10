@@ -438,7 +438,7 @@ class AgenticStore {
 
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
-				
+
 				onComplete?.(
 					'',
 					undefined,

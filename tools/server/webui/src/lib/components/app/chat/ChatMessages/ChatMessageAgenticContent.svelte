@@ -138,7 +138,7 @@
 	}
 </script>
 
-{#snippet renderSection(section: typeof sectionsParsed[number], index: number)}
+{#snippet renderSection(section: (typeof sectionsParsed)[number], index: number)}
 	{#if section.type === AgenticSectionType.TEXT}
 		<div class="agentic-text">
 			<MarkdownContent content={section.content} attachments={message?.extra} />
@@ -283,7 +283,7 @@
 	{#if highlightTurns && turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
-			<div class="agentic-turn hover:bg-muted/80 dark:hover:bg-muted/30 my-2">
+			<div class="agentic-turn my-2 hover:bg-muted/80 dark:hover:bg-muted/30">
 				<span class="agentic-turn-label">Turn {turnIndex + 1}</span>
 				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
 					{@render renderSection(section, turn.flatIndices[sIdx])}
