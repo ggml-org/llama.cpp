@@ -155,6 +155,12 @@ int main(void) {
         std::string("a") + SEP + "b" + SEP + "c" + SEP + "d.txt",
         "/a//b\\c/d.txt");
 
+    // --- normalize doesn't validate and doesn't trim dot segments in the middle of the path ---
+    test_normalize("dotdot retained",           std::string("foo") + SEP + ".." + SEP + "bar", "foo/../bar");
+    test_normalize("dotdot at start retained",  std::string("..") + SEP + "bar",               "../bar");
+    test_normalize("dotdot at end retained",    std::string("foo") + SEP + "..",               "foo/..");
+    test_normalize("dot component retained mid", std::string("foo") + SEP + "." + SEP + "bar", "foo/./bar");
+
     if (n_failed) {
         printf("\n%d/%d tests failed\n", n_failed, n_tests);
         fflush(stdout);
