@@ -7882,20 +7882,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_round     (type));
         test_cases.emplace_back(new test_trunc     (type));
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sqr       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sqrt      (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_log       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_sin       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sin       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_cos       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_cos       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_clamp     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_clamp     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_leaky_relu(type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_floor     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_floor     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_ceil      (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_ceil      (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_round     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_round     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_trunc     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_trunc     (type, {1024, 1024, 1, 1}));
     }
 
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
