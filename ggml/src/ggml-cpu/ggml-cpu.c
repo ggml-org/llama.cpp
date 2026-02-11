@@ -2913,7 +2913,7 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_GATED_DELTA_NET:
                     {
                         const int64_t S_v = node->src[0]->ne[0];
-                        cur = (S_v * S_v + 4 * S_v) * sizeof(float) * n_tasks;
+                        cur = (S_v * S_v + S_v) * sizeof(float) * n_tasks;
                     } break;
                 case GGML_OP_COUNT:
                     {

@@ -10322,17 +10322,14 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     GGML_ASSERT(ggml_is_contiguous(src_beta));
     GGML_ASSERT(ggml_is_contiguous(src_state));
 
-    // scratch layout per thread: [s_t(S_v*S_v) | q_local(S_v) | k_local(S_v) | kv_mem(S_v) | delta(S_v)]
+    // scratch layout per thread: [s_t(S_v*S_v) | delta(S_v)]
     // s_t holds the transposed (row-major) state for contiguous vector ops
-    const int64_t scratch_per_thread = S_v * S_v + 4 * S_v;
+    const int64_t scratch_per_thread = S_v * S_v + S_v;
     const int ith = params->ith;
     float * scratch = (float *)params->wdata + ith * scratch_per_thread + CACHE_LINE_SIZE_F32;
 
     float * s_t     = scratch;
-    float * q_local = scratch + S_v * S_v;
-    float * k_local = scratch + S_v * S_v + S_v;
-    float * kv_mem  = scratch + S_v * S_v + 2 * S_v;
-    float * delta   = scratch + S_v * S_v + 3 * S_v;
+    float * delta   = scratch + S_v * S_v;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs floats
@@ -10348,19 +10345,13 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const float * g_base        = (const float *)src_g->data;
     const float * beta_base     = (const float *)src_beta->data;
 
-    const float eps = ggml_get_op_params_f32(dst, 0);
-
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t h_idx    = ir % H;
         const int64_t sequence = ir / H;
 
-        // output state pointer for this (head, seq) — column-major (ggml layout)
         float * s_out = state_out_base + (sequence * H + h_idx) * S_v * S_v;
 
-        // Copy state into scratch in row-major layout of S (not S^T)
-        // ggml column-major: s_in[j + i*S_v] = S[j][i]  (j=dim0, i=dim1)
-        // row-major of S:    s_t[j * S_v + i] = S[j][i]  (row j is contiguous over i)
-        // This makes kv_mem[j] = dot(s_t[j*S_v:], k) a contiguous dot product
+        // tranpose
         const float * s_in = state_in_base + (sequence * H + h_idx) * S_v * S_v;
         for (int64_t j = 0; j < S_v; ++j) {
             for (int64_t i = 0; i < S_v; ++i) {
@@ -10379,56 +10370,33 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             const float * k_d = k_base + qkv_offset;
             const float * v_d = v_base + qkv_offset;
 
-            // g and beta layout: [H, n_tokens, n_seqs]
             const int64_t gb_offset = sequence * n_tokens * H + t * H + h_idx;
             const float beta_val_raw = beta_base[gb_offset];
             const float beta_val = 1.0f / (1.0f + expf(-beta_val_raw)); // sigmoid
             const float g_val = expf(g_base[gb_offset]);
 
-            memcpy(q_local, q_d, S_v * sizeof(float));
-            memcpy(k_local, k_d, S_v * sizeof(float));
-
-            // l2-norm q and scale by 1/sqrt(S_v)
-            float norm;
-            ggml_vec_norm_f32(S_v, &norm, q_local);
-            ggml_vec_scale_f32(S_v, q_local, 1.0f / fmaxf(norm, eps));
-            ggml_vec_scale_f32(S_v, q_local, 1.0f / sqrtf((float)S_v));
-
-            // l2-norm k
-            ggml_vec_norm_f32(S_v, &norm, k_local);
-            ggml_vec_scale_f32(S_v, k_local, 1.0f / fmaxf(norm, eps));
-
-            // state decay: S *= exp(g)
             ggml_vec_scale_f32(S_v * S_v, s_t, g_val);
 
-            // kv_mem[j] = sum_i S[j][i] * k[i] = dot(s_t[j*S_v:], k)
-            // row j of s_t is contiguous -> use ggml_vec_dot_f32
             for (int64_t j = 0; j < S_v; ++j) {
-                ggml_vec_dot_f32(S_v, &kv_mem[j], 0, &s_t[j * S_v], 0, k_local, 0, 1);
-            }
-
-            // delta = (v - kv_mem) * beta
-            for (int64_t j = 0; j < S_v; ++j) {
-                delta[j] = (v_d[j] - kv_mem[j]) * beta_val;
+                float kv_j;
+                ggml_vec_dot_f32(S_v, &kv_j, 0, &s_t[j * S_v], 0, k_d, 0, 1);
+                delta[j] = (v_d[j] - kv_j) * beta_val;
             }
 
             // outer product: S[j][i] += k[i] * delta[j]
-            // s_t[j * S_v + i] += k[i] * delta[j]
-            // row j gets k[:] scaled by delta[j] -> contiguous ggml_vec_mad_f32
             for (int64_t j = 0; j < S_v; ++j) {
-                ggml_vec_mad_f32(S_v, &s_t[j * S_v], k_local, delta[j]);
+                ggml_vec_mad_f32(S_v, &s_t[j * S_v], k_d, delta[j]);
             }
 
             // attn_out[j] = sum_i S[j][i] * q[i] = dot(s_t[j*S_v:], q)
             for (int64_t j = 0; j < S_v; ++j) {
-                ggml_vec_dot_f32(S_v, &attn_data[j], 0, &s_t[j * S_v], 0, q_local, 0, 1);
+                ggml_vec_dot_f32(S_v, &attn_data[j], 0, &s_t[j * S_v], 0, q_d, 0, 1);
             }
 
             attn_data += S_v * H; // advance to next token
         }
 
-        // copy scratch back to output: row-major of S -> column-major (ggml layout)
-        // s_t[j * S_v + i] = S[j][i] -> s_out[j + i * S_v] = S[j][i]
+        // transpose back
         for (int64_t j = 0; j < S_v; ++j) {
             for (int64_t i = 0; i < S_v; ++i) {
                 s_out[j + i * S_v] = s_t[j * S_v + i];
