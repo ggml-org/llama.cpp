@@ -32,9 +32,9 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
-	let message = $state(initialMessage);
-	let previousIsLoading = $state(isLoading);
-	let previousInitialMessage = $state(initialMessage);
+	let message = $derived(initialMessage);
+	let previousIsLoading = $derived(isLoading);
+	let previousInitialMessage = $derived(initialMessage);
 
 	// Sync message when initialMessage prop changes (e.g., after draft restoration)
 	$effect(() => {

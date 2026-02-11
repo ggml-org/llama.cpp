@@ -14,7 +14,7 @@
 
 	let { logs, connectionTimeMs, defaultExpanded = false, class: className }: Props = $props();
 
-	let isExpanded = $state(defaultExpanded);
+	let isExpanded = $derived(defaultExpanded);
 </script>
 
 {#if logs.length > 0}

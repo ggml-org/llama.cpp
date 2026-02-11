@@ -314,7 +314,7 @@
 		// }
 	];
 
-	let activeSection = $state<SettingsSectionTitle>(
+	let activeSection = $derived<SettingsSectionTitle>(
 		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
 	);
 	let currentSection = $derived(

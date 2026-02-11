@@ -56,7 +56,7 @@
 	let connectionTimeMs = $derived(successState?.connectionTimeMs);
 	let instructions = $derived(successState?.instructions);
 
-	let isEditing = $state(!server.url.trim());
+	let isEditing = $derived(!server.url.trim());
 	let showDeleteDialog = $state(false);
 	let editFormRef: McpServerCardEditForm | null = $state(null);
 
