@@ -23466,6 +23466,28 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
     return result;
 }
 
+// Hybrid dispatch: lightweight ops that operate only on activations (not weights)
+// should stay on GPU even when the layer is classified as CPU-bound.
+// These ops have tiny kernels and the activation data is already on-device,
+// so the cost of a CPU roundtrip (D2H + compute + H2D) far exceeds the GPU cost.
+static bool should_force_gpu(const ggml_tensor * dst) {
+    static int hybrid_enabled = -1;
+    if (hybrid_enabled < 0) {
+        const char * env = getenv("GGML_SYCL_HYBRID_DISPATCH");
+        hybrid_enabled = env ? atoi(env) : 1;
+    }
+    if (!hybrid_enabled) {
+        return false;
+    }
+
+    switch (dst->op) {
+        case GGML_OP_SCALE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
     if (!g_sycl_loaded) {
         return false;
@@ -23509,7 +23531,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     }
     // Data-local compute: dispatch to CPU when weight tensor is host-resident.
     // If CPU path doesn't support this op, fall through to GPU dispatch.
-    if (should_dispatch_to_cpu(ctx, dst)) {
+    // Hybrid dispatch: lightweight activation-only ops (SCALE, etc.) stay on GPU
+    // even for CPU-bound layers — the GPU kernel is cheaper than a D2H/H2D roundtrip.
+    if (should_dispatch_to_cpu(ctx, dst) && !should_force_gpu(dst)) {
         if (ggml_sycl_compute_forward_cpu(ctx, dst)) {
             return true;
         }
