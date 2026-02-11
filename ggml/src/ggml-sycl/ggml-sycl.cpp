@@ -23469,11 +23469,10 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
 // Hybrid dispatch: keep lightweight activation-only ops on GPU even for CPU layers.
 // Set GGML_SYCL_HYBRID_DISPATCH=0 to disable.
 static bool ggml_sycl_hybrid_dispatch_enabled() {
-    static int enabled = -1;
-    if (enabled < 0) {
-        const char * env = std::getenv("GGML_SYCL_HYBRID_DISPATCH");
-        enabled = (env && std::atoi(env) == 0) ? 0 : 1;  // Default ON
-    }
+    static bool enabled = []() {
+        const char * val = getenv("GGML_SYCL_HYBRID_DISPATCH");
+        return val == nullptr || std::string(val) != "0";  // Default ON
+    }();
     return enabled;
 }
 
