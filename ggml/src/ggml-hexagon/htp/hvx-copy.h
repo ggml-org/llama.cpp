@@ -136,8 +136,6 @@ static inline void hvx_copy_f32_uu(uint8_t * restrict dst, const uint8_t * restr
         dst_type * restrict vdst = (dst_type *) dst;                                \
         src_type * restrict vsrc = (src_type *) src;                                \
                                                                                     \
-        const HVX_Vector zero = Q6_V_vsplat_R(0);                                   \
-                                                                                    \
         const uint32_t elem_size = sizeof(__fp16);                                  \
         const uint32_t epv  = 128 / elem_size;                                      \
         const uint32_t nvec = n / epv;                                              \

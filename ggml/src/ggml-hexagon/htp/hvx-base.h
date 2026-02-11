@@ -66,6 +66,12 @@ static inline float hvx_vec_get_f32(HVX_Vector v) {
     return x;
 }
 
+static inline int32_t hvx_vec_get_i32(HVX_Vector v) {
+    int32_t __attribute__((aligned(128))) x;
+    hvx_vec_store_a(&x, 4, v);
+    return x;
+}
+
 static inline HVX_Vector hvx_vec_abs_f16(HVX_Vector v) {
     // abs by clearing the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x7fff);

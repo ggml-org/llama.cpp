@@ -6,6 +6,7 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include_directories(
     ${HEXAGON_SDK_ROOT}/incs
     ${HEXAGON_SDK_ROOT}/incs/stddef
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../include
     ${CMAKE_CURRENT_SOURCE_DIR}/../..
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -21,6 +22,7 @@ add_library(${HTP_LIB} SHARED
     matmul-ops.c
     binary-ops.c
     unary-ops.c
+    sum-rows-ops.c
     softmax-ops.c
     act-ops.c
     rope-ops.c
@@ -28,6 +30,7 @@ add_library(${HTP_LIB} SHARED
     set-rows-ops.c
     get-rows-ops.c
     cpy-ops.c
+    argsort-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE
