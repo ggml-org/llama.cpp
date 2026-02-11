@@ -1025,12 +1025,13 @@ enum class alloc_hint : uint8_t {
 // Classification of runtime (non-weight) VRAM reservations for diagnostics.
 // Used with unified_cache_add_runtime_bytes() to track where VRAM is consumed.
 enum class runtime_category : uint8_t {
-    KV_CACHE = 0,  // KV buffer allocations
-    COMPUTE  = 1,  // Compute buffer pool + scratch
-    STAGING  = 2,  // Expert staging, DMA staging, BLAS fallback
-    GRAPH    = 3,  // Persistent TG temp allocs, get_rows_pool
-    OTHER    = 4,  // Everything else (default for backward compat)
-    COUNT    = 5
+    KV_CACHE     = 0,  // KV buffer allocations
+    COMPUTE      = 1,  // Compute buffer pool + scratch
+    STAGING      = 2,  // Expert staging, DMA staging, BLAS fallback
+    GRAPH        = 3,  // Persistent TG temp allocs, get_rows_pool
+    HOST_COMPUTE = 4,  // Host-pinned scratch for CPU offload layers
+    OTHER        = 5,  // Everything else (default for backward compat)
+    COUNT        = 6
 };
 
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)

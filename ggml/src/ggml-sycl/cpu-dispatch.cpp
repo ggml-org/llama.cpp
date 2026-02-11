@@ -97,6 +97,7 @@ static const void * cpu_dispatch_lookup_host_ptr(const char * name) {
 static void *                                          g_retained_scratch     = nullptr;
 static size_t                                          g_retained_scratch_cap = 0;
 static size_t                                          g_retained_scratch_off = 0;  // bump allocator offset
+static int                                             g_retained_device      = -1;
 
 struct retained_entry {
     void * host_ptr;   // pointer into g_retained_scratch
@@ -124,21 +125,29 @@ static void scratch_reset() {
 void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
     GGML_ASSERT(!g_retained_scratch || gpu_q == g_retained_gpu_q);
     if (!g_retained_scratch) {
-        constexpr size_t DEFAULT_SCRATCH_SIZE = 4 * 1024 * 1024;  // 4MB
+        constexpr size_t DEFAULT_SCRATCH_SIZE = 32 * 1024 * 1024;  // 32MB
         g_retained_scratch = sycl::malloc_host(DEFAULT_SCRATCH_SIZE, *gpu_q);
         if (g_retained_scratch) {
             g_retained_scratch_cap = DEFAULT_SCRATCH_SIZE;
+            ggml_sycl::unified_cache_add_runtime_bytes(
+                device, DEFAULT_SCRATCH_SIZE,
+                ggml_sycl::runtime_category::HOST_COMPUTE);
         }
     }
     g_retained_scratch_off = 0;
     g_retained_map.clear();
     g_retained_active = true;
     g_retained_gpu_q  = gpu_q;
-    GGML_UNUSED(device);
+    g_retained_device = device;
 }
 
 void ggml_sycl_cpu_retained_cleanup() {
     if (g_retained_scratch && g_retained_gpu_q) {
+        if (g_retained_device >= 0) {
+            ggml_sycl::unified_cache_sub_runtime_bytes(
+                g_retained_device, g_retained_scratch_cap,
+                ggml_sycl::runtime_category::HOST_COMPUTE);
+        }
         sycl::free(g_retained_scratch, *g_retained_gpu_q);
         g_retained_scratch     = nullptr;
         g_retained_scratch_cap = 0;
@@ -146,6 +155,7 @@ void ggml_sycl_cpu_retained_cleanup() {
     g_retained_map.clear();
     g_retained_active = false;
     g_retained_gpu_q  = nullptr;
+    g_retained_device = -1;
 }
 
 bool ggml_sycl_cpu_retained_active() {
@@ -153,11 +163,10 @@ bool ggml_sycl_cpu_retained_active() {
 }
 
 void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst) {
-    // Retained scratch output is disabled: deferred flush_all has a timing
-    // issue with device buffer reuse in ggml compute buffers.  All ops use
-    // the per-op staging path which flushes immediately and is correct.
-    // The retained API is kept so the orchestration code can call init/flush/
-    // deactivate without modification.
+    // Retained activation is disabled: ggml's compute buffer allocator reuses
+    // device addresses for tensors with non-overlapping lifetimes, so flush_all()
+    // at CPU→GPU boundaries would write to recycled addresses and corrupt data.
+    // Returning nullptr forces the staging fallback path (correct but slower).
     GGML_UNUSED(dst);
     return nullptr;
 }
@@ -351,6 +360,11 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
 // The flush event is tracked internally and awaited at the start of the next op.
 static void flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q) {
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
+        return;
+    }
+    // When retained mode is active, outputs stay in host scratch.
+    // flush_all at CPU→GPU boundary handles the final copy.
+    if (g_retained_active && g_retained_map.count(t)) {
         return;
     }
     void * dev_ptr = ggml_sycl_get_data_ptr(t, device);

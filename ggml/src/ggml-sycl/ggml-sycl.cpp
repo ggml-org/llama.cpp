@@ -23339,6 +23339,10 @@ static std::mutex g_layer_map_mutex;
 // Per-layer tracking: which layers have been classified (true = resolved)
 static std::vector<bool> g_layer_classified;
 
+static thread_local const int8_t * g_preclassified_cpu_flags = nullptr;
+static thread_local int             g_preclassified_node_idx  = -1;
+static thread_local int             g_preclassified_size      = 0;
+
 // Check if a tensor's operation should be dispatched to CPU based on
 // weight residency. For MUL_MAT, classifies the layer by querying the
 // unified cache for the weight tensor's location. For other ops (norm,
@@ -23346,17 +23350,28 @@ static std::vector<bool> g_layer_classified;
 // This ensures ALL ops in a CPU-bound layer run on CPU, avoiding
 // activation transfers between CPU and GPU within a single layer.
 static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_tensor * dst) {
+    // Memoize: boundary sync in graph_compute_impl queries once per node,
+    // then compute_forward queries again for the same node — return cached result.
+    static thread_local const ggml_tensor * g_last_dispatch_query = nullptr;
+    static thread_local bool                g_last_dispatch_result = false;
+
+    // Fast path: use pre-classified flags from classify_cpu_layer_blocks()
+    if (g_preclassified_cpu_flags && g_preclassified_node_idx >= 0 &&
+        g_preclassified_node_idx < g_preclassified_size) {
+        bool result = g_preclassified_cpu_flags[g_preclassified_node_idx] == 1;
+        // Update memoization cache so compute_forward re-query hits it
+        g_last_dispatch_query = dst;
+        g_last_dispatch_result = result;
+        return result;
+    }
+
+    if (dst == g_last_dispatch_query) {
+        return g_last_dispatch_result;
+    }
+
     // Only dispatch when CPU offload is available
     if (!ggml_sycl_cpu_offload_available()) {
         return false;
-    }
-
-    // Memoize: boundary sync in graph_compute_impl queries once per node,
-    // then compute_forward queries again for the same node — return cached result.
-    static const ggml_tensor * g_last_dispatch_query = nullptr;
-    static bool                g_last_dispatch_result = false;
-    if (dst == g_last_dispatch_query) {
-        return g_last_dispatch_result;
     }
 
     // Initialize map structure lazily (sizes the vector, doesn't classify).
@@ -23544,7 +23559,15 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         if (ggml_sycl_compute_forward_cpu(ctx, dst)) {
             return true;
         }
-        // Unsupported op (RESHAPE, PERMUTE, ROPE, etc.) — GPU handles it
+        // Unsupported op — GPU handles it.  Safety: flush any retained
+        // activations so GPU reads up-to-date device data.  Phase 4 of
+        // classify_cpu_layer_blocks() should prevent this, but belt-and-
+        // suspenders for robustness.
+        if (ggml_sycl_cpu_retained_active()) {
+            ggml_sycl_cpu_retained_flush_all(ctx.device, ctx.stream());
+            GGML_SYCL_DEBUG("[RETAINED] Safety flush: CPU op %s fell through to GPU\n",
+                            ggml_op_name(dst->op));
+        }
     }
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -24757,6 +24780,120 @@ static inline bool ggml_sycl_is_noop(const ggml_tensor * node) {
            node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE;
 }
 
+// Pre-classify all graph nodes as CPU or GPU.
+// Phase 1: scan MUL_MAT weight tensors to classify layers.
+// Phase 2: propagate classification to ALL nodes in those layers.
+static void classify_cpu_layer_blocks(
+    ggml_backend_sycl_context & ctx,
+    const ggml_cgraph * cgraph,
+    std::vector<int8_t> & node_cpu_flags)  // -1=unknown, 0=GPU, 1=CPU
+{
+    node_cpu_flags.assign(cgraph->n_nodes, -1);
+
+    // Phase 1: classify layers from weight MUL_MATs
+    // Force-classify all layers by scanning graph weights.
+    // This calls should_dispatch_to_cpu() which triggers lazy classification
+    // via g_layer_on_cpu / g_layer_classified globals.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (!node || node->op != GGML_OP_MUL_MAT) continue;
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->name) continue;
+        int layer_id = ggml_sycl::extract_layer_id(src0->name);
+        if (layer_id < 0) continue;
+        // Trigger lazy classification for this layer
+        should_dispatch_to_cpu(ctx, node);
+    }
+
+    // Phase 2: propagate to all nodes
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (!node) { node_cpu_flags[i] = 0; continue; }
+
+        // View ops: inherit from previous non-noop node
+        if (ggml_sycl_is_noop(node)) {
+            node_cpu_flags[i] = (i > 0) ? node_cpu_flags[i-1] : 0;
+            continue;
+        }
+
+        // Try extracting layer_id from multiple sources:
+        int layer_id = -1;
+
+        // 1. From dst->name
+        if (node->name) {
+            layer_id = ggml_sycl::extract_layer_id(node->name);
+        }
+        // 2. From any src->name (catches attention MUL_MATs where src[0] is intermediate)
+        if (layer_id < 0) {
+            for (int s = 0; s < GGML_MAX_SRC && node->src[s]; s++) {
+                if (node->src[s]->name) {
+                    layer_id = ggml_sycl::extract_layer_id(node->src[s]->name);
+                    if (layer_id >= 0) break;
+                }
+            }
+        }
+        // 3. Inherit from predecessor (for ops with no layer info at all)
+        if (layer_id < 0 && i > 0) {
+            node_cpu_flags[i] = node_cpu_flags[i-1];
+            continue;
+        }
+
+        // Invariant: g_layer_classified.size() == g_layer_on_cpu.size()
+        // (both sized at initialization in build_layer_device_map)
+        if (layer_id >= 0 && layer_id < (int)g_layer_on_cpu.size() &&
+            g_layer_classified[layer_id] && g_layer_on_cpu[layer_id]) {
+            node_cpu_flags[i] = 1;
+        } else {
+            node_cpu_flags[i] = 0;
+        }
+    }
+
+    // Phase 3: batch threshold — large batches (PP) stay on GPU
+    static int cpu_batch_threshold = -1;
+    if (cpu_batch_threshold < 0) {
+        const char * env = getenv("GGML_SYCL_CPU_BATCH_THRESHOLD");
+        // Default 4: batches > 4 are prompt processing and stay on GPU
+        cpu_batch_threshold = env ? std::max(1, atoi(env)) : 4;
+    }
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (node_cpu_flags[i] == 1) {
+            ggml_tensor * node = cgraph->nodes[i];
+            if (node && node->ne[1] > cpu_batch_threshold) {
+                node_cpu_flags[i] = 0;
+            }
+        }
+    }
+
+    // Phase 4: filter out ops that don't have CPU kernels.
+    // Only ops handled by ggml_sycl_compute_forward_cpu() should be marked
+    // CPU.  Others (FLASH_ATTN_EXT, PERMUTE, RESHAPE, VIEW, GET_ROWS,
+    // SET_ROWS) fall through to GPU and would read stale device data if
+    // retained activations haven't been flushed.
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (node_cpu_flags[i] != 1) continue;
+        ggml_tensor * node = cgraph->nodes[i];
+        if (!node) continue;
+        switch (node->op) {
+            case GGML_OP_MUL_MAT:
+            case GGML_OP_RMS_NORM:
+            case GGML_OP_ADD:
+            case GGML_OP_MUL:
+            case GGML_OP_UNARY:
+            case GGML_OP_GLU:
+            case GGML_OP_SOFT_MAX:
+            case GGML_OP_NORM:
+            case GGML_OP_SCALE:
+            case GGML_OP_CPY:
+            case GGML_OP_CONT:
+            case GGML_OP_ROPE:
+                break;  // Has CPU kernel — keep as CPU
+            default:
+                node_cpu_flags[i] = 0;  // No CPU kernel — force GPU
+                break;
+        }
+    }
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
@@ -24845,12 +24982,32 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Overhead: one ext_oneapi_submit_barrier() per GPU op (~1-2us each).
     // This is amortized by avoiding the heavier full-queue wait at transitions.
     const bool cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
+    // IMPORTANT: node_cpu_flags MUST remain in scope for the entire function
+    // because g_preclassified_cpu_flags holds a raw pointer to its data.
+    std::vector<int8_t> node_cpu_flags;
+    if (cpu_offload_active) {
+        classify_cpu_layer_blocks(*sycl_ctx, cgraph, node_cpu_flags);
+    }
     bool prev_on_cpu = false;
     bool retained_mode_active = false;
     std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
 
+    g_preclassified_cpu_flags = cpu_offload_active && !node_cpu_flags.empty() ? node_cpu_flags.data() : nullptr;
+    g_preclassified_size = (int)node_cpu_flags.size();
+
+    // RAII guard: ensure thread-local pointers are reset even if an exception
+    // or GGML_ASSERT fires before the end-of-function cleanup.
+    struct preclassify_guard {
+        ~preclassify_guard() {
+            g_preclassified_cpu_flags = nullptr;
+            g_preclassified_node_idx  = -1;
+            g_preclassified_size      = 0;
+        }
+    } preclassify_guard_;
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
+        g_preclassified_node_idx = i;
         ggml_tensor * node = cgraph->nodes[i];
         if (!node) {
             GGML_SYCL_DEBUG("NULL!\n");
@@ -25210,9 +25367,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // GPU ops try to read them from device buffers.
                     if (retained_mode_active) {
                         ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
-                        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device\n");
-                        ggml_sycl_cpu_retained_deactivate();
-                        retained_mode_active = false;
+                        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device at boundary\n");
+                        // Don't deactivate — just flush. Scratch offset resets on next
+                        // GPU→CPU entry via retained_init(). This avoids re-allocating
+                        // the 32MB scratch buffer for each CPU layer.
                     }
 
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] CPU→GPU transition at node %d (%s)\n",
@@ -25223,13 +25381,22 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
             // CPU op fusion: fuse consecutive element-wise ops to eliminate
             // intermediate staging round-trips (saves 2-3 transfers/layer).
-            auto is_cpu_dispatched = [&](const ggml_tensor * n) {
+            auto is_cpu_dispatched = [&](int node_idx) -> bool {
+                if (node_idx < 0 || node_idx >= cgraph->n_nodes) return false;
+                ggml_tensor * n = cgraph->nodes[node_idx];
+                if (!n) return false;
+                if (!node_cpu_flags.empty() && node_idx < (int)node_cpu_flags.size()) {
+                    if (node_cpu_flags[node_idx] != 1) return false;
+                    // Still check force_gpu_dispatch override
+                    if (ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n)) return false;
+                    return true;
+                }
                 return should_dispatch_to_cpu(*sycl_ctx, n) &&
                        !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n));
             };
-            if (is_cpu_dispatched(node) && i + 1 < cgraph->n_nodes) {
+            if (is_cpu_dispatched(i) && i + 1 < cgraph->n_nodes) {
                 ggml_tensor * next = cgraph->nodes[i + 1];
-                if (next && !ggml_sycl_is_noop(next) && is_cpu_dispatched(next)) {
+                if (next && !ggml_sycl_is_noop(next) && is_cpu_dispatched(i + 1)) {
                     // RMS_NORM + MUL fusion: saves 2 staging transfers per layer
                     if (node->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL &&
                         next->src[0] == node) {
@@ -25600,6 +25767,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
 
     // End of graph compute — flush and deactivate any active retention mode
+    // Note: g_preclassified_* cleanup handled by preclassify_guard_ RAII above
     if (retained_mode_active) {
         ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
         GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device (end of graph)\n");
