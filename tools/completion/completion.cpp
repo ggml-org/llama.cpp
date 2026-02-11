@@ -391,13 +391,7 @@ int main(int argc, char ** argv) {
         // Logits are not stored as part of the session state so we need to
         // "replay" the last token to get logits for sampling.
         if (!session_tokens.empty() && n_match > 0 && n_match == session_tokens.size()) {
-            llama_token last_token = session_tokens.back();
-            int32_t pos = n_match;
-
-            llama_batch batch = llama_batch_get_one(&last_token, 1);
-            batch.pos = &pos;
-            if (llama_decode(ctx, batch)) {
-                LOG_ERR("%s: failed to regenerate logits after loading state\n", __func__);
+            if (!common_replay_last_token(ctx, session_tokens.back(), n_match)) {
                 return 1;
             }
 

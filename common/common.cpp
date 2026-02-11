@@ -1789,6 +1789,16 @@ float lr_opt::get_lr(float epoch) const {
     return r;
 }
 
+bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos) {
+    llama_batch batch = llama_batch_get_one(&last_token, 1);
+    batch.pos = &pos;
+    if (llama_decode(ctx, batch)) {
+        LOG_ERR("%s: failed to replay last token\n", __func__);
+        return false;
+    }
+    return true;
+}
+
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
     const std::vector<llama_token> & tokens,

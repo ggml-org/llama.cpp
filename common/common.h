@@ -794,6 +794,10 @@ bool common_prompt_batch_decode(
                               bool   save_state,
                               bool   is_last_batch = true);
 
+// replays the last token after loading state to regenerate logits
+// used after loading session state to ensure the sampling context has valid logits
+bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos);
+
 //
 // Vocab utils
 //

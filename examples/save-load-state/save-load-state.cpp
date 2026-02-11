@@ -6,17 +6,6 @@
 #include <vector>
 #include <cstdio>
 
-static bool replay_last_token(llama_context * ctx, llama_token last_token, int & n_past) {
-    llama_batch batch = llama_batch_get_one(&last_token, 1);
-    int pos = n_past;
-    batch.pos = &pos;
-    if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "%s: failed to replay last token after loading state\n", __func__);
-        return false;
-    }
-    ++n_past;
-    return true;
-}
 
 int main(int argc, char ** argv) {
     common_params params;
@@ -120,9 +109,10 @@ int main(int argc, char ** argv) {
 
     // restore state (last tokens)
     n_past = n_token_count_out;
-    if (!replay_last_token(ctx2, tokens.back(), n_past)) {
+    if (!common_replay_last_token(ctx2, tokens.back(), n_past)) {
         return 1;
     }
+    ++n_past;
 
     // second run
     for (auto i = 0; i < params.n_predict; i++) {
@@ -173,9 +163,10 @@ int main(int argc, char ** argv) {
 
     // restore state (last tokens)
     n_past = n_token_count_out;
-    if (!replay_last_token(ctx3, tokens.back(), n_past)) {
+    if (!common_replay_last_token(ctx3, tokens.back(), n_past)) {
         return 1;
     }
+    ++n_past;
 
     // save seq 0 and load into seq 1
     {
