@@ -10296,6 +10296,186 @@ void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, s
     }
 }
 
+// ggml_compute_forward_gated_delta_net
+static void ggml_compute_forward_gated_delta_net_one_chunk(
+    const ggml_compute_params * params,
+    ggml_tensor * dst,
+    int64_t ir0,
+    int64_t ir1) {
+
+    ggml_tensor * src_q     = dst->src[0];
+    ggml_tensor * src_k     = dst->src[1];
+    ggml_tensor * src_v     = dst->src[2];
+    ggml_tensor * src_g     = dst->src[3];
+    ggml_tensor * src_beta  = dst->src[4];
+    ggml_tensor * src_state = dst->src[5];
+
+    const int64_t S_v      = src_q->ne[0];
+    const int64_t H        = src_q->ne[1];
+    const int64_t n_tokens = src_q->ne[2];
+    const int64_t n_seqs   = src_q->ne[3];
+
+    GGML_ASSERT(ggml_is_contiguous(src_q));
+    GGML_ASSERT(ggml_is_contiguous(src_k));
+    GGML_ASSERT(ggml_is_contiguous(src_v));
+    GGML_ASSERT(ggml_is_contiguous(src_g));
+    GGML_ASSERT(ggml_is_contiguous(src_beta));
+    GGML_ASSERT(ggml_is_contiguous(src_state));
+
+    // scratch layout per thread: [q_local(S_v) | k_local(S_v) | kv_mem(S_v) | delta(S_v)]
+    const int64_t scratch_per_thread = 4 * S_v;
+    const int ith = params->ith;
+    float * scratch = (float *)params->wdata + ith * scratch_per_thread + CACHE_LINE_SIZE_F32;
+
+    float * q_local = scratch;
+    float * k_local = scratch + S_v;
+    float * kv_mem  = scratch + 2 * S_v;
+    float * delta   = scratch + 3 * S_v;
+
+    // output layout: [attn_scores | new_states]
+    // attn_scores: S_v * H * n_tokens * n_seqs floats
+    // new_states:  S_v * S_v * H * n_seqs floats
+    const int64_t attn_score_elems = S_v * H * n_tokens * n_seqs;
+    float * attn_out_base  = (float *)dst->data;
+    float * state_out_base = (float *)dst->data + attn_score_elems;
+
+    const float * state_in_base = (const float *)src_state->data;
+    const float * q_base        = (const float *)src_q->data;
+    const float * k_base        = (const float *)src_k->data;
+    const float * v_base        = (const float *)src_v->data;
+    const float * g_base        = (const float *)src_g->data;
+    const float * beta_base     = (const float *)src_beta->data;
+
+    const float eps = ggml_get_op_params_f32(dst, 0);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t h_idx    = ir % H;
+        const int64_t sequence = ir / H;
+
+        // output state pointer for this (head, seq)
+        float * s_out = state_out_base + (sequence * H + h_idx) * S_v * S_v;
+
+        // copy input state for this (head, seq) into output
+        const float * s_in = state_in_base + (sequence * H + h_idx) * S_v * S_v;
+        memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        // attn output pointer for first token of this (head, seq)
+        float * attn_data = attn_out_base + (sequence * n_tokens * H + h_idx) * S_v;
+
+        for (int64_t t = 0; t < n_tokens; t++) {
+            // input pointers for this (head, seq, token)
+            // layout is contiguous [S_v, H, n_tokens, n_seqs]
+            const int64_t qkv_offset = sequence * n_tokens * H * S_v + t * H * S_v + h_idx * S_v;
+            const float * q_d = q_base + qkv_offset;
+            const float * k_d = k_base + qkv_offset;
+            const float * v_d = v_base + qkv_offset;
+
+            // g and beta layout: [H, n_tokens, n_seqs]
+            const int64_t gb_offset = sequence * n_tokens * H + t * H + h_idx;
+            const float beta_val_raw = beta_base[gb_offset];
+            const float beta_val = 1.0f / (1.0f + expf(-beta_val_raw)); // sigmoid
+            const float g_val = expf(g_base[gb_offset]);
+
+            memcpy(q_local, q_d, S_v * sizeof(float));
+            memcpy(k_local, k_d, S_v * sizeof(float));
+
+            // l2-norm q and scale by 1/sqrt(S_v)
+            float norm;
+            ggml_vec_norm_f32(S_v, &norm, q_local);
+            ggml_vec_scale_f32(S_v, q_local, 1.0f / fmaxf(norm, eps));
+            ggml_vec_scale_f32(S_v, q_local, 1.0f / sqrtf((float)S_v));
+
+            // l2-norm k
+            ggml_vec_norm_f32(S_v, &norm, k_local);
+            ggml_vec_scale_f32(S_v, k_local, 1.0f / fmaxf(norm, eps));
+
+            // state decay: S *= exp(g)
+            ggml_vec_scale_f32(S_v * S_v, s_out, g_val);
+
+            // kv_mem = S @ k
+            for (int64_t i = 0; i < S_v; ++i) {
+                ggml_vec_dot_f32(S_v, &kv_mem[i], 0, &s_out[i * S_v], 0, k_local, 0, 1);
+            }
+
+            // delta = (v - kv_mem) * beta
+            for (int64_t i = 0; i < S_v; ++i) {
+                delta[i] = (v_d[i] - kv_mem[i]) * beta_val;
+            }
+
+            // outer product update: S += k (x) delta
+            for (int64_t i = 0; i < S_v; ++i) {
+                ggml_vec_mad_f32(S_v, &s_out[i * S_v], delta, k_local[i]);
+            }
+
+            // attn output = S @ q
+            for (int64_t i = 0; i < S_v; ++i) {
+                ggml_vec_dot_f32(S_v, &attn_data[i], 0, &s_out[i * S_v], 0, q_local, 0, 1);
+            }
+
+            attn_data += S_v * H; // advance to next token
+        }
+    }
+}
+
+
+static void ggml_compute_forward_gated_delta_net_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    ggml_tensor * Q = dst->src[0];
+    int64_t nr = Q->ne[1] * Q->ne[3];
+
+    // disable for NUMA
+    const bool disable_chunking = ggml_is_numa();
+
+    int nth = params->nth;
+    int ith = params->ith;
+
+    // 4x chunks per thread
+    int nth_scaled = nth * 4;
+    int64_t chunk_size = (nr + nth_scaled - 1) / nth_scaled;
+    int64_t nchunk     = (nr + chunk_size - 1) / chunk_size;
+
+    if (nth == 1 || nchunk < nth || disable_chunking) {
+      nchunk = nth;
+    }
+
+    if (ith == 0) {
+      ggml_threadpool_chunk_set(params->threadpool, nth);
+    }
+
+    ggml_barrier(params->threadpool);
+
+    const int64_t dr = (nr + nchunk - 1) / nchunk;
+
+    int current_chunk = ith;
+
+    while (current_chunk < nchunk) {
+        const int64_t ir0 = dr * current_chunk;
+        const int64_t ir1 = MIN(ir0 + dr, nr);
+
+        ggml_compute_forward_gated_delta_net_one_chunk(params, dst, ir0, ir1);
+        current_chunk = ggml_threadpool_chunk_add(params->threadpool, 1);
+    }
+}
+
+void ggml_compute_forward_gated_delta_net(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_gated_delta_net_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(
