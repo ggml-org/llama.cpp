@@ -4460,8 +4460,6 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .cpy_tensor_async        = */ NULL, // ggml_backend_sycl_cpy_tensor_async,
                                            // // TODO: update for the new
                                            // interface
-    /* .shfl_tensor_async       = */ NULL,
-    /* .allreduce_tensor_async  = */ NULL,
     /* .synchronize             = */ ggml_backend_sycl_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,

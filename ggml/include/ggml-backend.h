@@ -111,17 +111,6 @@ extern "C" {
     // automatic fallback to sync copy if async is not supported
     GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
 
-    // asynchronous tensor shuffle
-    //   - src1, dst1 belong to backend_1
-    //   - src2, dst2 belong to backend_2
-    //   - src1 is copied to dst2
-    //   - src2 is copied to dst1
-    //   - both backends wait until both copies have completed
-    GGML_API void ggml_backend_tensor_shfl_async(
-        ggml_backend_t backend_1, ggml_backend_t backend_2,
-        const struct ggml_tensor * src1, const struct ggml_tensor * src2,
-        struct ggml_tensor * dst1, struct ggml_tensor * dst2);
-
     GGML_API ggml_backend_dev_t ggml_backend_get_device(ggml_backend_t backend);
 
     //

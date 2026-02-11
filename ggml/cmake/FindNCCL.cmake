@@ -1,5 +1,7 @@
 # cmake/FindNCCL.cmake
 
+# NVIDIA does not distribute CMake files with NCCl, therefore use this file to find it instead.
+
 find_path(NCCL_INCLUDE_DIR
     NAMES nccl.h
     HINTS ${NCCL_ROOT} $ENV{NCCL_ROOT} $ENV{CUDA_HOME} /usr/local/cuda
