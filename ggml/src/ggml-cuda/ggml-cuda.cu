@@ -2868,11 +2868,11 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
     const std::string gemma3n_per_layer_proj_src0_name = "inp_per_layer_selected";
     const std::string gemma3n_per_layer_proj_src1_name = "per_layer_proj";
-    const std::string ffn_moe_gate_bias_prefix = "ffn_moe_gate_biased";
-    const std::string ffn_moe_up_bias_prefix = "ffn_moe_up_biased";
-    const std::string ffn_moe_down_bias_prefix = "ffn_moe_down_biased";
-    const std::string nemotron_h_block_out_prefix = "nemotron_h_block_out";
-    const std::string mamba2_y_add_d_prefix = "mamba2_y_add_d";
+    const std::string ffn_moe_gate_bias_prefix         = "ffn_moe_gate_biased";
+    const std::string ffn_moe_up_bias_prefix           = "ffn_moe_up_biased";
+    const std::string ffn_moe_down_bias_prefix         = "ffn_moe_down_biased";
+    const std::string nemotron_h_block_out_prefix      = "nemotron_h_block_out";
+    const std::string mamba2_y_add_d_prefix            = "mamba2_y_add_d";
     const std::string qwen3next_diag_mask              = "diag_mask";
     const std::regex  delta_net_linear_attn(R"(new_state-\d+)");
 
@@ -2897,8 +2897,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 #endif
         }
 
-        if (node->op == GGML_OP_ADD &&
-            node->src[1] && node->src[1]->ne[1] > 1 &&
+        if (node->op == GGML_OP_ADD && node->src[1] && node->src[1]->ne[1] > 1 &&
             (node->src[0] ? node->src[0]->name != gemma3n_per_layer_proj_src0_name : true) &&
             (node->src[1] ? node->src[1]->name != gemma3n_per_layer_proj_src1_name : true) &&
             strncmp(node->name, ffn_moe_gate_bias_prefix.c_str(), ffn_moe_gate_bias_prefix.size()) != 0 &&
