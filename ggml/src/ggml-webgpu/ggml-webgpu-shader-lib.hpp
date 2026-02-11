@@ -3,6 +3,9 @@
 
 #include "ggml.h"
 #include "pre_wgsl.hpp"
+#include "ggml-wgsl-shaders.hpp"
+
+#include <webgpu/webgpu_cpp.h>
 
 #include <algorithm>
 #include <memory>
@@ -46,6 +49,64 @@
 
 #define WEBGPU_MAX_WG_SIZE     288
 #define WEBGPU_MUL_MAT_WG_SIZE 256
+
+struct ggml_webgpu_shader_lib_context {
+    ggml_tensor * src0;
+    ggml_tensor * src1;
+    ggml_tensor * dst;
+
+    uint32_t max_wg_size;
+};
+
+struct webgpu_pipeline {
+    wgpu::ComputePipeline pipeline;
+    std::string           name;
+    std::shared_ptr<void> context = nullptr;
+};
+
+class ggml_webgpu_shader_lib {
+    wgpu::Device           device;
+    pre_wgsl::Preprocessor preprocessor;
+
+    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;  // key is fixed, no variants yet
+
+  public:
+    ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
+
+    webgpu_pipeline get_sum_rows_pipeline(ggml_webgpu_shader_lib_context & context) {
+        auto it = sum_rows_pipelines.find(1);
+        if (it != sum_rows_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed        = preprocessor.preprocess(wgsl_sum_rows, defines);
+        sum_rows_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "sum_rows");
+        return sum_rows_pipelines[1];
+    }
+
+  private:
+
+    static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device & device,
+                                                       std::string    shader_code,
+                                                       std::string    label) {
+        wgpu::ShaderSourceWGSL shader_source;
+        shader_source.code = shader_code.c_str();
+
+        wgpu::ShaderModuleDescriptor shader_desc;
+        shader_desc.nextInChain = &shader_source;
+
+        wgpu::ShaderModule shader_module = device.CreateShaderModule(&shader_desc);
+
+        wgpu::ComputePipelineDescriptor pipeline_desc;
+        pipeline_desc.label              = label.c_str();
+        pipeline_desc.compute.module     = shader_module;
+        pipeline_desc.compute.entryPoint = "main";   // Entry point in the WGSL code
+        pipeline_desc.layout             = nullptr;  // nullptr means auto layout
+        return { device.CreateComputePipeline(&pipeline_desc), label };
+    }
+};
 
 // helper function for replacing {{PLACEHOLDERS}}
 inline void ggml_webgpu_replace_placeholder(std::string &       shader_code,
