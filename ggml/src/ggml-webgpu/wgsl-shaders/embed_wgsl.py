@@ -56,7 +56,9 @@ def expand_includes(shader, input_dir):
     return include_pattern.sub(replacer, shader)
 
 
-def write_shader(shader_name, shader_code, output_dir, outfile):
+def write_shader(shader_name, shader_code, output_dir, outfile, input_dir):
+    shader_code = expand_includes(shader_code, input_dir)
+
     if output_dir:
         wgsl_filename = os.path.join(output_dir, f"{shader_name}.wgsl")
         with open(wgsl_filename, "w", encoding="utf-8") as f_out:
@@ -74,7 +76,7 @@ def generate_variants(fname, input_dir, output_dir, outfile):
     try:
         variants = ast.literal_eval(extract_block(text, "VARIANTS"))
     except ValueError:
-        write_shader(shader_base_name, text, output_dir, outfile)
+        write_shader(shader_base_name, text, output_dir, outfile, input_dir)
     else:
         try:
             decls_map = parse_decls(extract_block(text, "DECLS"))
@@ -123,7 +125,7 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                 output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
             else:
                 output_name = shader_base_name
-            write_shader(output_name, final_shader, output_dir, outfile)
+            write_shader(output_name, final_shader, output_dir, outfile, input_dir)
 
 
 def main():

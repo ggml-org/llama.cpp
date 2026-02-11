@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "pre_wgsl.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <vector>
@@ -17,6 +18,46 @@
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
 #define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
+
+// Matrix multiplication parameters
+
+// Register tiling parameters
+#define WEBGPU_MUL_MAT_TILE_M    8
+#define WEBGPU_MUL_MAT_TILE_N    8
+#define WEBGPU_MUL_MAT_WG_SIZE_M 8
+#define WEBGPU_MUL_MAT_WG_SIZE_N 8
+#define WEBGPU_MUL_MAT_TILE_K    32
+
+// Subgroup matrix parameters
+// The number of subgroups in the M dimension
+#define WEBGPU_MUL_MAT_SUBGROUP_M        2
+// The number of subgroups in the N dimension
+#define WEBGPU_MUL_MAT_SUBGROUP_N        2
+// The number of subgroup matrices each subgroup accumulates over
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M 4
+#define WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N 2
+
+// Matrix-vector multiplication parameters
+#define WEBGPU_MUL_MAT_VEC_WG_SIZE        256
+// Must be multiple of 4 to work with vectorized paths, and must divide
+// mul_mat_vec wg size
+#define WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG 64
+#define WEBGPU_MUL_MAT_VEC_TILE_K         256
+
+#define WEBGPU_MAX_WG_SIZE     288
+#define WEBGPU_MUL_MAT_WG_SIZE 256
+
+// helper function for replacing {{PLACEHOLDERS}}
+inline void ggml_webgpu_replace_placeholder(std::string &       shader_code,
+                                            const std::string & key,
+                                            const std::string & value) {
+    std::string pattern = "{{" + key + "}}";
+    size_t      pos     = 0;
+    while ((pos = shader_code.find(pattern, pos)) != std::string::npos) {
+        shader_code.replace(pos, pattern.length(), value);
+        pos += value.length();
+    }
+}
 
 struct ggml_webgpu_processed_shader {
     std::string           wgsl;
@@ -178,7 +219,8 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
                                 context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
     if (context.key.kv_direct) {
         GGML_ASSERT(kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
-        // Avoids having to use bounds-checks and decreasing performance for direct KV loads
+        // Avoids having to use bounds-checks and decreasing performance for direct
+        // KV loads
         while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
             kv_tile -= context.sg_mat_n;
         }
@@ -466,6 +508,22 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_unary_shader(
     return result;
 }
 
+/** Scale **/
+
+struct ggml_webgpu_scale_pipeline_key {
+    int inplace;
+
+    bool operator==(const ggml_webgpu_scale_pipeline_key & other) const { return inplace == other.inplace; }
+};
+
+struct ggml_webgpu_scale_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_scale_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
 /** Binary **/
 
 struct ggml_webgpu_binary_pipeline_key {
@@ -489,6 +547,34 @@ struct ggml_webgpu_binary_pipeline_key_hash {
         return seed;
     }
 };
+
+struct ggml_webgpu_scale_shader_lib_context {
+    ggml_webgpu_scale_pipeline_key key;
+    uint32_t                       max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_scale_shader(
+    pre_wgsl::Preprocessor &                     preprocessor,
+    const char *                                 shader_src,
+    const ggml_webgpu_scale_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "scale";
+
+    if (context.key.inplace) {
+        defines.push_back("INPLACE");
+        variant += "_inplace";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl        = preprocessor.preprocess(shader_src, defines);
+    result.variant     = variant;
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
+    return result;
+}
 
 struct ggml_webgpu_binary_shader_lib_context {
     ggml_webgpu_binary_pipeline_key key;
@@ -535,4 +621,366 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_binary_shader(
     result.decisions   = decisions;
     return result;
 }
+
+/** get_rows */
+
+struct ggml_webgpu_get_rows_pipeline_key {
+    ggml_type src_type;
+    int       vectorized;
+
+    bool operator==(const ggml_webgpu_get_rows_pipeline_key & other) const {
+        return src_type == other.src_type && vectorized == other.vectorized;
+    }
+};
+
+struct ggml_webgpu_get_rows_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_get_rows_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src_type);
+        ggml_webgpu_hash_combine(seed, key.vectorized);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_get_rows_shader_lib_context {
+    ggml_webgpu_get_rows_pipeline_key key;
+    uint32_t                          max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_get_rows_shader(
+    pre_wgsl::Preprocessor &                        preprocessor,
+    const char *                                    shader_src,
+    const ggml_webgpu_get_rows_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "get_rows";
+
+    // Determine src type string
+    const char * type_str = nullptr;
+
+    // src type
+    const struct ggml_type_traits * type_traits = ggml_get_type_traits(context.key.src_type);
+    type_str                                    = type_traits->type_name;
+
+    switch (context.key.src_type) {
+        case GGML_TYPE_F32:
+            if (context.key.vectorized) {
+                defines.push_back("F32_VEC");
+                defines.push_back("SRC_TYPE=vec4<f32>");
+                defines.push_back("DST_TYPE=vec4<f32>");
+                defines.push_back("BLOCK_SIZE=4u");
+            } else {
+                defines.push_back("F32");
+                defines.push_back("SRC_TYPE=f32");
+                defines.push_back("DST_TYPE=f32");
+                defines.push_back("BLOCK_SIZE=1u");
+            }
+            variant += "_f32";
+            break;
+        case GGML_TYPE_F16:
+            defines.push_back("F16");
+            defines.push_back("SRC_TYPE=f16");
+            defines.push_back("DST_TYPE=f32");
+            defines.push_back("BLOCK_SIZE=1u");
+            variant += "_f16";
+            break;
+        case GGML_TYPE_I32:
+            defines.push_back("I32");
+            defines.push_back("SRC_TYPE=i32");
+            defines.push_back("DST_TYPE=i32");
+            defines.push_back("BLOCK_SIZE=1u");
+            variant += "_i32";
+            break;
+        default:
+            // convert name to upper case for other defines
+            std::string type_upper = type_str;
+            std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
+
+            // push back defines for quantized types
+            defines.push_back("BYTE_HELPERS");
+            defines.push_back(type_upper + "_T");
+            defines.push_back(type_upper);
+
+            // for q4_k and q5_k
+            defines.push_back(type_upper + "_SCALE_MIN");
+
+            // defines for i-quants
+            defines.push_back(type_upper + "_TABLES");
+            defines.push_back(type_upper + "_GRID");
+
+            // add variant
+            variant += "_";
+            variant += type_str;
+
+            // add define for quantized src0 type
+            defines.push_back(std::string("SRC_TYPE=") + type_str);
+            defines.push_back("DST_TYPE=f32");
+            break;
+    }
+
+    // determine block_size for quantized types
+    if (context.key.src_type == GGML_TYPE_I32) {
+        defines.push_back("BLOCK_SIZE=1u");
+    } else if ((context.key.src_type >= GGML_TYPE_Q4_0 && context.key.src_type <= GGML_TYPE_Q8_1) ||
+               context.key.src_type == GGML_TYPE_IQ4_NL) {
+        // Non-K quants use 32
+        defines.push_back("BLOCK_SIZE=32u");
+    } else if (context.key.src_type >= GGML_TYPE_Q2_K) {
+        // K-quants and IQ variants all use 256
+        defines.push_back("BLOCK_SIZE=256u");
+    }
+
+    // Vectorized suffix
+    if (context.key.vectorized) {
+        variant += "_vec";
+    }
+
+    defines.push_back("WORKGROUP_SIZE=" + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl    = preprocessor.preprocess(shader_src, defines);
+    result.variant = variant;
+
+    // Create decisions structure to store workgroup size
+    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+    decisions->wg_size = context.max_wg_size;
+    result.decisions   = decisions;
+
+    return result;
+}
+
+/** Matrix Multiplication **/
+
+struct ggml_webgpu_mul_mat_pipeline_key {
+    ggml_type src0_type;
+    ggml_type src1_type;
+    int       vectorized;
+    int       is_vec;
+    int       use_subgroup_matrix;
+    int       register_tile;
+
+    bool operator==(const ggml_webgpu_mul_mat_pipeline_key & other) const {
+        return src0_type == other.src0_type && src1_type == other.src1_type && vectorized == other.vectorized &&
+               is_vec == other.is_vec && use_subgroup_matrix == other.use_subgroup_matrix &&
+               register_tile == other.register_tile;
+    }
+};
+
+struct ggml_webgpu_mul_mat_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_mul_mat_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.src0_type);
+        ggml_webgpu_hash_combine(seed, key.src1_type);
+        ggml_webgpu_hash_combine(seed, key.vectorized);
+        ggml_webgpu_hash_combine(seed, key.is_vec);
+        ggml_webgpu_hash_combine(seed, key.use_subgroup_matrix);
+        ggml_webgpu_hash_combine(seed, key.register_tile);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_mul_mat_shader_lib_context {
+    ggml_webgpu_mul_mat_pipeline_key key;
+
+    // For subgroup matrix paths
+    uint32_t max_subgroup_size;
+    uint32_t sg_mat_m;
+    uint32_t sg_mat_n;
+    uint32_t sg_mat_k;
+};
+
+struct ggml_webgpu_mul_mat_shader_decisions {
+    uint32_t tile_k;
+    uint32_t wg_size_m;
+    uint32_t wg_size_n;
+    uint32_t wg_size;
+    uint32_t outputs_per_wg;
+    int      is_vec;
+    int      use_subgroup_matrix;
+
+    // Add new fields for all the parameters
+    uint32_t tile_m;
+    uint32_t tile_n;
+
+    // Subgroup matrix parameters
+    uint32_t subgroup_m;
+    uint32_t subgroup_n;
+    uint32_t subgroup_matrix_m;
+    uint32_t subgroup_matrix_n;
+
+    uint32_t mul_mat_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_mul_mat_shader(
+    pre_wgsl::Preprocessor &                       preprocessor,
+    const char *                                   shader_src,
+    const ggml_webgpu_mul_mat_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "mul_mat";
+
+    // Determine base variant name based on kernel type
+    if (context.key.is_vec) {
+        variant = "mul_mat_vec";
+    } else if (context.key.use_subgroup_matrix) {
+        variant = "mul_mat_subgroup_matrix";
+    } else if (context.key.register_tile) {
+        variant = "mul_mat_reg_tile";
+    }
+
+    // Determine src0/src1 type strings
+    const char * src0_type_str = nullptr;
+
+    bool is_fast_path = context.key.is_vec || context.key.use_subgroup_matrix || context.key.register_tile;
+
+    // src1 type
+    switch (context.key.src1_type) {
+        case GGML_TYPE_F32:
+            defines.push_back(context.key.vectorized ? "SRC1_TYPE=vec4<f32>" : "SRC1_TYPE=f32");
+            defines.push_back(context.key.vectorized ? "DST_TYPE=vec4<f32>" : "DST_TYPE=f32");
+            break;
+        case GGML_TYPE_F16:
+            defines.push_back(context.key.vectorized ? "SRC1_TYPE=vec4<f16>" : "SRC1_TYPE=f16");
+            defines.push_back(context.key.vectorized ? "DST_TYPE=vec4<f32>" : "DST_TYPE=f32");
+            break;
+        default:
+            break;
+    }
+
+    // same for all types
+    defines.push_back(context.key.vectorized ? "SHMEM_TYPE=vec4<f16>" : "SHMEM_TYPE=f16");
+
+    // src0 type
+    const struct ggml_type_traits * src0_type_traits = ggml_get_type_traits(context.key.src0_type);
+    src0_type_str                                    = src0_type_traits->type_name;
+
+    // for f32 and f16, account for vectorized src0 types
+    switch (context.key.src0_type) {
+        case GGML_TYPE_F32:
+            src0_type_str = context.key.vectorized ? "vec4<f32>" : "f32";
+            defines.push_back(context.key.vectorized ? "SRC0_TYPE=vec4<f32>" : "SRC0_TYPE=f32");
+
+            defines.push_back("FLOAT");
+            defines.push_back("MUL_ACC_FLOAT");
+            defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+            defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+
+            variant += "_f32";
+            break;
+
+        case GGML_TYPE_F16:
+            src0_type_str = context.key.vectorized ? "vec4<f16>" : "f16";
+            defines.push_back(context.key.vectorized ? "SRC0_TYPE=vec4<f16>" : "SRC0_TYPE=f16");
+
+            defines.push_back("FLOAT");
+            defines.push_back("MUL_ACC_FLOAT");
+            defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+            defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+
+            variant += "_f16";
+
+            break;
+
+        default:
+            // convert name to upper case for other defines
+            std::string type_upper = src0_type_str;
+            std::transform(type_upper.begin(), type_upper.end(), type_upper.begin(), ::toupper);
+
+            // push back defines for quantized types
+            defines.push_back("BYTE_HELPERS");
+            defines.push_back(type_upper + "_T");
+
+            defines.push_back(type_upper);
+            defines.push_back("MUL_ACC_" + type_upper);
+            defines.push_back("INIT_SRC0_SHMEM_" + type_upper);
+            defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+
+            // for q4_k and q5_k
+            defines.push_back(type_upper + "_SCALE_MIN");
+
+            // defines for i-quants
+            defines.push_back(type_upper + "_TABLES");
+            defines.push_back(type_upper + "_GRID");
+
+            // add variant
+            variant += "_";
+            variant += src0_type_str;
+
+            // add define for non-fast path quantized src0 type-- overwritten if fast
+            // path
+            defines.push_back(std::string("SRC0_TYPE=") + src0_type_str);
+
+            break;
+    }
+
+    // Add VEC/SCALAR defines
+    if (is_fast_path) {
+        // if quantized type and using fast path, need to use f16 instead of the
+        // quantized type
+        if (context.key.src0_type != GGML_TYPE_F32 && context.key.src0_type != GGML_TYPE_F16) {
+            src0_type_str = "f16";
+            defines.push_back(std::string("SRC0_TYPE=") + src0_type_str);
+        }
+
+        // all fast paths need VEC vs SCALAR
+        defines.push_back(context.key.vectorized ? "VEC" : "SCALAR");
+        // add vec_size define too
+        defines.push_back(context.key.vectorized ? "VEC_SIZE=4u" : "VEC_SIZE=1u");
+
+        // reg_tile and subgroup_matrix need these extra defines
+        if (!context.key.is_vec) {
+            defines.push_back(context.key.vectorized ? "SHMEM_VEC" : "SHMEM_SCALAR");
+        }
+    }
+
+    // Append src1 type
+    variant += std::string("_") + (context.key.src1_type == GGML_TYPE_F32 ? "f32" : "f16");
+
+    // printf("DEBUG: After appending src1 type: variant='%s'\n",
+    // variant.c_str());
+
+    // Vectorized suffix
+    if (context.key.vectorized) {
+        variant += "_vec";
+    }
+
+    // Add defines for TILE_M and TILE_N
+    defines.push_back("TILE_M=" + std::to_string(WEBGPU_MUL_MAT_TILE_M) + "u");
+    defines.push_back("TILE_N=" + std::to_string(WEBGPU_MUL_MAT_TILE_N) + "u");
+
+    // Add subgroup matrix defines if using subgroup_matrix
+    if (context.key.use_subgroup_matrix) {
+        defines.push_back("MAX_SUBGROUP_SIZE=" + std::to_string(context.max_subgroup_size) + "u");
+        defines.push_back("TILE_K=" + std::to_string(WEBGPU_MUL_MAT_TILE_K) + "u");
+        defines.push_back("SUBGROUP_M=" + std::to_string(WEBGPU_MUL_MAT_SUBGROUP_M) + "u");
+        defines.push_back("SUBGROUP_N=" + std::to_string(WEBGPU_MUL_MAT_SUBGROUP_N) + "u");
+        defines.push_back("SUBGROUP_MATRIX_M=" + std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M) + "u");
+        defines.push_back("SUBGROUP_MATRIX_N=" + std::to_string(WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N) + "u");
+        defines.push_back("SUBGROUP_MATRIX_M_SIZE=" + std::to_string(context.sg_mat_m) + "u");
+        defines.push_back("SUBGROUP_MATRIX_N_SIZE=" + std::to_string(context.sg_mat_n) + "u");
+        defines.push_back("SUBGROUP_MATRIX_K_SIZE=" + std::to_string(context.sg_mat_k) + "u");
+    }
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl    = preprocessor.preprocess(shader_src, defines);
+    result.variant = variant;
+
+    auto decisions                 = std::make_shared<ggml_webgpu_mul_mat_shader_decisions>();
+    decisions->tile_m              = WEBGPU_MUL_MAT_TILE_M;
+    decisions->tile_n              = WEBGPU_MUL_MAT_TILE_N;
+    decisions->tile_k              = context.key.is_vec ? WEBGPU_MUL_MAT_VEC_TILE_K : WEBGPU_MUL_MAT_TILE_K;
+    decisions->wg_size_m           = WEBGPU_MUL_MAT_WG_SIZE_M;
+    decisions->wg_size_n           = WEBGPU_MUL_MAT_WG_SIZE_N;
+    decisions->wg_size             = WEBGPU_MUL_MAT_VEC_WG_SIZE;
+    decisions->outputs_per_wg      = WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG;
+    decisions->subgroup_m          = WEBGPU_MUL_MAT_SUBGROUP_M;
+    decisions->subgroup_n          = WEBGPU_MUL_MAT_SUBGROUP_N;
+    decisions->subgroup_matrix_m   = WEBGPU_MUL_MAT_SUBGROUP_MATRIX_M;
+    decisions->subgroup_matrix_n   = WEBGPU_MUL_MAT_SUBGROUP_MATRIX_N;
+    decisions->mul_mat_wg_size     = WEBGPU_MUL_MAT_WG_SIZE;
+    decisions->is_vec              = context.key.is_vec;
+    decisions->use_subgroup_matrix = context.key.use_subgroup_matrix;
+    result.decisions               = decisions;
+
+    return result;
+}
+
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP
