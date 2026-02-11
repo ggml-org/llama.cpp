@@ -884,67 +884,6 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     return 0;
 }
 
-static enum ggml_backend_meta_split_state llama_meta_device_get_tensor_split(const struct ggml_tensor * tensor, void * userdata) {
-    // attention
-    const std::regex pattern_qkv_weight("blk\\.\\d*\\.attn_(q|k|v).weight");
-    if (std::regex_match(tensor->name, pattern_qkv_weight)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
-    }
-    const std::regex pattern_qkv_bias("blk\\.\\d*\\.attn_(q|k|v)\\.bias");
-    if (std::regex_match(tensor->name, pattern_qkv_bias)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-    const std::regex pattern_qk_norm("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
-    if (std::regex_match(tensor->name, pattern_qk_norm)) {
-        return tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_STATE_MIRRORED : GGML_BACKEND_SPLIT_STATE_BY_NE1;
-    }
-    const std::regex pattern_kv_cache("cache_(k|v)_l\\d*");
-    const std::regex pattern_attn_sinks("blk\\.\\d*\\.attn_sinks.weight");
-    if (std::regex_match(tensor->name, pattern_kv_cache) || std::regex_match(tensor->name, pattern_attn_sinks)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-    const std::regex pattern_attn_out_weight("blk\\.\\d*\\.attn_output.weight");
-    if (std::regex_match(tensor->name, pattern_attn_out_weight)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-    const std::regex pattern_attn_out_bias("blk\\.\\d*\\.attn_output.bias");
-    if (std::regex_match(tensor->name, pattern_attn_out_bias)) {
-        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
-    }
-
-    // FFN
-    const std::regex pattern_ffn_up_gate_weight("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.weight");
-    if (std::regex_match(tensor->name, pattern_ffn_up_gate_weight)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
-    }
-    const std::regex pattern_ffn_up_gate_bias("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.bias");
-    if (std::regex_match(tensor->name, pattern_ffn_up_gate_bias)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-    const std::regex pattern_ffn_down_weight("blk\\.\\d*\\.ffn_down(_exps)?.weight");
-    if (std::regex_match(tensor->name, pattern_ffn_down_weight)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-    const std::regex pattern_ffn_down_bias("blk\\.\\d*\\.ffn_down(_exps)?.bias");
-    if (std::regex_match(tensor->name, pattern_ffn_down_bias)) {
-        return GGML_BACKEND_SPLIT_STATE_MIRRORED;
-    }
-
-    // output
-    const std::regex pattern_output_weight("output\\.weight");
-    if (std::regex_match(tensor->name, pattern_output_weight)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE1;
-    }
-    const std::regex pattern_output_bias("output\\.bias");
-    if (std::regex_match(tensor->name, pattern_output_bias)) {
-        return GGML_BACKEND_SPLIT_STATE_BY_NE0;
-    }
-
-    // everything else
-    return GGML_BACKEND_SPLIT_STATE_MIRRORED;
-    GGML_UNUSED(userdata);
-}
-
 static struct llama_model * llama_model_load_from_file_impl(
         const std::string & path_model,
         std::vector<std::string> & splits,
@@ -982,7 +921,10 @@ static struct llama_model * llama_model_load_from_file_impl(
             while (params.devices[n_devs]) {
                 n_devs++;
             }
-            model->devices.push_back(ggml_backend_meta_device(params.devices, n_devs, llama_meta_device_get_tensor_split, nullptr));
+            model->get_split_state_ud.n_devices    = n_devs;
+            model->get_split_state_ud.tensor_split = model->tensor_split();
+            model->devices.push_back(ggml_backend_meta_device(
+                params.devices, n_devs, llama_meta_device_get_split_state, &model->get_split_state_ud));
         } else {
             for (ggml_backend_dev_t * dev = params.devices; *dev; ++dev) {
                 model->devices.push_back(*dev);
@@ -1004,7 +946,10 @@ static struct llama_model * llama_model_load_from_file_impl(
             }
             GGML_ASSERT(devs.size() >= 2);
             GGML_ASSERT(ggml_backend_dev_buffer_type(devs.back()) == ggml_backend_cpu_buffer_type());
-            gpus.push_back(ggml_backend_meta_device(devs.data(), devs.size() - 1, llama_meta_device_get_tensor_split, nullptr));
+            model->get_split_state_ud.n_devices    = devs.size() - 1;
+            model->get_split_state_ud.tensor_split = model->tensor_split();
+            gpus.push_back(ggml_backend_meta_device(
+                devs.data(), devs.size() - 1, llama_meta_device_get_split_state, &model->get_split_state_ud));
         } else {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
