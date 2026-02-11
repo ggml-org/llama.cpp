@@ -22,6 +22,7 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
 
     ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, CHUNK_SIZE), 1.0f));
     ggml_tensor * diag_mask = ggml_add(ctx0, causal_mask, identity);
+    ggml_set_name(diag_mask, "diag_mask");
 
     ggml_build_forward_expand(gf, causal_mask);
     ggml_build_forward_expand(gf, identity);
