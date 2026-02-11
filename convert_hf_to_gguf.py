@@ -1123,7 +1123,7 @@ class TextModel(ModelBase):
         if chkhsh == "9c2227e4dd922002fb81bde4fc02b0483ca4f12911410dee2255e4987644e3f8":
             # ref: https://huggingface.co/CohereForAI/c4ai-command-r-v01
             res = "command-r"
-        if chkhsh == "9e47301af09841d8b5fa0bba1851507ea4259f2f0ce47df39d296836c6dce0fc":
+        if chkhsh == "d772b220ace2baec124bed8cfafce0ead7d6c38a4b65ef11261cf9d5d62246d1":
             # ref: https://huggingface.co/CohereLabs/tiny-aya-base
             res = "tiny_aya"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
@@ -7269,6 +7269,8 @@ class Cohere2Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Cohere2 runtime in llama.cpp expects no bias tensors; skip them at conversion time.
         if name.endswith(".bias"):
+            if torch.any(data_torch != 0):
+                raise ValueError(f"Bias tensor {name!r} is not zero.")
             logger.debug(f"Skipping bias tensor {name!r} for Cohere2 conversion.")
             return
 
