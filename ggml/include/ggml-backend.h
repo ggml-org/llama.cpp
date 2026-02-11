@@ -261,6 +261,9 @@ extern "C" {
 
     GGML_API enum ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
+    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
+    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
+
     //
     // Backend registry
     //
