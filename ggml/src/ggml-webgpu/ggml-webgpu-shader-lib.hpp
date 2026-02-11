@@ -1,15 +1,16 @@
 #ifndef GGML_WEBGPU_SHADER_LIB_HPP
 #define GGML_WEBGPU_SHADER_LIB_HPP
 
+#include "ggml-wgsl-shaders.hpp"
 #include "ggml.h"
 #include "pre_wgsl.hpp"
-#include "ggml-wgsl-shaders.hpp"
 
 #include <webgpu/webgpu_cpp.h>
 
 #include <algorithm>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #define GGML_WEBGPU_F16_SIZE_BYTES                   2
@@ -50,6 +51,11 @@
 #define WEBGPU_MAX_WG_SIZE     288
 #define WEBGPU_MUL_MAT_WG_SIZE 256
 
+// Same hash combine function as in boost
+template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
+    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
 struct ggml_webgpu_shader_lib_context {
     ggml_tensor * src0;
     ggml_tensor * src1;
@@ -64,16 +70,48 @@ struct webgpu_pipeline {
     std::shared_ptr<void> context = nullptr;
 };
 
+/** Set Rows **/
+
+struct ggml_webgpu_set_rows_pipeline_key {
+    int dst_type;
+    int vec4;
+    int i64_idx;
+
+    bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
+        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx;
+    }
+};
+
+struct ggml_webgpu_set_rows_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_set_rows_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.dst_type);
+        ggml_webgpu_hash_combine(seed, key.vec4);
+        ggml_webgpu_hash_combine(seed, key.i64_idx);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_set_rows_shader_decisions {
+    bool     vec4;
+    bool     i64_idx;
+    uint32_t wg_size;
+};
+
 class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
     std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;  // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;    // key is vec4
+
+    std::unordered_map<ggml_webgpu_set_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_set_rows_pipeline_key_hash>
+        set_rows_pipelines;
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
 
-    webgpu_pipeline get_sum_rows_pipeline(ggml_webgpu_shader_lib_context & context) {
+    webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         auto it = sum_rows_pipelines.find(1);
         if (it != sum_rows_pipelines.end()) {
             return it->second;
@@ -86,8 +124,74 @@ class ggml_webgpu_shader_lib {
         return sum_rows_pipelines[1];
     }
 
-  private:
+    webgpu_pipeline get_argmax_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        bool vec4 = context.src0->ne[0] % 4 == 0;
 
+        auto it = argmax_pipelines.find(vec4);
+        if (it != argmax_pipelines.end()) {
+            return it->second;
+        }
+        std::string              variant = "argmax";
+        std::vector<std::string> defines;
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+        if (vec4) {
+            defines.push_back("VEC4");
+            variant += "_vec4";
+        }
+
+        auto processed         = preprocessor.preprocess(wgsl_argmax, defines);
+        argmax_pipelines[vec4] = ggml_webgpu_create_pipeline(device, processed, variant);
+        return argmax_pipelines.at(vec4);
+    }
+
+    webgpu_pipeline get_set_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_set_rows_pipeline_key key = { .dst_type = context.dst->type,
+                                                  .vec4     = context.src0->ne[0] % 4 == 0,
+                                                  .i64_idx  = context.src1->type == GGML_TYPE_I64 };
+
+        auto it = set_rows_pipelines.find(key);
+        if (it != set_rows_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = "set_rows";
+
+        switch (context.dst->type) {
+            case GGML_TYPE_F32:
+                defines.push_back("DST_F32");
+                variant += "_dstf32";
+                break;
+            case GGML_TYPE_F16:
+                defines.push_back("DST_F16");
+                variant += "_dstf16";
+                break;
+            default:
+                GGML_ABORT("Unsupported dst type for set_rows shader");
+        }
+
+        if (key.vec4) {
+            defines.push_back("VEC4");
+            variant += "_vec4";
+        }
+        if (key.i64_idx) {
+            defines.push_back("I64_IDX");
+            variant += "_i64idx";
+        }
+
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed                  = preprocessor.preprocess(wgsl_set_rows, defines);
+        auto decisions                  = std::make_shared<ggml_webgpu_set_rows_shader_decisions>();
+        decisions->vec4                 = key.vec4;
+        decisions->i64_idx              = key.i64_idx;
+        decisions->wg_size              = context.max_wg_size;
+        set_rows_pipelines[key]         = ggml_webgpu_create_pipeline(device, processed, variant);
+        set_rows_pipelines[key].context = decisions;
+        return set_rows_pipelines[key];
+    }
+
+  private:
     static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device & device,
                                                        std::string    shader_code,
                                                        std::string    label) {
@@ -125,11 +229,6 @@ struct ggml_webgpu_processed_shader {
     std::string           variant;
     std::shared_ptr<void> decisions;
 };
-
-// Same hash combine function as in boost
-template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
-    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
 
 /** FlashAttention */
 
@@ -432,73 +531,6 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_merge_shader(
     result.variant     = variant;
     auto decisions     = std::make_shared<ggml_webgpu_argsort_shader_decisions>();
     decisions->wg_size = wg_size;
-    result.decisions   = decisions;
-    return result;
-}
-
-/** Set Rows **/
-
-struct ggml_webgpu_set_rows_pipeline_key {
-    int dst_type;
-    int vec4;
-    int i64_idx;
-
-    bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
-        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx;
-    }
-};
-
-struct ggml_webgpu_set_rows_pipeline_key_hash {
-    size_t operator()(const ggml_webgpu_set_rows_pipeline_key & key) const {
-        size_t seed = 0;
-        ggml_webgpu_hash_combine(seed, key.dst_type);
-        ggml_webgpu_hash_combine(seed, key.vec4);
-        ggml_webgpu_hash_combine(seed, key.i64_idx);
-        return seed;
-    }
-};
-
-struct ggml_webgpu_set_rows_shader_lib_context {
-    ggml_webgpu_set_rows_pipeline_key key;
-    uint32_t                          max_wg_size;
-};
-
-inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_set_rows_shader(
-    pre_wgsl::Preprocessor &                        preprocessor,
-    const char *                                    shader_src,
-    const ggml_webgpu_set_rows_shader_lib_context & context) {
-    std::vector<std::string> defines;
-    std::string              variant = "set_rows";
-
-    switch (context.key.dst_type) {
-        case GGML_TYPE_F32:
-            defines.push_back("DST_F32");
-            variant += "_dstf32";
-            break;
-        case GGML_TYPE_F16:
-            defines.push_back("DST_F16");
-            variant += "_dstf16";
-            break;
-        default:
-            GGML_ABORT("Unsupported dst type for set_rows shader");
-    }
-
-    if (context.key.vec4) {
-        defines.push_back("VEC4");
-        variant += "_vec";
-    }
-    if (context.key.i64_idx) {
-        defines.push_back("I64_IDX");
-        variant += "_i64idx";
-    }
-
-    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
-
-    ggml_webgpu_processed_shader result;
-    result.wgsl        = preprocessor.preprocess(shader_src, defines);
-    result.variant     = variant;
-    auto decisions     = std::make_shared<ggml_webgpu_generic_shader_decisions>();
-    decisions->wg_size = context.max_wg_size;
     result.decisions   = decisions;
     return result;
 }
