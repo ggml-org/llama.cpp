@@ -355,9 +355,19 @@ struct clip_model {
     ggml_tensor * conv1d_1_b = nullptr;
     ggml_tensor * conv1d_2_w = nullptr;
     ggml_tensor * conv1d_2_b = nullptr;
+    ggml_tensor * conv_out_w = nullptr;
+    ggml_tensor * conv_out_b = nullptr;
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
+
+    // qwen3a
+    ggml_tensor * conv2d_1_w = nullptr;
+    ggml_tensor * conv2d_1_b = nullptr;
+    ggml_tensor * conv2d_2_w = nullptr;
+    ggml_tensor * conv2d_2_b = nullptr;
+    ggml_tensor * conv2d_3_w = nullptr;
+    ggml_tensor * conv2d_3_b = nullptr;
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

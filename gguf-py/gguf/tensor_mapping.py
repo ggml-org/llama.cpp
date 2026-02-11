@@ -1665,6 +1665,14 @@ class TensorNameMap:
             "model.audio_tower.subsample_conv_projection.conv_{bid}.norm", # gemma3n
         ),
 
+        MODEL_TENSOR.A_ENC_CONV2D: (
+            "audio_tower.conv2d{bid}", # qwen3omni
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_OUT: (
+            "audio_tower.conv_out", # qwen3omni
+        ),
+
         MODEL_TENSOR.A_PRE_NORM: (),
 
         MODEL_TENSOR.A_POST_NORM: (
@@ -1789,7 +1797,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MMPROJ: (
             "audio.multi_modal_projector.linear_{bid}", # ultravox
-            "audio_adapter.model.{bid}" # lfm2
+            "audio_adapter.model.{bid}", # lfm2
+            "audio_tower.proj{bid}", # qwen3omni
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (
