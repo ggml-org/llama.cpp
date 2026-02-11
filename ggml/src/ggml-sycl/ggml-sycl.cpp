@@ -2174,9 +2174,12 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     GGML_LOG_INFO("[SYCL-BUDGET] g_model_exceeds_vram=%s\n",
                   model_exceeds_vram ? "true (HOST placement)" : "false (VRAM placement)");
 
-    // Reserve extra VRAM headroom for large models that exceed VRAM (onemath/DNN scratch)
+    // Reserve extra VRAM headroom for large models that exceed VRAM (onemath/DNN scratch).
+    // When CPU offload is available, CPU-dispatched layers don't need GPU scratch,
+    // so skip the extra reservation to maximize VRAM available for weight caching.
     const size_t desired_headroom = std::max(base_headroom, base_mem / 4);
     const size_t desired_extra = model_exceeds_vram && desired_headroom > base_headroom
+                                    && !cpu_offload_available
                                     ? (desired_headroom - base_headroom)
                                     : 0;
     size_t & prev_extra = g_tiered_headroom_reserve[ctx->device];
@@ -4973,12 +4976,15 @@ void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor,
     const bool host_layout_supported =
         (resolved == GGML_LAYOUT_AOS || resolved == GGML_LAYOUT_SOA || resolved == GGML_LAYOUT_COALESCED ||
          resolved == GGML_LAYOUT_XMX_GEMM_TILED || resolved == GGML_LAYOUT_XMX_TILED);
-    // Only prefer host placement when model exceeds VRAM (streaming mode).
-    // When model fits in VRAM, prefer device placement for best performance.
+    // Only prefer host placement when model exceeds VRAM AND GPU streaming is the
+    // fallback (no CPU offload). When CPU offload is available, let the cache fill
+    // VRAM naturally — weights that don't fit will overflow to HOST, and
+    // should_dispatch_to_cpu() routes those layers to CPU based on actual location.
     // GGML_SYCL_FORCE_VRAM=1 overrides this to always prefer VRAM (for debugging).
     bool prefer_host_default = ggml_backend_sycl_weights_evictable() && !src_is_device &&
                                g_model_exceeds_vram.load(std::memory_order_acquire) &&
-                               !ggml_sycl_force_vram_enabled();
+                               !ggml_sycl_force_vram_enabled() &&
+                               !ggml_sycl_cpu_offload_available();
     // For reordered/tiled layouts, prefer device placement to avoid non-USM host pointers
     // leaking into kernel dispatch when VRAM is available.
     if (resolved != GGML_LAYOUT_AOS) {
