@@ -153,14 +153,13 @@ bool ggml_sycl_cpu_retained_active() {
 }
 
 void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst) {
-    if (!g_retained_active) return nullptr;
-
-    size_t size = ggml_nbytes(dst);
-    void * host_ptr = scratch_alloc(size);
-    if (!host_ptr) return nullptr;
-
-    g_retained_map[dst] = { host_ptr, size };
-    return host_ptr;
+    // Retained scratch output is disabled: deferred flush_all has a timing
+    // issue with device buffer reuse in ggml compute buffers.  All ops use
+    // the per-op staging path which flushes immediately and is correct.
+    // The retained API is kept so the orchestration code can call init/flush/
+    // deactivate without modification.
+    GGML_UNUSED(dst);
+    return nullptr;
 }
 
 void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
@@ -170,22 +169,20 @@ void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
     events.reserve(g_retained_map.size());
 
     for (auto & [tensor, entry] : g_retained_map) {
-        // Skip host-accessible tensors (no device copy needed)
         if (!tensor->buffer || ggml_backend_buffer_is_host(tensor->buffer)) {
             continue;
         }
-        // Use proper device pointer lookup (matches flush_output pattern)
         void * device_ptr = ggml_sycl_get_data_ptr(tensor, device);
-        if (!device_ptr) continue;
-
+        if (!device_ptr) {
+            continue;
+        }
         events.push_back(
             gpu_q->memcpy(device_ptr, entry.host_ptr, entry.size)
         );
     }
 
-    // Wait for all H2D copies to complete
     if (!events.empty()) {
-        sycl::event::wait(events);
+        gpu_q->wait();
     }
 
     g_retained_map.clear();
@@ -382,14 +379,12 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
 // Sets *retained to true if output goes to scratch, false for staging.
 static void * get_retained_or_staging_output(ggml_tensor * dst, int device,
                                               sycl::queue * gpu_q, bool * retained) {
-    *retained = false;
-    if (g_retained_active) {
-        void * ptr = ggml_sycl_cpu_retained_alloc_output(dst);
-        if (ptr) {
-            *retained = true;
-            return ptr;
-        }
+    void * scratch_ptr = ggml_sycl_cpu_retained_alloc_output(dst);
+    if (scratch_ptr) {
+        *retained = true;
+        return scratch_ptr;
     }
+    *retained = false;
     return get_host_output_ptr(dst, device, gpu_q);
 }
 
