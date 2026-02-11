@@ -96,8 +96,6 @@ inline void mul_vec_q_n_f32(
     int r1 = get_group_id(1);
     int im = get_group_id(2);
 
-    // (r0 * N_SIMDGROUP + get_sub_group_id()) is essenatially the linear global
-    // id of a SIMD group in the grid.
     int first_row = (r0 * N_SIMDGROUP + get_sub_group_id()) * N_DST;
 
     int i12 = im%ne12;
@@ -168,19 +166,9 @@ inline void mul_vec_q_n_f32(
         sumf.s2 += block_q4_1_dot_y(x+ib+2*nb, sumy, yl, il);
         sumf.s3 += block_q4_1_dot_y(x+ib+3*nb, sumy, yl, il);
 
-        // One thread in a SIMD group (i.e., subgroup) handles a half block,
-        // hence then entire SIMD group handles SIMDWIDTH/2 blocks.
-        // y points to the activation matrix (of type float). Therefore for
-        // one thread, the # of blocks y should advance is SIMDWIDTH/2 (because
-        // SIMDWIDTH/2 blocks are processed by a SIMD group) - in terms of
-        // floats, it is QK4_1 * (SIMDWIDTH/2), where QK4_1 is the block size.
         yb += QK4_1 * (N_SIMDWIDTH/2);
     }
 
-    // The above does not work for Adreno - it produces incorrect results for
-    // row = 1, 2, 3 and only row = 0 gives the correct result.
-    // If N_DST is changed, the below array must be initialized accordingly.
-    // This also seems to perform better on Intel.
     float4 tot = (float4)(
         sub_group_reduce_add(sumf.s0), sub_group_reduce_add(sumf.s1),
         sub_group_reduce_add(sumf.s2), sub_group_reduce_add(sumf.s3)
