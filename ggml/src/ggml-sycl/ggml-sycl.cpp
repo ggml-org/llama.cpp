@@ -5367,6 +5367,11 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     }
     if (is_weight_buffer && offset == 0 && size > 0) {
         ggml_sycl_maybe_capture_canonical_checksum(tensor, data, size);
+        // Register the original host (mmap) pointer for CPU dispatch.
+        // CPU compute path needs host-accessible weight data for vec_dot.
+        if (tensor->name) {
+            ggml_sycl_cpu_dispatch_register_host_ptr(tensor->name, data, size);
+        }
     }
     // Determine if we should do CPU-side SoA reordering during upload
     // This is faster than GPU-side reorder: no kernel launch, data already in cache
@@ -24742,6 +24747,14 @@ static void ggml_sycl_trace_persistent_ops(ggml_backend_sycl_context & ctx) {
     }
 }
 
+// Check if a graph node is a no-op that doesn't generate GPU/CPU work.
+// Used by graph_compute_impl, prefix detection, and suffix dispatch.
+static inline bool ggml_sycl_is_noop(const ggml_tensor * node) {
+    return ggml_is_empty(node) || node->op == GGML_OP_RESHAPE ||
+           node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW ||
+           node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE;
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
@@ -24863,8 +24876,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
             continue;
         }
-        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
-            node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+        if (ggml_sycl_is_noop(node)) {
             continue;
         }
 #ifndef NDEBUG
@@ -30613,12 +30625,7 @@ normal_dispatch:
             for (int i = 0; i < total_n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
                 if (!node) continue;
-                // Skip no-op nodes that don't generate GPU work
-                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE ||
-                    node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW ||
-                    node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
-                    continue;
-                }
+                if (ggml_sycl_is_noop(node)) continue;
                 if (should_dispatch_to_cpu(*sycl_ctx, node) &&
                     !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(node))) {
                     first_cpu_node = i;
@@ -30693,15 +30700,11 @@ normal_dispatch:
             for (int i = prefix_end; i < total; i++) {
                 ggml_tensor * node = cg->nodes[i];
                 if (!node) continue;
-                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE ||
-                    node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW ||
-                    node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
-                    continue;
-                }
+                if (ggml_sycl_is_noop(node)) continue;
                 bool ok = ggml_sycl_compute_forward(*ctx, node);
                 if (!ok) {
                     GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n",
-                                   "graph_compute", node->name, ggml_op_name(node->op));
+                                   "ggml_backend_sycl_graph_compute", node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
             }
