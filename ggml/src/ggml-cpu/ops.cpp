@@ -4306,6 +4306,57 @@ void ggml_compute_forward_out_prod(
 
 // ggml_compute_forward_scale
 
+static void ggml_compute_forward_scale_f16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    float s; // scale factor
+    float b; // bias
+
+    memcpy(&s, (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&b, (float *) dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    const size_t nb01 = src0->nb[1];
+
+    const size_t nb1 = dst->nb[1];
+
+    if (b == 0.0f) {
+        for (int i1 = ir0; i1 < ir1; i1++) {
+            if (dst->data != src0->data) {
+                memcpy((char *)dst->data + i1*nb1, (char *)src0->data + i1*nb01, nc * sizeof(ggml_fp16_t));
+            }
+            ggml_vec_scale_f16(nc, (ggml_fp16_t *) ((char *) dst->data + i1*nb1), s);
+        }
+    } else {
+        for (int i1 = ir0; i1 < ir1; i1++) {
+            ggml_fp16_t       * dst_row = (ggml_fp16_t *) ((char *) dst->data  + i1*nb1);
+            const ggml_fp16_t * src_row = (const ggml_fp16_t *) ((char *) src0->data + i1*nb01);
+            for (int i0 = 0; i0 < nc; i0++) {
+                dst_row[i0] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(src_row[i0]) * s + b);
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_scale_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4365,6 +4416,10 @@ void ggml_compute_forward_scale(
     const ggml_tensor * src0 = dst->src[0];
 
     switch (src0->type) {
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_scale_f16(params, dst);
+            } break;
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_scale_f32(params, dst);

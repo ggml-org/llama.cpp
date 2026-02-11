@@ -3373,8 +3373,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         const ggml_tensor *tanh   = cgraph->nodes[node_idx+1];
         const ggml_tensor *scale2 = cgraph->nodes[node_idx+2];
 
-        GGML_ASSERT(scale->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(scale->type == GGML_TYPE_F32);
+        GGML_ASSERT(scale->src[0]->type == GGML_TYPE_F32 || scale->src[0]->type == GGML_TYPE_F16);
+        GGML_ASSERT(scale->type == scale->src[0]->type);
 
         if (ggml_get_unary_op(tanh) != GGML_UNARY_OP_TANH) {
             return false;
