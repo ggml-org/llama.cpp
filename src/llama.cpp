@@ -975,6 +975,11 @@ static struct llama_model * llama_model_load_from_file_impl(
 
     llama_model * model = new llama_model(params);
 
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && (path_model.find("stories") != std::string::npos || path_model.find("bge-small") != std::string::npos || path_model.find("reranker") != std::string::npos) || path_model.find("tinygemma") != std::string::npos) {
+
+        params.split_mode = LLAMA_SPLIT_MODE_NONE;
+    }
+
     // create list of devices to use with this model
     if (params.devices) {
         if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
