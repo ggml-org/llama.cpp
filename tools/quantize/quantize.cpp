@@ -626,7 +626,7 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
 
-    // parse command line arguments
+// parse command line arguments
     const std::string fname_inp = argv[arg_idx];
     arg_idx++;
     std::string fname_out;
@@ -634,22 +634,26 @@ int main(int argc, char ** argv) {
     std::string ftype_str;
     std::string suffix = ".gguf";
     if (try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
-        std::string fpath;
-        const size_t pos = fname_inp.find_last_of("/\\");
-        if (pos != std::string::npos) {
-            fpath = fname_inp.substr(0, pos + 1);
-        }
+        // argv[arg_idx] is the ftype directly: <input> <ftype>
+        if (!params.dry_run) {
+            std::string fpath;
+            const size_t pos = fname_inp.find_last_of("/\\");
+            if (pos != std::string::npos) {
+                fpath = fname_inp.substr(0, pos + 1);
+            }
 
-        // export as [inp path]/ggml-model-[ftype]. Only add extension if there is no splitting
-        fname_out = fpath + "ggml-model-" + ftype_str;
-        if (!params.keep_split) {
-            fname_out += suffix;
+            // export as [inp path]/ggml-model-[ftype]. Only add extension if there is no splitting
+            fname_out = fpath + "ggml-model-" + ftype_str;
+            if (!params.keep_split) {
+                fname_out += suffix;
+            }
         }
         arg_idx++;
         if (ftype_str == "COPY") {
             params.only_copy = true;
         }
     } else {
+        // argv[arg_idx] is not a valid ftype, so treat it as output path: <input> <output> <ftype>
         fname_out = argv[arg_idx];
         if (params.keep_split && fname_out.find(suffix) != std::string::npos) {
             fname_out = fname_out.substr(0, fname_out.length() - suffix.length());
@@ -692,14 +696,21 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (std::error_code ec; std::filesystem::equivalent(fname_inp, fname_out, ec)) {
-        fprintf(stderr, "%s: error: input and output files are the same: '%s'\n", __func__, fname_inp.c_str());
-        return 1;
+    if (!params.dry_run) {
+        if (std::error_code ec; std::filesystem::equivalent(fname_inp, fname_out, ec)) {
+            fprintf(stderr, "%s: error: input and output files are the same: '%s'\n", __func__, fname_inp.c_str());
+            return 1;
+        }
     }
 
     print_build_info();
 
-    fprintf(stderr, "%s: quantizing '%s' to '%s' as %s", __func__, fname_inp.c_str(), fname_out.c_str(), ftype_str.c_str());
+    if (params.dry_run) {
+        fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());
+    } else {
+        fprintf(stderr, "%s: quantizing '%s' to '%s' as %s", __func__, fname_inp.c_str(), fname_out.c_str(), ftype_str.c_str());
+    }
+
     if (params.nthread > 0) {
         fprintf(stderr, " using %d threads", params.nthread);
     }
