@@ -233,6 +233,16 @@ static struct {
 
 static sycl::queue * g_cpu_staging_gpu_q = nullptr;
 
+// Persistent staging cache for leaf tensors (RoPE freqs, masks, constants).
+// Key: tensor data pointer (stable across tokens for leaf tensors).
+// Value: host-accessible pointer (either direct host ptr or cached staging copy).
+// Cleared on graph shape change (new token count changes masks).
+static std::unordered_map<const void *, void *> g_leaf_staging_cache;
+
+void ggml_sycl_cpu_staging_cache_clear() {
+    g_leaf_staging_cache.clear();
+}
+
 // Current bank index (alternates per op) and event tracking
 static int         g_staging_bank      = 0;
 static sycl::event g_staging_flush_evt;     // Event from previous op's flush_output
@@ -339,7 +349,17 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
         return nullptr;
     }
 
-    // Non-weight tensors (activations, compute buffers) → stage device→host.
+    // Non-weight tensors (activations, compute buffers).
+    // Check persistent staging cache for leaf tensors.
+    // Leaf tensors (RoPE freqs, masks) have stable data between tokens.
+    if (t->data) {
+        auto it = g_leaf_staging_cache.find(t->data);
+        if (it != g_leaf_staging_cache.end()) {
+            if (out_event) *out_event = sycl::event{};
+            return it->second;
+        }
+    }
+
     void * ptr = ggml_sycl_get_data_ptr(t, device);
     if (!ptr) {
         return nullptr;
@@ -355,6 +375,12 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
     } else {
         // Fallback: if caller doesn't handle events, wait synchronously
         evt.wait();
+    }
+    // Cache for leaf tensors (stable data pointers between tokens).
+    // Only cache non-weight tensors that aren't activations (no src[0]).
+    // Leaf tensors in ggml have no source tensors.
+    if (t->data && !t->src[0]) {
+        g_leaf_staging_cache[t->data] = host;
     }
     return host;
 }

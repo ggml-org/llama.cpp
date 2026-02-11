@@ -20,6 +20,10 @@ bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_
 // Drain any pending async staging events (call at boundary sync points).
 void ggml_sycl_cpu_staging_drain();
 
+// Clear persistent staging cache for leaf tensors.
+// Call on graph shape change (new token count changes masks).
+void ggml_sycl_cpu_staging_cache_clear();
+
 // Register the original host (mmap) pointer for a weight tensor.
 // Called from set_tensor when weight data is uploaded to the device.
 // The CPU dispatch path uses this to access quantized weight data directly
