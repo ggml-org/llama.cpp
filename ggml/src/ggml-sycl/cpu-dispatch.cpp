@@ -5,8 +5,8 @@
 // pinned memory (unified cache PINNED_HOST or MMAP tier).  Avoids unnecessary
 // host-to-device transfers for layers evicted from VRAM.
 //
-// MUL_MAT uses dnnl_sgemm (pure CPU BLAS, no SYCL queue required) after
-// dequantizing weights to F32 via ggml type traits.  Element-wise ops
+// MUL_MAT uses quantized vec_dot (e.g., Q4_0×Q8_0) for small M (TG), or
+// dnnl_sgemm for larger M (PP) after dequantizing to F32.  Element-wise ops
 // (RMS_NORM, ADD, MUL) use portable SYCL parallel_for on the CPU queue.
 //
 // Supports F32, F16, and quantized types (via dequantize-to-F32 + sgemm).
@@ -28,13 +28,39 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <cmath>
 #include <cstring>
+#include <mutex>
+#include <unordered_map>
 
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"          // Provides dnnl.hpp → dnnl_sgemm()
 #endif
+
+// ---------------------------------------------------------------------------
+// Host pointer registry: stores original mmap pointers for weight tensors.
+// Populated during set_tensor (when the host data from the GGUF mmap is still
+// available) and read during CPU dispatch to access quantized weight data
+// directly without dequantization.
+// ---------------------------------------------------------------------------
+
+static std::mutex                                      g_host_ptr_mutex;
+static std::unordered_map<std::string, const void *>   g_host_ptr_map;
+
+void ggml_sycl_cpu_dispatch_register_host_ptr(const char * name, const void * host_ptr, size_t size) {
+    if (!name || !host_ptr || size == 0) return;
+    std::lock_guard<std::mutex> lock(g_host_ptr_mutex);
+    g_host_ptr_map[name] = host_ptr;
+}
+
+static const void * cpu_dispatch_lookup_host_ptr(const char * name) {
+    if (!name) return nullptr;
+    std::lock_guard<std::mutex> lock(g_host_ptr_mutex);
+    auto it = g_host_ptr_map.find(name);
+    return (it != g_host_ptr_map.end()) ? it->second : nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Activation staging: double-buffered host-pinned buffers for device↔host transfer
@@ -116,11 +142,21 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
         return t->data;
     }
 
-    // For weight tensors: look up the host_cache for AOS data.
+    // For weight tensors: look up host-accessible data from cache or mmap.
     if (ggml_sycl_tensor_is_weight(t)) {
         if (ggml_sycl::unified_cache_enabled()) {
             ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(t, device);
             if (key.valid) {
+                // Try unified cache — PINNED_HOST and MMAP entries are host-accessible.
+                auto * cache = ggml_sycl::get_unified_cache_for_device(device);
+                if (cache) {
+                    ggml_sycl::cache_ptr_view view = cache->get_view(key, GGML_LAYOUT_AOS);
+                    if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
+                        return view.ptr;
+                    }
+                }
+
+                // Try host_cache (pinned AOS copies of device-resident weights).
                 auto * hcache = ggml_sycl::get_host_cache_for_device(device);
                 if (hcache) {
                     int layer_id  = ggml_sycl::extract_layer_id(t->name);
@@ -131,6 +167,16 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
                         return hp;
                     }
                 }
+            }
+        }
+
+        // Fallback: retrieve original mmap host pointer from our static registry.
+        // During set_tensor, we store the host data pointer (from the mmap'd GGUF
+        // file) before the SYCL backend copies it to device memory.
+        if (t->name) {
+            const void * mmap_ptr = cpu_dispatch_lookup_host_ptr(t->name);
+            if (mmap_ptr) {
+                return const_cast<void *>(mmap_ptr);
             }
         }
         return nullptr;
@@ -248,16 +294,22 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     // Stage tensors to host-accessible memory (event-based).
     sycl::event e0, e1;
+    fprintf(stderr, "[CPU-MM] staging src0=%s type=%d\n", src0->name ? src0->name : "?", src0->type);
     const void * src0_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
+    fprintf(stderr, "[CPU-MM] src0_data=%p\n", src0_data);
     const void * src1_data = get_host_ptr(src1, device, 1, gpu_q, &e1);
+    fprintf(stderr, "[CPU-MM] src1=%p dst=", src1_data);
     void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
+    fprintf(stderr, "%p\n", dst_data);
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
 
     // Wait for staging to complete before CPU compute
+    fprintf(stderr, "[CPU-MM] waiting...\n");
     e0.wait();
     e1.wait();
+    fprintf(stderr, "[CPU-MM] compute M=%lld N=%lld K=%lld vec_dot=%d\n", (long long)M, (long long)N, (long long)K, (int)(M <= 4 && cpu_traits && cpu_traits->vec_dot));
 
     // Batch dimensions (broadcast src0 if ne02/ne03 < ne12/ne13)
     const int64_t ne02 = src0->ne[2];
@@ -275,9 +327,31 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const dnnl_dim_t ldc = static_cast<dnnl_dim_t>(dst->nb[1] / sizeof(float));
 
-    // Dequant/conversion buffer for non-F32 weights (reused across batch iters)
+    // For small M (TG batch=1..4), use quantized dot product when available.
+    // This avoids dequantizing the entire N×K weight matrix to F32 and replaces
+    // dnnl_sgemm GEMV with direct quantized vec_dot (e.g., Q4_0 × Q8_0).
+    // Benefits: ~5x less memory bandwidth (quantized reads), no BLAS overhead,
+    // L1-friendly access pattern (one 2KB weight row + 4KB activation per dot).
+    const auto * cpu_traits = src0_quantized ? ggml_get_type_traits_cpu(src0->type) : nullptr;
+    const bool   use_vec_dot = (M <= 4 && cpu_traits && cpu_traits->vec_dot);
+
+    ggml_from_float_t from_float_fn = nullptr;
+    size_t            q_row_size    = 0;
+    std::vector<uint8_t> src1_q_buf;
+
+    if (use_vec_dot) {
+        const ggml_type vec_dot_type = cpu_traits->vec_dot_type;
+        const auto * vdt_cpu_traits  = ggml_get_type_traits_cpu(vec_dot_type);
+        from_float_fn = vdt_cpu_traits ? vdt_cpu_traits->from_float : nullptr;
+        if (from_float_fn) {
+            q_row_size = ggml_row_size(vec_dot_type, K);
+            src1_q_buf.resize(static_cast<size_t>(M) * q_row_size);
+        }
+    }
+
+    // Dequant/conversion buffer for non-F32 weights (only for GEMM fallback path)
     std::vector<float> src0_f32_buf;
-    if (src0_quantized) {
+    if (src0_quantized && !use_vec_dot) {
         src0_f32_buf.resize(static_cast<size_t>(N) * K);
     }
 
@@ -293,35 +367,47 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             float * dst_batch = reinterpret_cast<float *>(
                 static_cast<char *>(dst_data) + i12 * nb2 + i13 * nb3);
 
-            const float * weight_f32;
-            dnnl_dim_t    weight_ld = K;
-
-            if (src0_f32) {
-                // F32 weights: use directly from mmap
-                weight_f32 = reinterpret_cast<const float *>(src0_batch);
-                weight_ld  = static_cast<dnnl_dim_t>(nb01 / sizeof(float));
-            } else {
-                // F16 / quantized → dequantize each row to F32
-                for (dnnl_dim_t row = 0; row < N; row++) {
-                    const void * row_data = src0_batch + row * nb01;
-                    type_traits->to_float(row_data, src0_f32_buf.data() + row * K, K);
+            if (use_vec_dot && from_float_fn) {
+                // Quantized dot product path: quantize activations, then vec_dot
+                // per output element.  No weight dequantization needed.
+                for (dnnl_dim_t m = 0; m < M; m++) {
+                    from_float_fn(src1_batch + m * K,
+                                  src1_q_buf.data() + m * q_row_size,
+                                  K);
                 }
-                weight_f32 = src0_f32_buf.data();
-            }
 
-            // Pure CPU GEMM via oneDNN BLAS (no SYCL queue needed).
-            // Row-major C[M,N] = src1[M,K] * weight^T[K,N] is computed
-            // via Fortran-convention trick: C_f = weight_f * src1_f^T
-            //   transa='T': weight [N,K] row-major → Fortran [K,N], transposed = [N,K]
-            //   transb='N': src1   [M,K] row-major → Fortran [K,M], used as-is
-            //   result C:   dst    [M,N] row-major → Fortran [N,M]
-            dnnl_sgemm('T', 'N',
-                       N, M, K,
-                       1.0f,
-                       weight_f32, weight_ld,
-                       src1_batch, K,
-                       0.0f,
-                       dst_batch, ldc);
+                for (dnnl_dim_t n = 0; n < N; n++) {
+                    const void * weight_row = src0_batch + n * nb01;
+                    for (dnnl_dim_t m = 0; m < M; m++) {
+                        float dot_result = 0.0f;
+                        cpu_traits->vec_dot(
+                            static_cast<int>(K), &dot_result, sizeof(float),
+                            weight_row, 0,
+                            src1_q_buf.data() + m * q_row_size, 0,
+                            1);
+                        dst_batch[m * ldc + n] = dot_result;
+                    }
+                }
+            } else {
+                // GEMM fallback: dequantize weights to F32, then dnnl_sgemm
+                const float * weight_f32;
+                dnnl_dim_t    weight_ld = K;
+
+                if (src0_f32) {
+                    weight_f32 = reinterpret_cast<const float *>(src0_batch);
+                    weight_ld  = static_cast<dnnl_dim_t>(nb01 / sizeof(float));
+                } else {
+                    for (dnnl_dim_t row = 0; row < N; row++) {
+                        const void * row_data = src0_batch + row * nb01;
+                        type_traits->to_float(row_data, src0_f32_buf.data() + row * K, K);
+                    }
+                    weight_f32 = src0_f32_buf.data();
+                }
+
+                dnnl_sgemm('T', 'N', N, M, K,
+                           1.0f, weight_f32, weight_ld, src1_batch, K,
+                           0.0f, dst_batch, ldc);
+            }
         }
     }
 
@@ -1153,6 +1239,7 @@ static bool cpu_unary(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("[CPU-FWD] op=%s name=%s\n", ggml_op_name(dst->op), dst->name ? dst->name : "(null)");
     switch (dst->op) {
         case GGML_OP_MUL_MAT:
             return cpu_mul_mat(ctx, dst);
