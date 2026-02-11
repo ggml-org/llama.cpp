@@ -25198,7 +25198,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // keep intermediates in host scratch memory instead of
                     // bouncing device↔host per op.
                     if (!retained_mode_active) {
-                        cpu_retained_init(sycl_ctx->stream());
+                        ggml_sycl_cpu_retained_init(sycl_ctx->device, sycl_ctx->stream());
                         retained_mode_active = true;
                     }
                 } else {
@@ -25208,8 +25208,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // Flush all retained activations back to device before
                     // GPU ops try to read them from device buffers.
                     if (retained_mode_active) {
-                        cpu_retained_flush_all(sycl_ctx->stream());
-                        cpu_retained_deactivate();
+                        ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
+                        ggml_sycl_cpu_retained_deactivate();
                         retained_mode_active = false;
                     }
 
@@ -25599,8 +25599,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     // End of graph compute — flush and deactivate any active retention mode
     if (retained_mode_active) {
-        cpu_retained_flush_all(sycl_ctx->stream());
-        cpu_retained_deactivate();
+        ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
+        ggml_sycl_cpu_retained_deactivate();
     }
 
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)

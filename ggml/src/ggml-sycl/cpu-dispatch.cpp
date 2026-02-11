@@ -121,7 +121,10 @@ static void scratch_reset() {
     g_retained_scratch_off = 0;
 }
 
-void cpu_retained_init(sycl::queue * gpu_q) {
+static int g_retained_device = -1;
+
+void ggml_sycl_cpu_retained_init(sycl::queue * gpu_q) {
+    GGML_ASSERT(!g_retained_scratch || gpu_q == g_retained_gpu_q);
     if (!g_retained_scratch) {
         constexpr size_t DEFAULT_SCRATCH_SIZE = 4 * 1024 * 1024;  // 4MB
         g_retained_scratch = sycl::malloc_host(DEFAULT_SCRATCH_SIZE, *gpu_q);
@@ -135,7 +138,12 @@ void cpu_retained_init(sycl::queue * gpu_q) {
     g_retained_gpu_q  = gpu_q;
 }
 
-void cpu_retained_cleanup() {
+void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
+    ggml_sycl_cpu_retained_init(gpu_q);
+    g_retained_device = device;
+}
+
+void ggml_sycl_cpu_retained_cleanup() {
     if (g_retained_scratch && g_retained_gpu_q) {
         sycl::free(g_retained_scratch, *g_retained_gpu_q);
         g_retained_scratch     = nullptr;
@@ -144,13 +152,14 @@ void cpu_retained_cleanup() {
     g_retained_map.clear();
     g_retained_active = false;
     g_retained_gpu_q  = nullptr;
+    g_retained_device = -1;
 }
 
-bool cpu_retained_active() {
+bool ggml_sycl_cpu_retained_active() {
     return g_retained_active && g_retained_scratch;
 }
 
-void * cpu_retained_alloc_output(const ggml_tensor * dst) {
+void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst) {
     if (!g_retained_active) return nullptr;
 
     size_t size = ggml_nbytes(dst);
@@ -161,15 +170,19 @@ void * cpu_retained_alloc_output(const ggml_tensor * dst) {
     return host_ptr;
 }
 
-void cpu_retained_flush_all(sycl::queue * gpu_q) {
+void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
     if (g_retained_map.empty()) return;
 
     std::vector<sycl::event> events;
     events.reserve(g_retained_map.size());
 
     for (auto & [tensor, entry] : g_retained_map) {
-        // Get device pointer for this tensor's compute buffer
-        void * device_ptr = tensor->data;
+        // Skip host-accessible tensors (no device copy needed)
+        if (!tensor->buffer || ggml_backend_buffer_is_host(tensor->buffer)) {
+            continue;
+        }
+        // Use proper device pointer lookup (matches flush_output pattern)
+        void * device_ptr = ggml_sycl_get_data_ptr(tensor, device);
         if (!device_ptr) continue;
 
         events.push_back(
@@ -178,13 +191,15 @@ void cpu_retained_flush_all(sycl::queue * gpu_q) {
     }
 
     // Wait for all H2D copies to complete
-    sycl::event::wait(events);
+    if (!events.empty()) {
+        sycl::event::wait(events);
+    }
 
     g_retained_map.clear();
     scratch_reset();
 }
 
-void cpu_retained_deactivate() {
+void ggml_sycl_cpu_retained_deactivate() {
     g_retained_map.clear();
     scratch_reset();
     g_retained_active = false;
@@ -370,6 +385,21 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
     return staging_ensure(g_staging_bank, 2, nbytes, gpu_q);
 }
 
+// Helper: get output pointer from retained scratch or staging fallback.
+// Sets *retained to true if output goes to scratch, false for staging.
+static void * get_retained_or_staging_output(ggml_tensor * dst, int device,
+                                              sycl::queue * gpu_q, bool * retained) {
+    *retained = false;
+    if (g_retained_active) {
+        void * ptr = ggml_sycl_cpu_retained_alloc_output(dst);
+        if (ptr) {
+            *retained = true;
+            return ptr;
+        }
+    }
+    return get_host_output_ptr(dst, device, gpu_q);
+}
+
 // Wait for all pending staging events (call at boundary sync points).
 void ggml_sycl_cpu_staging_drain() {
     if (g_staging_flush_pending) {
@@ -436,16 +466,8 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const void * src0_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
     const void * src1_data = get_host_ptr(src1, device, 1, gpu_q, &e1);
 
-    // Output: use retained scratch if active, else staging
-    void * dst_data;
-    bool   retained_output = false;
-    if (g_retained_active) {
-        dst_data = cpu_retained_alloc_output(dst);
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = get_host_output_ptr(dst, device, gpu_q);
-    }
+    bool   retained_output;
+    void * dst_data = get_retained_or_staging_output(dst, device, gpu_q, &retained_output);
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
@@ -596,16 +618,8 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     sycl::event e0;
     const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !dst_data) {
         return false;
@@ -686,16 +700,8 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
     const float * src0_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     const float * src1_data = static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q, &e1));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src0_data || !src1_data || !dst_data) {
         return false;
@@ -809,16 +815,8 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     sycl::event e0;
     const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !dst_data) {
         return false;
@@ -885,16 +883,8 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         return false;
     }
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
     if (!dst_data) {
         return false;
     }
@@ -1010,16 +1000,8 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const float * mask_data = src1 ? static_cast<const float *>(get_host_ptr(src1, device, 1, gpu_q, &e1))
                                    : nullptr;
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !dst_data) {
         return false;
@@ -1115,16 +1097,8 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     sycl::event e0;
     const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !dst_data) {
         return false;
@@ -1204,16 +1178,8 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     sycl::event e0;
     const float * src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !dst_data) {
         return false;
@@ -1267,16 +1233,8 @@ static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     sycl::event e0;
     const void * src_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
 
-    // Output: use retained scratch if active, else staging
-    void * dst_data;
-    bool   retained_output = false;
-    if (g_retained_active) {
-        dst_data = cpu_retained_alloc_output(dst);
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = get_host_output_ptr(dst, device, gpu_q);
-    }
+    bool   retained_output;
+    void * dst_data = get_retained_or_staging_output(dst, device, gpu_q, &retained_output);
 
     if (!src_data || !dst_data) {
         return false;
@@ -1344,16 +1302,8 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const float *   src_data = static_cast<const float *>(get_host_ptr(src0, device, 0, gpu_q, &e0));
     const int32_t * pos_data = static_cast<const int32_t *>(get_host_ptr(src1, device, 1, gpu_q, &e1));
 
-    // Output: use retained scratch if active, else staging
-    float * dst_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        dst_data = static_cast<float *>(cpu_retained_alloc_output(dst));
-        retained_output = (dst_data != nullptr);
-    }
-    if (!retained_output) {
-        dst_data = static_cast<float *>(get_host_output_ptr(dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * dst_data = static_cast<float *>(get_retained_or_staging_output(dst, device, gpu_q, &retained_output));
 
     if (!src_data || !pos_data || !dst_data) {
         return false;
@@ -1529,16 +1479,8 @@ bool ggml_sycl_compute_fused_rms_norm_mul(ggml_backend_sycl_context & ctx,
     const float * rms_in_data = static_cast<const float *>(get_host_ptr(rms_src0, device, 0, gpu_q, &e0));
     const float * mul_wt_data = static_cast<const float *>(get_host_ptr(mul_src1, device, 1, gpu_q, &e1));
 
-    // Output: use retained scratch if active, else staging
-    float * out_data;
-    bool    retained_output = false;
-    if (g_retained_active) {
-        out_data = static_cast<float *>(cpu_retained_alloc_output(mul_dst));
-        retained_output = (out_data != nullptr);
-    }
-    if (!retained_output) {
-        out_data = static_cast<float *>(get_host_output_ptr(mul_dst, device, gpu_q));
-    }
+    bool    retained_output;
+    float * out_data = static_cast<float *>(get_retained_or_staging_output(mul_dst, device, gpu_q, &retained_output));
 
     if (!rms_in_data || !mul_wt_data || !out_data) {
         return false;
@@ -1629,15 +1571,8 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
     const float * b_data = static_cast<const float *>(get_host_ptr(add_src1, device, 1, gpu_q, &e1));
 
     // Output: use retained scratch for both add_dst and rms_dst if active
-    float * add_out;
-    bool    retained_add = false;
-    if (g_retained_active) {
-        add_out = static_cast<float *>(cpu_retained_alloc_output(add_dst));
-        retained_add = (add_out != nullptr);
-    }
-    if (!retained_add) {
-        add_out = static_cast<float *>(get_host_output_ptr(add_dst, device, gpu_q));
-    }
+    bool    retained_add;
+    float * add_out = static_cast<float *>(get_retained_or_staging_output(add_dst, device, gpu_q, &retained_add));
 
     if (!a_data || !b_data || !add_out) {
         return false;
@@ -1659,12 +1594,13 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
     const int64_t s13  = add_src1->nb[3] / sizeof(float);
     const int64_t nr0  = ne00 / ne10;
 
-    // rms output: use retained scratch if active, else staging slot 0
+    // rms output: use retained scratch if active, else staging slot 0.
+    // Cannot use the helper here because slot 2 may already be used for add_dst.
     const size_t rms_nbytes = ggml_nbytes(rms_dst);
     float * rms_out;
     bool    retained_rms = false;
     if (g_retained_active) {
-        rms_out = static_cast<float *>(cpu_retained_alloc_output(rms_dst));
+        rms_out = static_cast<float *>(ggml_sycl_cpu_retained_alloc_output(rms_dst));
         retained_rms = (rms_out != nullptr);
     }
     if (!retained_rms) {
