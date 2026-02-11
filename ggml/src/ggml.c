@@ -6112,7 +6112,8 @@ struct ggml_tensor * ggml_gated_delta_net(
         struct ggml_tensor  * v,
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
-        struct ggml_tensor  * state) {
+        struct ggml_tensor  * state,
+        float                 eps) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(v));
@@ -6144,6 +6145,8 @@ struct ggml_tensor * ggml_gated_delta_net(
     // output: S_v * H * n_tokens * n_seqs, state: S_v * S_v * H * n_seqs
     const int64_t ne[4] = { S_v * H, n_tokens * n_seqs + S_v * n_seqs, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_f32(result, 0, eps);
 
     result->op     = GGML_OP_GATED_DELTA_NET;
     result->src[0] = q;
