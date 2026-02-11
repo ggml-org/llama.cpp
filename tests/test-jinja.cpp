@@ -691,6 +691,12 @@ static void test_filters(testing & t) {
         "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}"
     );
 
+    test_template(t, "indent",
+        "{{ data|indent(4)}}",
+        { "data", "foo" },
+        "    foo"
+    );
+
     test_template(t, "chained filters",
         "{{ '  HELLO  '|trim|lower }}",
         json::object(),
