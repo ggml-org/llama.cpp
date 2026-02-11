@@ -24846,6 +24846,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // This is amortized by avoiding the heavier full-queue wait at transitions.
     const bool cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
     bool prev_on_cpu = false;
+    bool retained_mode_active = false;
     std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -25192,9 +25193,26 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     }
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU per-tensor sync at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
+
+                    // Activate retained activation mode — subsequent CPU ops
+                    // keep intermediates in host scratch memory instead of
+                    // bouncing device↔host per op.
+                    if (!retained_mode_active) {
+                        cpu_retained_init(sycl_ctx->stream());
+                        retained_mode_active = true;
+                    }
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
+
+                    // Flush all retained activations back to device before
+                    // GPU ops try to read them from device buffers.
+                    if (retained_mode_active) {
+                        cpu_retained_flush_all(sycl_ctx->stream());
+                        cpu_retained_deactivate();
+                        retained_mode_active = false;
+                    }
+
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] CPU→GPU transition at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
                 }
@@ -25577,6 +25595,12 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 }
             }
         }
+    }
+
+    // End of graph compute — flush and deactivate any active retention mode
+    if (retained_mode_active) {
+        cpu_retained_flush_all(sycl_ctx->stream());
+        cpu_retained_deactivate();
     }
 
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
