@@ -5,6 +5,7 @@
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
 	import { formatPerformanceTime } from '$lib/utils';
+	import { MS_PER_SECOND, DEFAULT_PERFORMANCE_TIME } from '$lib/constants/formatters';
 
 	interface Props {
 		predictedTokens?: number;
@@ -96,12 +97,12 @@
 
 	let agenticToolsPerSecond = $derived(
 		hasAgenticStats && agenticTimings!.toolsMs > 0
-			? (agenticTimings!.toolCallsCount / agenticTimings!.toolsMs) * 1000
+			? (agenticTimings!.toolCallsCount / agenticTimings!.toolsMs) * MS_PER_SECOND
 			: 0
 	);
 
 	let formattedAgenticToolsTime = $derived(
-		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : '0s'
+		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : DEFAULT_PERFORMANCE_TIME
 	);
 
 	let agenticTotalTimeMs = $derived(

@@ -24,10 +24,12 @@
 	} from '$lib/constants/settings-sections';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui';
+	import { SettingsFieldType } from '$lib/enums/settings';
 	import type { Component } from 'svelte';
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
+	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 	import type { SettingsSectionTitle } from '$lib/constants/settings-sections';
 
 	interface Props {
@@ -49,7 +51,7 @@
 				{
 					key: SETTINGS_KEYS.THEME,
 					label: 'Theme',
-					type: 'select',
+					type: SettingsFieldType.SELECT,
 					options: SETTINGS_COLOR_MODES_CONFIG
 				},
 				{ key: SETTINGS_KEYS.API_KEY, label: 'API Key', type: SettingsFieldType.INPUT },
@@ -255,24 +257,24 @@
 			icon: McpLogo,
 			fields: [
 				{
-					key: 'agenticMaxTurns',
+					key: SETTINGS_KEYS.AGENTIC_MAX_TURNS,
 					label: 'Agentic loop max turns',
-					type: 'input'
+					type: SettingsFieldType.INPUT
 				},
 				{
-					key: 'alwaysShowAgenticTurns',
+					key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					label: 'Always show agentic turns in conversation',
-					type: 'checkbox'
+					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: 'agenticMaxToolPreviewLines',
+					key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
 					label: 'Max lines per tool preview',
-					type: 'input'
+					type: SettingsFieldType.INPUT
 				},
 				{
-					key: 'showToolCallInProgress',
+					key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
 					label: 'Show tool call in progress',
-					type: 'checkbox'
+					type: SettingsFieldType.CHECKBOX
 				}
 			]
 		},
@@ -281,14 +283,9 @@
 			icon: Code,
 			fields: [
 				{
-					key: 'disableReasoningParsing',
+					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
 					label: 'Disable reasoning content parsing',
-					type: 'checkbox'
-				},
-				{
-					key: 'showRawOutputSwitch',
-					label: 'Enable raw output toggle',
-					type: 'checkbox'
+					type: SettingsFieldType.CHECKBOX
 				},
 				{
 					key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,

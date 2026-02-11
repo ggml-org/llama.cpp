@@ -28,7 +28,7 @@
 		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return 'json';
 		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return 'javascript';
 		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return 'typescript';
-		// Try to detect from URI/name
+
 		const name = extra.name || extra.uri || '';
 		return getLanguageFromFilename(name) || 'plaintext';
 	}

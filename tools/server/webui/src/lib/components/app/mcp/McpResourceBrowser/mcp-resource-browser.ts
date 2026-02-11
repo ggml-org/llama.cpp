@@ -63,6 +63,7 @@ export function buildResourceTree(
 		}
 
 		const fileName = pathParts[pathParts.length - 1] || resource.name;
+
 		current.children.set(resource.uri, {
 			name: fileName,
 			resource: { ...resource, serverName },
@@ -71,7 +72,6 @@ export function buildResourceTree(
 		});
 	}
 
-	// Clean up empty folders that don't match
 	function cleanupEmptyFolders(node: ResourceTreeNode): boolean {
 		if (node.resource) return true;
 

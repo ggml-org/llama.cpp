@@ -14,7 +14,8 @@ import {
 	CODE_FILE_EXTENSION_REGEX,
 	TEXT_FILE_EXTENSION_REGEX,
 	PROTOCOL_PREFIX_REGEX,
-	FILE_EXTENSION_REGEX
+	FILE_EXTENSION_REGEX,
+	DISPLAY_NAME_SEPARATOR_REGEX
 } from '$lib/constants/mcp-resource';
 import {
 	Database,
@@ -159,7 +160,7 @@ export function parseResourcePath(uri: string): string[] {
 export function getDisplayName(pathPart: string): string {
 	const withoutExt = pathPart.replace(FILE_EXTENSION_REGEX, '');
 	return withoutExt
-		.split(/[-_]/)
+		.split(DISPLAY_NAME_SEPARATOR_REGEX)
 		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
 		.join(' ');
 }

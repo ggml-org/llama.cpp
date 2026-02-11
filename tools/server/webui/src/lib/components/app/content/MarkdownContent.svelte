@@ -367,8 +367,10 @@
 					if (appendMode && index < previousBlockCount) {
 						const prevBlock = renderedBlocks[index];
 						const currentHash = getMdastNodeHash(child, index);
+
 						if (prevBlock?.contentHash === currentHash) {
 							nextBlocks.push(prevBlock);
+
 							continue;
 						}
 					}
@@ -379,6 +381,7 @@
 						{ position: (child as { position?: unknown }).position } as HastRootContent,
 						index
 					);
+
 					nextBlocks.push({ id, html, contentHash: hash });
 				}
 
@@ -390,6 +393,7 @@
 			previousContent = prefixMarkdown;
 			unstableBlockHtml = '';
 			incompleteCodeBlock = incompleteBlock;
+
 			return;
 		}
 
@@ -416,6 +420,7 @@
 				const currentHash = getMdastNodeHash(child, index);
 				if (prevBlock?.contentHash === currentHash) {
 					nextBlocks.push(prevBlock);
+
 					continue;
 				}
 			}

@@ -22,9 +22,21 @@ import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG, AGENTIC_TAGS } from '$lib/constants/agentic';
-import { IMAGE_MIME_TO_EXTENSION } from '$lib/constants/mcp-resource';
-import { AttachmentType, ContentPartType, MessageRole } from '$lib/enums';
+import {
+	DEFAULT_AGENTIC_CONFIG,
+	AGENTIC_TAGS,
+	NEWLINE_SEPARATOR,
+	TURN_LIMIT_MESSAGE,
+	LLM_ERROR_BLOCK_START,
+	LLM_ERROR_BLOCK_END
+} from '$lib/constants/agentic';
+import {
+	IMAGE_MIME_TO_EXTENSION,
+	DATA_URI_BASE64_REGEX,
+	MCP_ATTACHMENT_NAME_PREFIX,
+	DEFAULT_IMAGE_EXTENSION
+} from '$lib/constants/mcp-resource';
+import { AttachmentType, ContentPartType, MessageRole, MimeTypePrefix } from '$lib/enums';
 import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
@@ -425,7 +437,7 @@ class AgenticStore {
 					return;
 				}
 				const normalizedError = error instanceof Error ? error : new Error('LLM stream error');
-				onChunk?.(`\n\n\`\`\`\nUpstream LLM error:\n${normalizedError.message}\n\`\`\`\n`);
+				onChunk?.(`${LLM_ERROR_BLOCK_START}${normalizedError.message}${LLM_ERROR_BLOCK_END}`);
 				onComplete?.(
 					'',
 					undefined,
@@ -573,7 +585,7 @@ class AgenticStore {
 			if (turnStats.toolCalls.length > 0) agenticTimings.perTurn!.push(turnStats);
 		}
 
-		onChunk?.('\n\n```\nTurn limit reached\n```\n');
+		onChunk?.(TURN_LIMIT_MESSAGE);
 		onComplete?.('', undefined, this.buildFinalTimings(capturedTimings, agenticTimings), undefined);
 	}
 
@@ -611,7 +623,7 @@ class AgenticStore {
 		}
 
 		let output = `\n${AGENTIC_TAGS.TOOL_ARGS_END}`;
-		const lines = result.split('\n');
+		const lines = result.split(NEWLINE_SEPARATOR);
 		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
 
 		output += `\n${trimmedLines.join('\n')}\n${AGENTIC_TAGS.TOOL_CALL_END}\n`;
@@ -626,14 +638,14 @@ class AgenticStore {
 			return { cleanedResult: result, attachments: [] };
 		}
 
-		const lines = result.split('\n');
+		const lines = result.split(NEWLINE_SEPARATOR);
 		const attachments: DatabaseMessageExtra[] = [];
 		let attachmentIndex = 0;
 
 		const cleanedLines = lines.map((line) => {
 			const trimmedLine = line.trim();
 
-			const match = trimmedLine.match(/^data:([^;]+);base64,([A-Za-z0-9+/]+=*)$/);
+			const match = trimmedLine.match(DATA_URI_BASE64_REGEX);
 			if (!match) {
 				return line;
 			}
@@ -648,7 +660,7 @@ class AgenticStore {
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
-			if (mimeType.startsWith('image/')) {
+			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
 				attachments.push({ type: AttachmentType.IMAGE, name, base64Url: trimmedLine });
 
 				return `[Attachment saved: ${name}]`;
@@ -657,12 +669,12 @@ class AgenticStore {
 			return line;
 		});
 
-		return { cleanedResult: cleanedLines.join('\n'), attachments };
+		return { cleanedResult: cleanedLines.join(NEWLINE_SEPARATOR), attachments };
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? 'img';
-		return `mcp-attachment-${Date.now()}-${index}.${extension}`;
+		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
+		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
 	}
 }
 

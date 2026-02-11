@@ -2,7 +2,7 @@ import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
-import type { ParameterSource, SyncableParameterType } from '$lib/enums';
+import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 
 export type SettingsConfigValue = string | number | boolean;
 
