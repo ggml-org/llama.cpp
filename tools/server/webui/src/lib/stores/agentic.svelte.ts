@@ -674,6 +674,7 @@ class AgenticStore {
 
 	private buildAttachmentName(mimeType: string, index: number): string {
 		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
+
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
 	}
 }
