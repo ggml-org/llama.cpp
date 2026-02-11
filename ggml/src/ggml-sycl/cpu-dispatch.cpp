@@ -31,6 +31,7 @@
 #include "ggml-cpu.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
@@ -48,11 +49,34 @@
 
 static std::mutex                                      g_host_ptr_mutex;
 static std::unordered_map<std::string, const void *>   g_host_ptr_map;
+static bool                                            g_host_ptr_owns_memory = false;
 
 void ggml_sycl_cpu_dispatch_register_host_ptr(const char * name, const void * host_ptr, size_t size) {
     if (!name || !host_ptr || size == 0) return;
     std::lock_guard<std::mutex> lock(g_host_ptr_mutex);
-    g_host_ptr_map[name] = host_ptr;
+
+    if (ggml_sycl_cpu_offload_enabled()) {
+        // CPU offload mode: copy weight data to persistent host memory.
+        // The original mmap pointer may be released by the model loader after
+        // set_tensor completes, so we need our own copy for inference.
+        // aligned_alloc(64) ensures AVX-512 alignment for vec_dot.
+        size_t aligned_size = (size + 63) & ~size_t(63);
+        void * copy = aligned_alloc(64, aligned_size);
+        if (copy) {
+            memcpy(copy, host_ptr, size);
+            // Free any previous copy for this tensor
+            if (g_host_ptr_owns_memory) {
+                auto it = g_host_ptr_map.find(name);
+                if (it != g_host_ptr_map.end()) {
+                    free(const_cast<void *>(it->second));
+                }
+            }
+            g_host_ptr_map[name] = copy;
+            g_host_ptr_owns_memory = true;
+        }
+    } else {
+        g_host_ptr_map[name] = host_ptr;
+    }
 }
 
 static const void * cpu_dispatch_lookup_host_ptr(const char * name) {
