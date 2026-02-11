@@ -254,9 +254,6 @@ extern "C" {
 #    define GGML_BACKEND_DL_SCORE_IMPL(score_fn)
 #endif
 
-    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
-    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
-
 #ifdef  __cplusplus
 }
 #endif

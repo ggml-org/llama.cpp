@@ -7504,7 +7504,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     t->buffer = buf; // set dummy buffer for weights so that the backend scheduler won't try to allocate them
                 }
             } else {
-                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+                if (ggml_backend_buft_is_meta(buft)) {
+                    buf = ggml_backend_meta_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+                } else {
+                    buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft); // real buffer
+                }
             }
             if (buf == nullptr) {
                 throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
