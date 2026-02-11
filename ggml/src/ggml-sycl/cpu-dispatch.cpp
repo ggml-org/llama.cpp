@@ -121,9 +121,7 @@ static void scratch_reset() {
     g_retained_scratch_off = 0;
 }
 
-static int g_retained_device = -1;
-
-void ggml_sycl_cpu_retained_init(sycl::queue * gpu_q) {
+void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
     GGML_ASSERT(!g_retained_scratch || gpu_q == g_retained_gpu_q);
     if (!g_retained_scratch) {
         constexpr size_t DEFAULT_SCRATCH_SIZE = 4 * 1024 * 1024;  // 4MB
@@ -136,11 +134,7 @@ void ggml_sycl_cpu_retained_init(sycl::queue * gpu_q) {
     g_retained_map.clear();
     g_retained_active = true;
     g_retained_gpu_q  = gpu_q;
-}
-
-void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
-    ggml_sycl_cpu_retained_init(gpu_q);
-    g_retained_device = device;
+    GGML_UNUSED(device);
 }
 
 void ggml_sycl_cpu_retained_cleanup() {
@@ -152,7 +146,6 @@ void ggml_sycl_cpu_retained_cleanup() {
     g_retained_map.clear();
     g_retained_active = false;
     g_retained_gpu_q  = nullptr;
-    g_retained_device = -1;
 }
 
 bool ggml_sycl_cpu_retained_active() {
