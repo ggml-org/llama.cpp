@@ -750,11 +750,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
 
         const std::string name = ggml_get_name(tensor);
+        const size_t tensor_size = ggml_nbytes(tensor);
 
         if (!params->dry_run) {
             if (!ml.use_mmap) {
-                if (read_data.size() < ggml_nbytes(tensor)) {
-                    read_data.resize(ggml_nbytes(tensor));
+                if (read_data.size() < tensor_size) {
+                    read_data.resize(tensor_size);
                 }
                 tensor->data = read_data.data();
             }
@@ -908,19 +909,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
 
         // we have now decided on the target type for this tensor
-        // the --dry-run option calculates the final quantization size without quantizting
         if (params->dry_run) {
+            // the --dry-run option calculates the final quantization size without quantizting
             if (quantize) {
                 new_size = ggml_nrows(tensor) * ggml_row_size(new_type, tensor->ne[0]);
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB (%s)\n",
-                               ggml_nbytes(tensor)/1024.0/1024.0,
+                               tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
             } else {
-                new_size = ggml_nbytes(tensor);
+                new_size = tensor_size;
                 LLAMA_LOG_INFO("size = %8.3f MiB\n", new_size/1024.0/1024.0);
             }
-            total_size_org += ggml_nbytes(tensor);
+            total_size_org += tensor_size;
             total_size_new += new_size;
             continue;
         } else {
@@ -928,8 +929,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (!quantize) {
                 new_type = tensor->type;
                 new_data = tensor->data;
-                new_size = ggml_nbytes(tensor);
-                LLAMA_LOG_INFO("size = %8.3f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0);
+                new_size = tensor_size;
+                LLAMA_LOG_INFO("size = %8.3f MiB\n", tensor_size/1024.0/1024.0);
             } else {
                 const int64_t nelements = ggml_nelements(tensor);
 
@@ -1030,9 +1031,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
 #endif
                 }
-                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", ggml_nbytes(tensor)/1024.0/1024.0, new_size/1024.0/1024.0);
+                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }
-            total_size_org += ggml_nbytes(tensor);
+            total_size_org += tensor_size;
             total_size_new += new_size;
 
             // update the gguf meta data as we go
