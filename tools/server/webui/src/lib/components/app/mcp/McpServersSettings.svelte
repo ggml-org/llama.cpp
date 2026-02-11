@@ -59,7 +59,7 @@
 
 		const newServerId = crypto.randomUUID
 			? crypto.randomUUID()
-			: `${MCP_SERVER_ID_PREFIX}${Date.now()}`;
+			: `${MCP_SERVER_ID_PREFIX}-${Date.now()}`;
 
 		mcpStore.addServer({
 			id: newServerId,

@@ -77,7 +77,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 		const id =
 			typeof (entry as { id?: unknown })?.id === 'string' && (entry as { id?: string }).id?.trim()
 				? (entry as { id: string }).id.trim()
-				: `${MCP_SERVER_ID_PREFIX}${index + 1}`;
+				: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 
 		return {
 			id,
