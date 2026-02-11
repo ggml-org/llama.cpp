@@ -24898,6 +24898,37 @@ static void classify_cpu_layer_blocks(
                 break;
         }
     }
+
+    // Phase 5: Mark GPU "islands" within CPU layer blocks.
+    // A GPU island is a short run of GPU ops (typically FLASH_ATTN_EXT + SET_ROWS)
+    // sandwiched between CPU ops in the same layer.  Instead of full boundary
+    // transitions, these get lightweight inline handling (staging drain only).
+    //
+    // node_cpu_flags encoding: -1=unknown, 0=GPU, 1=CPU, 2=GPU_ISLAND
+    for (int i = 1; i < cgraph->n_nodes - 1; i++) {
+        if (node_cpu_flags[i] != 0) continue;  // only check GPU nodes
+
+        // Look backward for CPU predecessor (skip noops and other islands)
+        bool prev_cpu = false;
+        for (int j = i - 1; j >= 0; j--) {
+            if (node_cpu_flags[j] == 1) { prev_cpu = true; break; }
+            if (node_cpu_flags[j] == 0) break;  // hit a real GPU node
+            // node_cpu_flags[j] == 2 means another island — keep looking
+        }
+        if (!prev_cpu) continue;
+
+        // Look forward for CPU successor (skip noops and other islands)
+        bool next_cpu = false;
+        for (int j = i + 1; j < cgraph->n_nodes; j++) {
+            if (node_cpu_flags[j] == 1) { next_cpu = true; break; }
+            if (node_cpu_flags[j] == 0) break;
+            // 2 = another island, keep looking
+        }
+        if (!next_cpu) continue;
+
+        // This GPU op is an island within a CPU block
+        node_cpu_flags[i] = 2;  // GPU_ISLAND
+    }
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
@@ -25334,8 +25365,25 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         // GPU op we record a barrier event for dst.  At GPU→CPU transitions we
         // wait only on the events for the CPU node's input tensors.
         if (cpu_offload_active) {
-            bool node_on_cpu = should_dispatch_to_cpu(*sycl_ctx, node);
-            if (node_on_cpu != prev_on_cpu) {
+            int8_t flag = (!node_cpu_flags.empty() && i < (int)node_cpu_flags.size())
+                              ? node_cpu_flags[i] : -1;
+            bool node_on_cpu    = (flag == 1);
+            bool node_is_island = (flag == 2);
+
+            if (node_is_island) {
+                // GPU island: run on GPU without full boundary transition.
+                // Drain pending async staging copies so island inputs (Q from
+                // CPU MUL_MAT) are available on device.  Don't flush retained
+                // activations — island inputs (K, V) come from device-resident
+                // KV cache, not from CPU intermediates.
+                ggml_sycl_cpu_staging_drain();
+                GGML_SYCL_DEBUG("[GPU-ISLAND] node %d (%s) — inline GPU op\n",
+                                i, node->name ? node->name : "(null)");
+                // Don't change prev_on_cpu — island is transparent to CPU state.
+                // After island, CPU ops resume reading from retained scratch.
+                // Island output staging is handled by get_host_ptr() in the
+                // next CPU op, using the same in-order queue for correctness.
+            } else if (node_on_cpu != prev_on_cpu) {
                 if (node_on_cpu) {
                     // GPU→CPU: wait only on events for this node's input tensors.
                     // Inputs without tracked events (weights, KV cache, external
@@ -25383,40 +25431,45 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                                     i, node->name ? node->name : "(null)");
                 }
             }
-            prev_on_cpu = node_on_cpu;
+            if (!node_is_island) {
+                prev_on_cpu = node_on_cpu;
+            }
 
             // CPU op fusion: fuse consecutive element-wise ops to eliminate
             // intermediate staging round-trips (saves 2-3 transfers/layer).
-            auto is_cpu_dispatched = [&](int node_idx) -> bool {
-                if (node_idx < 0 || node_idx >= cgraph->n_nodes) return false;
-                ggml_tensor * n = cgraph->nodes[node_idx];
-                if (!n) return false;
-                if (!node_cpu_flags.empty() && node_idx < (int)node_cpu_flags.size()) {
-                    if (node_cpu_flags[node_idx] != 1) return false;
-                    // Still check force_gpu_dispatch override
-                    if (ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n)) return false;
-                    return true;
-                }
-                return should_dispatch_to_cpu(*sycl_ctx, n) &&
-                       !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n));
-            };
-            if (is_cpu_dispatched(i) && i + 1 < cgraph->n_nodes) {
-                ggml_tensor * next = cgraph->nodes[i + 1];
-                if (next && !ggml_sycl_is_noop(next) && is_cpu_dispatched(i + 1)) {
-                    // RMS_NORM + MUL fusion: saves 2 staging transfers per layer
-                    if (node->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL &&
-                        next->src[0] == node) {
-                        if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, node, next)) {
-                            i++;
-                            continue;
-                        }
+            // Skip for GPU islands (they run on GPU, not CPU).
+            if (node_on_cpu) {
+                auto is_cpu_dispatched = [&](int node_idx) -> bool {
+                    if (node_idx < 0 || node_idx >= cgraph->n_nodes) return false;
+                    ggml_tensor * n = cgraph->nodes[node_idx];
+                    if (!n) return false;
+                    if (!node_cpu_flags.empty() && node_idx < (int)node_cpu_flags.size()) {
+                        if (node_cpu_flags[node_idx] != 1) return false;
+                        // Still check force_gpu_dispatch override
+                        if (ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n)) return false;
+                        return true;
                     }
-                    // ADD + RMS_NORM fusion: saves 1 staging transfer per layer
-                    if (node->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM &&
-                        next->src[0] == node) {
-                        if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, node, next)) {
-                            i++;
-                            continue;
+                    return should_dispatch_to_cpu(*sycl_ctx, n) &&
+                           !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n));
+                };
+                if (i + 1 < cgraph->n_nodes) {
+                    ggml_tensor * next = cgraph->nodes[i + 1];
+                    if (next && !ggml_sycl_is_noop(next) && is_cpu_dispatched(i + 1)) {
+                        // RMS_NORM + MUL fusion: saves 2 staging transfers per layer
+                        if (node->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL &&
+                            next->src[0] == node) {
+                            if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, node, next)) {
+                                i++;
+                                continue;
+                            }
+                        }
+                        // ADD + RMS_NORM fusion: saves 1 staging transfer per layer
+                        if (node->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM &&
+                            next->src[0] == node) {
+                            if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, node, next)) {
+                                i++;
+                                continue;
+                            }
                         }
                     }
                 }
