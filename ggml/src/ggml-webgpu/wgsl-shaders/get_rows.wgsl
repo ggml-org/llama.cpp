@@ -638,8 +638,7 @@ struct Params {
 @group(0) @binding(3)
 var<uniform> params: Params;
 
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.n_rows * params.ne2 * params.ne3) {
         return;
