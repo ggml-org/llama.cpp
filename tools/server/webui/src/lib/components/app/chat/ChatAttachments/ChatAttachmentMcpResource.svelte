@@ -34,7 +34,7 @@
 		<button
 			type="button"
 			class={cn(
-				'flex flex-shrink-0 items-center gap-2 rounded-md border p-0.5 pl-2 text-sm transition-colors',
+				'flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.75 text-sm transition-colors',
 				getStatusClass(attachment),
 				onClick && 'cursor-pointer hover:bg-muted/50',
 				className
@@ -43,19 +43,19 @@
 			disabled={!onClick}
 		>
 			{#if attachment.loading}
-				<Loader2 class="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+				<Loader2 class="h-3 w-3 animate-spin text-muted-foreground" />
 			{:else if attachment.error}
-				<AlertCircle class="h-3.5 w-3.5 text-red-500" />
+				<AlertCircle class="h-3 w-3 text-red-500" />
 			{:else}
-				<ResourceIcon class="h-3.5 w-3.5 text-muted-foreground" />
+				<ResourceIcon class="h-3 w-3 text-muted-foreground" />
 			{/if}
 
-			<span class="max-w-[150px] truncate">
+			<span class="max-w-[150px] truncate text-xs">
 				{attachment.resource.title || attachment.resource.name}
 			</span>
 
 			{#if onRemove}
-				<ActionIconRemove class="bg-transparent " id={attachment.id} {onRemove} />
+				<ActionIconRemove class="-mr-2 bg-transparent" id={attachment.id} {onRemove} />
 			{/if}
 		</button>
 	</Tooltip.Trigger>
