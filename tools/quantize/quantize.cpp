@@ -626,7 +626,7 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
 
-// parse command line arguments
+    // parse command line arguments
     const std::string fname_inp = argv[arg_idx];
     arg_idx++;
     std::string fname_out;
