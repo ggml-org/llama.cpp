@@ -23466,23 +23466,23 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
     return result;
 }
 
-// Hybrid dispatch: lightweight ops that operate only on activations (not weights)
-// should stay on GPU even when the layer is classified as CPU-bound.
-// These ops have tiny kernels and the activation data is already on-device,
-// so the cost of a CPU roundtrip (D2H + compute + H2D) far exceeds the GPU cost.
-static bool should_force_gpu(const ggml_tensor * dst) {
-    static int hybrid_enabled = -1;
-    if (hybrid_enabled < 0) {
-        const char * env = getenv("GGML_SYCL_HYBRID_DISPATCH");
-        hybrid_enabled = env ? atoi(env) : 1;
+// Hybrid dispatch: keep lightweight activation-only ops on GPU even for CPU layers.
+// Set GGML_SYCL_HYBRID_DISPATCH=0 to disable.
+static bool ggml_sycl_hybrid_dispatch_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_HYBRID_DISPATCH");
+        enabled = (env && std::atoi(env) == 0) ? 0 : 1;  // Default ON
     }
-    if (!hybrid_enabled) {
-        return false;
-    }
+    return enabled;
+}
 
+// Override: keep lightweight ops on GPU even for CPU layers.
+// These ops have tiny tensors where GPU compute < staging overhead.
+static inline bool should_force_gpu(const ggml_tensor * dst) {
     switch (dst->op) {
         case GGML_OP_SCALE:
-            return true;
+            return true;  // Trivial scalar multiply, staging overhead >> compute
         default:
             return false;
     }
@@ -23533,7 +23533,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     // If CPU path doesn't support this op, fall through to GPU dispatch.
     // Hybrid dispatch: lightweight activation-only ops (SCALE, etc.) stay on GPU
     // even for CPU-bound layers — the GPU kernel is cheaper than a D2H/H2D roundtrip.
-    if (should_dispatch_to_cpu(ctx, dst) && !should_force_gpu(dst)) {
+    if (should_dispatch_to_cpu(ctx, dst) && !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu(dst))) {
         if (ggml_sycl_compute_forward_cpu(ctx, dst)) {
             return true;
         }
