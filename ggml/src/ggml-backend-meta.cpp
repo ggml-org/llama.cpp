@@ -894,7 +894,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 bcj1.cgraphs[i].nodes_aux.push_back(node_tmp_1);
                 bcj2.cgraphs[i].nodes_aux.push_back(node_tmp_2);
 
-                ggml_backend_tensor_shfl_async(bcj1.backend, bcj2.backend, node1, node2, node_tmp_1, node_tmp_2);
+                ggml_backend_tensor_copy_async(bcj1.backend, bcj2.backend, node1, node_tmp_2);
+                ggml_backend_tensor_copy_async(bcj2.backend, bcj1.backend, node2, node_tmp_1);
 
                 ggml_tensor * node_red_1 = backend_ctx->get_next_tensor(j,       tensors, node1);
                 ggml_tensor * node_red_2 = backend_ctx->get_next_tensor(j_other, tensors, node2);
@@ -982,8 +983,6 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .get_tensor_2d_async     = */ nullptr,
     /* .set_tensor_2d_async     = */ nullptr,
     /* .cpy_tensor_async        = */ nullptr,
-    /* .shfl_tensor_async       = */ nullptr,
-    /* .allreduce_tensor_async  = */ nullptr,
     /* .synchronize             = */ ggml_backend_meta_synchronize,
     /* .graph_plan_create       = */ nullptr,
     /* .graph_plan_free         = */ nullptr,
