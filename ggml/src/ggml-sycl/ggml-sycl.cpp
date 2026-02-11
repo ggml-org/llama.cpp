@@ -25200,6 +25200,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     if (!retained_mode_active) {
                         ggml_sycl_cpu_retained_init(sycl_ctx->device, sycl_ctx->stream());
                         retained_mode_active = true;
+                        GGML_SYCL_DEBUG("[RETAINED] Init: activating host scratch retention\n");
                     }
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
@@ -25209,6 +25210,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // GPU ops try to read them from device buffers.
                     if (retained_mode_active) {
                         ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
+                        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device\n");
                         ggml_sycl_cpu_retained_deactivate();
                         retained_mode_active = false;
                     }
@@ -25600,6 +25602,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // End of graph compute — flush and deactivate any active retention mode
     if (retained_mode_active) {
         ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
+        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device (end of graph)\n");
         ggml_sycl_cpu_retained_deactivate();
     }
 
