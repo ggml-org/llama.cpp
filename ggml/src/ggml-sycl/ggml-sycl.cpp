@@ -30590,12 +30590,71 @@ normal_dispatch:
 
 
 #ifdef GGML_SYCL_GRAPH
+    // GPU subgraph replay for mixed CPU/GPU mode.
+    // Instead of disabling graphs entirely when CPU layers exist, find the
+    // contiguous GPU-only prefix and record/replay just that portion.
+    // The CPU suffix is dispatched individually after graph execution.
+    //
+    // This check runs BEFORE the stale-pointer gate because the GPU prefix
+    // contains only VRAM-resident layers whose pointers are stable — the
+    // exceeds/evictions concern applies only to host-streamed layers which
+    // are handled by the individual CPU suffix dispatch.
+    constexpr int MIN_GPU_PREFIX_NODES = 50;
+    const int     total_n_nodes        = cgraph->n_nodes;  // Save before any truncation
+    int           gpu_prefix_end       = -1;               // -1 = full graph (no prefix mode)
+
+    if (ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device) {
+        bool has_cpu_layers = g_layer_map_initialized.load(std::memory_order_acquire) &&
+                              std::any_of(g_layer_on_cpu.begin(), g_layer_on_cpu.end(),
+                                          [](bool v) { return v; });
+        if (has_cpu_layers) {
+            // Find the first node that dispatches to CPU.
+            int first_cpu_node = total_n_nodes;
+            for (int i = 0; i < total_n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+                if (!node) continue;
+                // Skip no-op nodes that don't generate GPU work
+                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE ||
+                    node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW ||
+                    node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                    continue;
+                }
+                if (should_dispatch_to_cpu(*sycl_ctx, node) &&
+                    !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(node))) {
+                    first_cpu_node = i;
+                    break;
+                }
+            }
+
+            if (first_cpu_node >= MIN_GPU_PREFIX_NODES) {
+                // Large GPU prefix: record/replay GPU portion, dispatch CPU suffix individually.
+                // Truncate n_nodes so graph machinery only sees the GPU prefix.
+                // GPU prefix weights are VRAM-resident with stable pointers, so the
+                // stale-pointer gate below is skipped (it only applies to host-streamed layers).
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] GPU prefix mode: %d GPU nodes, %d suffix nodes\n",
+                                first_cpu_node, total_n_nodes - first_cpu_node);
+                gpu_prefix_end  = first_cpu_node;
+                cgraph->n_nodes = first_cpu_node;
+                // Fall through to graph machinery with truncated n_nodes
+            } else {
+                // Too few GPU nodes to justify graph overhead — dispatch everything individually.
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: CPU offload active, GPU prefix too small (%d < %d)\n",
+                                first_cpu_node, MIN_GPU_PREFIX_NODES);
+                compute_impl();
+                record_completion(false);
+                return GGML_STATUS_SUCCESS;
+            }
+        }
+    }
+
     // Disable graph replay when weight pointers may be stale:
     // 1. Model exceeds VRAM → layer streaming rotates buffer pointers
     // 2. Cache has evictions → baked pointers reference freed device memory
+    // Skip this check in GPU prefix mode — the prefix contains only VRAM-resident
+    // layers whose pointers are stable (host-streamed layers are in the CPU suffix).
     const bool exceeds   = g_model_exceeds_vram.load(std::memory_order_acquire);
     const bool evictions = ggml_sycl::unified_cache_has_evictions();
-    if (exceeds || evictions) {
+    if ((exceeds || evictions) && gpu_prefix_end < 0) {
         GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
                         (int)exceeds, (int)evictions);
         compute_impl();
@@ -30603,19 +30662,57 @@ normal_dispatch:
         return GGML_STATUS_SUCCESS;
     }
 
-    // Disable graph replay when data-local CPU offload is active.
-    // Graph replay records GPU commands only — CPU inline ops can't be replayed.
-    if (ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device) {
-        bool has_cpu_layers = g_layer_map_initialized.load(std::memory_order_acquire) &&
-                              std::any_of(g_layer_on_cpu.begin(), g_layer_on_cpu.end(),
-                                          [](bool v) { return v; });
-        if (has_cpu_layers) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: data-local CPU offload active\n");
-            compute_impl();
-            record_completion(false);
-            return GGML_STATUS_SUCCESS;
+    // RAII guard: in prefix mode, always restore cgraph->n_nodes and dispatch
+    // the CPU suffix on scope exit.  This handles all early return paths.
+    struct prefix_suffix_guard {
+        ggml_cgraph *                cg;
+        ggml_backend_sycl_context *  ctx;
+        int                          total;
+        int                          prefix_end;  // -1 if not in prefix mode
+        bool                         dispatched = false;
+
+        prefix_suffix_guard(ggml_cgraph * cg, ggml_backend_sycl_context * ctx, int total, int prefix_end)
+            : cg(cg), ctx(ctx), total(total), prefix_end(prefix_end) {}
+
+        void dispatch_suffix() {
+            if (dispatched || prefix_end < 0 || prefix_end >= total) return;
+            dispatched = true;
+
+            // Restore full node count
+            cg->n_nodes = total;
+
+            // Ensure GPU work completes before CPU suffix reads its outputs.
+            ctx->stream()->wait();
+
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] Dispatching CPU suffix: nodes [%d, %d)\n",
+                            prefix_end, total);
+
+            // Drain any pending staging flushes before mixed dispatch
+            ggml_sycl_cpu_staging_drain();
+
+            for (int i = prefix_end; i < total; i++) {
+                ggml_tensor * node = cg->nodes[i];
+                if (!node) continue;
+                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE ||
+                    node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW ||
+                    node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                    continue;
+                }
+                bool ok = ggml_sycl_compute_forward(*ctx, node);
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n",
+                                   "graph_compute", node->name, ggml_op_name(node->op));
+                }
+                GGML_ASSERT(ok);
+            }
         }
-    }
+
+        ~prefix_suffix_guard() {
+            dispatch_suffix();
+            // Always restore n_nodes even if suffix was already dispatched
+            cg->n_nodes = total;
+        }
+    } suffix_guard(cgraph, sycl_ctx, total_n_nodes, gpu_prefix_end);
 
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
@@ -31087,6 +31184,11 @@ normal_dispatch:
     {
         compute_impl();
     }
+
+    // In prefix mode, dispatch the CPU suffix before record_completion.
+    // The RAII guard handles this for early returns; call explicitly for normal exit.
+    suffix_guard.dispatch_suffix();
+
     record_completion(graph_executed);
     return GGML_STATUS_SUCCESS;
 }
