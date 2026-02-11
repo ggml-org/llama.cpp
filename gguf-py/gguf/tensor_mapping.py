@@ -228,6 +228,7 @@ class TensorNameMap:
             "transformer_encoder.{bid}.qkv",                                       # neobert
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
         ),
 
         # Attention query
@@ -359,6 +360,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_GATE: (
             "model.layers.{bid}.self_attn.gate_proj", # afmoe
+            "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
+            "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
         ),
 
         # Feed-forward norm
@@ -423,6 +426,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.router.gate",               # afmoe
             "layers.{bid}.gate",                                # mistral-large
             "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
+            "model.layers.{bid}.moe.gate",                      # step3.5
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -438,6 +442,8 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
             "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
+            "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
+            "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
         ),
 
         # Feed-forward up
@@ -492,6 +498,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.experts.up_proj",      # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.up", # smallthinker
+            "model.layers.{bid}.moe.up_proj",                       # step3.5
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -502,6 +509,8 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
             "layers.{bid}.shared_experts.w3",                        # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
+            "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # kimi
+            "model.layers.{bid}.share_expert.up_proj",               # step3.5
         ),
 
         MODEL_TENSOR.FFN_UP_CHEXP: (
@@ -541,6 +550,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.experts.w1",           # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.gate_proj",        # llama4
             "model.layers.{bid}.block_sparse_moe.experts.gate",         # smallthinker
+            "model.layers.{bid}.moe.gate_proj",                         # step3.5
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -549,6 +559,8 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
             "layers.{bid}.shared_experts.w1",                          # mistral-large
+            "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # kimi
+            "model.layers.{bid}.share_expert.gate_proj",               # step3.5
         ),
 
         MODEL_TENSOR.FFN_GATE_CHEXP: (
@@ -603,6 +615,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.experts.down_proj",    # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w2",              # nomic-bert-moe
             "model.layers.{bid}.block_sparse_moe.experts.down",     # smallthinker
+            "model.layers.{bid}.moe.down_proj",                     # step3.5
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -613,6 +626,8 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
             "layers.{bid}.shared_experts.w2",                          # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
+            "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
+            "model.layers.{bid}.share_expert.down_proj",               # step3.5
         ),
 
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
@@ -759,6 +774,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
             "model.layers.{bid}.linear_attn.dt_proj",   # qwen3next
             "backbone.layers.{bid}.mixer.dt",           # nemotron-h-moe
+            "model.layers.{bid}.self_attn.dt_proj",     # kimi
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
@@ -772,6 +788,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.A_log",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.A_log",  # plamo2
             "model.layers.{bid}.linear_attn.A_log",   # qwen3next
+            "model.layers.{bid}.self_attn.A_log",     # kimi
         ),
 
         MODEL_TENSOR.SSM_B_NORM: (
@@ -797,6 +814,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.norm",        # falcon-h1 granite-hybrid
             "model.layers.{bid}.linear_attn.norm",  # qwen3next
             "backbone.layers.{bid}.mixer.norm",     # mamba2
+            "model.layers.{bid}.self_attn.o_norm",  # kimi
         ),
 
         MODEL_TENSOR.SSM_OUT: (
@@ -807,10 +825,40 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5
+        ),
+
         MODEL_TENSOR.SSM_BETA_ALPHA: (
             "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3next
         ),
 
+        # Kimi Linear KDA (using SSM_ prefix for consistency)
+        MODEL_TENSOR.SSM_CONV1D_Q: (
+            "model.layers.{bid}.self_attn.q_conv1d",
+        ),
+        MODEL_TENSOR.SSM_CONV1D_K: (
+            "model.layers.{bid}.self_attn.k_conv1d",
+        ),
+        MODEL_TENSOR.SSM_CONV1D_V: (
+            "model.layers.{bid}.self_attn.v_conv1d",
+        ),
+        MODEL_TENSOR.SSM_F_A: (
+            "model.layers.{bid}.self_attn.f_a_proj",
+        ),
+        MODEL_TENSOR.SSM_F_B: (
+            "model.layers.{bid}.self_attn.f_b_proj",
+        ),
+        MODEL_TENSOR.SSM_BETA: (
+            "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
+            "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
+        ),
+        MODEL_TENSOR.SSM_G_A: (
+            "model.layers.{bid}.self_attn.g_a_proj",
+        ),
+        MODEL_TENSOR.SSM_G_B: (
+            "model.layers.{bid}.self_attn.g_b_proj",
+        ),
         MODEL_TENSOR.TIME_MIX_W0: (
             "model.layers.{bid}.attention.w0",            # rwkv7
         ),

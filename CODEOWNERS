@@ -15,8 +15,10 @@
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
+/common/jinja/                          @ngxson @CISC @aldehir
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
+/common/ngram-map.*                     @srogmann
 /common/peg-parser.*                    @aldehir
 /common/sampling.*                      @ggerganov
 /common/speculative.*                   @ggerganov
@@ -25,6 +27,7 @@
 /examples/batched.swift/                @ggerganov
 /examples/batched/                      @ggerganov
 /examples/convert-llama2c-to-ggml/      @ggerganov
+/examples/debug/                        @danbev @pwilkin
 /examples/deprecation-warning/          @ggerganov
 /examples/diffusion/                    @am17an
 /examples/embedding/                    @ggerganov
@@ -66,6 +69,7 @@
 /ggml/src/ggml-rpc/                     @rgerganov
 /ggml/src/ggml-threading.*              @ggerganov
 /ggml/src/ggml-vulkan/                  @0cc4m
+/ggml/src/ggml-virtgpu/                 @kpouget
 /ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
 /ggml/src/ggml.c                        @ggerganov

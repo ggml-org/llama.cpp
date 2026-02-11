@@ -539,12 +539,18 @@ llama_model_loader::llama_model_loader(
     files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
 
-    use_direct_io = use_direct_io && files.back()->has_direct_io();
+    if (use_mmap && use_direct_io) {
+        if (files.back()->has_direct_io()) {
+            LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+            use_mmap = false;
+        } else {
+            LLAMA_LOG_WARN("%s: direct I/O is not available, using mmap\n", __func__);
+            use_direct_io = false;
 
-    // Disable mmap in case Direct I/O is enabled and available
-    if (use_direct_io && use_mmap) {
-        use_mmap = false;
-        LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+            // reopen file using std::fopen for mmap
+            files.pop_back();
+            files.emplace_back(new llama_file(fname.c_str(), "rb", false));
+        }
     }
 
     // Save tensors data offset of the main file.
