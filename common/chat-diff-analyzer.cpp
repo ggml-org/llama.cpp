@@ -20,77 +20,76 @@ static std::vector<std::function<void(const common_chat_template & tmpl, diff_an
     { // Old reasoning Qwen templates - they don't really display reasoning content, but we still want to
       // support reasoning on them
       [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
-          if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
-              analysis.reasoning == reasoning_mode::NONE) {
-              analysis.reasoning               = reasoning_mode::FORCED_OPEN;
-              analysis.markers.reasoning_start = "<think>";
-              analysis.markers.reasoning_end   = "</think>";
-              analysis.preserved_tokens.push_back("<think>");
-              analysis.preserved_tokens.push_back("</think>");
-              LOG_DBG(ANSI_ORANGE "[Patch: old Qwen/Deepseek thinking template]\n" ANSI_RESET);
+          if (tmpl.src.find("content.split('</think>')") != std::string::npos && analysis.reasoning == reasoning_mode::NONE) {
+            analysis.reasoning               = reasoning_mode::FORCED_OPEN;
+            analysis.markers.reasoning_start = "<think>";
+            analysis.markers.reasoning_end   = "</think>";
+            analysis.preserved_tokens.push_back("<think>");
+            analysis.preserved_tokens.push_back("</think>");
+            LOG_DBG(ANSI_ORANGE "[Patch: old Qwen/Deepseek thinking template]\n" ANSI_RESET);
           }
       },
       // Granite 3.3, with separate reasoning and content markers
       [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
           if (tmpl.src.find("Write your thoughts between <think></think> and write your response between "
                             "<response></response>") != std::string::npos) {
-              analysis.reasoning               = reasoning_mode::TAG_BASED;
-              analysis.markers.reasoning_start = "<think>";
-              analysis.markers.reasoning_end   = "</think>";
-              analysis.preserved_tokens.push_back("<think>");
-              analysis.preserved_tokens.push_back("</think>");
-              analysis.content               = content_mode::WRAPPED_WITH_REASONING;
-              analysis.markers.content_start = "<response>";
-              analysis.markers.content_end   = "</response>";
-              analysis.preserved_tokens.push_back("<response>");
-              analysis.preserved_tokens.push_back("</response>");
-              LOG_DBG(ANSI_ORANGE "[Patch: Granite 3.3]\n" ANSI_RESET);
+            analysis.reasoning               = reasoning_mode::TAG_BASED;
+            analysis.markers.reasoning_start = "<think>";
+            analysis.markers.reasoning_end   = "</think>";
+            analysis.preserved_tokens.push_back("<think>");
+            analysis.preserved_tokens.push_back("</think>");
+            analysis.content               = content_mode::WRAPPED_WITH_REASONING;
+            analysis.markers.content_start = "<response>";
+            analysis.markers.content_end   = "</response>";
+            analysis.preserved_tokens.push_back("<response>");
+            analysis.preserved_tokens.push_back("</response>");
+            LOG_DBG(ANSI_ORANGE "[Patch: Granite 3.3]\n" ANSI_RESET);
           }
       },
       // Cohere Command R+ - content wrapped in <|CHATBOT_TOKEN|>...<|END_OF_TURN_TOKEN|>
       [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
           if (tmpl.src.find("<|CHATBOT_TOKEN|>") != std::string::npos &&
-              tmpl.src.find("<|END_OF_TURN_TOKEN|>") != std::string::npos && analysis.markers.content_start.empty()) {
-              analysis.content               = content_mode::ALWAYS_WRAPPED;
-              analysis.markers.content_start = "<|CHATBOT_TOKEN|>";
-              analysis.markers.content_end   = "<|END_OF_TURN_TOKEN|>";
-              analysis.preserved_tokens.push_back("<|CHATBOT_TOKEN|>");
-              analysis.preserved_tokens.push_back("<|END_OF_TURN_TOKEN|>");
-              LOG_DBG(ANSI_ORANGE "[Patch: Cohere Command R+]\n" ANSI_RESET);
+              tmpl.src.find("<|END_OF_TURN_TOKEN|>") != std::string::npos &&
+              analysis.markers.content_start.empty()) {
+            analysis.content               = content_mode::ALWAYS_WRAPPED;
+            analysis.markers.content_start = "<|CHATBOT_TOKEN|>";
+            analysis.markers.content_end   = "<|END_OF_TURN_TOKEN|>";
+            analysis.preserved_tokens.push_back("<|CHATBOT_TOKEN|>");
+            analysis.preserved_tokens.push_back("<|END_OF_TURN_TOKEN|>");
+            LOG_DBG(ANSI_ORANGE "[Patch: Cohere Command R+]\n" ANSI_RESET);
           }
       },
       // Functionary - no tool call section delimiter
       [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
           if (tmpl.src.find("set has_code_interpreter = tools | selectattr(\"type\", \"equalto\", "
                             "\"code_interpreter\") | list | length > 0") != std::string::npos) {
-              analysis.content                    = content_mode::PLAIN;
-              analysis.markers.content_end        = "";
-              analysis.markers.func_name_prefix   = "";
-              analysis.markers.tool_section_start = "";
-              analysis.markers.tool_section_end   = "";
-              analysis.markers.per_call_start     = "<function=";
-              analysis.markers.per_call_end       = "</function>";
-              analysis.markers.func_close         = "";
-              analysis.preserved_tokens.clear();
-              analysis.preserved_tokens.push_back("<|eot_id|>");
-              analysis.preserved_tokens.push_back("<|eom_id|>");
-              analysis.preserved_tokens.push_back("<function=");
-              analysis.preserved_tokens.push_back(">");
-              analysis.preserved_tokens.push_back("</function>");
-              LOG_DBG(ANSI_ORANGE "[Patch: Functionary 3.1]\n" ANSI_RESET);
-          }
+            analysis.content                    = content_mode::PLAIN;
+            analysis.markers.content_end        = "";
+            analysis.markers.func_name_prefix   = "";
+            analysis.markers.tool_section_start = "";
+            analysis.markers.tool_section_end   = "";
+            analysis.markers.per_call_start     = "<function=";
+            analysis.markers.per_call_end       = "</function>";
+            analysis.markers.func_close         = "";
+            analysis.preserved_tokens.clear();
+            analysis.preserved_tokens.push_back("<|eot_id|>");
+            analysis.preserved_tokens.push_back("<|eom_id|>");
+            analysis.preserved_tokens.push_back("<function=");
+            analysis.preserved_tokens.push_back(">");
+            analysis.preserved_tokens.push_back("</function>");
+            LOG_DBG(ANSI_ORANGE "[Patch: Functionary 3.1]\n" ANSI_RESET);
+        }
       },
       // DeepSeek-R1-Distill-Qwen
       [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
-          if (tmpl.src.find(
-                  "{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>'") !=
+          if (tmpl.src.find("{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>'") !=
               std::string::npos) {
-              analysis.markers.tool_section_start = "<｜tool▁calls▁begin｜>";
-              analysis.markers.tool_section_end   = "<｜tool▁calls▁end｜>";
-              analysis.markers.per_call_start     = "<｜tool▁call▁begin｜>function";
-              analysis.markers.func_name_prefix   = "<｜tool▁sep｜>";
-              analysis.markers.per_call_end       = "<｜tool▁call▁end｜>";
-              analysis.markers.func_close         = "```";
+            analysis.markers.tool_section_start = "<｜tool▁calls▁begin｜>";
+            analysis.markers.tool_section_end   = "<｜tool▁calls▁end｜>";
+            analysis.markers.per_call_start     = "<｜tool▁call▁begin｜>function";
+            analysis.markers.func_name_prefix   = "<｜tool▁sep｜>";
+            analysis.markers.per_call_end       = "<｜tool▁call▁end｜>";
+            analysis.markers.func_close         = "```";
           }
       } });
 
@@ -126,40 +125,16 @@ static json build_tool_call(const std::string & name, const json & args, const s
 }
 
 static json first_tool_call_zero_args         = build_tool_call("foofoo", json::object(), "call00001");
-static json first_tool_call_one_arg           = build_tool_call("foofoo",
-                                                                json{
-                                                                    { "first", "XXXX" }
-},
-                                                                "call00001");
-static json first_tool_call_one_arg_other_val = build_tool_call("foofoo",
-                                                                json{
-                                                                    { "first", "YYYY" }
-},
-                                                                "call00001");
-static json first_tool_call_other_arg         = build_tool_call("foofoo",
-                                                                json{
-                                                                    { "second", "YYYY" }
-},
-                                                                "call00001");
-static json first_tool_call                   = build_tool_call("foofoo",
-                                                                json{
-                                                                    { "first",  "XXXX" },
-                                                                    { "second", "YYYY" }
-},
-                                                                "call00001");
-static json second_tool_call                  = build_tool_call("barbar",
-                                                                json{
-                                                                    { "first",  "XXXX" },
-                                                                    { "second", "YYYY" }
-},
-                                                                "call00002");
-// Tool call variants with different IDs for call_id detection
-static json first_tool_call_alt_id            = build_tool_call("foofoo",
-                                                                json{
-                                                                    { "first",  "XXXX" },
-                                                                    { "second", "YYYY" }
-},
-                                                                "call99999");
+static json first_tool_call_one_arg           = build_tool_call("foofoo", json{ "first", "XXXX" }, "call00001");
+static json first_tool_call_one_arg_other_val = build_tool_call("foofoo",json{{ "first", "YYYY" }}, "call00001");
+static json first_tool_call_other_arg         = build_tool_call("foofoo",json{ { "second", "YYYY" }}, "call00001");
+
+static json first_tool_call =
+    build_tool_call("foofoo", json{{ "first",  "XXXX" }, { "second", "YYYY" }}, "call00001");
+static json second_tool_call =
+    build_tool_call("barbar", json{ { "first",  "XXXX" }, { "second", "YYYY" }}, "call00002");
+static json first_tool_call_alt_id =
+    build_tool_call("foofoo", json{{ "first",  "XXXX" }, { "second", "YYYY" }}, "call99999");
 
 std::string differential_analyzer::apply_template(const common_chat_template & tmpl, const template_params & params) {
     templates_params tmpl_params;
@@ -441,11 +416,11 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
     };
 
     json assistant_reasoning_tools = json{
-        { "role",              "assistant"                                                             },
-        { "content",           nullptr                                                                 },
-        { "reasoning_content", "Let me think."                                                         },
+        { "role",              "assistant"     },
+        { "content",           nullptr         },
+        { "reasoning_content", "Let me think." },
         { "tool_calls",
-         json::array({ build_tool_call("foofoo", json{ { "first", "VVVV" }, { "second", "XXXX" } }) }) }
+            json::array({ build_tool_call("foofoo", json{ { "first", "VVVV" }, { "second", "XXXX" } }) }) }
     };
 
     template_params params;
@@ -532,8 +507,8 @@ void differential_analyzer::compare_content_values(const common_chat_template & 
     };
 
     json assistant_with_tools = json{
-        { "role",       "assistant"                                                                 },
-        { "content",    ""                                                                          },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ build_tool_call("test_func", json{ { "arg1", "value1" } }) }) }
     };
 
@@ -685,8 +660,7 @@ void differential_analyzer::analyze_tool_call_format_json_native(const std::stri
     int  json_end       = clean_haystack.find_last_of('}');
     std::string cut     = clean_haystack.substr(json_start, json_end - json_start + 1);
     json call_struct    = json::parse(cut);
-    auto register_field = [&](const std::string &                                             prefix,
-                              const nlohmann::detail::iteration_proxy_value<json::iterator> & subel) {
+    auto register_field = [&](const std::string & prefix, const nlohmann::detail::iteration_proxy_value<json::iterator> & subel) {
         if (subel.value().is_string() && std::string(subel.value()).find("call0000") != std::string::npos) {
             result.id_field = !prefix.empty() ? prefix + "." + subel.key() : subel.key();
         } else if (subel.value().is_string() && std::string(subel.value()) == fun_name_needle) {
@@ -883,14 +857,14 @@ void differential_analyzer::analyze_tools(const common_chat_template & tmpl, dif
 
 void differential_analyzer::check_per_call_markers(const common_chat_template & tmpl, diff_analysis_result & result) {
     json assistant_one_tool = json{
-        { "role",       "assistant"                      },
-        { "content",    ""                               },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call }) }
     };
 
     json assistant_two_tools = json{
-        { "role",       "assistant"                                        },
-        { "content",    ""                                                 },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call, second_tool_call }) }
     };
 
@@ -1169,14 +1143,14 @@ void differential_analyzer::extract_function_markers(const common_chat_template 
 void differential_analyzer::extract_argument_separator(const common_chat_template & tmpl,
                                                        diff_analysis_result &       result) {
     json assistant_one_arg = json{
-        { "role",       "assistant"                              },
-        { "content",    ""                                       },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_one_arg }) }
     };
 
     json assistant_two_args = json{
-        { "role",       "assistant"                      },
-        { "content",    ""                               },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call }) }
     };
 
@@ -1207,14 +1181,14 @@ void differential_analyzer::extract_argument_separator(const common_chat_templat
 
 void differential_analyzer::extract_args_markers(const common_chat_template & tmpl, diff_analysis_result & result) {
     json assistant_no_args = json{
-        { "role",       "assistant"                                },
-        { "content",    ""                                         },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_zero_args }) }
     };
 
     json assistant_with_args = json{
-        { "role",       "assistant"                              },
-        { "content",    ""                                       },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_one_arg }) }
     };
 
@@ -1266,14 +1240,14 @@ void differential_analyzer::extract_args_markers(const common_chat_template & tm
 
 void differential_analyzer::extract_call_id_markers(const common_chat_template & tmpl, diff_analysis_result & result) {
     json assistant_id1 = json{
-        { "role",       "assistant"                      },
+        { "role",       "assistant" },
         { "content",    ""                               },
         { "tool_calls", json::array({ first_tool_call }) }
     };
 
     json assistant_id2 = json{
-        { "role",       "assistant"                             },
-        { "content",    ""                                      },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_alt_id }) }
     };
 
@@ -1458,14 +1432,14 @@ void differential_analyzer::analyze_arguments(const common_chat_template & tmpl,
 void differential_analyzer::extract_argument_name_markers(const common_chat_template & tmpl,
                                                           diff_analysis_result &       result) {
     json assistant_first_arg = json{
-        { "role",       "assistant"                              },
-        { "content",    ""                                       },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_one_arg }) }
     };
 
     json assistant_second_arg = json{
-        { "role",       "assistant"                                },
-        { "content",    ""                                         },
+        { "role",       "assistant" },
+        { "content",    ""          },
         { "tool_calls", json::array({ first_tool_call_other_arg }) }
     };
 
