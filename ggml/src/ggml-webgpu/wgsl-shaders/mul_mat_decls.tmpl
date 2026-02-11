@@ -1,4 +1,10 @@
-#ifdef SHMEM_VEC
+#ifdef VEC
+#define VEC_SIZE 4
+#define SHMEM_TYPE vec4<f16>
+#define DST_TYPE vec4<f32>
+#define SRC0_TYPE vec4<SRC0_INNER_TYPE>
+#define SRC1_TYPE vec4<SRC1_INNER_TYPE>
+
 fn store_shmem(val: vec4<f16>, idx: u32) {
     shmem[idx] = val.x;
     shmem[idx + 1] = val.y;
@@ -7,7 +13,13 @@ fn store_shmem(val: vec4<f16>, idx: u32) {
 }
 #endif
 
-#ifdef SHMEM_SCALAR
+#ifdef SCALAR
+#define VEC_SIZE 1
+#define SHMEM_TYPE f16
+#define DST_TYPE f32
+#define SRC0_TYPE SRC0_INNER_TYPE
+#define SRC1_TYPE SRC1_INNER_TYPE
+
 fn store_shmem(val: f16, idx: u32) {
     shmem[idx] = val;
 }

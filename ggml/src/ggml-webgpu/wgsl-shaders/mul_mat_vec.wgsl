@@ -4,6 +4,12 @@ enable f16;
 #include "common_decls.tmpl"
 
 #ifdef VEC
+
+#define VEC_SIZE 4
+#define DST_TYPE vec4<f32>
+#define SRC0_TYPE vec4<SRC0_INNER_TYPE>
+#define SRC1_TYPE vec4<SRC1_INNER_TYPE>
+
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(dot(SRC1_TYPE(src0_val), src1_val));
 }
@@ -17,6 +23,12 @@ fn store_val(group_base: u32) -> vec4<f32> {
 #endif
 
 #ifdef SCALAR
+
+#define VEC_SIZE 1
+#define DST_TYPE f32
+#define SRC0_TYPE SRC0_INNER_TYPE
+#define SRC1_TYPE SRC1_INNER_TYPE
+
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(src0_val) * f32(src1_val);
 }

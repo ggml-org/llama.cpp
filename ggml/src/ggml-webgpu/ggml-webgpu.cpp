@@ -354,17 +354,8 @@ struct webgpu_context_struct {
 
     std::unique_ptr<ggml_webgpu_shader_lib> shader_lib;
 
-    pre_wgsl::Preprocessor p;
-
     webgpu_buf_pool param_buf_pool;
     webgpu_buf_pool set_rows_error_buf_pool;
-
-    std::unordered_map<ggml_webgpu_mul_mat_pipeline_key,
-                       webgpu_pipeline,
-                       ggml_webgpu_mul_mat_pipeline_key_hash>
-        mul_mat_pipelines;                                        // src0_type, src1_type, vectorized
-    std::map<int, std::map<int, std::map<int, webgpu_pipeline>>>
-        mul_mat_vec_pipelines;                                    // src0_type, src1_type, vectorized
 
     std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;  // src_type, dst_type
 
@@ -413,25 +404,6 @@ struct ggml_backend_webgpu_buffer_context {
 };
 
 /* WebGPU object initializations */
-
-// Process a WGSL shader string, replacing tokens of the form {{KEY}} with
-// the corresponding values provided in `repls`.
-static std::string ggml_webgpu_process_shader_repls(const char *                               src,
-                                                    const std::map<std::string, std::string> & repls) {
-    if (!src) {
-        return std::string();
-    }
-    std::string s = src;
-    for (const auto & kv : repls) {
-        std::string token = "{{" + kv.first + "}}";
-        size_t      pos   = 0;
-        while ((pos = s.find(token, pos)) != std::string::npos) {
-            s.replace(pos, token.length(), kv.second);
-            pos += kv.second.length();
-        }
-    }
-    return s;
-}
 
 static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device &                           device,
                                                    const char *                             shader_code,
