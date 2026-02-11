@@ -1,7 +1,7 @@
 <script lang="ts">
 	import {
 		ChatAttachmentMcpPrompt,
-		ChatAttachmentMcpResourceStored,
+		ChatAttachmentMcpResource,
 		ChatAttachmentThumbnailImage,
 		ChatAttachmentThumbnailFile,
 		HorizontalScrollCarousel,
@@ -11,7 +11,11 @@
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { AttachmentType } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
+	import type {
+		DatabaseMessageExtraMcpPrompt,
+		DatabaseMessageExtraMcpResource,
+		MCPResourceAttachment
+	} from '$lib/types';
 	import { getAttachmentDisplayItems } from '$lib/utils';
 
 	interface Props {
@@ -74,11 +78,24 @@
 		previewDialogOpen = true;
 	}
 
-	function openMcpResourcePreview(extra: DatabaseMessageExtraMcpResource, event?: MouseEvent) {
-		event?.stopPropagation();
-		event?.preventDefault();
+	function openMcpResourcePreview(extra: DatabaseMessageExtraMcpResource) {
 		mcpResourcePreviewExtra = extra;
 		mcpResourcePreviewOpen = true;
+	}
+
+	function toMcpResourceAttachment(
+		extra: DatabaseMessageExtraMcpResource,
+		id: string
+	): MCPResourceAttachment {
+		return {
+			id,
+			resource: {
+				uri: extra.uri,
+				name: extra.name,
+				title: extra.name,
+				serverName: extra.serverName
+			}
+		};
 	}
 
 	$effect(() => {
@@ -123,13 +140,12 @@
 							/>
 						{/if}
 					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
-						<ChatAttachmentMcpResourceStored
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
+
+						<ChatAttachmentMcpResource
 							class="flex-shrink-0 {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
-							extra={item.attachment as DatabaseMessageExtraMcpResource}
-							{readonly}
-							onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
-							onClick={(event) =>
-								openMcpResourcePreview(item.attachment as DatabaseMessageExtraMcpResource, event)}
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
@@ -203,12 +219,11 @@
 							/>
 						{/if}
 					{:else if item.isMcpResource && item.attachment?.type === AttachmentType.MCP_RESOURCE}
-						<ChatAttachmentMcpResourceStored
-							extra={item.attachment as DatabaseMessageExtraMcpResource}
-							{readonly}
-							onRemove={onFileRemove ? () => onFileRemove(item.id) : undefined}
-							onClick={(event) =>
-								openMcpResourcePreview(item.attachment as DatabaseMessageExtraMcpResource, event)}
+						{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
+
+						<ChatAttachmentMcpResource
+							attachment={toMcpResourceAttachment(mcpResource, item.id)}
+							onClick={() => openMcpResourcePreview(mcpResource)}
 						/>
 					{:else if item.isImage && item.preview}
 						<ChatAttachmentThumbnailImage
