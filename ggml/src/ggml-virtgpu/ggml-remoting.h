@@ -8,6 +8,9 @@
 #include <memory>
 #include <string>
 
+#define GGML_VIRTGPU_NAME "ggml-virtgpu"
+#define GGML_VIRTGPU "ggml-virtgpu: "
+
 // USE_ALWAYS_TRUE_SUPPORTS_OP: 1 is fast, 0 avoid micro-benchmark crashes
 
 #define USE_ALWAYS_TRUE_SUPPORTS_OP 1
@@ -62,7 +65,7 @@ static inline apir_buffer_type_host_handle_t ggml_buffer_type_to_apir_handle(ggm
 
 static inline apir_buffer_host_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
     if (!buffer->context) {
-        GGML_ABORT("%s: no context available :/", __func__);
+        GGML_ABORT(GGML_VIRTGPU "%s: no context available :/", __func__);
     }
     return BUFFER_TO_HOST_HANDLE(buffer);
 }

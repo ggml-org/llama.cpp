@@ -36,6 +36,8 @@
 // vision-specific
 #define KEY_VISION_PROJ_TYPE    "clip.vision.projector_type" // for models with mixed modalities
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
+#define KEY_IMAGE_MIN_PIXELS    "clip.vision.image_min_pixels"
+#define KEY_IMAGE_MAX_PIXELS    "clip.vision.image_max_pixels"
 #define KEY_PREPROC_IMAGE_SIZE  "clip.vision.preproc_image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
@@ -233,6 +235,7 @@ enum projector_type {
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
     PROJECTOR_TYPE_YOUTUVL,
+    PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -266,6 +269,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
     { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
+    { PROJECTOR_TYPE_KIMIK25,   "kimik25"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

@@ -14,6 +14,10 @@ enum common_speculative_type common_speculative_type_from_name(const std::string
 // convert type to string
 std::string common_speculative_type_to_str(enum common_speculative_type type);
 
+// check if the llama_context is compatible for speculative decoding
+// note: clears the memory of the context
+bool common_speculative_is_compat(llama_context * ctx_tgt);
+
 common_speculative * common_speculative_init(
         common_params_speculative & params,
         llama_context             * ctx_tgt);

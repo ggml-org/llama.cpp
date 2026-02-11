@@ -27,7 +27,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
 
     const void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
     if (!shmem_data) {
-        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Couldn't get the shmem addr from virgl\n", __func__);
         apir_decoder_set_fatal(dec);
         return 1;
     }
@@ -45,7 +45,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
         if (dev->iface.supports_op(dev, op)) {
             continue;
         }
-        GGML_LOG_ERROR("Graph node %d (%s) not supported by the backend\n", idx, ggml_op_desc(op));
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Graph node %d (%s) not supported by the backend\n", idx, ggml_op_desc(op));
 
         status = GGML_STATUS_ABORTED;
         apir_encode_ggml_status(enc, &status);

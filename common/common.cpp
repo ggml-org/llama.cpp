@@ -1470,66 +1470,6 @@ void common_batch_add(
 }
 
 //
-// Token utils
-//
-
-size_t common_lcp(const llama_tokens & a, const llama_tokens & b) {
-    size_t i;
-    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
-
-    return i;
-}
-
-size_t common_lcs(const llama_tokens & a, const llama_tokens & b) {
-    // check for empty sequences
-    if (a.empty() || b.empty()) {
-        return 0;
-    }
-
-    // get the lengths of the input sequences
-    size_t a_len = a.size();
-    size_t b_len = b.size();
-
-    // initialize the maximum length of the longest common subsequence (LCS)
-    size_t max_length = 0;
-
-    // use two rows instead of a 2D matrix to optimize space
-    std::vector<size_t> prev_row(b_len + 1, 0);
-    std::vector<size_t> curr_row(b_len + 1, 0);
-
-    // iterate through the elements of a
-    for (size_t i = 1; i <= a_len; i++) {
-        // iterate through the elements of b
-        for (size_t j = 1; j <= b_len; j++) {
-            // if elements at the current positions match
-            if (a[i - 1] == b[j - 1]) {
-                // if it's the first element of either sequences, set LCS length to 1
-                if (i == 1 || j == 1) {
-                    curr_row[j] = 1;
-                } else {
-                    // increment LCS length by 1 compared to the previous element
-                    curr_row[j] = prev_row[j - 1] + 1;
-                }
-
-                // update max_length if necessary
-                if (curr_row[j] > max_length) {
-                    max_length = curr_row[j];
-                }
-            } else {
-                // reset LCS length if elements don't match
-                curr_row[j] = 0;
-            }
-        }
-
-        // update the previous row for the next iteration
-        prev_row = curr_row;
-    }
-
-    // return the maximum length of the LCS
-    return max_length;
-}
-
-//
 // Vocab utils
 //
 
