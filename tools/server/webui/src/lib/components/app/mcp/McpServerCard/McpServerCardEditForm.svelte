@@ -12,9 +12,9 @@
 
 	let { serverId, serverUrl, serverUseProxy = false, onSave, onCancel }: Props = $props();
 
-	let editUrl = $state(serverUrl);
+	let editUrl = $derived(serverUrl);
 	let editHeaders = $state('');
-	let editUseProxy = $state(serverUseProxy);
+	let editUseProxy = $derived(serverUseProxy);
 
 	let urlError = $derived.by(() => {
 		if (!editUrl.trim()) return 'URL is required';
