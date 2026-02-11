@@ -67,9 +67,9 @@ inline float block_q4_1_dot_y(
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 4 // each SIMD group works on 4 rows
-#define N_SIMDGROUP 1 // number of SIMD groups in a thread group
-#define N_SIMDWIDTH 16 // assuming SIMD group size is 16
+#define N_DST 4 // each subgroup works on 4 rows
+#define N_SIMDGROUP 1 // number of subgroups in a thread group
+#define N_SIMDWIDTH 16 // assuming subgroup size is 16
 #elif defined (ADRENO_GPU)
 #define N_DST 4
 #define N_SIMDGROUP 1
@@ -106,7 +106,7 @@ inline void mul_vec_q_n_f32(
     global struct block_q4_1 * x = (global struct block_q4_1 *) src0 + offset0;
     global float             * y = (global float             *) src1 + r1*ne10 + im*ne00*ne1;
 
-    float16 yl;       // src1 vector cache
+    float16 yl;
     float4 sumf = (float4)(0.f, 0.f, 0.f, 0.f);
 
     int ix = get_sub_group_local_id()/2;
@@ -114,7 +114,6 @@ inline void mul_vec_q_n_f32(
 
     global float * yb = y + ix * QK4_1 + il;
 
-    // each thread in a SIMD group deals with half a block.
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/2) {
         float sumy = 0;
 

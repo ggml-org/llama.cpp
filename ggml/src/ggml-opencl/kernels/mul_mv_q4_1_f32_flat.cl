@@ -68,9 +68,9 @@ inline float block_q4_1_dot_y_flat(
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 4 // each SIMD group works on 4 rows
-#define N_SIMDGROUP 1 // number of SIMD groups in a thread group
-#define N_SIMDWIDTH 16 // assuming SIMD group size is 16
+#define N_DST 4 // each subgroup works on 4 rows
+#define N_SIMDGROUP 1 // number of subgroups in a thread group
+#define N_SIMDWIDTH 16 // assuming subgroup size is 16
 #elif defined (ADRENO_GPU)
 #define N_DST 4
 #define N_SIMDGROUP 1
@@ -116,7 +116,7 @@ inline void mul_vec_q_n_f32_flat(
     global half  * m = (global half  *) src0_m + offset0_dm;
     global float * y = (global float *) src1   + r1*ne10 + im*ne00*ne1;
 
-    float16 yl;       // src1 vector cache
+    float16 yl;
     float4 sumf = (float4)(0.f, 0.f, 0.f, 0.f);
 
     int ix = get_sub_group_local_id()/2;
@@ -124,7 +124,6 @@ inline void mul_vec_q_n_f32_flat(
 
     global float * yb = y + ix * QK4_1 + il;
 
-    // each thread in a SIMD group deals with half a block.
     for (int ib = ix; ib < nb; ib += N_SIMDWIDTH/2) {
         float sumy = 0;
 
@@ -176,19 +175,9 @@ inline void mul_vec_q_n_f32_flat(
         sumf.s2 += block_q4_1_dot_y_flat(x + ib*QK4_1/2 + 2*nb*QK4_1/2, d + ib + 2*nb, m + ib + 2*nb, sumy, yl, il);
         sumf.s3 += block_q4_1_dot_y_flat(x + ib*QK4_1/2 + 3*nb*QK4_1/2, d + ib + 3*nb, m + ib + 3*nb, sumy, yl, il);
 
-        // One thread in a SIMD group (i.e., subgroup) handles a half block,
-        // hence then entire SIMD group handles SIMDWIDTH/2 blocks.
-        // y points to the activation matrix (of type float). Therefore for
-        // one thread, the # of blocks y should advance is SIMDWIDTH/2 (because
-        // SIMDWIDTH/2 blocks are processed by a SIMD group) - in terms of
-        // floats, it is QK4_1 * (SIMDWIDTH/2), where QK4_1 is the block size.
         yb += QK4_1 * (N_SIMDWIDTH/2);
     }
 
-    // The above does not work for Adreno - it produces incorrect results for
-    // row = 1, 2, 3 and only row = 0 gives the correct result.
-    // If N_DST is changed, the below array must be initialized accordingly.
-    // This also seems to perform better on Intel.
     float4 tot = (float4)(
         sub_group_reduce_add(sumf.s0), sub_group_reduce_add(sumf.s1),
         sub_group_reduce_add(sumf.s2), sub_group_reduce_add(sumf.s3)
