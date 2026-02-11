@@ -34,7 +34,6 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-// SRC0_TYPE and SRC1_TYPE are defined in mul_mat_decls, which is included
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
 @group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
 @group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
@@ -48,14 +47,9 @@ fn get_local_m(thread_id: u32) -> u32 {
     return thread_id % WORKGROUP_SIZE_M;
 }
 
-override WORKGROUP_SIZE_M: u32;
-override WORKGROUP_SIZE_N: u32;
-override TILE_K: u32;
-
-override TOTAL_WORKGROUP_SIZE = WORKGROUP_SIZE_M * WORKGROUP_SIZE_N;
-override TILE_SRC0_SHMEM = TILE_K * WORKGROUP_SIZE_M * TILE_M;
-override TILE_SRC1_SHMEM = TILE_K * WORKGROUP_SIZE_N * TILE_N;
-
+const TOTAL_WORKGROUP_SIZE = WORKGROUP_SIZE_M * WORKGROUP_SIZE_N;
+const TILE_SRC0_SHMEM = TILE_K * WORKGROUP_SIZE_M * TILE_M;
+const TILE_SRC1_SHMEM = TILE_K * WORKGROUP_SIZE_N * TILE_N;
 var<workgroup> shmem: array<f16, TILE_SRC0_SHMEM + TILE_SRC1_SHMEM>;
 
 @compute @workgroup_size(TOTAL_WORKGROUP_SIZE)
@@ -142,4 +136,3 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
     }
 }
-

@@ -98,16 +98,13 @@ struct MulMatParams {
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
-override WORKGROUP_SIZE: u32;
-override TILE_K: u32;
-override OUTPUTS_PER_WG: u32;
-override THREADS_PER_OUTPUT = WORKGROUP_SIZE / OUTPUTS_PER_WG;
+const THREADS_PER_OUTPUT = WG_SIZE / OUTPUTS_PER_WG;
 
 // Shared memory for collaborative loading and reduction
 var<workgroup> shared_vector: array<SRC1_TYPE, TILE_K/VEC_SIZE>;  // Cache vector tile
-var<workgroup> partial_sums: array<f32, WORKGROUP_SIZE>;   // For reduction
+var<workgroup> partial_sums: array<f32, WG_SIZE>;   // For reduction
 
-@compute @workgroup_size(WORKGROUP_SIZE)
+@compute @workgroup_size(WG_SIZE)
 fn main(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) wg_id: vec3<u32>,
@@ -150,7 +147,7 @@ fn main(
         let tile_size = min(TILE_K, params.k - k_tile);
 
         // Cooperatively load vector tile into shared memory (all threads)
-        for (var i = thread_id * VEC_SIZE; i < tile_size; i += WORKGROUP_SIZE * VEC_SIZE) {
+        for (var i = thread_id * VEC_SIZE; i < tile_size; i += WG_SIZE * VEC_SIZE) {
             shared_vector[i / VEC_SIZE] = src1[(src1_idx_base + k_tile + i) / VEC_SIZE];
         }
 
@@ -168,7 +165,7 @@ fn main(
     workgroupBarrier();
     let group_base = thread_group * THREADS_PER_OUTPUT;
     let thread_base = group_base + thread_in_group;
-    var offset = THREADS_PER_OUTPUT / 2;
+    var offset: u32 = THREADS_PER_OUTPUT / 2;
     while (offset > 0) {
         if (thread_in_group < offset) {
             partial_sums[thread_base] += partial_sums[thread_base + offset];
