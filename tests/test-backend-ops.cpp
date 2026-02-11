@@ -1943,7 +1943,11 @@ struct test_unary : public test_case {
 
         ggml_tensor * a;
         if (v & 1) {
-            auto ne = ne_a; ne[0] *= 3;
+            auto ne = ne_a;
+            ne[0] *= 3;
+            ne[1] *= 2;
+            ne[2] *= 5;
+            ne[3] *= 4;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             if (grad_supported) {
                 ggml_set_param(a);
