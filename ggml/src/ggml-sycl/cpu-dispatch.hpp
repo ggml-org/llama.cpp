@@ -33,4 +33,14 @@ bool ggml_sycl_compute_fused_rms_norm_mul(ggml_backend_sycl_context & ctx,
 bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
                                             ggml_tensor * add_dst, ggml_tensor * rms_dst);
 
+// Retained activation API — eliminates per-op staging overhead
+// by keeping intermediate results in host scratch memory between
+// consecutive CPU-dispatched ops within a layer block.
+void   cpu_retained_init(sycl::queue * gpu_q);
+void   cpu_retained_cleanup();
+bool   cpu_retained_active();
+void * cpu_retained_alloc_output(const ggml_tensor * dst);
+void   cpu_retained_flush_all(sycl::queue * gpu_q);
+void   cpu_retained_deactivate();
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP
