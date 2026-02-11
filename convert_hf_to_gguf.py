@@ -1815,7 +1815,7 @@ class MmprojModel(ModelBase):
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
-    n_block_keys = ["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "encoder_layers"]
+    n_block_keys = ["layers", "n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth", "encoder_layers"]
 
     has_vision_encoder: bool = True # by default
     has_audio_encoder: bool = False
@@ -1837,7 +1837,13 @@ class MmprojModel(ModelBase):
             if "audio_config" not in self.hparams:
                 self.hparams["audio_config"] = {}
             text_config = {**self.hparams, **self.hparams["text_config"]}
-            self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
+            n_embd_text = (
+                text_config.get("hidden_size")
+                or text_config.get("n_embd")
+                or text_config.get("embed_dim")
+                or 0
+            )
+            self.n_embd_text = int(n_embd_text) if n_embd_text else 0
         else:
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
@@ -7382,6 +7388,130 @@ class JinaBertV2Model(BertModel):
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
+
+
+@ModelBase.register("JinaCLIPModel")
+class JinaCLIPTextModel(XLMRobertaModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+    _text_prefix = "text_model.transformer."
+
+    @staticmethod
+    def _load_json_file(path: Path) -> dict[str, Any]:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    @staticmethod
+    def _load_hf_config_json(hf_name_or_path: str) -> dict[str, Any]:
+        p = Path(hf_name_or_path)
+        if p.is_dir():
+            cfg_path = p / "config.json"
+            if cfg_path.is_file():
+                return JinaCLIPTextModel._load_json_file(cfg_path)
+
+        try:
+            from huggingface_hub import hf_hub_download
+        except Exception:
+            raise ImportError(
+                "huggingface_hub is required to fetch the text tower config.json for JinaClip; "
+                "install this package or provide a local path in text_config.hf_model_name_or_path."
+            )
+
+        try:
+            cfg_path = Path(hf_hub_download(repo_id=hf_name_or_path, filename="config.json", local_files_only=True))
+        except Exception:
+            cfg_path = Path(hf_hub_download(repo_id=hf_name_or_path, filename="config.json", local_files_only=False))
+        return JinaCLIPTextModel._load_json_file(cfg_path)
+
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+        jinaclip_hparams = ModelBase.load_hparams(dir_model, False)
+        text_cfg = jinaclip_hparams.get("text_config") or {}
+        hf_name = text_cfg.get("hf_model_name_or_path")
+        if not hf_name:
+            raise KeyError("JinaCLIPTextModel: missing text_config.hf_model_name_or_path in config.json")
+
+        base_cfg = self._load_hf_config_json(str(hf_name))
+
+        overrides = text_cfg.get("hf_model_config_kwargs") or {}
+        if not isinstance(overrides, dict):
+            raise TypeError("JinaCLIPTextModel: text_config.hf_model_config_kwargs must be a dict")
+
+        merged_hparams = {**base_cfg, **overrides}
+
+        kwargs["hparams"] = merged_hparams
+
+        super().__init__(dir_model, ftype, fname_out, **kwargs)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if not name.startswith(self._text_prefix):
+            return []
+
+        name = name[len(self._text_prefix):]
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("JinaCLIPModel")
+class JinaCLIPVisionModel(MmprojModel):
+
+    def set_gguf_parameters(self):
+        cfg = self.hparams
+
+        width = int(self.find_hparam(["width"]))
+        head_width = int(self.find_hparam(["head_width"]))
+        layers = int(self.find_hparam(["layers"]))
+        image_size = int(self.find_hparam(["image_size"]))
+        patch_size = int(self.find_hparam(["patch_size"]))
+
+        if width % head_width != 0:
+            raise ValueError(
+                f"JinaCLIPVisionModel: width ({width}) not divisible by head_width ({head_width})"
+            )
+        n_head = width // head_width
+
+        if "mlp_ratio" in cfg:
+            n_ff = int(width * float(cfg["mlp_ratio"]))
+        elif bool(cfg.get("naive_swiglu", False)):
+            n_ff = int((width * 8) // 3)
+        else:
+            raise ValueError("JinaCLIPVisionModel: unable to infer FFN size; please provide 'mlp_ratio' or set 'naive_swiglu' in config.json")
+
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_clip_has_vision_encoder(True)
+        proj_dim = int(self.global_config.get("projection_dim") or cfg.get("embed_dim") or width)
+        self.gguf_writer.add_vision_projection_dim(proj_dim)
+
+        self.gguf_writer.add_vision_image_size(image_size)
+        self.gguf_writer.add_vision_patch_size(patch_size)
+        self.gguf_writer.add_vision_embedding_length(width)
+        self.gguf_writer.add_vision_feed_forward_length(n_ff)
+        self.gguf_writer.add_vision_block_count(layers)
+        self.gguf_writer.add_vision_head_count(n_head)
+
+        self.gguf_writer.add_vision_attention_layernorm_eps(float(cfg.get("layer_norm_eps", 1e-6)))
+
+        # JinaClip v2 uses mean/std in preprocessor_config.json
+        mean = self.preprocessor_config["mean"]
+        std  = self.preprocessor_config["std"]
+        self.gguf_writer.add_vision_image_mean(mean)
+        self.gguf_writer.add_vision_image_std(std)
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.JINACLIP2)
+        self.gguf_writer.add_vision_use_silu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("vision_model."):
+            name = name[len("vision_model."):]
+        elif not (name.startswith("v.") or name.startswith("mm.")):
+            return []
+
+        if name == "pos_embed":
+            pos_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_POS] + ".weight"
+            return [(pos_name, data_torch)]
+
+        try:
+            return [(self.map_tensor_name(name), data_torch)]
+        except Exception:
+            logger.debug("mmproj(jinaclip): skip unmapped tensor %s", name)
+            return []
 
 
 @ModelBase.register("OpenELMForCausalLM")

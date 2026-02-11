@@ -689,9 +689,13 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_ATTN_O         = auto()
     V_ENC_ATTN_O_NORM    = auto()
     V_ENC_POST_ATTN_NORM = auto()
+    V_ENC_ATTN_LN        = auto()
     V_ENC_FFN_UP         = auto()
     V_ENC_FFN_GATE       = auto()
     V_ENC_FFN_DOWN       = auto()
+    V_ENC_FFN_NORM       = auto()
+    V_ENC_ATTN_Q_BIAS    = auto()
+    V_ENC_ATTN_V_BIAS    = auto()
     V_LAYER_SCALE_1      = auto()
     V_LAYER_SCALE_2      = auto()
     V_PRE_NORM           = auto()
@@ -1120,9 +1124,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_ATTN_O:              "v.blk.{bid}.attn_out",
     MODEL_TENSOR.V_ENC_ATTN_O_NORM:         "v.blk.{bid}.attn_out_norm",
     MODEL_TENSOR.V_ENC_POST_ATTN_NORM:      "v.blk.{bid}.ln2",
+    MODEL_TENSOR.V_ENC_ATTN_LN:             "v.blk.{bid}.attn_ln",
     MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
     MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
     MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_ENC_FFN_NORM:            "v.blk.{bid}.ffn_norm",
+    MODEL_TENSOR.V_ENC_ATTN_Q_BIAS:         "v.blk.{bid}.attn_q.bias",
+    MODEL_TENSOR.V_ENC_ATTN_V_BIAS:         "v.blk.{bid}.attn_v.bias",
     MODEL_TENSOR.V_LAYER_SCALE_1:           "v.blk.{bid}.ls1",
     MODEL_TENSOR.V_LAYER_SCALE_2:           "v.blk.{bid}.ls2",
     MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
@@ -1238,9 +1246,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_ATTN_O,
         MODEL_TENSOR.V_ENC_ATTN_O_NORM,
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM,
+        MODEL_TENSOR.V_ENC_ATTN_LN,
         MODEL_TENSOR.V_ENC_FFN_UP,
         MODEL_TENSOR.V_ENC_FFN_GATE,
         MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_ENC_FFN_NORM,
+        MODEL_TENSOR.V_ENC_ATTN_Q_BIAS,
+        MODEL_TENSOR.V_ENC_ATTN_V_BIAS,
         MODEL_TENSOR.V_LAYER_SCALE_1,
         MODEL_TENSOR.V_LAYER_SCALE_2,
         MODEL_TENSOR.V_PRE_NORM,
@@ -3760,6 +3772,7 @@ class VisionProjectorType:
     QWEN3VL = "qwen3vl_merger"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
+    JINACLIP2 = "jinaclip2"
     QWEN2A = "qwen2a" # audio
     GLMA = "glma" # audio
     QWEN25O = "qwen2.5o" # omni

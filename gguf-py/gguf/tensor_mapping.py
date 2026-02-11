@@ -1329,6 +1329,7 @@ class TensorNameMap:
             "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
             "model.vision.patch_embedding.cls_embedding", # cogvlm
+            "cls_token", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -1343,6 +1344,7 @@ class TensorNameMap:
             "vision_tower.patch_embed.proj", # kimi-vl
             "model.vision.patch_embedding.proj", # cogvlm
             "siglip2.vision_model.embeddings.patch_embedding",
+            "patch_embed.proj", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_NORM: (
@@ -1377,6 +1379,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
+            "blocks.{bid}.attn.q_proj", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1395,6 +1398,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "blocks.{bid}.attn.k_proj", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1413,6 +1417,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "blocks.{bid}.attn.v_proj", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1428,6 +1433,7 @@ class TensorNameMap:
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm1",
+            "blocks.{bid}.norm1", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1444,6 +1450,7 @@ class TensorNameMap:
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
+            "blocks.{bid}.attn.proj", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1459,6 +1466,11 @@ class TensorNameMap:
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
             "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.layer_norm2",
+            "blocks.{bid}.norm2", # JinaCLIP v2 vision
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_LN: (
+            "blocks.{bid}.attn.inner_attn_ln",              # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1475,12 +1487,14 @@ class TensorNameMap:
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc1",
+            "blocks.{bid}.mlp.w2", # JinaCLIP v2 vision (up)
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
             "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
             "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
+            "blocks.{bid}.mlp.w1", # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
@@ -1497,6 +1511,11 @@ class TensorNameMap:
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
             "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
             "siglip2.vision_model.encoder.layers.{bid}.mlp.fc2",
+            "blocks.{bid}.mlp.w3", # JinaCLIP v2 vision (down)
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_NORM: (
+            "blocks.{bid}.mlp.ffn_ln",              # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
@@ -1507,6 +1526,14 @@ class TensorNameMap:
         MODEL_TENSOR.V_LAYER_SCALE_2: (
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_Q_BIAS: (
+            "blocks.{bid}.attn.q_bias",              # JinaCLIP v2 vision
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_V_BIAS: (
+            "blocks.{bid}.attn.v_bias",              # JinaCLIP v2 vision
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
@@ -1522,6 +1549,7 @@ class TensorNameMap:
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
             "vision_tower.encoder.final_layernorm", # kimi-vl
+            "norm", # JinaCLIP v2 vision
             "visual.post_layernorm", # glm4v
             "siglip2.vision_model.post_layernorm",
         ),

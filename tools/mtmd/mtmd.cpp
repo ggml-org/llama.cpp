@@ -436,6 +436,87 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
+struct mtmd_mmproj_context {
+    clip_ctx * ctx_v = nullptr;
+};
+
+mtmd_mmproj_context_t mtmd_mmproj_init(const char * mmproj_fname,
+                                       const struct mtmd_context_params ctx_params) {
+    clip_context_params clip_params{};
+    clip_params.use_gpu          = ctx_params.use_gpu;
+    clip_params.flash_attn_type  = CLIP_FLASH_ATTN_TYPE_AUTO;
+    clip_params.image_min_tokens = ctx_params.image_min_tokens;
+    clip_params.image_max_tokens = ctx_params.image_max_tokens;
+    clip_params.warmup           = ctx_params.warmup;
+    clip_params.cb_eval          = nullptr;
+    clip_params.cb_eval_user_data = nullptr;
+    auto res = clip_init(mmproj_fname, clip_params);
+    if (!res.ctx_v) {
+        return nullptr;
+    }
+    auto * ctx = new mtmd_mmproj_context();
+    ctx->ctx_v = res.ctx_v;
+    return ctx;
+}
+
+void mtmd_mmproj_free(mtmd_mmproj_context_t ctx) {
+    if (!ctx) return;
+    clip_free(ctx->ctx_v);
+    delete ctx;
+}
+
+int32_t mtmd_mmproj_encode_bitmap(mtmd_mmproj_context_t ctx,
+                                  const mtmd_bitmap * bmp,
+                                  int32_t n_threads,
+                                  float ** out_data,
+                                  size_t * out_count) {
+    if (!ctx || !ctx->ctx_v || !bmp || !out_data || !out_count) {
+        LOG_ERR("%s: invalid args: ctx=%p ctx_v=%p bmp=%p out_data=%p out_count=%p\n",
+                __func__, (void*) ctx, ctx ? (void*) ctx->ctx_v : (void*) nullptr,
+                (void*) bmp, (void*) out_data, (void*) out_count);
+        return 1;
+    }
+
+    clip_image_u8_ptr img_u8(clip_image_u8_init());
+    img_u8->nx = bmp->nx;
+    img_u8->ny = bmp->ny;
+    img_u8->buf.resize(bmp->data.size());
+    std::memcpy(img_u8->buf.data(), bmp->data.data(), img_u8->nx * img_u8->ny * 3);
+
+    clip_image_f32_batch batch_f32;
+    bool ok = clip_image_preprocess(ctx->ctx_v, img_u8.get(), &batch_f32);
+    if (!ok) {
+        LOG_ERR("%s: image preprocess failed (nx=%u ny=%u proj=%d)\n",
+                __func__, img_u8->nx, img_u8->ny, (int) clip_get_projector_type(ctx->ctx_v));
+        return 1;
+    }
+    clip_image_f32 * processed_img = clip_image_f32_get_img(&batch_f32, 0);
+    if (!processed_img) {
+        LOG_ERR("%s: preprocessed image is null\n", __func__);
+        return 1;
+    }
+
+    const int n_tok   = clip_n_output_tokens(ctx->ctx_v, processed_img);
+    const int n_embd  = clip_n_mmproj_embd(ctx->ctx_v);
+    const size_t n_el = (size_t) n_tok * (size_t) n_embd;
+    std::vector<float> buf(n_el);
+    if (!clip_image_encode(ctx->ctx_v, n_threads, processed_img, buf.data())) {
+        LOG_ERR("%s: image encode failed (threads=%d tokens=%d embd=%d)\n",
+                __func__, n_threads, n_tok, n_embd);
+        return 1;
+    }
+
+    float * out = (float *) std::malloc(n_el * sizeof(float));
+    if (!out) {
+        LOG_ERR("%s: malloc failed (elements=%zu bytes=%zu)\n", __func__, n_el, n_el * sizeof(float));
+        return 1;
+    }
+    std::memcpy(out, buf.data(), n_el * sizeof(float));
+    *out_data  = out;
+    *out_count = n_el;
+    return 0;
+}
+
 struct mtmd_tokenizer {
     mtmd_context * ctx;
     std::vector<const mtmd_bitmap *> bitmaps;

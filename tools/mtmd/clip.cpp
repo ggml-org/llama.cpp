@@ -293,6 +293,8 @@ ggml_tensor * clip_graph::build_vit(
             ggml_tensor * learned_pos_embd,
             std::function<ggml_tensor *(ggml_tensor *, const clip_layer &)> add_pos
         ) {
+    block_norm_t = norm_t;
+
     if (learned_pos_embd) {
         inp = ggml_add(ctx0, inp, learned_pos_embd);
         cb(inp, "pos_embed", -1);
@@ -490,7 +492,6 @@ ggml_tensor * clip_graph::build_norm(
         cur = ggml_add(ctx0, cur, mb);
         cb(cur, "norm_b", il);
     }
-
     return cur;
 }
 
@@ -561,6 +562,14 @@ ggml_tensor * clip_graph::build_ffn(
             } break;
     }
 
+    if (il >= 0 && il < (int) model.layers.size()) {
+        const auto & layer = model.layers[il];
+        if (layer.ffn_hidden_norm_w) {
+            cur = build_norm(cur, layer.ffn_hidden_norm_w, layer.ffn_hidden_norm_b, block_norm_t, eps, il);
+            cb(cur, "ffn_hidden_normed", il);
+        }
+    }
+
     if (down) {
         cur = ggml_mul_mat(ctx0, down, cur);
     }
@@ -629,6 +638,14 @@ ggml_tensor * clip_graph::build_attn(
     }
 
     cb(cur, "kqv_out", il);
+
+    if (il >= 0 && il < (int) model.layers.size()) {
+        const auto & layer = model.layers[il];
+        if (layer.attn_out_norm_w) {
+            cur = build_norm(cur, layer.attn_out_norm_w, layer.attn_out_norm_b, block_norm_t, eps, il);
+            cb(cur, "kqv_out_normed", il);
+        }
+    }
 
     if (wo) {
         cur = ggml_mul_mat(ctx0, wo, cur);
@@ -813,6 +830,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_LLAMA4:
             {
                 builder = std::make_unique<clip_graph_llama4>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                builder = std::make_unique<clip_graph_jinaclip2>(ctx, img);
             } break;
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
@@ -1200,6 +1221,11 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         set_llava_uhd_res_candidates(model, 3);
                     } break;
+                case PROJECTOR_TYPE_JINACLIP2:
+                    {
+                        hparams.rope_theta = 10000.0f;
+                        get_f32(KEY_VISION_ROPE_THETA, hparams.rope_theta, false);
+                    } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
                 case PROJECTOR_TYPE_GLMA:
@@ -1358,6 +1384,7 @@ struct clip_model_loader {
             layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
+            layer.attn_out_norm_w = get_tensor(string_format(TN_ATTN_LN,  prefix, il, "weight"), false);
             layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
             layer.ln_2_w = get_tensor(string_format(TN_LN_2,        prefix, il, "weight"), false);
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        prefix, il, "weight"), false); // no bias
@@ -1368,6 +1395,7 @@ struct clip_model_loader {
             layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
             layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
+            layer.attn_out_norm_b = get_tensor(string_format(TN_ATTN_LN,  prefix, il, "bias"), false);
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
@@ -1376,6 +1404,8 @@ struct clip_model_loader {
             layer.ff_up_b   = get_tensor(string_format(TN_FFN_UP,   prefix, il, "bias"),   false);
             layer.ff_gate_w = get_tensor(string_format(TN_FFN_GATE, prefix, il, "weight"), false);
             layer.ff_gate_b = get_tensor(string_format(TN_FFN_GATE, prefix, il, "bias"),   false);
+            layer.ffn_hidden_norm_w = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"), false);
+            layer.ffn_hidden_norm_b = get_tensor(string_format(TN_FFN_NORM, prefix, il, "bias"),   false);
             layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"));
             layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"),   false);
 
@@ -1784,6 +1814,9 @@ struct clip_model_loader {
                     model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                } break;
+            case PROJECTOR_TYPE_JINACLIP2:
+                {
                 } break;
             case PROJECTOR_TYPE_LFM2A:
                 {
@@ -3133,6 +3166,41 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 res_imgs->grid_y = inst.grid_size.height;
             } break;
 
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                clip_image_u8 processed_image;
+                const int sz = params.image_size;
+
+                const int in_w = img->nx;
+                const int in_h = img->ny;
+                if (in_w <= 0 || in_h <= 0) {
+                    LOG_ERR("%s: invalid input image size %dx%d\n", __func__, in_w, in_h);
+                    return false;
+                }
+
+                int out_w = 0, out_h = 0;
+                if (in_w < in_h) {
+                    out_w = sz;
+                    out_h = std::max(1, (int) std::round((double) in_h * sz / in_w));
+                } else {
+                    out_h = sz;
+                    out_w = std::max(1, (int) std::round((double) in_w * sz / in_h));
+                }
+
+                clip_image_u8 resized_keep_ratio;
+                img_tool::resize(*img, resized_keep_ratio, clip_image_size{out_w, out_h}, img_tool::RESIZE_ALGO_BICUBIC);
+
+                const int x0 = std::max(0, (resized_keep_ratio.nx - sz) / 2);
+                const int y0 = std::max(0, (resized_keep_ratio.ny - sz) / 2);
+                const int crop_w = std::min(sz, resized_keep_ratio.nx);
+                const int crop_h = std::min(sz, resized_keep_ratio.ny);
+                img_tool::crop(resized_keep_ratio, processed_image, x0, y0, crop_w, crop_h);
+
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(processed_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
+
         case PROJECTOR_TYPE_LFM2:
             {
                 auto const inst = lfm2_vl_image_processor::get_slice_instructions(ctx, original_size);
@@ -3308,6 +3376,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_JANUS_PRO:
             {
                 // do nothing
+            } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                n_patches = 1;
             } break;
         case PROJECTOR_TYPE_LDP:
         case PROJECTOR_TYPE_LDPV2:
@@ -3739,6 +3811,54 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
             set_input_i32("positions", positions);
         } break;
+        case PROJECTOR_TYPE_JINACLIP2:
+            {
+                std::vector<int32_t> positions(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i] = i;
+                }
+                set_input_i32("positions", positions);
+
+                const int n_patches = n_pos - 1;
+                const int n_patches_per_col = image_size_width / patch_size;
+
+                std::vector<int32_t> pos_data(n_pos, 0);
+
+                for (int i = 0; i < n_patches; ++i) {
+                    const int idx = i + 1;
+                    pos_data[idx] = i / n_patches_per_col;
+                }
+                set_input_i32("pos_h", pos_data);
+
+                std::fill(pos_data.begin(), pos_data.end(), 0);
+                for (int i = 0; i < n_patches; ++i) {
+                    const int idx = i + 1;
+                    pos_data[idx] = i % n_patches_per_col;
+                }
+                set_input_i32("pos_w", pos_data);
+
+                int pt_seq_len = 16;
+                if (patch_size > 0) {
+                    const int cand = (int) llroundf(224.0f / (float) patch_size);
+                    if (cand > 0) {
+                        pt_seq_len = cand;
+                    }
+                }
+                const float s = (float) pt_seq_len / (float) n_patches_per_col;
+                const int d_head_local = hparams.n_embd / hparams.n_head;
+                const int half_local = d_head_local / 2;
+                std::vector<float> rope_c_first(half_local);
+                std::vector<float> rope_c_second(half_local);
+                const float odd = std::pow(hparams.rope_theta, (float) -2.0f / (float) d_head_local);
+
+                for (int k = 0; k < half_local; ++k) {
+                    rope_c_first[k]  = 1.0f / s;
+                    rope_c_second[k] = 1.0f / (s * odd);
+                }
+
+                set_input_f32("rope_c_first", rope_c_first);
+                set_input_f32("rope_c_second", rope_c_second);
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -3863,6 +3983,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_LIGHTONOCR:
             return ctx->model.mm_2_w->ne[1];
+        case PROJECTOR_TYPE_JINACLIP2:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
