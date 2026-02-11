@@ -2248,14 +2248,16 @@ void ggml_sycl_recalc_model_exceeds_vram(size_t effective_budget) {
             return;
         }
         const bool old_exceeds = g_model_exceeds_vram.load(std::memory_order_acquire);
-        const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
 
-        if (!old_exceeds && new_exceeds) {
-            GGML_LOG_INFO("[SYCL-BUDGET] Recalc: model now exceeds effective budget "
-                          "(model=%.1f MB, effective_budget=%.1f MB) — enabling streaming gates\n",
-                          g_tensor_inventory_total_size / (1024.0 * 1024.0),
-                          effective_budget / (1024.0 * 1024.0));
+        // When the initial inventory (set_tensor_inventory) determined the model
+        // fits within VRAM budget, do NOT override that decision. The framework's
+        // device buffer already holds all assigned weights in VRAM. Runtime budget
+        // depletion (KV cache, compute) doesn't invalidate the device allocation —
+        // it just means the unified cache has no extra budget for layout copies.
+        if (!old_exceeds) {
+            return;
         }
+        const bool new_exceeds = g_tensor_inventory_total_size > effective_budget;
 
         if (old_exceeds != new_exceeds) {
             g_model_exceeds_vram.store(new_exceeds, std::memory_order_release);
@@ -30461,22 +30463,24 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // O(n_nodes) graph scans when persistent TG handles its own pointer resolution.
     // Cache the result (3x O(n) scans avoided on steady-state TG).
     bool persistent_eligible;
-    bool cached_is_decode = false;
     if (sycl_ctx->cached_persistent_n_nodes == cgraph->n_nodes) {
         persistent_eligible = sycl_ctx->cached_persistent_result;
-        cached_is_decode = sycl_ctx->cached_is_decode_phase;
     } else {
         persistent_eligible = should_use_persistent_tg(*sycl_ctx, cgraph);
-        // Phase detection: find first MUL_MAT and check ne[1]
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT && cgraph->nodes[i]->src[1]) {
-                cached_is_decode = (cgraph->nodes[i]->src[1]->ne[1] == 1);
-                break;
-            }
-        }
         sycl_ctx->cached_persistent_n_nodes = cgraph->n_nodes;
         sycl_ctx->cached_persistent_result  = persistent_eligible;
-        sycl_ctx->cached_is_decode_phase    = cached_is_decode;
+    }
+
+    // Phase detection: always recompute — n_nodes is the same for PP and TG
+    // when GPU prefix mode truncates the graph, so caching by n_nodes alone
+    // returns stale PP phase during TG, causing graph replay with wrong shapes.
+    // This scan is O(1) in practice (finds first MUL_MAT in the graph).
+    bool cached_is_decode = false;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT && cgraph->nodes[i]->src[1]) {
+            cached_is_decode = (cgraph->nodes[i]->src[1]->ne[1] == 1);
+            break;
+        }
     }
 
     // Skip finalize_layouts when layouts are stable (no dirty weights, no epoch change).

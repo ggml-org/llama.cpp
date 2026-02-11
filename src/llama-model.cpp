@@ -8549,8 +8549,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         size_t                             total_size = 0;
 
-        // Iterate over all contexts to collect tensor inventory
+        // Iterate over SYCL-backed contexts only to collect tensor inventory.
+        // When fit_params reduces ngl, some contexts use CPU buffer types — those
+        // must be excluded or the inventory inflates the model size, incorrectly
+        // triggering tiered/streaming mode for tensors that fit in VRAM.
         for (auto & [buft, ctx_ptr] : ctx_map) {
+            if (ggml_backend_buft_is_host(buft)) {
+                continue;  // Skip CPU/host buffer types
+            }
             ggml_context * ctx = ctx_ptr.get();
             for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
                 if (ggml_nbytes(t) > 0) {
@@ -8708,43 +8714,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
 #ifdef GGML_USE_SYCL
-    // Post-allocation tensor inventory refresh for SYCL tiered memory
-    // Note: Early inventory was already set before allocation (see above)
-    // This refresh ensures the backend has final tensor names after allocation
-    // Skip during fit_params measurement probes (no_alloc)
-    if (!ml.no_alloc && !tensors_by_name.empty()) {
-        std::vector<ggml_sycl_tensor_info> sycl_tensors;
-        sycl_tensors.reserve(tensors_by_name.size());
-        size_t total_size = 0;
-
-        for (const auto & [name, tensor] : tensors_by_name) {
-            if (tensor && ggml_nbytes(tensor) > 0) {
-                sycl_tensors.push_back({ name.c_str(), ggml_nbytes(tensor) });
-                total_size += ggml_nbytes(tensor);
-            }
-        }
-
-        if (!sycl_tensors.empty()) {
-            ggml_sycl_tensor_inventory inventory;
-            inventory.tensors       = sycl_tensors.data();
-            inventory.count         = sycl_tensors.size();
-            inventory.total_size    = total_size;
-            inventory.n_expert      = hparams.n_expert;
-            inventory.n_expert_used = hparams.n_expert_used;
-
-            // Refresh inventory for each SYCL backend device (post-allocation)
-            for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {
-                ggml_backend_t sycl_backend = ggml_backend_sycl_init(i);
-                if (sycl_backend) {
-                    ggml_backend_sycl_set_tensor_inventory(sycl_backend, &inventory);
-                    ggml_backend_free(sycl_backend);
-                }
-            }
-
-            LLAMA_LOG_DEBUG("%s: SYCL tensor inventory refreshed: %zu tensors, %.2f GB\n", __func__,
-                            sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
-        }
-    }
+    // Post-allocation tensor inventory refresh REMOVED.
+    // The early inventory (above, before allocation) already correctly filters
+    // to SYCL-backed tensors only. A second call here was overwriting the filtered
+    // inventory with ALL tensors (including CPU-backend ones), inflating the model
+    // size and incorrectly triggering streaming/tiered mode when fit_params reduces ngl.
 #endif
 
     if (ml.no_alloc) {
