@@ -323,6 +323,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         }
     }
 
+#ifdef GGML_USE_NCCL
     int dev_ids[GGML_CUDA_MAX_DEVICES];
     for (int id = 0; id < info.device_count; ++id) {
         dev_ids[id] = id;
@@ -330,6 +331,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
     NCCL_CHECK(ncclCommInitAll(info.comms, info.device_count, dev_ids));
 
     return info;
+#endif // GGML_USE_NCCL
 }
 
 const ggml_cuda_device_info & ggml_cuda_info() {
@@ -1099,6 +1101,10 @@ bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_t
 
     return true;
 #else
+    // If NCCL is installed it is used by default for optimal performance.
+    // However, NVIDIA does not distribute NCCL with CUDA so users may be unwittingly missing this package.
+    // RCCL is disabled by default, users are explicitly opting in.
+    // Therefore print no warning for RCCL.
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     static bool warning_printed = false;
     if (!warning_printed) {
