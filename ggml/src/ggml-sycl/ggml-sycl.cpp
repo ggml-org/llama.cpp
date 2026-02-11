@@ -24797,9 +24797,18 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             fflush(stderr);
         }
     }
-    // Data-local CPU offload: track device transitions for boundary sync
+    // Data-local CPU offload: per-tensor event tracking for boundary sync.
+    // Instead of a full queue drain (stream()->wait()) at GPU→CPU transitions,
+    // we record a barrier event for each GPU op's output tensor.  At the
+    // transition we wait only on events for the CPU node's input tensors.
+    // For in-order queues the latest event subsumes all prior ones, but
+    // per-tensor tracking is correct regardless of queue ordering mode.
+    //
+    // Overhead: one ext_oneapi_submit_barrier() per GPU op (~1-2us each).
+    // This is amortized by avoiding the heavier full-queue wait at transitions.
     const bool cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
     bool prev_on_cpu = false;
+    std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         GGML_SYCL_DEBUG("[DEBUG-IMPL] Node %d/%d: ", i, cgraph->n_nodes);
@@ -25120,18 +25129,31 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
 #endif
         // Data-local compute: boundary sync at GPU↔CPU layer transitions.
-        // When switching from GPU to CPU layers, drain the GPU queue so that
-        // activation data in VRAM is ready for staging to host memory.
-        // With HOST_COMPUTE (host-pinned compute buffers), the GPU queue drain
-        // is still needed because GPU kernels write activations that CPU ops read,
-        // but staging drain is unnecessary (no device↔host copies).
+        // Per-tensor event tracking replaces the full queue drain.  After each
+        // GPU op we record a barrier event for dst.  At GPU→CPU transitions we
+        // wait only on the events for the CPU node's input tensors.
         if (cpu_offload_active) {
             bool node_on_cpu = should_dispatch_to_cpu(*sycl_ctx, node);
             if (node_on_cpu != prev_on_cpu) {
                 if (node_on_cpu) {
-                    // GPU→CPU: ensure all queued GPU work is complete
-                    sycl_ctx->stream()->wait();
-                    GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU boundary sync at node %d (%s)\n",
+                    // GPU→CPU: wait only on events for this node's input tensors.
+                    // Inputs without tracked events (weights, KV cache, external
+                    // tensors) are either static or CPU-written — safe to skip.
+                    // If NO inputs have tracked events despite GPU ops having run,
+                    // fall back to a barrier for correctness (unusual graph shape).
+                    bool any_input_from_gpu = false;
+                    for (int si = 0; si < GGML_MAX_SRC; si++) {
+                        if (!node->src[si]) break;
+                        auto it = gpu_tensor_events.find(node->src[si]);
+                        if (it != gpu_tensor_events.end()) {
+                            it->second.wait();
+                            any_input_from_gpu = true;
+                        }
+                    }
+                    if (!any_input_from_gpu && !gpu_tensor_events.empty()) {
+                        sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
+                    }
+                    GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU per-tensor sync at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
@@ -25152,6 +25174,14 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
 
         GGML_ASSERT(ok);
+
+        // Per-tensor event tracking: after each GPU op, record a barrier event
+        // for dst so that GPU→CPU transitions can wait on specific tensors.
+        // Skip for CPU-dispatched nodes (they are synchronous).
+        if (cpu_offload_active && !prev_on_cpu) {
+            gpu_tensor_events[node] =
+                sycl_ctx->stream()->ext_oneapi_submit_barrier();
+        }
         if (g_sycl_tg_trace_hash) {
             void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
             ggml_sycl_trace_tensor_hash(*sycl_ctx, node, out_ptr, "base", g_sycl_trace_op_index++, node->op);
