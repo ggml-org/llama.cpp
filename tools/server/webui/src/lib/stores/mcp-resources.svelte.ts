@@ -12,6 +12,8 @@
 
 import { SvelteMap } from 'svelte/reactivity';
 import { AttachmentType } from '$lib/enums';
+import { MCP_RESOURCE_CACHE_MAX_ENTRIES, MCP_RESOURCE_CACHE_TTL_MS } from '$lib/constants/cache';
+import { MCP_RESOURCE_ATTACHMENT_ID_PREFIX } from '$lib/constants/mcp-resource';
 import type {
 	MCPResource,
 	MCPResourceTemplate,
@@ -24,11 +26,8 @@ import type {
 	MCPServerResources
 } from '$lib/types';
 
-const MAX_CACHED_RESOURCES = 50;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
 function generateAttachmentId(): string {
-	return `res-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+	return `${MCP_RESOURCE_ATTACHMENT_ID_PREFIX}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
 class MCPResourceStore {
@@ -241,9 +240,10 @@ class MCPResourceStore {
 	 */
 	cacheResourceContent(resource: MCPResourceInfo, content: MCPResourceContent[]): void {
 		// Enforce cache size limit
-		if (this._cachedResources.size >= MAX_CACHED_RESOURCES) {
+		if (this._cachedResources.size >= MCP_RESOURCE_CACHE_MAX_ENTRIES) {
 			// Remove oldest entry
 			const oldestKey = this._cachedResources.keys().next().value;
+
 			if (oldestKey) {
 				this._cachedResources.delete(oldestKey);
 			}
@@ -267,7 +267,8 @@ class MCPResourceStore {
 
 		// Check if cache is still valid
 		const age = Date.now() - cached.fetchedAt.getTime();
-		if (age > CACHE_TTL_MS && !cached.subscribed) {
+
+		if (age > MCP_RESOURCE_CACHE_TTL_MS && !cached.subscribed) {
 			// Cache expired and not subscribed, remove it
 			this._cachedResources.delete(uri);
 

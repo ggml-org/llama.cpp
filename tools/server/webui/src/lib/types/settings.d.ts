@@ -2,14 +2,14 @@ import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
 import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
-import type { ParameterSource, SyncableParameterType } from '$lib/enums';
+import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
 
 export type SettingsConfigValue = string | number | boolean;
 
 export interface SettingsFieldConfig {
 	key: string;
 	label: string;
-	type: 'input' | 'textarea' | 'checkbox' | 'select';
+	type: SettingsFieldType;
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;

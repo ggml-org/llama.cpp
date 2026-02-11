@@ -79,6 +79,7 @@ function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 			parsed = JSON.parse(trimmed);
 		} catch (error) {
 			console.warn('[MCP] Failed to parse mcpServers JSON:', error);
+
 			return [];
 		}
 	} else {
@@ -91,6 +92,7 @@ function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
 	return parsed.map((entry, index) => {
 		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
 		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
+
 		return {
 			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
@@ -121,6 +123,7 @@ function buildServerConfig(
 			console.warn('[MCP] Failed to parse custom headers JSON:', entry.headers);
 		}
 	}
+
 	return {
 		url: entry.url,
 		transport: detectMcpTransportFromUrl(entry.url),
@@ -141,8 +144,10 @@ function checkServerEnabled(
 
 	if (perChatOverrides) {
 		const override = perChatOverrides.find((o) => o.serverId === server.id);
+
 		return override?.enabled ?? false;
 	}
+
 	return false;
 }
 
@@ -156,11 +161,13 @@ function buildMcpClientConfigInternal(
 	}
 
 	const servers: Record<string, MCPServerConfig> = {};
+
 	for (const [index, entry] of rawServers.entries()) {
 		if (!checkServerEnabled(entry, perChatOverrides)) continue;
 		const normalized = buildServerConfig(entry);
 		if (normalized) servers[generateMcpServerId(entry.id, index)] = normalized;
 	}
+
 	if (Object.keys(servers).length === 0) {
 		return undefined;
 	}
@@ -228,27 +235,34 @@ class MCPStore {
 	get isInitializing(): boolean {
 		return this._isInitializing;
 	}
+
 	get isInitialized(): boolean {
 		return this.connections.size > 0;
 	}
+
 	get error(): string | null {
 		return this._error;
 	}
+
 	get toolCount(): number {
 		return this._toolCount;
 	}
+
 	get connectedServerCount(): number {
 		return this._connectedServers.length;
 	}
+
 	get connectedServerNames(): string[] {
 		return this._connectedServers;
 	}
+
 	get isEnabled(): boolean {
 		const mcpConfig = buildMcpClientConfigInternal(config());
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
 		);
 	}
+
 	get availableTools(): string[] {
 		return Array.from(this.toolsIndex.keys());
 	}
@@ -259,29 +273,45 @@ class MCPStore {
 		toolCount?: number;
 		connectedServers?: string[];
 	}): void {
-		if (state.isInitializing !== undefined) this._isInitializing = state.isInitializing;
-		if (state.error !== undefined) this._error = state.error;
-		if (state.toolCount !== undefined) this._toolCount = state.toolCount;
-		if (state.connectedServers !== undefined) this._connectedServers = state.connectedServers;
+		if (state.isInitializing !== undefined) {
+			this._isInitializing = state.isInitializing;
+		}
+
+		if (state.error !== undefined) {
+			this._error = state.error;
+		}
+
+		if (state.toolCount !== undefined) {
+			this._toolCount = state.toolCount;
+		}
+
+		if (state.connectedServers !== undefined) {
+			this._connectedServers = state.connectedServers;
+		}
 	}
 
 	updateHealthCheck(serverId: string, state: HealthCheckState): void {
 		this._healthChecks = { ...this._healthChecks, [serverId]: state };
 	}
+
 	getHealthCheckState(serverId: string): HealthCheckState {
 		return this._healthChecks[serverId] ?? { status: 'idle' };
 	}
+
 	hasHealthCheck(serverId: string): boolean {
 		return serverId in this._healthChecks && this._healthChecks[serverId].status !== 'idle';
 	}
+
 	clearHealthCheck(serverId: string): void {
 		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const { [serverId]: _removed, ...rest } = this._healthChecks;
 		this._healthChecks = rest;
 	}
+
 	clearAllHealthChecks(): void {
 		this._healthChecks = {};
 	}
+
 	clearError(): void {
 		this._error = null;
 	}

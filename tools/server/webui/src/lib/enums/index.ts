@@ -44,7 +44,7 @@ export { ModelModality } from './model';
 
 export { ServerRole, ServerModelStatus } from './server';
 
-export { ParameterSource, SyncableParameterType } from './settings';
+export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
 export { ColorMode, McpPromptVariant, UrlPrefix } from './ui';
 
