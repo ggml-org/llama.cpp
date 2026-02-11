@@ -10399,7 +10399,6 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             ggml_vec_scale_f32(S_v, k_local, 1.0f / fmaxf(norm, eps));
 
             // state decay: S *= exp(g)
-            // s_t is row-major, but scaling all elements is layout-agnostic
             ggml_vec_scale_f32(S_v * S_v, s_t, g_val);
 
             // kv_mem[j] = sum_i S[j][i] * k[i] = dot(s_t[j*S_v:], k)
