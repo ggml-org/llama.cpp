@@ -223,24 +223,31 @@ extern "C" {
     // Meta backend
     //
 
-    enum ggml_backend_meta_split_state {
-        // tensor split by tensor dimensions:
-        GGML_BACKEND_SPLIT_STATE_BY_NE0   =  0,
-        GGML_BACKEND_SPLIT_STATE_BY_NE1   =  1,
-        GGML_BACKEND_SPLIT_STATE_BY_NE2   =  2,
-        GGML_BACKEND_SPLIT_STATE_BY_NE3   =  3,
+    #define GGML_BACKEND_META_MAX_DEVICES 16
 
-        GGML_BACKEND_SPLIT_STATE_MIRRORED = 10, // all values on all backends
-        GGML_BACKEND_SPLIT_STATE_PARTIAL  = 11, // each backend has a partial sum
+    enum ggml_backend_meta_split_axis {
+        // tensor split by tensor dimensions:
+        GGML_BACKEND_SPLIT_AXIS_0   =  0,
+        GGML_BACKEND_SPLIT_AXIS_1   =  1,
+        GGML_BACKEND_SPLIT_AXIS_2   =  2,
+        GGML_BACKEND_SPLIT_AXIS_3   =  3,
+
+        GGML_BACKEND_SPLIT_AXIS_MIRRORED = 10, // all values on all backends
+        GGML_BACKEND_SPLIT_AXIS_PARTIAL  = 11, // each backend has a partial sum
 
         // for internal bookkeeping only:
-        GGML_BACKEND_SPLIT_STATE_NONE     = 98,
-        GGML_BACKEND_SPLIT_STATE_UNKNOWN  = 99,
+        GGML_BACKEND_SPLIT_AXIS_NONE     = 98,
+        GGML_BACKEND_SPLIT_AXIS_UNKNOWN  = 99,
+    };
+    GGML_API const char * ggml_backend_meta_split_axis_name(enum ggml_backend_meta_split_axis split_axis);
+
+    struct ggml_backend_meta_split_state {
+        enum ggml_backend_meta_split_axis axis;
+        int64_t                           ne[GGML_BACKEND_META_MAX_DEVICES];
     };
 
     // function to assign split states for statically allocated tensors, compute tensor split states will be assigned to be compatible:
-    typedef enum ggml_backend_meta_split_state (*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
-
+    typedef struct ggml_backend_meta_split_state (*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
 
     GGML_API bool ggml_backend_dev_is_meta(ggml_backend_dev_t dev);
     GGML_API size_t ggml_backend_meta_dev_n_devs(ggml_backend_dev_t meta_dev);
@@ -263,7 +270,7 @@ extern "C" {
     GGML_API size_t ggml_backend_meta_n_backends(ggml_backend_t meta_backend);
     GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
 
-    GGML_API enum ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
+    GGML_API struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
     // temporary workaround to statically allocate tensors from a context in a deduplicated way:
     GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
