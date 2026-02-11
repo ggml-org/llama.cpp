@@ -245,6 +245,25 @@ public:
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE;
     }
 
+    static std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (is_inp_tok(tensor, op)) {
+            return "inp_tokens";
+        }
+        if (is_inp_pos(tensor, op)) {
+            return "inp_pos";
+        }
+        if (is_inp_emb(tensor, op)) {
+            return "embd";
+        }
+        if (is_output_idx(tensor, op)) {
+            return "inp_out_ids";
+        }
+        if (is_inp_mask(tensor, op)) {
+            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+        }
+        return tensor->name;
+    }
+
 private:
     void set_input_output(ggml_tensor * node, bool naive = false);
     int compute_op_case(const ggml_tensor * node) const;

@@ -160,7 +160,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         if (src == nullptr) {
             continue;
         }
-        std::string src_name = std::string(src->name);
+        auto src_name = std::string(src->name);
+        if (src->flags & GGML_TENSOR_FLAG_INPUT) {
+            src_name = get_graph_input_ov_name(src, node);
+        }
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
 

@@ -117,9 +117,12 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     int32_t * rope_params = ggml_model_decoder.get_rope_params();
+    if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
+        return;
+    }
     auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
     std::shared_ptr<ov::Node> rope_freqs_weight;
-    if (tensor_map.find("rope_freqs_weight") != tensor_map.end()) {
+    if (tensor_map.find("rope_freqs.weight") != tensor_map.end()) {
         rope_freqs_weight = tensor_map.at("rope_freqs.weight").get_node_shared_ptr();
     }
 
