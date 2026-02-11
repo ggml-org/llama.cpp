@@ -48,8 +48,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
 
-	const url =
-		path.startsWith('http://') || path.startsWith('https://') ? path : `${base}${path}`;
+	const url = path.startsWith('http://') || path.startsWith('https://') ? path : `${base}${path}`;
 
 	const response = await fetch(url, {
 		...fetchOptions,
