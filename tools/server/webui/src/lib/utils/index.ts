@@ -9,6 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders } from './api-headers';
+export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -75,8 +76,7 @@ export { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
 export {
 	isFileTypeSupportedByModel,
 	filterFilesByModalities,
-	generateModalityErrorMessage,
-	type ModalityCapabilities
+	generateModalityErrorMessage
 } from './modality-file-validation';
 
 // Model name utilities
