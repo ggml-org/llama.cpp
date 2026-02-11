@@ -25198,6 +25198,34 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 }
             }
             prev_on_cpu = node_on_cpu;
+
+            // CPU op fusion: fuse consecutive element-wise ops to eliminate
+            // intermediate staging round-trips (saves 2-3 transfers/layer).
+            auto is_cpu_dispatched = [&](const ggml_tensor * n) {
+                return should_dispatch_to_cpu(*sycl_ctx, n) &&
+                       !(ggml_sycl_hybrid_dispatch_enabled() && should_force_gpu_dispatch(n));
+            };
+            if (is_cpu_dispatched(node) && i + 1 < cgraph->n_nodes) {
+                ggml_tensor * next = cgraph->nodes[i + 1];
+                if (next && !ggml_sycl_is_noop(next) && is_cpu_dispatched(next)) {
+                    // RMS_NORM + MUL fusion: saves 2 staging transfers per layer
+                    if (node->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL &&
+                        next->src[0] == node) {
+                        if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, node, next)) {
+                            i++;
+                            continue;
+                        }
+                    }
+                    // ADD + RMS_NORM fusion: saves 1 staging transfer per layer
+                    if (node->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM &&
+                        next->src[0] == node) {
+                        if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, node, next)) {
+                            i++;
+                            continue;
+                        }
+                    }
+                }
+            }
         }
         if (g_ggml_sycl_graph_recording) {
             g_sycl_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);

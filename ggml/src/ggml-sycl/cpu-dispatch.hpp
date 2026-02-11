@@ -26,4 +26,11 @@ void ggml_sycl_cpu_staging_drain();
 // from the mmap'd GGUF file, avoiding dequantization when using vec_dot.
 void ggml_sycl_cpu_dispatch_register_host_ptr(const char * name, const void * host_ptr, size_t size);
 
+// Fused CPU operation handlers — eliminate intermediate staging round-trips.
+// Returns true if fusion was applied, false to fall back to individual dispatch.
+bool ggml_sycl_compute_fused_rms_norm_mul(ggml_backend_sycl_context & ctx,
+                                           ggml_tensor * rms_dst, ggml_tensor * mul_dst);
+bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
+                                            ggml_tensor * add_dst, ggml_tensor * rms_dst);
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP

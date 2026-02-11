@@ -294,22 +294,16 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     // Stage tensors to host-accessible memory (event-based).
     sycl::event e0, e1;
-    fprintf(stderr, "[CPU-MM] staging src0=%s type=%d\n", src0->name ? src0->name : "?", src0->type);
     const void * src0_data = get_host_ptr(src0, device, 0, gpu_q, &e0);
-    fprintf(stderr, "[CPU-MM] src0_data=%p\n", src0_data);
     const void * src1_data = get_host_ptr(src1, device, 1, gpu_q, &e1);
-    fprintf(stderr, "[CPU-MM] src1=%p dst=", src1_data);
     void *       dst_data  = get_host_output_ptr(dst, device, gpu_q);
-    fprintf(stderr, "%p\n", dst_data);
     if (!src0_data || !src1_data || !dst_data) {
         return false;
     }
 
     // Wait for staging to complete before CPU compute
-    fprintf(stderr, "[CPU-MM] waiting...\n");
     e0.wait();
     e1.wait();
-    fprintf(stderr, "[CPU-MM] compute M=%lld N=%lld K=%lld vec_dot=%d\n", (long long)M, (long long)N, (long long)K, (int)(M <= 4 && cpu_traits && cpu_traits->vec_dot));
 
     // Batch dimensions (broadcast src0 if ne02/ne03 < ne12/ne13)
     const int64_t ne02 = src0->ne[2];
@@ -317,9 +311,10 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t ne12 = src1->ne[2];
     const int64_t ne13 = src1->ne[3];
 
-    const int64_t nb01 = src0->nb[1];
-    const int64_t nb02 = src0->nb[2];
-    const int64_t nb03 = src0->nb[3];
+    // AOS stride for host data (tensor nb may be SOA, but mmap/cache data is AOS)
+    const int64_t nb01 = static_cast<int64_t>(ggml_row_size(src0->type, K));
+    const int64_t nb02 = nb01 * src0->ne[1];
+    const int64_t nb03 = nb02 * src0->ne[2];
     const int64_t nb12 = src1->nb[2];
     const int64_t nb13 = src1->nb[3];
     const int64_t nb2  = dst->nb[2];
@@ -1232,6 +1227,213 @@ static bool cpu_unary(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             GGML_SYCL_DEBUG("[SYCL-CPU] Unsupported unary op %d on CPU\n", static_cast<int>(op));
             return false;
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// Fused RMS_NORM + MUL  (single staging pass, saves 1 flush + 1 stage-in)
+// ---------------------------------------------------------------------------
+//
+// Pattern: rms_dst = RMS_NORM(x), mul_dst = MUL(rms_dst, w)
+// Fused:   mul_dst[j] = x[j] * rms_scale * w[j]  (no intermediate flush)
+//
+// Saves 2 staging transfers per fusion (2x per transformer layer):
+//   - RMS_NORM output flush to device
+//   - MUL input re-stage of that same data
+
+bool ggml_sycl_compute_fused_rms_norm_mul(ggml_backend_sycl_context & ctx,
+                                           ggml_tensor * rms_dst, ggml_tensor * mul_dst) {
+    const ggml_tensor * rms_src0 = rms_dst->src[0];  // input to normalize
+    const ggml_tensor * mul_src1 = mul_dst->src[1];   // element-wise weight
+
+    if (!rms_src0 || !mul_src1) {
+        return false;
+    }
+    if (rms_src0->type != GGML_TYPE_F32 || rms_dst->type != GGML_TYPE_F32 ||
+        mul_src1->type != GGML_TYPE_F32 || mul_dst->type  != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(rms_src0) || !ggml_is_contiguous(mul_dst)) {
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, rms_dst->op_params, sizeof(float));
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+
+    staging_begin_op();
+
+    // Stage: rms input (slot 0) + mul weight (slot 1) + mul output (slot 2)
+    sycl::event e0, e1;
+    const float * rms_in_data = static_cast<const float *>(get_host_ptr(rms_src0, device, 0, gpu_q, &e0));
+    const float * mul_wt_data = static_cast<const float *>(get_host_ptr(mul_src1, device, 1, gpu_q, &e1));
+    float *       out_data    = static_cast<float *>(get_host_output_ptr(mul_dst, device, gpu_q));
+
+    if (!rms_in_data || !mul_wt_data || !out_data) {
+        return false;
+    }
+
+    e0.wait();
+    e1.wait();
+
+    const int64_t ne00  = rms_src0->ne[0];
+    const int64_t nrows = ggml_nrows(rms_src0);
+
+    // mul_src1 dimensions for broadcasting
+    const int64_t ne10 = mul_src1->ne[0];
+    const int64_t ne11 = mul_src1->ne[1];
+    const int64_t s11  = mul_src1->nb[1] / sizeof(float);
+
+    for (int64_t row = 0; row < nrows; row++) {
+        const float * src_row = rms_in_data + row * ne00;
+        float *       dst_row = out_data    + row * ne00;
+
+        // RMS normalization
+        float sum_sq = 0.0f;
+        for (int64_t j = 0; j < ne00; j++) {
+            sum_sq += src_row[j] * src_row[j];
+        }
+        const float scale = 1.0f / sqrtf(sum_sq / static_cast<float>(ne00) + eps);
+
+        // Fused multiply: rms_norm(x) * weight
+        const int64_t wt_row_idx = row % ne11;
+        const float * wt_row = mul_wt_data + wt_row_idx * s11;
+        const int64_t nr0 = ne00 / ne10;
+        for (int64_t r = 0; r < nr0; r++) {
+            for (int64_t j = 0; j < ne10; j++) {
+                dst_row[r * ne10 + j] = src_row[r * ne10 + j] * scale * wt_row[j];
+            }
+        }
+    }
+
+    flush_output(mul_dst, device, gpu_q);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Fused ADD + RMS_NORM  (single staging pass, saves 1 stage-in)
+// ---------------------------------------------------------------------------
+//
+// Pattern: add_dst = ADD(a, b), rms_dst = RMS_NORM(add_dst)
+// Both outputs needed: add_dst is the residual (consumed downstream),
+// rms_dst is the normalized input to attention/FFN.
+//
+// Saves 1 staging transfer per fusion (1x per transformer layer):
+//   - RMS_NORM re-staging of add_dst from device
+
+bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
+                                            ggml_tensor * add_dst, ggml_tensor * rms_dst) {
+    const ggml_tensor * add_src0 = add_dst->src[0];
+    const ggml_tensor * add_src1 = add_dst->src[1];
+    const ggml_tensor * rms_src0 = rms_dst->src[0];  // should == add_dst
+
+    if (!add_src0 || !add_src1 || rms_src0 != add_dst) {
+        return false;
+    }
+    if (add_src0->type != GGML_TYPE_F32 || add_src1->type != GGML_TYPE_F32 ||
+        add_dst->type  != GGML_TYPE_F32 || rms_dst->type  != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(add_src0) || !ggml_is_contiguous(add_dst) ||
+        !ggml_is_contiguous(rms_dst)) {
+        return false;
+    }
+    if (add_src1->nb[0] != sizeof(float)) {
+        return false;
+    }
+
+    float eps;
+    memcpy(&eps, rms_dst->op_params, sizeof(float));
+
+    const int device = ctx.device;
+    sycl::queue * gpu_q = ctx.stream();
+
+    staging_begin_op();
+
+    // Stage add inputs (slots 0, 1) + add output (slot 2)
+    sycl::event e0, e1;
+    const float * a_data = static_cast<const float *>(get_host_ptr(add_src0, device, 0, gpu_q, &e0));
+    const float * b_data = static_cast<const float *>(get_host_ptr(add_src1, device, 1, gpu_q, &e1));
+    float *  add_out     = static_cast<float *>(get_host_output_ptr(add_dst, device, gpu_q));
+
+    if (!a_data || !b_data || !add_out) {
+        return false;
+    }
+
+    e0.wait();
+    e1.wait();
+
+    const int64_t ne00 = add_src0->ne[0];
+    const int64_t ne01 = add_src0->ne[1];
+    const int64_t ne02 = add_src0->ne[2];
+    const int64_t ne03 = add_src0->ne[3];
+    const int64_t ne10 = add_src1->ne[0];
+    const int64_t ne11 = add_src1->ne[1];
+    const int64_t ne12 = add_src1->ne[2];
+    const int64_t ne13 = add_src1->ne[3];
+    const int64_t s11  = add_src1->nb[1] / sizeof(float);
+    const int64_t s12  = add_src1->nb[2] / sizeof(float);
+    const int64_t s13  = add_src1->nb[3] / sizeof(float);
+    const int64_t nr0  = ne00 / ne10;
+
+    // Reuse staging slot 0 for rms output (input staging no longer needed)
+    const size_t rms_nbytes = ggml_nbytes(rms_dst);
+    float * rms_out = static_cast<float *>(staging_ensure(g_staging_bank, 0, rms_nbytes, gpu_q));
+    if (!rms_out) {
+        return false;
+    }
+
+    const int64_t total_rows = ne01 * ne02 * ne03;
+
+    for (int64_t ir = 0; ir < total_rows; ir++) {
+        const int64_t i03 = ir / (ne02 * ne01);
+        const int64_t i02 = (ir - i03 * ne02 * ne01) / ne01;
+        const int64_t i01 = ir - i03 * ne02 * ne01 - i02 * ne01;
+
+        const int64_t i13 = i03 % ne13;
+        const int64_t i12 = i02 % ne12;
+        const int64_t i11 = i01 % ne11;
+
+        const float * a_row = a_data + ir * ne00;
+        const float * b_row = b_data + i13 * s13 + i12 * s12 + i11 * s11;
+        float * add_row     = add_out + ir * ne00;
+        float * rms_row     = rms_out + ir * ne00;
+
+        // Fused ADD + RMS_NORM
+        float sum_sq = 0.0f;
+        for (int64_t r = 0; r < nr0; r++) {
+            for (int64_t j = 0; j < ne10; j++) {
+                const float v = a_row[r * ne10 + j] + b_row[j];
+                add_row[r * ne10 + j] = v;
+                sum_sq += v * v;
+            }
+        }
+
+        const float scale = 1.0f / sqrtf(sum_sq / static_cast<float>(ne00) + eps);
+        for (int64_t j = 0; j < ne00; j++) {
+            rms_row[j] = add_row[j] * scale;
+        }
+    }
+
+    // Flush add_dst from staging slot 2
+    flush_output(add_dst, device, gpu_q);
+
+    // Flush rms_dst from staging slot 0 (reused for rms output)
+    if (!rms_dst->buffer || ggml_backend_buffer_is_host(rms_dst->buffer)) {
+        // Host-accessible: copy directly
+        memcpy(rms_dst->data, rms_out, rms_nbytes);
+    } else {
+        void * rms_dev_ptr = ggml_sycl_get_data_ptr(rms_dst, device);
+        if (rms_dev_ptr) {
+            // In-order queue: this is sequenced after the add flush
+            g_staging_flush_evt     = gpu_q->memcpy(rms_dev_ptr, rms_out, rms_nbytes);
+            g_staging_flush_pending = true;
+        }
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
