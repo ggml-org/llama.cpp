@@ -1303,6 +1303,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
+            "mm_projector.proj.linear_{bid}", # Kimi-K2.5
             "visual.merger.mlp.{bid}", # qwen2vl
             "merger.mlp.{bid}",
         ),
@@ -1364,6 +1365,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
@@ -1538,6 +1540,7 @@ class TensorNameMap:
             "multi_modal_projector.norm",
             "multi_modal_projector.layer_norm",
             "multi_modal_projector.pre_norm",
+            "mm_projector.pre_norm", # Kimi-K2.5
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
             "merger.ln_q",
