@@ -1503,7 +1503,7 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
             auto left_seg = segmentize_markers(diff.left);
             if (left_seg.size() == 1) {  // only the name + maybe extra whitespace / normal chars in differing part
                 result.markers.arg_name_suffix = diff.left.substr(5);
-                auto suf_seg                   = segmentize_markers(diff.suffix);
+                auto suf_seg= segmentize_markers(diff.suffix);
                 for (size_t i = 0; i < suf_seg.size(); i++) {
                     result.markers.arg_name_suffix += suf_seg[i].value;
                     if (suf_seg[i].type == segment_type::MARKER) {
