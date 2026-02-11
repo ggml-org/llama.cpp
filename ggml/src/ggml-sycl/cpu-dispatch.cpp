@@ -450,7 +450,7 @@ void ggml_sycl_cpu_staging_drain() {
 
 struct cpu_thread_pool {
     struct work_item {
-        std::function<void(int, int)> fn;  // fn(start, end)
+        const std::function<void(int, int)> * fn;  // non-owning pointer (lifetime managed by parallel_for)
         int start;
         int end;
     };
@@ -472,9 +472,10 @@ struct cpu_thread_pool {
     cpu_thread_pool() {
         const char * env = getenv("GGML_SYCL_CPU_THREADS");
         n_threads = env ? std::max(1, atoi(env))
-                        : std::max(1, (int) std::thread::hardware_concurrency() - 2);
+                        : std::max(1, static_cast<int>(std::thread::hardware_concurrency()) - 2);
         // Cap to reasonable max
         n_threads = std::min(n_threads, 32);
+        tasks.reserve(n_threads);
 
         for (int i = 0; i < n_threads; i++) {
             workers.emplace_back([this] {
@@ -484,10 +485,10 @@ struct cpu_thread_pool {
                         std::unique_lock<std::mutex> lock(mtx);
                         cv_work.wait(lock, [this] { return shutdown.load() || !tasks.empty(); });
                         if (shutdown.load() && tasks.empty()) return;
-                        item = std::move(tasks.back());
+                        item = tasks.back();
                         tasks.pop_back();
                     }
-                    item.fn(item.start, item.end);
+                    (*item.fn)(item.start, item.end);
                     if (active.fetch_sub(1) == 1) {
                         cv_done.notify_all();
                     }
@@ -502,8 +503,12 @@ struct cpu_thread_pool {
         for (auto & w : workers) w.join();
     }
 
+    cpu_thread_pool(const cpu_thread_pool &)            = delete;
+    cpu_thread_pool & operator=(const cpu_thread_pool &) = delete;
+
     // Partition [0, total) across n_threads and execute fn(start, end) in parallel.
     // Blocks until all work is complete.
+    // NOT thread-safe: must be called from a single thread at a time.
     void parallel_for(int total, std::function<void(int, int)> fn) {
         if (total <= 0) return;
         int chunk = (total + n_threads - 1) / n_threads;
@@ -514,7 +519,7 @@ struct cpu_thread_pool {
                 int start = t * chunk;
                 int end   = std::min(start + chunk, total);
                 if (start >= total) break;
-                tasks.push_back({fn, start, end});
+                tasks.push_back({&fn, start, end});
                 n_tasks++;
             }
             active.store(n_tasks);
