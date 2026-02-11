@@ -214,9 +214,8 @@ enum class ggml_sycl_host_weight_release_mode {
 
 static void ggml_sycl_release_host_weight_extras(ggml_sycl_host_weight_release_mode mode);
 
-// CPU compute path for data-local dispatch (defined in cpu-dispatch.cpp)
-bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst);
-void ggml_sycl_cpu_staging_drain();
+// CPU compute path for data-local dispatch
+#include "ggml-sycl/cpu-dispatch.hpp"
 
 // Layout-size helpers (defined later).
 static size_t ggml_sycl_layout_bytes_for_tensor(const ggml_tensor * tensor, layout_mode layout, int device);

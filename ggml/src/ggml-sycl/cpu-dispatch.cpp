@@ -86,14 +86,15 @@ static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gp
 }
 
 // Begin a new staging operation.  Alternates to the next bank and waits for
-// any pending flush from the previous op that used this bank.
+// the previous op's flush to complete.  Since we alternate banks, the pending
+// flush used the OTHER bank.  By waiting here we ensure the global flush
+// event is drained before submitting new memcpys to the GPU queue.  The
+// staging buffers for the bank we're about to use were last touched 2 ops ago
+// and are already safe (waited on by the intervening op).
 static void staging_begin_op() {
-    // Switch bank
     g_staging_bank = 1 - g_staging_bank;
 
-    // Wait for previous flush that wrote into this bank's device memory.
-    // This ensures the GPU has finished reading from the staging buffer
-    // before we overwrite it with new staging data.
+    // Drain the previous op's flush (submitted on the other bank).
     if (g_staging_flush_pending) {
         g_staging_flush_evt.wait();
         g_staging_flush_pending = false;
@@ -157,21 +158,19 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
 
 // Copy output from host staging back to device memory (event-based).
 // No-op if tensor is already in host-accessible memory.
-// Returns true if a flush was submitted (caller should NOT wait — the event
-// is tracked internally and awaited at the start of the next op).
-static bool flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q) {
+// The flush event is tracked internally and awaited at the start of the next op.
+static void flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q) {
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
-        return false;
+        return;
     }
     void * dev_ptr = ggml_sycl_get_data_ptr(t, device);
     auto & entry   = g_cpu_staging[g_staging_bank][2];
     if (!dev_ptr || !entry.ptr) {
-        return false;
+        return;
     }
     size_t nbytes = ggml_nbytes(t);
     g_staging_flush_evt     = gpu_q->memcpy(dev_ptr, entry.ptr, nbytes);
     g_staging_flush_pending = true;
-    return true;
 }
 
 // Get host pointer for output tensor.
