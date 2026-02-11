@@ -60,7 +60,7 @@ function generateMcpServerId(id: unknown, index: number): string {
 		return id.trim();
 	}
 
-	return `${MCP_SERVER_ID_PREFIX}${index + 1}`;
+	return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 }
 
 function parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
