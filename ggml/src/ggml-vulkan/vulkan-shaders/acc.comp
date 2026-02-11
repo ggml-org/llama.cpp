@@ -7,24 +7,21 @@ layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
     const uint idx = gl_GlobalInvocationID.x;
-    if (idx >= p.ne) {
+    if (idx >= p.ne) {  // p.ne = nelements(src1)
         return;
     }
 
-    const uint offset = p.param3;
-    const uint src1_i = idx - offset;
-    const uint i3 = src1_i / p.nb03;
-    const uint rem2 = src1_i - i3 * p.nb03;
-    const uint i2 = rem2 / p.nb02;
-    const uint rem1 = rem2 - i2 * p.nb02;
-    const uint i1 = rem1 / p.nb01;
-    const uint i0 = rem1 % p.nb01;
+    const uint i3  = idx / (p.ne12 * p.ne11 * p.ne10);
+    const uint rem2 = idx - i3 * (p.ne12 * p.ne11 * p.ne10);
+    const uint i2  = rem2 / (p.ne11 * p.ne10);
+    const uint rem1 = rem2 - i2 * (p.ne11 * p.ne10);
+    const uint i1  = rem1 / p.ne10;
+    const uint i0  = rem1 % p.ne10;
 
-    uint i00, i01, i02, i03;
+    const uint dst_offset = p.param3 + i0 + i1 * p.nb01 + i2 * p.nb02 + i3 * p.nb03;
 
-    if (i0 < p.ne10 && i1 < p.ne11 && i2 < p.ne12 && i3 < p.ne13) {
-        data_d[get_doffset() + idx] = D_TYPE(FLOAT_TYPE(data_a[get_aoffset() + idx]) + FLOAT_TYPE(data_b[get_boffset() + src1_idx(i0, i1, i2, i3)]));
-    } else {
-        data_d[get_doffset() + idx] = D_TYPE(FLOAT_TYPE(data_a[get_aoffset() + idx]));
-    }
+    data_d[get_doffset() + dst_offset] = D_TYPE(
+        FLOAT_TYPE(data_a[get_aoffset() + dst_offset]) +
+        FLOAT_TYPE(data_b[get_boffset() + src1_idx(i0, i1, i2, i3)])
+    );
 }
