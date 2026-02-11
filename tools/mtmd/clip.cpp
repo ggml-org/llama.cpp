@@ -830,6 +830,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_cogvlm>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            {
+                builder = std::make_unique<clip_graph_ernie45vlmoe>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -1139,6 +1143,15 @@ struct clip_model_loader {
                         hparams.set_limit_image_tokens(8, 1024);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
+                case PROJECTOR_TYPE_ERNIE45VLMOE:
+                {
+                    hparams.n_merge = 2;
+                    hparams.spatial_conv_size  = 2;
+                    hparams.temporal_conv_size = 2;
+                    hparams.use_temporal_conv  = model.mm_1_w != nullptr;
+                    hparams.set_limit_image_tokens(8, 1024);
+                    hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
+                } break;
                 case PROJECTOR_TYPE_GEMMA3:
                     {
                         // default value (used by all model sizes in gemma 3 family)
@@ -1830,6 +1843,29 @@ struct clip_model_loader {
                         layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
                         layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
+                } break;
+            case PROJECTOR_TYPE_ERNIE45VLMOE:
+                {
+                    // spatial path: Linear -> GELU -> Linear -> LayerNorm
+                    model.mm_0_w         = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b         = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_2_w         = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b         = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_post_norm_w = get_tensor(string_format(TN_LLAVA_PROJ, 3, "weight"));
+                    model.mm_post_norm_b = get_tensor(string_format(TN_LLAVA_PROJ, 3, "bias"), false);
+
+                    // temporal path: Linear -> GELU -> Linear -> LayerNorm (optional, not used for single images)
+                    model.mm_1_w         = get_tensor("mm_temp.0.weight", false);
+                    model.mm_1_b         = get_tensor("mm_temp.0.bias",   false);
+                    model.mm_3_w         = get_tensor("mm_temp.2.weight", false);
+                    model.mm_3_b         = get_tensor("mm_temp.2.bias",   false);
+                    model.mm_input_norm_w = get_tensor("mm_temp.3.weight", false);
+                    model.mm_input_norm_b = get_tensor("mm_temp.3.bias",   false);
+
+                    // output MLP + RMS norm
+                    model.mm_fc_w        = get_tensor("mm.mlp.weight");
+                    model.mm_fc_b        = get_tensor("mm.mlp.bias");
+                    model.mm_norm_mid_w  = get_tensor("mm.norm.weight");
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3116,7 +3152,21 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            {
+                GGML_ASSERT(params.image_min_pixels > 0 && params.image_max_pixels > 0);
+                clip_image_u8 resized_image;
+                const int cur_merge = params.n_merge == 0 ? 1 : params.n_merge;
+                const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
+                    original_size,
+                    params.patch_size * cur_merge,
+                    params.image_min_pixels,
+                    params.image_max_pixels);
+                img_tool::resize(*img, resized_image, target_size, img_tool::RESIZE_ALGO_BILINEAR);
+                clip_image_f32_ptr img_f32(clip_image_f32_init());
+                normalize_image_u8_to_f32(resized_image, *img_f32, params.image_mean, params.image_std);
+                res_imgs->entries.push_back(std::move(img_f32));
+            } break;
         case PROJECTOR_TYPE_LLAMA4:
             {
                 GGML_ASSERT(!params.image_res_candidates.empty());
@@ -3271,6 +3321,8 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->nx / params.patch_size) / 2;
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            return (img->nx / params.patch_size) / 2;
         default:
             break;
     }
@@ -3287,6 +3339,8 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
             return (img->ny / params.patch_size) / 2;
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            return (img->nx / params.patch_size) / 2;
         default:
             break;
     }
@@ -3350,6 +3404,13 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_YOUTUVL:
+            {
+                // dynamic size (2 conv, so double patch size)
+                int x_patch = img->nx / (params.patch_size * 2);
+                int y_patch = img->ny / (params.patch_size * 2);
+                n_patches = x_patch * y_patch;
+            } break;
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx / (params.patch_size * 2);
@@ -3712,6 +3773,25 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
                 set_input_i32("positions", positions);
             } break;
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            {
+                const int pw = image_size_width  / patch_size;
+                const int ph = image_size_height / patch_size;
+                std::vector<int> positions(n_pos * 4);
+                int ptr = 0;
+
+                for (int y = 0; y < ph; y++) {
+                    for (int x = 0; x < pw; x++) {
+                        positions[                  ptr] = y;
+                        positions[    num_patches + ptr] = x;
+                        positions[2 * num_patches + ptr] = 0;
+                        positions[3 * num_patches + ptr] = 0;
+                        ptr++;
+                    }
+                }
+
+                set_input_i32("positions", positions);
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_LIGHTONOCR:
@@ -3903,6 +3983,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_ERNIE45VLMOE:
+            return ctx->model.mm_fc_w->ne[0];
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3919,6 +4001,14 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
 bool clip_is_glm(const struct clip_ctx * ctx) {
     // TODO: remove this function
     return ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE;
+}
+
+bool clip_is_mrope(const struct clip_ctx * ctx) {
+    return ctx->proj_type() == PROJECTOR_TYPE_QWEN2VL
+        || ctx->proj_type() == PROJECTOR_TYPE_QWEN25VL
+        || ctx->proj_type() == PROJECTOR_TYPE_QWEN3VL
+        || ctx->proj_type() == PROJECTOR_TYPE_ERNIE45VLMOE
+        || ctx->proj_type() == PROJECTOR_TYPE_GLM4V;
 }
 
 bool clip_is_llava(const struct clip_ctx * ctx) {

@@ -60,6 +60,7 @@ add_library(llama
             models/dots1.cpp
             models/dream.cpp
             models/ernie4-5-moe.cpp
+            models/ernie4-5-vl-moe.cpp
             models/ernie4-5.cpp
             models/exaone.cpp
             models/exaone4.cpp

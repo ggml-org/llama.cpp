@@ -5651,6 +5651,43 @@ static void rotate_pairs(const int64_t n, const int64_t n_offset, const float * 
   }
 }
 
+static void ggml_ernie3d_rope_cache_init(
+     float theta_base_t, float theta_base_h, float theta_base_w,
+     int sections[4],
+     float freq_scale, const float * freq_factors, float corr_dims[2], int64_t ne0, float ext_factor, float mscale,
+     float * cache, float sin_sign, float theta_scale) {
+    // n_hw = sections[0] + sections[1] = total number of interleaved h/w frequencies
+    int n_hw = sections[0] + sections[1];
+
+    float theta_accum = 1.0f; // accumulated theta_scale^freq_idx
+
+    for (int64_t i0 = 0; i0 < ne0; i0 += 2) {
+        int freq_idx = (int)(i0 / 2);
+        const float ff = freq_factors ? freq_factors[freq_idx] : 1.0f;
+
+        float theta;
+        if (freq_idx < n_hw) {
+            if (freq_idx % 2 == 0) {
+                // even freq index -> height position
+                theta = theta_base_h * theta_accum;
+            } else {
+                // odd freq index -> width position
+                theta = theta_base_w * theta_accum;
+            }
+        } else {
+            // temporal position
+            theta = theta_base_t * theta_accum;
+        }
+
+        rope_yarn(
+            theta/ff, freq_scale, corr_dims, i0, ext_factor, mscale, &cache[i0 + 0], &cache[i0 + 1]
+        );
+        cache[i0 + 1] *= sin_sign;
+
+        theta_accum *= theta_scale;
+    }
+}
+
 template<typename T> //float or ggml_fp16_t
 static void ggml_compute_forward_rope_flt(
         const ggml_compute_params * params,
@@ -5723,7 +5760,7 @@ static void ggml_compute_forward_rope_flt(
     if (is_vision) {
         GGML_ASSERT(n_dims == ne0/2);
     }
-
+    const bool is_ernie3d = mode == GGML_ROPE_TYPE_ERNIE3D;
     const float * freq_factors = NULL;
     if (src2 != NULL) {
         GGML_ASSERT(src2->type == GGML_TYPE_F32);
@@ -5745,6 +5782,14 @@ static void ggml_compute_forward_rope_flt(
             if (!mrope_used) {
                 const int64_t p = pos[i2];
                 ggml_rope_cache_init(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+            } else if (is_ernie3d) {
+                // ERNIE-VL 3D RoPE: interleaved h/w freq with NORMAL rotation
+                const int64_t p_t = pos[i2];
+                const int64_t p_h = pos[i2 + ne2];
+                const int64_t p_w = pos[i2 + ne2 * 2];
+                ggml_ernie3d_rope_cache_init(
+                    p_t, p_h, p_w, sections,
+                    freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
             else {
                 const int64_t p_t = pos[i2];
@@ -5765,6 +5810,7 @@ static void ggml_compute_forward_rope_flt(
 
                 switch (mode) {
                     case GGML_ROPE_TYPE_NORMAL:
+                    case GGML_ROPE_TYPE_ERNIE3D:
                         rotate_pairs<T>(n_dims, 1, cache, src, dst_data, 1);
                         break;
                     case GGML_ROPE_TYPE_NEOX:

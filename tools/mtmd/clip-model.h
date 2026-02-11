@@ -79,6 +79,11 @@ struct clip_hparams {
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 
+    // ernie4.5-vl-moe
+    int32_t spatial_conv_size  = 0;
+    int32_t temporal_conv_size = 0;
+    bool    use_temporal_conv  = false;
+
     // custom value provided by user, can be undefined if not set
     int32_t custom_image_min_tokens = -1;
     int32_t custom_image_max_tokens = -1;

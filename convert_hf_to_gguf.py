@@ -3817,6 +3817,171 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+@ModelBase.register("Ernie4_5_VLMoeForConditionalGeneration")
+class Ernie4_5VLMoeModel(Ernie4_5MoeModel):
+    model_arch = gguf.MODEL_ARCH.ERNIE4_5_VL_MOE
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._experts = [{} for _ in range(self.block_count)]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Handle list-based expert configurations by taking the first value
+        moe_num_experts = self.hparams["moe_num_experts"]
+        if isinstance(moe_num_experts, list):
+            moe_num_experts = moe_num_experts[0]
+        self.gguf_writer.add_expert_count(moe_num_experts)
+
+        self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
+        self.gguf_writer.add_interleave_moe_layer_step(self.hparams["moe_layer_interval"])
+
+        moe_layer_start_index = self.hparams["moe_layer_start_index"]
+        if isinstance(moe_layer_start_index, list):
+            moe_layer_start_index = moe_layer_start_index[0]
+        self.gguf_writer.add_leading_dense_block_count(moe_layer_start_index)
+
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            if isinstance(moe_intermediate_size, list):
+                self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
+                if len(moe_intermediate_size) > 1:
+                    self.gguf_writer.add_vision_expert_feed_forward_length(moe_intermediate_size[1])
+            else:
+                self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+
+        if (shared_expert_count := self.hparams.get('moe_num_shared_experts')) is not None:
+            self.gguf_writer.add_expert_shared_count(shared_expert_count)
+            if shared_expert_count > 0 and (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
+                self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision and multimodal tensors - they are not part of the text model
+        if name.startswith("vision_model") or name.startswith("resampler_model") or \
+           name.startswith("model.vision_model") or name.startswith("model.resampler_model"):
+            return []
+
+        # todo(megemini): gate_inp weight/weight_1
+        # weight
+        if name.endswith(".mlp.gate.weight") or name.endswith(".mlp.gate.weight_1"):
+            if name.endswith(".mlp.gate.weight_1"):
+                name = name.replace(".mlp.gate.weight_1", ".mlp.gate.vision.weight")
+
+            data_torch = data_torch.t()
+            # Extract bid from name if not provided
+            if bid is None:
+                match = re.search(r"model\.layers\.(\d+)", name)
+                if match:
+                    bid = int(match.group(1))
+            # todo(megemini):
+            logger.info("Processing gate.weight/weight_1: %s -> shape %s", name, data_torch.shape)
+            # Map the tensor name and ensure it has .weight suffix
+            mapped_name = self.map_tensor_name(name)
+
+            return [(mapped_name, data_torch)]
+
+        # todo(megemini): e_score_correction.bias/bias_1 for weight/weight_1
+        if name.endswith(".mlp.moe_statics.e_score_correction_bias"):
+            name_text = name.replace("e_score_correction_bias", "e_score_correction.bias")
+            data_torch_text = data_torch[0, :]
+
+            name_vision = name.replace("e_score_correction_bias", "e_score_correction.vision.bias")
+            data_torch_vision = data_torch[1, :]
+
+            return [(self.map_tensor_name(name_text), data_torch_text),
+                    (self.map_tensor_name(name_vision), data_torch_vision)]
+
+        # process the experts separately
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["moe_num_experts"]
+
+            # Handle n_experts being a list (for models with multiple expert groups)
+            if isinstance(n_experts, list):
+                total_experts = sum(n_experts)
+            else:
+                total_experts = n_experts
+
+            assert bid is not None
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            # Only merge routed experts (not shared experts)
+            # Total tensors = total_experts * 3 (gate, up, down)
+            if len(self._experts[bid]) >= total_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # For models with multiple expert groups of different sizes,
+                for w_name in ["gate_proj", "up_proj", "down_proj"]:
+                    # Collect all experts for this weight type
+                    expert_data: dict[int, Tensor] = {}
+                    for xid in range(total_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        if ename in self._experts[bid]:
+                            expert_data[xid] = self._experts[bid][ename]
+                            del self._experts[bid][ename]
+
+                    if not expert_data:
+                        continue
+
+                    # Group experts by shape (to handle different intermediate sizes)
+                    shape_groups: dict[tuple[int, ...], list[tuple[int, Tensor]]] = {}
+                    for xid, tensor in expert_data.items():
+                        shape_key = tuple(tensor.shape)
+                        if shape_key not in shape_groups:
+                            shape_groups[shape_key] = []
+                        shape_groups[shape_key].append((xid, tensor))
+
+                    # For each shape group, stack the experts
+                    # For ERNIE-4.5-VL with multiple expert groups of different sizes,
+                    # we need to save them separately as llama.cpp doesn't support mixed sizes yet
+                    if len(shape_groups) > 1:
+                        # Sort shape groups by number of experts (descending)
+                        sorted_groups = sorted(shape_groups.items(), key=lambda x: len(x[1]), reverse=True)
+
+                        for group_idx, (shape_key, expert_list) in enumerate(sorted_groups):
+                            # Sort by expert ID to maintain order
+                            expert_list.sort(key=lambda x: x[0])
+                            datas = [tensor for _, tensor in expert_list]
+
+                            data_torch = torch.stack(datas, dim=0)
+
+                            # Use group suffix for additional groups
+                            if group_idx == 0:
+                                merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                            else:
+                                merged_name = f"model.vision.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                            new_name = self.map_tensor_name(merged_name)
+                            tensors.append((new_name, data_torch))
+                    else:
+                        # Single shape - stack all experts
+                        expert_list = list(shape_groups.values())[0]
+                        expert_list.sort(key=lambda x: x[0])
+                        datas = [tensor for _, tensor in expert_list]
+
+                        data_torch = torch.stack(datas, dim=0)
+
+                        merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                        new_name = self.map_tensor_name(merged_name)
+                        tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
 
 @ModelBase.register(
     "Qwen2VLModel",

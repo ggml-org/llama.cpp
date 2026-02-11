@@ -264,6 +264,68 @@ static __global__ void rope_multi(const T *            x,
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
 }
 
+template<bool forward, bool has_ff, typename T>
+static __global__ void rope_ernie3d(
+        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2,
+        const int n_dims, const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
+        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, const mrope_sections sections) {
+    const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
+
+    if (i0 >= ne0) {
+        return;
+    }
+
+    const int row_dst = blockDim.x*blockIdx.x + threadIdx.x;
+
+    const int row_x     = row_dst % ne1;
+    const int channel_x = row_dst / ne1;
+
+    // NORMAL rotation: pair (x[i0], x[i0+1]), stored at adjacent positions
+    const int idst = row_dst*ne0 + i0;
+    const int ix   = channel_x*s2 + row_x*s1 + i0;
+
+    if (i0 >= n_dims) {
+        dst[idst + 0] = x[ix + 0];
+        dst[idst + 1] = x[ix + 1];
+        return;
+    }
+
+    // freq_idx = i0/2 (which frequency pair this is)
+    const int freq_idx = i0 / 2;
+    // n_hw = sections[0] + sections[1] = total number of h+w interleaved frequencies
+    const int n_hw = sections.v[0] + sections.v[1];
+
+    // Determine which position slot to use based on interleaved pattern
+    // Position slots: slot 0 = t_position, slot 1 = h_position, slot 2 = w_position
+    float theta_base = 0.0f;
+    if (freq_idx < n_hw) {
+        if (freq_idx % 2 == 0) {
+            // even freq index -> height position (slot 1)
+            theta_base = pos[channel_x + ne2 * 1] * powf(theta_scale, (float)freq_idx);
+        } else {
+            // odd freq index -> width position (slot 2)
+            theta_base = pos[channel_x + ne2 * 2] * powf(theta_scale, (float)freq_idx);
+        }
+    } else {
+        // temporal position (slot 0)
+        theta_base = pos[channel_x] * powf(theta_scale, (float)freq_idx);
+    }
+
+    const float freq_factor = has_ff ? freq_factors[freq_idx] : 1.0f;
+
+    float cos_theta;
+    float sin_theta;
+
+    rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, i0, ext_factor, attn_factor, cos_theta, sin_theta);
+
+    // NORMAL (GPT-J) rotation: adjacent pair (x[i0], x[i0+1])
+    const float x0 = x[ix + 0];
+    const float x1 = x[ix + 1];
+
+    dst[idst + 0] = x0*cos_theta - x1*sin_theta;
+    dst[idst + 1] = x0*sin_theta + x1*cos_theta;
+}
+
 template <bool forward, bool has_ff, typename T>
 static __global__ void rope_vision(const T *            x,
                                    T *                  dst,
@@ -453,6 +515,29 @@ static void rope_multi_cuda(const T *            x,
     }
 }
 
+template<bool forward, typename T>
+static void rope_ernie3d_cuda(
+        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2, const int n_dims, const int nr,
+        const int32_t * pos, const float freq_scale, const float freq_base, const float ext_factor, const float attn_factor,
+        const rope_corr_dims corr_dims, const float * freq_factors, const mrope_sections sections, cudaStream_t stream) {
+    GGML_ASSERT(ne0 % 2 == 0);
+    const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
+    const int n_blocks_x = (ne0 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
+    const dim3 block_nums(nr, n_blocks_x, 1);
+
+    const float theta_scale = powf(freq_base, -2.0f/n_dims);
+
+    if (freq_factors == nullptr) {
+        rope_ernie3d<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne0, ne1, ne2, s1, s2, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, freq_factors, sections);
+    } else {
+        rope_ernie3d<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
+            x, dst, ne0, ne1, ne2, s1, s2, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, freq_factors, sections);
+    }
+}
+
 template <bool forward, typename T>
 static void rope_vision_cuda(const T *            x,
                              T *                  dst,
@@ -603,7 +688,20 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
                                                 s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base,
                                                 ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
                                                 set_rows_stride, stream);
-        } else {
+        } else if (is_ernie3d) {
+            if (src0->type == GGML_TYPE_F32) {
+                rope_ernie3d_cuda<forward>(
+                    (const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
+                    freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
+            } else if (src0->type == GGML_TYPE_F16) {
+                rope_ernie3d_cuda<forward>(
+                    (const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
+                    freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
+            } else {
+                GGML_ABORT("fatal error");
+            }
+        }
+        else {
             GGML_ABORT("fatal error");
         }
     } else if (is_mrope && !is_vision) {

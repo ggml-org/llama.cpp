@@ -326,6 +326,11 @@ struct mtmd_context {
             img_end = "<|end_of_image|>";
 
         }
+        else if (proj == PROJECTOR_TYPE_ERNIE45VLMOE) {
+            img_beg = "<|IMAGE_START|>";
+            img_end = "<|IMAGE_END|>";
+
+        }
     }
 
     void init_audio() {
