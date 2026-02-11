@@ -158,7 +158,8 @@ static void usage(const char * executable) {
     printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --dry-run\n");
-    printf("                                      calculate and show the final quantization size without performing quantization\n\n");
+    printf("                                      calculate and show the final quantization size without performing quantization\n");
+    printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
