@@ -24789,10 +24789,16 @@ static inline bool ggml_sycl_is_noop(const ggml_tensor * node) {
 // Pre-classify all graph nodes as CPU or GPU.
 // Phase 1: scan MUL_MAT weight tensors to classify layers.
 // Phase 2: propagate classification to ALL nodes in those layers.
+// Node classification flags for CPU offload dispatch.
+constexpr int8_t FLAG_UNKNOWN    = -1;
+constexpr int8_t FLAG_GPU        = 0;
+constexpr int8_t FLAG_CPU        = 1;
+constexpr int8_t FLAG_GPU_ISLAND = 2;
+
 static void classify_cpu_layer_blocks(
     ggml_backend_sycl_context & ctx,
     const ggml_cgraph * cgraph,
-    std::vector<int8_t> & node_cpu_flags)  // -1=unknown, 0=GPU, 1=CPU
+    std::vector<int8_t> & node_cpu_flags)  // -1=unknown, 0=GPU, 1=CPU, 2=GPU_ISLAND
 {
     node_cpu_flags.assign(cgraph->n_nodes, -1);
 
@@ -24906,28 +24912,30 @@ static void classify_cpu_layer_blocks(
     //
     // node_cpu_flags encoding: -1=unknown, 0=GPU, 1=CPU, 2=GPU_ISLAND
     for (int i = 1; i < cgraph->n_nodes - 1; i++) {
-        if (node_cpu_flags[i] != 0) continue;  // only check GPU nodes
+        if (node_cpu_flags[i] != FLAG_GPU) continue;  // only check GPU nodes
 
-        // Look backward for CPU predecessor (skip noops and other islands)
+        // Look backward for CPU predecessor
         bool prev_cpu = false;
         for (int j = i - 1; j >= 0; j--) {
-            if (node_cpu_flags[j] == 1) { prev_cpu = true; break; }
-            if (node_cpu_flags[j] == 0) break;  // hit a real GPU node
-            // node_cpu_flags[j] == 2 means another island — keep looking
+            if (node_cpu_flags[j] == FLAG_CPU) { prev_cpu = true; break; }
+            if (node_cpu_flags[j] == FLAG_GPU) break;  // hit a real GPU node
+            // Skip past islands - we want the nearest non-island neighbor
+            // to determine sandwiching.
         }
         if (!prev_cpu) continue;
 
-        // Look forward for CPU successor (skip noops and other islands)
+        // Look forward for CPU successor
         bool next_cpu = false;
         for (int j = i + 1; j < cgraph->n_nodes; j++) {
-            if (node_cpu_flags[j] == 1) { next_cpu = true; break; }
-            if (node_cpu_flags[j] == 0) break;
-            // 2 = another island, keep looking
+            if (node_cpu_flags[j] == FLAG_CPU) { next_cpu = true; break; }
+            if (node_cpu_flags[j] == FLAG_GPU) break;
+            // Skip past islands - we want the nearest non-island neighbor
+            // to determine sandwiching.
         }
         if (!next_cpu) continue;
 
         // This GPU op is an island within a CPU block
-        node_cpu_flags[i] = 2;  // GPU_ISLAND
+        node_cpu_flags[i] = FLAG_GPU_ISLAND;
     }
 }
 
@@ -25366,9 +25374,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         // wait only on the events for the CPU node's input tensors.
         if (cpu_offload_active) {
             int8_t flag = (!node_cpu_flags.empty() && i < (int)node_cpu_flags.size())
-                              ? node_cpu_flags[i] : -1;
-            bool node_on_cpu    = (flag == 1);
-            bool node_is_island = (flag == 2);
+                              ? node_cpu_flags[i] : FLAG_UNKNOWN;
+            bool node_on_cpu    = (flag == FLAG_CPU);
+            bool node_is_island = (flag == FLAG_GPU_ISLAND);
 
             if (node_is_island) {
                 // GPU island: run on GPU without full boundary transition.
@@ -25377,7 +25385,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 // activations — island inputs (K, V) come from device-resident
                 // KV cache, not from CPU intermediates.
                 ggml_sycl_cpu_staging_drain();
-                GGML_SYCL_DEBUG("[GPU-ISLAND] node %d (%s) — inline GPU op\n",
+                GGML_SYCL_DEBUG("[GPU-ISLAND] node %d (%s) - inline GPU op\n",
                                 i, node->name ? node->name : "(null)");
                 // Don't change prev_on_cpu — island is transparent to CPU state.
                 // After island, CPU ops resume reading from retained scratch.
@@ -31195,6 +31203,8 @@ normal_dispatch:
                 sycl_ctx->input_tensors_cached      = false;
                 sycl_ctx->cached_input_tensors.clear();
                 sycl_ctx->cached_input_dev_ptrs.clear();
+                // Clear leaf tensor staging cache (masks change with sequence length)
+                ggml_sycl_cpu_staging_cache_clear();
                 // Unpin expert cache slots when graph is invalidated
                 // This allows slots to be evicted for the new graph recording
                 graph_unpin_moe_experts(sycl_ctx);
