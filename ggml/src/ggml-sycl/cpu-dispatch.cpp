@@ -30,10 +30,14 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #if GGML_SYCL_DNNL
@@ -411,6 +415,93 @@ void ggml_sycl_cpu_staging_drain() {
 }
 
 // ---------------------------------------------------------------------------
+// Static CPU thread pool for parallel vec_dot
+// ---------------------------------------------------------------------------
+//
+// Lazy-initialized on first use. Thread count from GGML_SYCL_CPU_THREADS
+// or (hardware_concurrency - 2) to leave headroom for GPU driver threads.
+// DO NOT use OpenMP (not linked in SYCL build).
+
+struct cpu_thread_pool {
+    struct work_item {
+        std::function<void(int, int)> fn;  // fn(start, end)
+        int start;
+        int end;
+    };
+
+    std::vector<std::thread>       workers;
+    std::vector<work_item>         tasks;
+    std::mutex                     mtx;
+    std::condition_variable        cv_work;
+    std::condition_variable        cv_done;
+    std::atomic<int>               active{0};
+    std::atomic<bool>              shutdown{false};
+    int                            n_threads;
+
+    static cpu_thread_pool & instance() {
+        static cpu_thread_pool pool;
+        return pool;
+    }
+
+    cpu_thread_pool() {
+        const char * env = getenv("GGML_SYCL_CPU_THREADS");
+        n_threads = env ? std::max(1, atoi(env))
+                        : std::max(1, (int) std::thread::hardware_concurrency() - 2);
+        // Cap to reasonable max
+        n_threads = std::min(n_threads, 32);
+
+        for (int i = 0; i < n_threads; i++) {
+            workers.emplace_back([this] {
+                while (true) {
+                    work_item item;
+                    {
+                        std::unique_lock<std::mutex> lock(mtx);
+                        cv_work.wait(lock, [this] { return shutdown.load() || !tasks.empty(); });
+                        if (shutdown.load() && tasks.empty()) return;
+                        item = std::move(tasks.back());
+                        tasks.pop_back();
+                    }
+                    item.fn(item.start, item.end);
+                    if (active.fetch_sub(1) == 1) {
+                        cv_done.notify_all();
+                    }
+                }
+            });
+        }
+    }
+
+    ~cpu_thread_pool() {
+        shutdown.store(true);
+        cv_work.notify_all();
+        for (auto & w : workers) w.join();
+    }
+
+    // Partition [0, total) across n_threads and execute fn(start, end) in parallel.
+    // Blocks until all work is complete.
+    void parallel_for(int total, std::function<void(int, int)> fn) {
+        if (total <= 0) return;
+        int chunk = (total + n_threads - 1) / n_threads;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            int n_tasks = 0;
+            for (int t = 0; t < n_threads; t++) {
+                int start = t * chunk;
+                int end   = std::min(start + chunk, total);
+                if (start >= total) break;
+                tasks.push_back({fn, start, end});
+                n_tasks++;
+            }
+            active.store(n_tasks);
+        }
+        cv_work.notify_all();
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv_done.wait(lock, [this] { return active.load() == 0; });
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 // MUL_MAT  (oneDNN on CPU queue)
 // ---------------------------------------------------------------------------
 
@@ -545,16 +636,40 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                   K);
                 }
 
-                for (dnnl_dim_t n = 0; n < N; n++) {
-                    const void * weight_row = src0_batch + n * nb01;
-                    for (dnnl_dim_t m = 0; m < M; m++) {
-                        float dot_result = 0.0f;
-                        cpu_traits->vec_dot(
-                            static_cast<int>(K), &dot_result, sizeof(float),
-                            weight_row, 0,
-                            src1_q_buf.data() + m * q_row_size, 0,
-                            1);
-                        dst_batch[m * ldc + n] = dot_result;
+                // Parallel vec_dot over N (output rows).
+                // Each thread processes a contiguous chunk of weight rows.
+                // Thread-safe: each (n,m) writes to a unique dst_batch location.
+                auto & pool = cpu_thread_pool::instance();
+                const int N_int = static_cast<int>(N);
+
+                if (N_int > 64 && pool.n_threads > 1) {
+                    pool.parallel_for(N_int, [&](int n_start, int n_end) {
+                        for (int n = n_start; n < n_end; n++) {
+                            const void * weight_row = src0_batch + n * nb01;
+                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                float dot_result = 0.0f;
+                                cpu_traits->vec_dot(
+                                    static_cast<int>(K), &dot_result, sizeof(float),
+                                    weight_row, 0,
+                                    src1_q_buf.data() + m * q_row_size, 0,
+                                    1);
+                                dst_batch[m * ldc + n] = dot_result;
+                            }
+                        }
+                    });
+                } else {
+                    // Small N or single thread: use original serial path
+                    for (dnnl_dim_t n = 0; n < N; n++) {
+                        const void * weight_row = src0_batch + n * nb01;
+                        for (dnnl_dim_t m = 0; m < M; m++) {
+                            float dot_result = 0.0f;
+                            cpu_traits->vec_dot(
+                                static_cast<int>(K), &dot_result, sizeof(float),
+                                weight_row, 0,
+                                src1_q_buf.data() + m * q_row_size, 0,
+                                1);
+                            dst_batch[m * ldc + n] = dot_result;
+                        }
                     }
                 }
             } else {
