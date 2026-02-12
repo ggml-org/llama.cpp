@@ -9796,6 +9796,26 @@ static void ggml_vk_get_rows(ggml_backend_vk_context * ctx, vk_context& subctx, 
     });
 }
 
+static void ggml_vk_acc(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const uint32_t src0_type_size = ggml_type_size(src0->type);
+    const uint32_t src1_type_size = ggml_type_size(src1->type);
+    const uint32_t dst_type_size = ggml_type_size(dst->type);
+
+    int nb1 = dst->op_params[0] / src0_type_size; // 4 bytes of float32
+    int nb2 = dst->op_params[1] / src0_type_size; // 4 bytes of float32
+    int nb3 = dst->op_params[2] / src0_type_size; // 4 bytes of float32
+    int offset = dst->op_params[3] / src0_type_size; // offset in bytes
+
+    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_ACC, {
+        (uint32_t)ggml_nelements(src0),
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)nb1, (uint32_t)nb2, (uint32_t)nb3,
+        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
+        (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t)nb1, (uint32_t)nb2, (uint32_t)nb3,
+        0,
+        0.0f, 0.0f, offset,
+    });
+}
+
 static void ggml_vk_multi_add(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
     const ggml_tensor *first_node = cgraph->nodes[node_idx];
     const ggml_tensor *dst = cgraph->nodes[node_idx + ctx->num_additional_fused_ops];
@@ -10379,32 +10399,6 @@ static void ggml_vk_cpy(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst, ne);
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_CPY, std::move(p));
-}
-
-static void ggml_vk_acc(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-
-    ggml_vk_cpy(ctx, subctx, src0, dst);
-
-    const uint32_t src0_type_size = ggml_type_size(src0->type);
-    const uint32_t src1_type_size = ggml_type_size(src1->type);
-    const uint32_t dst_type_size  = ggml_type_size(dst->type);
-
-    int nb1    = dst->op_params[0] / src0_type_size;
-    int nb2    = dst->op_params[1] / src0_type_size;
-    int nb3    = dst->op_params[2] / src0_type_size;
-    int offset = dst->op_params[3] / src0_type_size;
-
-    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_ACC, {
-        (uint32_t)ggml_nelements(src1),
-        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2], (uint32_t)src0->ne[3],
-        (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)nb1, (uint32_t)nb2, (uint32_t)nb3,
-        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2], (uint32_t)src1->ne[3],
-        (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
-        (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
-        (uint32_t)dst->nb[0] / dst_type_size, (uint32_t)nb1, (uint32_t)nb2, (uint32_t)nb3,
-        0,
-        0.0f, 0.0f, offset,
-    });
 }
 
 static void ggml_vk_set_rows(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
