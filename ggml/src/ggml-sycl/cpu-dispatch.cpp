@@ -41,6 +41,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"          // Provides dnnl.hpp → dnnl_sgemm()
 #endif
@@ -444,16 +445,92 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
         }
     }
 
-    void * ptr = ggml_sycl_get_data_ptr(t, device);
-    if (!ptr) {
+    // Non-contiguous tensors (e.g. permuted KV cache views) cannot be
+    // copied with a linear memcpy.  Reject so the caller falls back to GPU.
+    if (!ggml_is_contiguous(t)) {
+        GGML_SYCL_DEBUG("[CPU-STAGE] Rejecting non-contiguous tensor %s\n",
+                        t->name ? t->name : "(null)");
         return nullptr;
     }
+
+    // Check if tensor data is already host-accessible.  SYCL buffer backing
+    // may be host memory (e.g. KV cache when VRAM is constrained) but
+    // ggml_backend_buffer_is_host() returns false for SYCL buffer types.
+    // Detect this by checking the USM pointer type of the base tensor's data.
+    // Cache results per base-pointer to avoid repeated get_pointer_type calls.
+    {
+        static std::unordered_map<void *, bool> host_ptr_cache;
+        const ggml_tensor * base = t;
+        while (base->view_src) base = base->view_src;
+        void * base_data = base->data;
+        if (base_data) {
+            auto it = host_ptr_cache.find(base_data);
+            bool is_host;
+            if (it != host_ptr_cache.end()) {
+                is_host = it->second;
+            } else {
+                // Query USM pointer type — regular malloc returns 'unknown',
+                // which is also host-accessible by CPU.
+                is_host = true;  // assume host unless proven device
+                try {
+                    sycl::context ctx = ggml_sycl_get_device(device).default_queue().get_context();
+                    sycl::usm::alloc pt = sycl::get_pointer_type(base_data, ctx);
+                    is_host = (pt != sycl::usm::alloc::device);
+                } catch (...) {}
+                host_ptr_cache[base_data] = is_host;
+            }
+            if (is_host) {
+                if (out_event) *out_event = sycl::event{};
+                GGML_SYCL_DEBUG("[CPU-STAGE] Host-accessible %s (base=%p) — no staging\n",
+                                t->name ? t->name : "(null)", base_data);
+                return t->data;
+            }
+        }
+    }
+
+    // Resolve the device pointer.  For view/permute tensors (e.g. KV cache
+    // views), extra->data_device may be NULL.  Walk the view_src chain to
+    // find a base tensor with a known device pointer, then add the offset.
+    void * dev_ptr = nullptr;
+    {
+        if (t->extra) {
+            void * ed = static_cast<ggml_tensor_extra_gpu *>(t->extra)->data_device[device];
+            if (ed) dev_ptr = ed;
+        }
+
+        if (!dev_ptr) {
+            // Follow view_src chain to find base tensor with device pointer
+            const ggml_tensor * base = t;
+            while (base->view_src) {
+                base = base->view_src;
+            }
+            if (base->extra) {
+                void * base_dev = static_cast<ggml_tensor_extra_gpu *>(base->extra)->data_device[device];
+                if (base_dev && base->data) {
+                    ptrdiff_t offset = static_cast<char *>(t->data) - static_cast<char *>(base->data);
+                    dev_ptr = static_cast<char *>(base_dev) + offset;
+                }
+            }
+        }
+
+        // If view_src resolution failed, use ggml_sycl_get_data_ptr as fallback.
+        if (!dev_ptr) {
+            dev_ptr = ggml_sycl_get_data_ptr(t, device);
+        }
+    }
+
+    if (!dev_ptr) {
+        return nullptr;
+    }
+
     size_t nbytes = ggml_nbytes(t);
     void * host = staging_ensure(g_staging_bank, slot, nbytes, gpu_q);
     if (!host) {
         return nullptr;
     }
-    sycl::event evt = gpu_q->memcpy(host, ptr, nbytes);
+    GGML_SYCL_DEBUG("[CPU-STAGE] memcpy %s: host=%p <- dev=%p, %zu bytes (bank=%d slot=%d)\n",
+                    t->name ? t->name : "?", host, dev_ptr, nbytes, g_staging_bank, slot);
+    sycl::event evt = gpu_q->memcpy(host, dev_ptr, nbytes);
     if (out_event) {
         *out_event = evt;
     } else {
@@ -1244,10 +1321,17 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         e1.wait();
     }
 
-    const int64_t ne00  = src0->ne[0];  // row width
+    const int64_t ne00  = src0->ne[0];  // row width (n_kv)
+    const int64_t ne01  = src0->ne[1];  // n_tokens per head group
+    const int64_t ne02  = src0->ne[2];  // n_heads
     const int64_t nrows = ggml_nrows(src0);
 
-    const int64_t mask_ne1 = src1 ? src1->nb[1] / sizeof(float) : 0;
+    // Mask strides in float elements — needed to index broadcast mask correctly
+    const int64_t mask_nb11 = src1 ? (int64_t)(src1->nb[1] / sizeof(float)) : 0;
+    const int64_t mask_nb12 = src1 ? (int64_t)(src1->nb[2] / sizeof(float)) : 0;
+    const int64_t mask_nb13 = src1 ? (int64_t)(src1->nb[3] / sizeof(float)) : 0;
+    const int64_t mask_ne12 = src1 ? src1->ne[2] : 1;
+    const int64_t mask_ne13 = src1 ? src1->ne[3] : 1;
 
     cpu_q->submit([&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows)), [=](sycl::id<1> row_id) {
@@ -1255,11 +1339,16 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             const float * sp  = src_data + row * ne00;
             float *       dp  = dst_data + row * ne00;
 
-            // Mask row — broadcast across rows within each head
+            // Mask row — decompose flat row into (token, head, batch) and
+            // broadcast mask across heads, matching the GPU softmax kernel
             const float * mp = nullptr;
             if (mask_data) {
-                const int64_t mask_row = row % (mask_ne1 > 0 ? (nrows) : 1);
-                mp = mask_data + mask_row * ne00;
+                const int64_t i01 = row % ne01;
+                const int64_t i02 = (row / ne01) % ne02;
+                const int64_t i03 = row / (ne01 * ne02);
+                const int64_t i12 = i02 % mask_ne12;
+                const int64_t i13 = i03 % mask_ne13;
+                mp = mask_data + i01 * mask_nb11 + i12 * mask_nb12 + i13 * mask_nb13;
             }
 
             // 1. Scale + mask + find max

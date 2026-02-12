@@ -2482,6 +2482,15 @@ void * ggml_sycl_get_cached_tensor_ptr_for(const ggml_tensor *      tensor,
     return cached_ptr;
 }
 
+// Per-graph-compute pointer resolution cache.  Avoids repeated slow-path
+// resolution for the same tensor within a single graph compute.  Cleared at
+// the start of each ggml_backend_sycl_graph_compute_impl() call.
+static thread_local std::unordered_map<const ggml_tensor *, void *> g_data_ptr_cache;
+
+void ggml_sycl_data_ptr_cache_new_graph() {
+    g_data_ptr_cache.clear();
+}
+
 // Cold path for ggml_sycl_get_data_ptr: full resolution chain
 // (tiered cache, get_pointer_type, unified cache, staging).
 // Called only when the fast-path data_device[] cache misses.
@@ -2489,6 +2498,15 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
     if (tensor == nullptr) {
         return nullptr;
     }
+
+    // Check per-graph pointer cache before expensive resolution.
+    {
+        auto it = g_data_ptr_cache.find(tensor);
+        if (it != g_data_ptr_cache.end()) {
+            return it->second;
+        }
+    }
+
     const bool is_input_tensor = (tensor->flags & GGML_TENSOR_FLAG_INPUT) != 0;
     const bool tp_enabled      = g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
     if (tensor->name[0] != '\0' && g_tiered_enabled.load(std::memory_order_acquire)) {
@@ -2498,6 +2516,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             if (is_input_tensor && !tp_enabled && tensor->data) {
                 ggml_sycl_refresh_cached_input_ptr(cached_ptr, tensor->data, ggml_nbytes(tensor), device);
             }
+            g_data_ptr_cache[tensor] = cached_ptr;
             return cached_ptr;
         }
     }
@@ -2509,7 +2528,60 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
             }
             GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using extra->data_device[%d]=%p\n",
                             tensor->name, device, device, extra->data_device[device]);
+            g_data_ptr_cache[tensor] = extra->data_device[device];
             return extra->data_device[device];
+        }
+    }
+
+    // For view/permute tensors (e.g. KV cache views), extra may be NULL or
+    // data_device unset.  Walk the view_src chain to find the base tensor
+    // with a known device pointer, then compute the view offset.
+    if (tensor->view_src != nullptr) {
+        const ggml_tensor * base = tensor;
+        while (base->view_src) {
+            base = base->view_src;
+        }
+        GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s view_src chain -> base=%s, base->extra=%p, base->data=%p, tensor->data=%p\n",
+                        tensor->name, base->name ? base->name : "(null)",
+                        (void *)base->extra, base->data, tensor->data);
+        if (base->extra != nullptr) {
+            auto * base_extra = static_cast<ggml_tensor_extra_gpu *>(base->extra);
+            if (base_extra->data_device[device] != nullptr && base->data != nullptr && tensor->data != nullptr) {
+                ptrdiff_t offset = static_cast<char *>(tensor->data) - static_cast<char *>(base->data);
+                void * result = static_cast<char *>(base_extra->data_device[device]) + offset;
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, resolved via view_src %s + offset %td = %p\n",
+                                tensor->name, device, base->name, offset, result);
+                g_data_ptr_cache[tensor] = result;
+                return result;
+            }
+        }
+        // base->extra is NULL — the base tensor is likely in a SYCL buffer
+        // where tensor->data IS the device pointer.  Check if base->data
+        // is device USM directly, and if so, compute view offset from it.
+        if (base->data != nullptr && tensor->data != nullptr) {
+            // The base tensor's data might be a device USM pointer even without extra.
+            // Try to use it directly with the view offset.
+            sycl::context   view_ctx_storage;
+            sycl::context * view_ctx = nullptr;
+            try {
+                view_ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
+                view_ctx         = &view_ctx_storage;
+            } catch (...) {
+                view_ctx = nullptr;
+            }
+            if (view_ctx != nullptr) {
+                sycl::usm::alloc base_ptr_type = sycl::get_pointer_type(base->data, *view_ctx);
+                GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: base=%s data=%p ptr_type=%d\n",
+                                base->name ? base->name : "(null)", base->data, (int)base_ptr_type);
+                if (base_ptr_type == sycl::usm::alloc::device || base_ptr_type == sycl::usm::alloc::shared) {
+                    ptrdiff_t offset = static_cast<char *>(tensor->data) - static_cast<char *>(base->data);
+                    void * result = static_cast<char *>(base->data) + offset;
+                    GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, resolved via view_src base USM + offset %td = %p\n",
+                                    tensor->name, device, offset, result);
+                    g_data_ptr_cache[tensor] = result;
+                    return result;
+                }
+            }
         }
     }
 
@@ -2541,6 +2613,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                 }
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using DEVICE USM tensor->data=%p\n",
                                 tensor->name, device, tensor->data);
+                g_data_ptr_cache[tensor] = tensor->data;
                 return tensor->data;
             }
 
@@ -2563,6 +2636,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                             GGML_SYCL_DEBUG(
                                 "ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, non-device fallback to cache=%p (type=%d)\n",
                                 tensor->name, device, cached, (int) ptr_type);
+                            g_data_ptr_cache[tensor] = cached;
                             return cached;
                         }
                     }
@@ -2574,6 +2648,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                 void * streamed = ggml_sycl::layer_streaming_get_weight_ptr(device, tensor->name);
                 if (streamed) {
                     GGML_LOG_DEBUG("get_data_ptr_slow: %s from layer stream buffer\n", tensor->name);
+                    g_data_ptr_cache[tensor] = streamed;
                     return streamed;
                 }
             }
@@ -2586,6 +2661,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
                 }
                 GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, staged non-device %p -> %p (%zu bytes, type=%d)\n",
                                 tensor->name, device, tensor->data, staged, nbytes, (int) ptr_type);
+                g_data_ptr_cache[tensor] = staged;
                 return staged;
             }
             GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, staging FAILED for non-device (type=%d), using tensor->data=%p\n",
@@ -2595,6 +2671,7 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
 
     GGML_SYCL_DEBUG("ggml_sycl_get_data_ptr_slow: tensor=%s, device=%d, using tensor->data=%p\n", tensor->name, device,
                     tensor->data);
+    g_data_ptr_cache[tensor] = tensor->data;
     return tensor->data;
 }
 
@@ -23567,6 +23644,8 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         if (ggml_sycl_compute_forward_cpu(ctx, dst)) {
             return true;
         }
+        GGML_SYCL_DEBUG("[CPU-FAIL] CPU dispatch failed for %s (%s), falling to GPU\n",
+                dst->name ? dst->name : "?", ggml_op_name(dst->op));
         // Unsupported op — GPU handles it.  Safety: flush any retained
         // activations so GPU reads up-to-date device data.  Phase 4 of
         // classify_cpu_layer_blocks() should prevent this, but belt-and-
@@ -24960,6 +25039,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
+
+    // Invalidate per-graph pointer resolution cache.
+    ggml_sycl_data_ptr_cache_new_graph();
+
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
     if (g_sycl_tg_dump_rms) {
         g_sycl_rms_seen_per_layer.clear();
