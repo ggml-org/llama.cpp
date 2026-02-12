@@ -1721,8 +1721,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    // JAIS2 disabled: non-power-of-2 head count (26/56) causes numerical instability in flash attention
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr && arch != LLM_ARCH_JAIS2;
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
