@@ -59,9 +59,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
     static auto is_static = false;
     static size_t stateful_kv_size = 0;
 
-    // if (is_naive(cgraph)) {
-    //     return naive_compute(cgraph, core, device, config);
-    // }
+    if (is_naive(cgraph)) {
+        return naive_compute(cgraph, core, device, config);
+    }
 
     auto start_time = ggml_time_us();
 
@@ -438,7 +438,13 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
 bool is_naive(ggml_cgraph * cgraph) {
     constexpr int naive_graph_size_threshold = 20;
-    return cgraph->n_nodes < naive_graph_size_threshold;
+    int count = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op != GGML_OP_NONE) {
+            count++;
+        }
+    }
+    return count < naive_graph_size_threshold;
 }
 
 enum ggml_status naive_compute(ggml_cgraph * cgraph,

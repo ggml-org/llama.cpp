@@ -34,9 +34,18 @@ OutputVector translate_get_rows(const NodeContext & context) {
     indices =
         std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
     if (data.get_partial_shape().rank() == 4) {
-        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
-        data = std::make_shared<ov::op::v0::Squeeze>(data, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
-        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
+        if (data.get_partial_shape()[1].get_length() == 1) {
+            // Work-around for a bug in ov cpu plugin for test-backend-ops
+            data = std::make_shared<ov::op::v0::Squeeze>(data,
+                                                         ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+            auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+            res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
+        } else {
+            auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
+            data =
+                std::make_shared<ov::op::v0::Squeeze>(data, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+            res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
+        }
     } else if (context.is_stateful() && data.get_partial_shape().rank() == 3) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);

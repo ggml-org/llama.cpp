@@ -95,9 +95,6 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     m_model_weights = model_weights;
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto * cur_node = cgraph->nodes[node_n];
-        if (cur_node->op == GGML_OP_NONE) {
-            continue;
-        }
         set_input_output(cur_node, true);
     }
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
@@ -110,6 +107,9 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
     std::map<void *, ggml_tensor *> data_addr_map;
     std::unordered_set<std::string> output_name_set;
     for (const auto & node_info : m_node_info_list) {
+        if (node_info.node->op == GGML_OP_NONE) {
+            continue;
+        }
         for (const auto & it : node_info.node_inputs) {
             const auto & src_name = it.first;
             const auto & src_node = it.second;
@@ -164,6 +164,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
         if (src->flags & GGML_TENSOR_FLAG_INPUT) {
             src_name = get_graph_input_ov_name(src, node);
         }
+        m_inputs[src_name] = src;
         current_node_info.node_inputs[src_name] = src;
         current_node_info.node_inputs_names.push_back(src_name);
 
@@ -193,7 +194,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
                 }
-                m_inputs[src_name] = src;
                 assert(stateful_kv_shape.rank().is_static());
                 ov::PartialShape param_shape =
                     (stateful_kv_shape.rank().get_length() != 0) ? stateful_kv_shape : get_graph_input_shape(node, src);
@@ -264,7 +264,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             } else {
                 op_case = 3;
             }
-        } else if (node->src[0]->src[0]->op == GGML_OP_ROPE || node->src[0]->src[0]->src[0]->op == GGML_OP_ROPE) {
+        } else {
             // rope'ed query tensor
             op_case = 4;
         }
@@ -839,6 +839,9 @@ int32_t * GgmlOvDecoder::get_output_op_params(int node_idx) const {
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const {
     for (int node_idx = 0; node_idx < m_cgraph->n_nodes; node_idx++) {
+        if (m_cgraph->nodes[node_idx]->op == GGML_OP_NONE) {
+            continue;
+        }
         node_visitor(std::make_shared<GgmlOvDecoder>(*this), node_idx);
     }
 }
