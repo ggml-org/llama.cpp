@@ -64,11 +64,6 @@ struct htp_ops_context {
     struct fastdiv_values broadcast_rv2;
     struct fastdiv_values broadcast_rv3;
 
-    struct fastdiv_values mm_div_ne12_ne1; // fastdiv values for ne12 * ne1
-    struct fastdiv_values mm_div_ne1;      // fastdiv values for ne1
-    struct fastdiv_values mm_div_r2;       // fastdiv values for ne12 / ne02
-    struct fastdiv_values mm_div_r3;       // fastdiv values for ne13 / ne03
-
     struct fastdiv_values set_rows_div_ne12; // fastdiv values for ne12
     struct fastdiv_values set_rows_div_ne11; // fastdiv values for ne11
 
