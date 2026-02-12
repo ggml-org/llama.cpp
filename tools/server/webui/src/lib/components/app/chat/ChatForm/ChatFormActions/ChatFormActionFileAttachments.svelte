@@ -134,10 +134,10 @@
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
 
-					<Tooltip.Content>
-						<p>Add a custom system message for this conversation</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+				<Tooltip.Content>
+					<p>Add a custom system message for this conversation</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
