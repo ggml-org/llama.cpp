@@ -114,44 +114,18 @@ static void write_etag(const std::string & path, const std::string & etag) {
 }
 
 static std::string read_etag(const std::string & path) {
-    std::string none;
     const std::string etag_path = path + ".etag";
-
-    if (std::filesystem::exists(etag_path)) {
-        std::ifstream etag_in(etag_path);
-        if (!etag_in) {
-            LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
-            return none;
-        }
-        std::string etag;
-        std::getline(etag_in, etag);
-        return etag;
+    if (!std::filesystem::exists(etag_path)) {
+        return {};
     }
-
-    // no etag file, but maybe there is an old .json
-    // remove this code later
-    const std::string metadata_path = path + ".json";
-
-    if (std::filesystem::exists(metadata_path)) {
-        std::ifstream metadata_in(metadata_path);
-        try {
-            nlohmann::json metadata_json;
-            metadata_in >> metadata_json;
-            LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
-                    metadata_json.dump().c_str());
-            if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
-                std::string etag = metadata_json.at("etag");
-                write_etag(path, etag);
-                if (!std::filesystem::remove(metadata_path)) {
-                    LOG_WRN("%s: failed to delete old .json metadata file: %s\n", __func__, metadata_path.c_str());
-                }
-                return etag;
-            }
-        } catch (const nlohmann::json::exception & e) {
-            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
-        }
+    std::ifstream etag_in(etag_path);
+    if (!etag_in) {
+        LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
+        return {};
     }
-    return none;
+    std::string etag;
+    std::getline(etag_in, etag);
+    return etag;
 }
 
 static bool is_http_status_ok(int status) {
