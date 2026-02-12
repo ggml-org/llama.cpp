@@ -250,6 +250,10 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-quantize-fns.cpp)
     llama_build_and_test(test-quantize-perf.cpp)
     llama_build_and_test(test-rope.cpp)
+    if (GGML_METAL)
+        llama_build(test-metal-fa-scalar.cpp)
+        target_link_libraries(test-metal-fa-scalar PRIVATE ggml)
+    endif()
 endif()
 
 # libmtmd

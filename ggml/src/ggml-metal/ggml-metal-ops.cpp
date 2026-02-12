@@ -2461,6 +2461,81 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_tmp = bid_blk;
     bid_tmp.offs += ggml_metal_op_flash_attn_ext_extra_blk(op);
 
+    // SCALAR fallback for GPUs without simdgroup matrix multiply support
+    if (!props_dev->has_simdgroup_mm) {
+        const int dk = ne00;
+        const int dv = ne00;
+
+        const char * kernel_name = nullptr;
+        if (dk == 64 && dv == 64) {
+            kernel_name = "kernel_flash_attn_ext_scalar_dk64_dv64";
+        } else if (dk == 128 && dv == 128) {
+            kernel_name = "kernel_flash_attn_ext_scalar_dk128_dv128";
+        } else if (dk == 256 && dv == 256) {
+            kernel_name = "kernel_flash_attn_ext_scalar_dk256_dv256";
+        } else {
+            GGML_ASSERT(false && "Unsupported head size for SCALAR FA");
+        }
+
+        auto pipeline = ggml_metal_library_compile_pipeline(lib, kernel_name, kernel_name, NULL);
+        GGML_ASSERT(pipeline.pipeline && "Failed to compile SCALAR FA pipeline");
+
+        const int nqptg = 4; // queries per threadgroup (BR)
+
+        ggml_metal_kargs_flash_attn_ext args = {
+            /*.ne01         =*/ (int32_t) ne01,
+            /*.ne02         =*/ (int32_t) ne02,
+            /*.ne03         =*/ (int32_t) ne03,
+            /*.nb01         =*/ (uint64_t) nb01,
+            /*.nb02         =*/ (uint64_t) nb02,
+            /*.nb03         =*/ (uint64_t) nb03,
+            /*.ne11         =*/ (int32_t) ne11,
+            /*.ne_12_2      =*/ (int32_t) ne12,
+            /*.ne_12_3      =*/ (int32_t) ne13,
+            /*.ns10         =*/ 0,
+            /*.nb11         =*/ (uint64_t) nb11,
+            /*.nb12         =*/ (uint64_t) nb12,
+            /*.nb13         =*/ (uint64_t) nb13,
+            /*.ns20         =*/ 0,
+            /*.nb21         =*/ (uint64_t) nb21,
+            /*.nb22         =*/ (uint64_t) nb22,
+            /*.nb23         =*/ (uint64_t) nb23,
+            /*.ne31         =*/ (int32_t) ne31,
+            /*.ne32         =*/ (int32_t) ne32,
+            /*.ne33         =*/ (int32_t) ne33,
+            /*.nb31         =*/ (uint64_t) nb31,
+            /*.nb32         =*/ (uint64_t) nb32,
+            /*.nb33         =*/ (uint64_t) nb33,
+            /*.ne1          =*/ (int32_t) ne1,
+            /*.ne2          =*/ (int32_t) ne2,
+            /*.ne3          =*/ (int32_t) ne3,
+            /*.scale        =*/ scale,
+            /*.max_bias     =*/ max_bias,
+            /*.m0           =*/ m0,
+            /*.m1           =*/ m1,
+            /*.n_head_log2  =*/ (int32_t) n_head_log2,
+            /*.logit_softcap=*/ logit_softcap,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+        ggml_metal_encoder_set_buffer  (enc, bid_src1, 2);
+        ggml_metal_encoder_set_buffer  (enc, bid_src2, 3);
+        ggml_metal_encoder_set_buffer  (enc, bid_src3, 4);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,  5);
+
+        const uint32_t num_query_tiles = (ne01 + nqptg - 1) / nqptg;
+        const size_t smem_q   = nqptg * (dk / 4) * sizeof(float) * 4;
+        const size_t smem_tmp = 128 * sizeof(float) * 4;
+        const size_t smem     = smem_q + smem_tmp;
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+        ggml_metal_encoder_dispatch_threadgroups(enc, num_query_tiles, ne02, ne03, 128, 1, 1);
+
+        return 1;
+    }
+
     if (!ggml_metal_op_flash_attn_ext_use_vec(op)) {
         // half8x8 kernel
         const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
