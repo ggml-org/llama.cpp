@@ -37,6 +37,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3NEXT,        "qwen3next"        },
     { LLM_ARCH_QWEN3VL,          "qwen3vl"          },
     { LLM_ARCH_QWEN3VLMOE,       "qwen3vlmoe"       },
+    { LLM_ARCH_QWEN35,           "qwen35"           },
+    { LLM_ARCH_QWEN35MOE,        "qwen35moe"        },
     { LLM_ARCH_PHI2,             "phi2"             },
     { LLM_ARCH_PHI3,             "phi3"             },
     { LLM_ARCH_PHIMOE,           "phimoe"           },
@@ -195,6 +197,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
+    { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
 
     { LLM_KV_ATTENTION_HEAD_COUNT,                   "%s.attention.head_count"                   },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,                "%s.attention.head_count_kv"                },
@@ -366,6 +369,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_SSM_CONV1D,                             "blk.%d.ssm_conv1d" },
     { LLM_TENSOR_SSM_DT,                                 "blk.%d.ssm_dt" },
     { LLM_TENSOR_SSM_BETA_ALPHA,                         "blk.%d.ssm_ba" },
+    { LLM_TENSOR_SSM_ALPHA,                              "blk.%d.ssm_alpha" },
     { LLM_TENSOR_SSM_IN,                                 "blk.%d.ssm_in" },
     { LLM_TENSOR_SSM_NORM,                               "blk.%d.ssm_norm" },
     { LLM_TENSOR_SSM_OUT,                                "blk.%d.ssm_out" },
@@ -968,7 +972,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ATTN_OUT,
                 LLM_TENSOR_ATTN_QKV,
                 LLM_TENSOR_ATTN_GATE,
-                LLM_TENSOR_FFN_NORM,
                 LLM_TENSOR_FFN_GATE_INP,
                 LLM_TENSOR_FFN_GATE_EXPS,
                 LLM_TENSOR_FFN_DOWN_EXPS,
@@ -982,6 +985,63 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_SSM_DT,
                 LLM_TENSOR_SSM_BETA_ALPHA,
                 LLM_TENSOR_SSM_IN,
+                LLM_TENSOR_SSM_NORM,
+                LLM_TENSOR_SSM_OUT,
+            };
+        case LLM_ARCH_QWEN35:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_POST_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_Q_NORM,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_K_NORM,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_GATE,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_SSM_A_NOSCAN,
+                LLM_TENSOR_SSM_CONV1D,
+                LLM_TENSOR_SSM_DT,
+                LLM_TENSOR_SSM_BETA,
+                LLM_TENSOR_SSM_ALPHA,
+                LLM_TENSOR_SSM_NORM,
+                LLM_TENSOR_SSM_OUT,
+            };
+        case LLM_ARCH_QWEN35MOE:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_POST_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_Q_NORM,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_K_NORM,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_GATE,
+                LLM_TENSOR_FFN_GATE_INP,
+                LLM_TENSOR_FFN_GATE_EXPS,
+                LLM_TENSOR_FFN_DOWN_EXPS,
+                LLM_TENSOR_FFN_UP_EXPS,
+                LLM_TENSOR_FFN_GATE_INP_SHEXP,
+                LLM_TENSOR_FFN_GATE_SHEXP,
+                LLM_TENSOR_FFN_DOWN_SHEXP,
+                LLM_TENSOR_FFN_UP_SHEXP,
+                LLM_TENSOR_SSM_A_NOSCAN,
+                LLM_TENSOR_SSM_CONV1D,
+                LLM_TENSOR_SSM_DT,
+                LLM_TENSOR_SSM_BETA,
+                LLM_TENSOR_SSM_ALPHA,
                 LLM_TENSOR_SSM_NORM,
                 LLM_TENSOR_SSM_OUT,
             };
@@ -2456,6 +2516,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_X,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_DT,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_OUT,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_ALPHA,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_BETA_ALPHA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_TIME_MIX_W1,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_TIME_MIX_W2,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -2675,6 +2736,8 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_KIMI_LINEAR:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
             return true;
         default:
             return false;

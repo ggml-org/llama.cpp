@@ -781,16 +781,6 @@ void common_batch_add(
                                bool   logits);
 
 //
-// Token utils
-//
-
-// longest common prefix
-size_t common_lcp(const llama_tokens & a, const llama_tokens & b);
-
-// longet common subsequence
-size_t common_lcs(const llama_tokens & a, const llama_tokens & b);
-
-//
 // Vocab utils
 //
 

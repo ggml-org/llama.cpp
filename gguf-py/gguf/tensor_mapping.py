@@ -228,6 +228,7 @@ class TensorNameMap:
             "transformer_encoder.{bid}.qkv",                                       # neobert
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
+            "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
         ),
 
         # Attention query
@@ -359,6 +360,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_GATE: (
             "model.layers.{bid}.self_attn.gate_proj", # afmoe
+            "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
         ),
 
@@ -823,6 +825,10 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
+        MODEL_TENSOR.SSM_ALPHA: (
+            "model.layers.{bid}.linear_attn.in_proj_a",  # qwen3.5
+        ),
+
         MODEL_TENSOR.SSM_BETA_ALPHA: (
             "model.layers.{bid}.linear_attn.in_proj_ba",  # qwen3next
         ),
@@ -844,7 +850,8 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.f_b_proj",
         ),
         MODEL_TENSOR.SSM_BETA: (
-            "model.layers.{bid}.self_attn.b_proj",
+            "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
+            "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
         ),
         MODEL_TENSOR.SSM_G_A: (
             "model.layers.{bid}.self_attn.g_a_proj",
@@ -1296,6 +1303,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
+            "mm_projector.proj.linear_{bid}", # Kimi-K2.5
             "visual.merger.mlp.{bid}", # qwen2vl
             "merger.mlp.{bid}",
         ),
@@ -1357,6 +1365,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
@@ -1531,6 +1540,7 @@ class TensorNameMap:
             "multi_modal_projector.norm",
             "multi_modal_projector.layer_norm",
             "multi_modal_projector.pre_norm",
+            "mm_projector.pre_norm", # Kimi-K2.5
             "pre_mm_projector_norm",
             "model.vision.linear_proj.norm1", # cogvlm
             "merger.ln_q",
