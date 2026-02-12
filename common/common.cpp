@@ -732,6 +732,7 @@ std::string fs_normalize_filepath(const std::string & path) {
 }
 
 // Validate if a filename or path is safe to use
+// Strictly rejects path traversal attempts, absolute paths, and reserved/illegal characters
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (!filename.length()) {
         // Empty filename invalid

@@ -142,6 +142,31 @@ int main(void) {
     test("trailing space before slash",     false, "bar /baz",         true);
     test("trailing dot before slash",       false, "bar./baz",         true);
 
+    // --- Simple filename tests ---
+    test("simple binary file",          true,  "file.bin");
+    test("japanese filename",           true,  u8"日本式ファイルの芸術.bin");
+
+    // --- Path traversal (no subdirs) ---
+    test("dotdot slash",                false, "../bad.bin");
+    test("dotdot backslash",            false, "..\\bad.bin");
+    test("subdir dotdot backslash",     false, "also/..\\bad.bin");
+    test("subdir slash",                false, "also/bad.bin");
+
+    // --- Unicode path equivalents ---
+    test("division slash U+2215",       false, "unicode\xe2\x88\x95""bad.bin");
+    test("set minus U+2216",            false, "unicode\xe2\x88\x96""bad.bin");
+    test("fullwidth period U+FF0E",     false, "unicode\xef\xbc\x8e""bad.bin");
+
+    // --- Overlong encoding ---
+    test("overlong 0xC0 0x2E",          false, std::string("overlong\xc0\x2e""bad.bin"));
+    test("overlong 0xE0 0x40 0xAE",     false, std::string("overlong\xe0\x40\xae""bad.bin"));
+    test("overlong dot (2-byte)",       false, std::string("overlong\xc0\xae""bad.bin", 14));
+    test("overlong slash (2-byte)",     false, std::string("overlong\xc0\xaf""bad.bin", 14));
+    test("overlong slash (3-byte)",     false, std::string("overlong\xe0\x80\xaf""bad.bin", 15));
+    test("overlong 0xC0 0x2F",          false, std::string("overlong\xc0\x2f""bad.bin"));
+    test("overlong 0xC0 0x5C",          false, std::string("overlong\xc0\x5c""bad.bin"));
+    test("overlong 0xC0 0x80 0x5C",     false, std::string("overlong\xc0\x80\x5c""bad.bin"));
+
     // --- fs_normalize_filepath ---
     test_normalize("passthrough simple",        "foo.txt",                              "foo.txt");
     test_normalize("passthrough subdir",        std::string("foo") + SEP + "bar.txt",   "foo/bar.txt");
