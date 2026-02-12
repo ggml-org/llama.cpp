@@ -880,6 +880,12 @@ ggml_tensor * llm_graph_context::build_cast_to_f32(
     return ggml_cast(ctx, cur, GGML_TYPE_F32);
 }
 
+ggml_tensor * llm_graph_context::set_result_logits(ggml_tensor * cur) {
+    cur = build_cast_to_f32(ctx0, cur);
+    res->t_logits = cur;
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
                  int   il) const {
@@ -1543,6 +1549,9 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     // make sure the produced embeddings are immediately materialized in the ggml graph
     // ref: https://github.com/ggml-org/llama.cpp/pull/18599
     ggml_build_forward_expand(gf, cur);
+
+    // cast to compute_type if needed (e.g., F16 for intermediate activations)
+    cur = build_cast_to_compute_type(ctx0, cur);
 
     return cur;
 }
