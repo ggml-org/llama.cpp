@@ -1,7 +1,3 @@
-#if defined(_MSC_VER)
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-#endif
-
 #include "ggml.h"
 #include "gguf.h"
 
@@ -9,12 +5,12 @@
 #include "log.h"
 #include "llama.h"
 #include "sampling.h"
+#include "unicode.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
 #include <cmath>
-#include <codecvt>
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
@@ -706,45 +702,28 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
         return false;
     }
 
-    std::u32string filename_utf32;
-    try {
-#if defined(__clang__)
-        // disable C++17 deprecation warning for std::codecvt_utf8
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
+    size_t offset = 0;
+    while (offset < filename.size()) {
+        utf8_parse_result result = parse_utf8_codepoint(filename, offset);
 
-        std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
-
-        filename_utf32 = converter.from_bytes(filename);
-
-        // If the reverse conversion mismatches, it means overlong UTF-8 sequences were used,
-        // or invalid encodings were encountered. Reject such attempts
-        std::string filename_reencoded = converter.to_bytes(filename_utf32);
-        if (filename_reencoded != filename) {
+        if (result.status != utf8_parse_result::SUCCESS) {
             return false;
         }
-    } catch (const std::exception &) {
-        return false;
-    }
+        uint32_t c = result.codepoint;
 
-    // Check for forbidden codepoints:
-    // - Control characters
-    // - Unicode equivalents of illegal characters
-    // - UTF-16 surrogate pairs
-    // - UTF-8 replacement character
-    // - Byte order mark (BOM)
-    // - Illegal characters: / \ : * ? " < > |
-    for (char32_t c : filename_utf32) {
+        if ((result.bytes_consumed == 2 && c < 0x80) ||
+            (result.bytes_consumed == 3 && c < 0x800) ||
+            (result.bytes_consumed == 4 && c < 0x10000)) {
+            return false;
+        }
+
+        // Check for forbidden codepoints:
+        // - Control characters
+        // - Unicode equivalents of illegal characters
+        // - UTF-16 surrogate pairs
+        // - UTF-8 replacement character
+        // - Byte order mark (BOM)
+        // - Illegal characters: / \ : * ? " < > |
         if (c <= 0x1F // Control characters (C0)
             || c == 0x7F // Control characters (DEL)
             || (c >= 0x80 && c <= 0x9F) // Control characters (C1)
@@ -752,6 +731,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             || c == 0x2215 // Division Slash (forward slash equivalent)
             || c == 0x2216 // Set Minus (backslash equivalent)
             || (c >= 0xD800 && c <= 0xDFFF) // UTF-16 surrogate pairs
+            || c > 0x10FFFF // Max Unicode limit
             || c == 0xFFFD // Replacement Character (UTF-8)
             || c == 0xFEFF // Byte Order Mark (BOM)
             || c == ':' || c == '*' // Illegal characters
@@ -762,6 +742,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
             // Subdirectories not allowed, reject path separators
             return false;
         }
+        offset += result.bytes_consumed;
     }
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
