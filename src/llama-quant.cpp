@@ -937,12 +937,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
+                if (!will_require_imatrix && tensor_requires_imatrix(params, tensor, new_type)) {
+                    will_require_imatrix = true;
+                }
             } else {
                 new_size = tensor_size;
                 LLAMA_LOG_INFO("size = %8.3f MiB\n", new_size/1024.0/1024.0);
-            }
-            if (!will_require_imatrix && tensor_requires_imatrix(params, tensor, new_type)) {
-                will_require_imatrix = true;
             }
             total_size_org += tensor_size;
             total_size_new += new_size;
@@ -1072,7 +1072,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_org/1024.0/1024.0, total_size_org*8.0/ml.n_elements);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
     if (!params->imatrix && params->dry_run && will_require_imatrix) {
-        LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n");
+        LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n",
+                       __func__
+        );
     }
 
     if (qs.n_fallback > 0) {
