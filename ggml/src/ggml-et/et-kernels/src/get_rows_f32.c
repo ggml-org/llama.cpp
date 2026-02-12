@@ -31,6 +31,9 @@ struct ggml_et_get_rows_params {
     struct ggml_tensor dst;      // Output tensor (F32)
 };
 
+#define CACHE_LINE_SIZE 64
+#define CACHE_ELEMENTS(elem_size) (CACHE_LINE_SIZE / (elem_size))
+
 KERNEL_TRAMPOLINE();
 
 // Copy a row of F32 data from source to destination
@@ -61,6 +64,64 @@ static void copy_q8_0_row(float* dst, const block_q8_0* src_blocks, int64_t num_
     }
 }
 
+static int get_row_f32_mc_row_cache_aligned(struct ggml_et_get_rows_params* params, void* env)
+{
+    kernel_environment_t* kernel_env = (kernel_environment_t*)env;
+    int thread_id = get_relative_thread_id(kernel_env->shire_mask);
+    int num_threads = get_num_threads(kernel_env->shire_mask);
+
+    struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32 or Q8_0)
+    struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
+    struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
+
+    const int64_t ne00 = src0->ne[0];  // Source columns (row width)
+    const int64_t ne01 = src0->ne[1];  // Source rows (total available rows)
+    const int64_t ne02 = src0->ne[2];  // Source batch dimension
+    const int64_t ne03 = src0->ne[3];  // Source outer batch dimension
+
+    const int64_t ne10 = src1->ne[0];  // Number of indices in dimension 0
+    const int64_t ne11 = src1->ne[1];  // Number of indices in dimension 1
+    const int64_t ne12 = src1->ne[2];  // Batch dimension for indices
+    const int64_t ne13 = src1->ne[3];  // Outer batch dimension for indices
+
+    const int64_t total_rows_to_extract = ne10 * ne11 * ne12 * ne13;
+
+    for (int64_t i = thread_id; i < total_rows_to_extract; i+=num_threads) {
+        // Calculate multi-dimensional index for the current output position
+        const int64_t i13_idx = i / (ne12 * ne11 * ne10);
+        const int64_t i12_idx = (i - i13_idx * ne12 * ne11 * ne10) / (ne11 * ne10);
+        const int64_t i11_idx = (i - i13_idx * ne12 * ne11 * ne10 - i12_idx * ne11 * ne10) / ne10;
+        const int64_t i10_idx = i - i13_idx * ne12 * ne11 * ne10 - i12_idx * ne11 * ne10 - i11_idx * ne10;
+
+        void* src0_data = src0->data;
+        int32_t* src1_data = (int32_t*)src1->data;
+        float* dst_data = (float*)dst->data;
+        // Get the row index from src1
+        const int64_t index_offset = i13_idx * ne12 * ne11 * ne10 +
+                                    i12_idx * ne11 * ne10 +
+                                    i11_idx * ne10 +
+                                    i10_idx;
+        const int32_t row_index = src1_data[index_offset];
+
+        if (row_index < 0 || row_index >= ne01) {
+            return -1; // Index out of bounds
+        }
+
+        const int64_t batch_offset = i11_idx * ne01 * ne00 +
+                                     i12_idx * ne02 * ne01 * ne00 +
+                                     i13_idx * ne03 * ne02 * ne01 * ne00;
+
+        const int64_t dst_offset = i;
+
+        // F32 source: direct copy
+        const float* src_row = (const float*)src0_data + row_index * ne00 + batch_offset;
+        float* dst_row = dst_data + dst_offset * ne00;
+        copy_f32_row(dst_row, src_row, ne00);
+    }
+
+    return -1;
+}
+
 int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     kernel_environment_t* kernel_env = (kernel_environment_t*)env;
 
@@ -70,6 +131,15 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
 
     int thread_id = get_relative_thread_id(kernel_env->shire_mask);
     int num_threads = get_num_threads(kernel_env->shire_mask);
+
+    struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32 or Q8_0)
+    struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
+    struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
+
+    if(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32
+        && src0->ne[0] % CACHE_ELEMENTS(sizeof(float)) == 0) {
+        return get_row_f32_mc_row_cache_aligned(params, env);
+    }
 
     if (thread_id < 0) {
         return 0;
@@ -82,10 +152,6 @@ int entry_point(struct ggml_et_get_rows_params* params, void* env) {
     if (params == 0 || ((uint64_t)params & 0x7) != 0) {
         return -1; // Invalid pointer
     }
-
-    struct ggml_tensor* src0 = &params->src0;  // Data tensor (F32 or Q8_0)
-    struct ggml_tensor* src1 = &params->src1;  // Row indices tensor (I32)
-    struct ggml_tensor* dst = &params->dst;    // Output tensor (F32)
 
     if (dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_I32) {
         return -1; // Invalid output or index type
