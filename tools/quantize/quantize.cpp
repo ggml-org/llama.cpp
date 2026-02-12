@@ -686,18 +686,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-    if (!params.dry_run &&
-        (
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS  || params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S   || params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S  ||
-            params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S   || params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M
-        ) && imatrix_data.empty()) {
-        fprintf(stderr, "\n==========================================================================================================\n");
-        fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
-        fprintf(stderr, "==========================================================================================================\n\n\n");
-        return 1;
-    }
-
     if (!params.dry_run) {
         if (std::error_code ec; std::filesystem::equivalent(fname_inp, fname_out, ec)) {
             fprintf(stderr, "%s: error: input and output files are the same: '%s'\n", __func__, fname_inp.c_str());
