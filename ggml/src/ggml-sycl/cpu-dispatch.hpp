@@ -46,7 +46,8 @@ bool   ggml_sycl_cpu_retained_active();
 void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst);
 void   ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q);
 void   ggml_sycl_cpu_retained_flush_selective(int device, sycl::queue * gpu_q,
-                                               const ggml_tensor * next_gpu_node);
+                                               const ggml_tensor * const * gpu_nodes,
+                                               int n_gpu_nodes);
 void   ggml_sycl_cpu_retained_deactivate();
 
 #endif // GGML_SYCL_CPU_DISPATCH_HPP

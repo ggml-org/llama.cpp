@@ -2145,12 +2145,14 @@ void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t backend, const ggml_s
     // Initialize double-buffered layer streaming when:
     // 1. Model exceeds effective VRAM budget (auto-activation)
     // 2. User forces streaming via GGML_SYCL_FORCE_STREAMING=1 (testing/override)
-    // Skip when CPU offload is available — CPU dispatch reads host weights directly,
-    // so layer streaming (host→device DMA) is unnecessary and conflicts with CPU dispatch.
+    // Layer streaming provides a device-side copy for GPU kernels that need weights.
+    // Even when CPU offload is available, some ops may fall back to GPU dispatch
+    // (e.g., unsupported ops, GPU islands). Streaming ensures the GPU fallback
+    // path can always access host-resident weights on device.
     const char * force_stream = std::getenv("GGML_SYCL_FORCE_STREAMING");
     const bool streaming_forced = force_stream && std::atoi(force_stream) == 1;
     const bool cpu_offload_available = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
-    if ((model_exceeds_vram || streaming_forced) && !cpu_offload_available) {
+    if (model_exceeds_vram || streaming_forced) {
         auto & mgr = ggml_sycl::get_layer_stream_manager(ctx->device);
         mgr.build_layer_map(g_tensor_inventory.data(), g_tensor_inventory.size());
         sycl::queue & q = ggml_sycl_get_device(ctx->device).default_queue();
@@ -24875,7 +24877,10 @@ static void classify_cpu_layer_blocks(
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (node_cpu_flags[i] == 1) {
             ggml_tensor * node = cgraph->nodes[i];
-            if (node && node->ne[1] > cpu_batch_threshold) {
+            // Only apply batch threshold to MUL_MAT — for that op, ne[1] is the
+            // batch dimension.  For other ops (ROPE, SOFT_MAX, etc.) ne[1] has
+            // different semantics (e.g. n_heads) and would incorrectly trigger.
+            if (node && node->op == GGML_OP_MUL_MAT && node->ne[1] > cpu_batch_threshold) {
                 node_cpu_flags[i] = 0;
             }
         }
@@ -25429,22 +25434,35 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // Activate retained activation mode — subsequent CPU ops
                     // keep intermediates in host scratch memory instead of
                     // bouncing device↔host per op.
-                    if (!retained_mode_active) {
-                        ggml_sycl_cpu_retained_init(sycl_ctx->device, sycl_ctx->stream());
-                        retained_mode_active = true;
-                        GGML_SYCL_DEBUG("[RETAINED] Init: activating host scratch retention\n");
-                    }
+                    // Retained activation mode disabled: the host scratch retention
+                    // mechanism has a data flow bug with view tensors (RESHAPE/PERMUTE)
+                    // causing output corruption. Individual CPU ops use staging (D2H/H2D
+                    // per op) which is correct but slower. Re-enable retained mode after
+                    // fixing the retained map interaction with ggml's view_src chain and
+                    // compute buffer address recycling.
+                    // TODO: fix retained activation mode (see flush_selective look-ahead)
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
 
-                    // Flush only retained activations that are inputs to the next GPU node.
-                    // Their device addresses are guaranteed valid (live dependencies in DAG).
+                    // Look-ahead: collect ALL consecutive GPU/island nodes before
+                    // next CPU node. flush_selective needs them all so it can flush
+                    // every retained tensor these nodes will read as inputs.
+                    // Without this, only the first GPU node's inputs get flushed and
+                    // the rest (Kcur, Vcur for rope_k, flash_attn) are lost.
                     if (retained_mode_active) {
+                        std::vector<const ggml_tensor *> gpu_run;
+                        for (int j = i; j < cgraph->n_nodes; j++) {
+                            int8_t jflag = (j < (int)node_cpu_flags.size())
+                                               ? node_cpu_flags[j] : FLAG_UNKNOWN;
+                            if (jflag == FLAG_CPU) break;  // hit next CPU block
+                            gpu_run.push_back(cgraph->nodes[j]);
+                        }
                         ggml_sycl_cpu_retained_flush_selective(
-                            sycl_ctx->device, sycl_ctx->stream(), node);
-                        GGML_SYCL_DEBUG("[RETAINED] Selective flush at CPU→GPU boundary (node %s)\n",
-                                        node->name ? node->name : "(null)");
+                            sycl_ctx->device, sycl_ctx->stream(),
+                            gpu_run.data(), (int)gpu_run.size());
+                        GGML_SYCL_DEBUG("[RETAINED] Look-ahead flush: %zu GPU nodes at CPU→GPU boundary (node %s)\n",
+                                        gpu_run.size(), node->name ? node->name : "(null)");
                         // Don't deactivate — just flush. Scratch offset resets on next
                         // GPU→CPU entry via retained_init(). This avoids re-allocating
                         // the 32MB scratch buffer for each CPU layer.

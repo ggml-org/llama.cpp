@@ -39,6 +39,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"          // Provides dnnl.hpp → dnnl_sgemm()
@@ -207,26 +208,62 @@ void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
 
 void ggml_sycl_cpu_retained_flush_selective(
         int device, sycl::queue * gpu_q,
-        const ggml_tensor * next_gpu_node)
+        const ggml_tensor * const * gpu_nodes, int n_gpu_nodes)
 {
-    if (g_retained_map.empty() || !next_gpu_node) {
+    if (g_retained_map.empty() || !gpu_nodes || n_gpu_nodes <= 0) {
         g_retained_map.clear();
         scratch_reset();
         return;
     }
 
-    // Only flush retained tensors that are inputs to the next GPU node.
-    // Their device addresses are guaranteed valid (live dependencies in DAG).
-    for (int s = 0; s < GGML_MAX_SRC; s++) {
-        const ggml_tensor * src = next_gpu_node->src[s];
-        if (!src) break;
-        auto it = g_retained_map.find(src);
-        if (it == g_retained_map.end()) continue;
+    // Collect retained tensors needed by ANY upcoming GPU node.  GPU node inputs
+    // may be views (RESHAPE/VIEW/PERMUTE) of retained tensors — follow view_src
+    // chain to find the underlying retained entry and flush to the VIEW's device
+    // address (which is a valid subregion of the original allocation).
+    //
+    // Use (retained_key, view_tensor) pairs to copy from the retained host buffer
+    // to the view tensor's device address (accounting for view_offs).
+    struct flush_entry {
+        const ggml_tensor * retained_key;  // key in g_retained_map
+        const ggml_tensor * view_tensor;   // actual tensor the GPU node reads
+    };
+    std::vector<flush_entry> to_flush;
+    std::unordered_set<const ggml_tensor *> seen;  // avoid duplicate flushes
 
-        if (src->buffer && !ggml_backend_buffer_is_host(src->buffer)) {
-            void * device_ptr = ggml_sycl_get_data_ptr(src, device);
+    for (int n = 0; n < n_gpu_nodes; n++) {
+        const ggml_tensor * gnode = gpu_nodes[n];
+        if (!gnode) continue;
+        for (int s = 0; s < GGML_MAX_SRC; s++) {
+            const ggml_tensor * src = gnode->src[s];
+            if (!src) break;
+            // Follow view_src chain to find retained entry
+            const ggml_tensor * lookup = src;
+            while (lookup) {
+                if (g_retained_map.count(lookup)) {
+                    if (seen.insert(src).second) {
+                        to_flush.push_back({lookup, src});
+                    }
+                    break;
+                }
+                lookup = lookup->view_src;
+            }
+        }
+    }
+
+    // Flush all collected tensors — their device addresses are guaranteed valid
+    // (live DAG dependencies of upcoming GPU nodes can't be recycled).
+    for (auto & [retained_key, view_tensor] : to_flush) {
+        auto it = g_retained_map.find(retained_key);
+        if (it == g_retained_map.end()) continue;
+        if (view_tensor->buffer && !ggml_backend_buffer_is_host(view_tensor->buffer)) {
+            void * device_ptr = ggml_sycl_get_data_ptr(view_tensor, device);
             if (device_ptr) {
-                gpu_q->memcpy(device_ptr, it->second.host_ptr, it->second.size);
+                // Compute offset within the retained buffer for views
+                char * host_base = static_cast<char *>(it->second.host_ptr);
+                size_t off = (view_tensor == retained_key) ? 0
+                    : (view_tensor->view_offs - retained_key->view_offs);
+                size_t nbytes = ggml_nbytes(view_tensor);
+                gpu_q->memcpy(device_ptr, host_base + off, nbytes);
             }
         }
     }
@@ -332,11 +369,22 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
     // Check retained activation map first — if this tensor's data was
     // produced by a prior CPU op in the same layer block, return the
     // host pointer directly without any D2H copy.
+    // Follow view_src chain for RESHAPE/VIEW/PERMUTE noops: these create
+    // new tensor objects that point to the same underlying data, but the
+    // retained map keys are the original tensor pointers.
     if (g_retained_active) {
-        auto it = g_retained_map.find(t);
-        if (it != g_retained_map.end()) {
-            if (out_event) *out_event = sycl::event{};  // no-op event (already on host)
-            return it->second.host_ptr;
+        const ggml_tensor * lookup = t;
+        while (lookup) {
+            auto it = g_retained_map.find(lookup);
+            if (it != g_retained_map.end()) {
+                // Found the source in retained map.  Apply view offset if we
+                // traversed a view chain (RESHAPE view_offs is typically 0).
+                char * base = static_cast<char *>(it->second.host_ptr);
+                size_t off  = (lookup == t) ? 0 : (t->view_offs - lookup->view_offs);
+                if (out_event) *out_event = sycl::event{};
+                return base + off;
+            }
+            lookup = lookup->view_src;
         }
     }
 
