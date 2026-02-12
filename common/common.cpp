@@ -740,6 +740,8 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     if (filename.length() > 255) {
         // Limit at common largest possible filename on Linux filesystems
         // to avoid unnecessary further validation
+        // NOTE: The 255 limit is per filename element on Linux, not the whole path
+        // On Windows, the limit is commonly 260 for the whole absolute path
         // (On systems with smaller limits it will be caught by the OS)
         return false;
     }
@@ -811,7 +813,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
 
     // Reject any leading or trailing ' ', or any trailing '.', these are stripped on Windows and will cause a different filename
     // Unicode and other whitespace is not affected, only 0x20 space
-    // This also matches path elements that equal '..' or '.'
+    // This also matches paths that equal '..' or '.'
     if (filename.front() == ' ' || filename.back() == ' ' || filename.back() == '.') {
         return false;
     }
