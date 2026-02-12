@@ -329,9 +329,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         dev_ids[id] = id;
     }
     NCCL_CHECK(ncclCommInitAll(info.comms, info.device_count, dev_ids));
+#endif // GGML_USE_NCCL
 
     return info;
-#endif // GGML_USE_NCCL
 }
 
 const ggml_cuda_device_info & ggml_cuda_info() {
@@ -1132,7 +1132,7 @@ bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_t
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     static bool warning_printed = false;
     if (!warning_printed) {
-        GGML_LOG_WARN("%s: NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal\n");
+        GGML_LOG_WARN("%s: NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal\n", __func__);
         warning_printed = true;
     }
     GGML_UNUSED_VARS(backends, tensors, n_backends);
