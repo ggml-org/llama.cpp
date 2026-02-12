@@ -48,7 +48,7 @@
 #define WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG 64
 #define WEBGPU_MUL_MAT_VEC_TILE_K         256
 
-#define WEBGPU_MAX_WG_SIZE     288
+// default size for legacy matrix multiplication
 #define WEBGPU_MUL_MAT_WG_SIZE 256
 
 // Same hash combine function as in boost
@@ -66,8 +66,8 @@ struct ggml_webgpu_shader_lib_context {
 
     uint32_t max_wg_size;
     size_t   wg_mem_limit_bytes       = 0;
-    bool     inplace                  = 0;
-    bool     overlap                  = 0;
+    bool     inplace                  = false;
+    bool     overlap                  = false;
     bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m                 = 0;
     uint32_t sg_mat_n                 = 0;
