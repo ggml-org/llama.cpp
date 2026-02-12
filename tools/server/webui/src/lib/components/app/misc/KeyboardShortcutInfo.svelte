@@ -11,7 +11,9 @@
 
 	let baseClasses =
 		'px-1 pointer-events-none inline-flex select-none items-center gap-0.5 font-sans text-md font-medium opacity-0 transition-opacity -my-1';
-	let variantClasses = variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground';
+	let variantClasses = $derived(
+		variant === 'destructive' ? 'text-destructive' : 'text-muted-foreground'
+	);
 </script>
 
 <kbd class="{baseClasses} {variantClasses} {className}">

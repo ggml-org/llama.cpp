@@ -93,3 +93,6 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
+
+// Image error fallback utilities
+export { getImageErrorFallbackHtml } from './image-error-fallback';
