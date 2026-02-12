@@ -3643,23 +3643,24 @@ struct test_gated_delta_net : public test_case {
     const int64_t head_size;
     const int64_t n_seq_tokens;
     const int64_t n_seqs;
+    const int     v_repeat;
 
     std::string vars() override {
-        return VARS_TO_STR5(type, head_count, head_size, n_seq_tokens, n_seqs);
+        return VARS_TO_STR6(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat);
     }
 
     test_gated_delta_net(ggml_type type = GGML_TYPE_F32,
-            int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1)
-        : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs) {}
+            int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1, int v_repeat = 1)
+        : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), v_repeat(v_repeat) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q     = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
         ggml_tensor * k     = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
-        ggml_tensor * v     = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
-        ggml_tensor * g     = ggml_new_tensor_3d(ctx, type, head_count, n_seq_tokens, n_seqs);
-        ggml_tensor * beta  = ggml_new_tensor_3d(ctx, type, head_count, n_seq_tokens, n_seqs);
-        ggml_tensor * state = ggml_new_tensor_2d(ctx, type, head_size * head_size * head_count, n_seqs);
-        ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state, 1e-6f);
+        ggml_tensor * v     = ggml_new_tensor_4d(ctx, type, head_size, head_count * v_repeat, n_seq_tokens, n_seqs);
+        ggml_tensor * g     = ggml_new_tensor_3d(ctx, type, head_count * v_repeat, n_seq_tokens, n_seqs);
+        ggml_tensor * beta  = ggml_new_tensor_3d(ctx, type, head_count * v_repeat, n_seq_tokens, n_seqs);
+        ggml_tensor * state = ggml_new_tensor_2d(ctx, type, head_size * v_repeat * head_size * head_count, n_seqs);
+        ggml_tensor * out   = ggml_gated_delta_net(ctx, q, k, v, g, beta, state);
         return out;
     }
 };
@@ -8343,7 +8344,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 64, 1, 2));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 2));
-    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 32, 4, 2));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 32, 4, 2, 2));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging

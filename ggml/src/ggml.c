@@ -6112,8 +6112,7 @@ struct ggml_tensor * ggml_gated_delta_net(
         struct ggml_tensor  * v,
         struct ggml_tensor  * g,
         struct ggml_tensor  * beta,
-        struct ggml_tensor  * state,
-        float                 eps) {
+        struct ggml_tensor  * state) {
     GGML_ASSERT(ggml_is_contiguous(q));
     GGML_ASSERT(ggml_is_contiguous(k));
     GGML_ASSERT(ggml_is_contiguous(v));
@@ -6128,25 +6127,17 @@ struct ggml_tensor * ggml_gated_delta_net(
     GGML_ASSERT(beta->type == GGML_TYPE_F32);
     GGML_ASSERT(state->type == GGML_TYPE_F32);
 
-    const int64_t S_k      = q->ne[0];
-    const int64_t H        = q->ne[1];
-    const int64_t n_tokens = q->ne[2];
-    const int64_t n_seqs   = q->ne[3];
+    const int64_t S_v      = v->ne[0];
+    const int64_t H        = v->ne[1];
+    const int64_t n_tokens = v->ne[2];
+    const int64_t n_seqs   = v->ne[3];
 
-    const int64_t S_v = v->ne[0];
-
-    GGML_ASSERT(k->ne[0] == S_k && k->ne[1] == H && k->ne[2] == n_tokens && k->ne[3] == n_seqs);
-    GGML_ASSERT(v->ne[1] == H && v->ne[2] == n_tokens && v->ne[3] == n_seqs);
-    GGML_ASSERT(g->ne[0] == H && g->ne[1] == n_tokens && g->ne[2] == n_seqs);
-    GGML_ASSERT(beta->ne[0] == H && beta->ne[1] == n_tokens && beta->ne[2] == n_seqs);
     GGML_ASSERT(ggml_nelements(state) == S_v * S_v * H * n_seqs);
 
     // concat output and new_state into a single tensor
     // output: S_v * H * n_tokens * n_seqs, state: S_v * S_v * H * n_seqs
     const int64_t ne[4] = { S_v * H, n_tokens * n_seqs + S_v * n_seqs, 1, 1 };
     struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
-
-    ggml_set_op_params_f32(result, 0, eps);
 
     result->op     = GGML_OP_GATED_DELTA_NET;
     result->src[0] = q;
