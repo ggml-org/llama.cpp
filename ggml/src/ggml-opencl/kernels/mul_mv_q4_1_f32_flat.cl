@@ -110,7 +110,7 @@ inline void mul_vec_q_n_f32_flat(
     ulong offset0_dm = (first_row * nb + (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02));
     // Each block contains QK4_1/2 uchars, hence offset for qs is as follows.
     ulong offset0_q  = (first_row * nb + (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02)) * QK4_1/2;
-    
+
     global uchar * x = (global uchar *) src0_q + offset0_q;
     global half  * d = (global half  *) src0_d + offset0_dm;
     global half  * m = (global half  *) src0_m + offset0_dm;
