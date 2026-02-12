@@ -18,8 +18,8 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// System message to inject
 	systemMessage?: string;
-	// Disable reasoning format (use 'none' instead of 'auto')
-	disableReasoningFormat?: boolean;
+	// Disable reasoning parsing (use 'none' instead of 'auto')
+	disableReasoningParsing?: boolean;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;

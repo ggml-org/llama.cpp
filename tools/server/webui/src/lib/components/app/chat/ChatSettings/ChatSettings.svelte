@@ -254,8 +254,13 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
+					key: 'disableReasoningParsing',
+					label: 'Disable reasoning content parsing',
+					type: 'checkbox'
+				},
+				{
+					key: 'showRawOutputSwitch',
+					label: 'Enable raw output toggle',
 					type: 'checkbox'
 				},
 				{

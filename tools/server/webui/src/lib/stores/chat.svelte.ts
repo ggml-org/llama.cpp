@@ -118,6 +118,16 @@ class ChatStore {
 		this.isLoading = this.isChatLoading(convId);
 		const streamingState = this.getChatStreaming(convId);
 		this.currentResponse = streamingState?.response || '';
+		this.isStreamingActive = streamingState !== undefined;
+		this.setActiveProcessingConversation(convId);
+
+		// Sync streaming content to activeMessages so UI displays current content
+		if (streamingState?.response && streamingState?.messageId) {
+			const idx = conversationsStore.findMessageIndex(streamingState.messageId);
+			if (idx !== -1) {
+				conversationsStore.updateMessageAtIndex(idx, { content: streamingState.response });
+			}
+		}
 	}
 
 	/**
@@ -1639,7 +1649,7 @@ class ChatStore {
 
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
