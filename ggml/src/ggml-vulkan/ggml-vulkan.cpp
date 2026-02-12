@@ -2767,11 +2767,9 @@ static constexpr uint32_t flash_attention_num_small_rows = 32;
 static uint32_t get_fa_scalar_num_rows(uint32_t hsk, uint32_t hsv, FaRows rows, bool small_cache) {
     if (rows == FA_ROWS_1) {
         return 1;
-    } else if (rows == FA_ROWS_SMALL) {
-        return 4;
     }
 
-    if (hsv >= 192 || (hsv | hsk) & 8 || small_cache) {
+    if (rows == FA_ROWS_SMALL || hsv >= 192 || (hsv | hsk) & 8 || small_cache) {
         return 8;
     }
 
