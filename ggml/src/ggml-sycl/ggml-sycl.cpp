@@ -24940,6 +24940,14 @@ static void classify_cpu_layer_blocks(
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    // Re-entrancy guard: Prevent nested calls to compute_impl
+    static thread_local bool g_in_compute_impl = false;
+    struct compute_impl_guard {
+        compute_impl_guard()  { GGML_ASSERT(!g_in_compute_impl && "Re-entrant compute_impl"); g_in_compute_impl = true; }
+        ~compute_impl_guard() { g_in_compute_impl = false; }
+    };
+    compute_impl_guard _reentry_guard;
+
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
@@ -30982,26 +30990,31 @@ normal_dispatch:
             // Restore full node count
             cg->n_nodes = total;
 
-            // Ensure GPU work completes before CPU suffix reads its outputs.
+            // Ensure GPU prefix work completes before suffix reads its outputs.
             ctx->stream()->wait();
 
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] Dispatching CPU suffix: nodes [%d, %d)\n",
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] Dispatching CPU suffix via compute_impl: nodes [%d, %d)\n",
                             prefix_end, total);
 
             // Drain any pending staging flushes before mixed dispatch
             ggml_sycl_cpu_staging_drain();
 
-            for (int i = prefix_end; i < total; i++) {
-                ggml_tensor * node = cg->nodes[i];
-                if (!node) continue;
-                if (ggml_sycl_is_noop(node)) continue;
-                bool ok = ggml_sycl_compute_forward(*ctx, node);
-                if (!ok) {
-                    GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n",
-                                   "ggml_backend_sycl_graph_compute", node->name, ggml_op_name(node->op));
-                }
-                GGML_ASSERT(ok);
-            }
+            // Dispatch suffix through the FULL optimized path.
+            // Create a temporary view of the graph starting at prefix_end.
+            ggml_tensor ** saved_nodes = cg->nodes;
+            int            saved_count = cg->n_nodes;
+
+            cg->nodes   = saved_nodes + prefix_end;
+            cg->n_nodes = total - prefix_end;
+
+            // Dispatch through compute_impl — gets pre-classification,
+            // boundary detection, retained activation, GPU islands, fusion.
+            // Graph recording is already off (suffix runs outside recording).
+            ggml_backend_sycl_graph_compute_impl(ctx, cg);
+
+            // Restore original graph
+            cg->nodes   = saved_nodes;
+            cg->n_nodes = saved_count;
         }
 
         ~prefix_suffix_guard() {
