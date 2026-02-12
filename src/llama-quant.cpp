@@ -484,7 +484,7 @@ static bool tensor_type_requires_imatrix(const llama_model_quantize_params * par
         dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
         dst_type == GGML_TYPE_IQ3_XXS || dst_type == GGML_TYPE_IQ1_S  ||
         dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_M  ||
-        dst_type == GGML_TYPE_TQ1_0   || dst_type == GGML_TYPE_TQ2_0  ||
+        // dst_type == GGML_TYPE_TQ1_0   || dst_type == GGML_TYPE_TQ2_0  || // uncomment if #12557 is merged
         (   // Q2_K is the worst k-quant type - only allow it without imatrix for token embeddings
             dst_type == GGML_TYPE_Q2_K && strcmp(t->name, "token_embd.weight") != 0
         )
