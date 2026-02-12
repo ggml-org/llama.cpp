@@ -772,6 +772,9 @@ class TextModel(ModelBase):
         if "text_config" in self.hparams:
             # move the text_config to the root level
             self.hparams = {**self.hparams, **self.hparams["text_config"]}
+        if "llm_config" in self.hparams:
+            # also handle llm_config for VLM models (e.g., Nemotron Nano 12B v2 VL)
+            self.hparams = {**self.hparams, **self.hparams["llm_config"]}
 
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -4054,6 +4057,72 @@ class InternVisionModel(MmprojModel):
                 yield from super().modify_tensors(wv, name.replace("attn.qkv", "self_attn.v_proj"), bid)
             else:
                 yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register(
+    "NemotronH_Nano_VL_V2",
+    "RADIOModel"
+)
+class NemotronNanoV2VLModel(MmprojModel):
+    # ViT-Huge architecture parameters for RADIO v2.5-h
+    _vit_hidden_size = 1280
+    _vit_intermediate_size = 5120
+    _vit_num_layers = 32
+    _vit_num_heads = 16
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        # RADIO config doesn't have standard ViT parameters, so they need to be constructed manually
+        vision_config = self.global_config.get("vision_config")
+        if vision_config is None:
+            return None
+        # Add ViT-H parameters
+        vision_config = {
+            **vision_config,
+            "hidden_size": self._vit_hidden_size,
+            "intermediate_size": self._vit_intermediate_size,
+            "num_hidden_layers": self._vit_num_layers,
+            "num_attention_heads": self._vit_num_heads,
+            "image_size": self.global_config.get("force_image_size", 512),
+        }
+        return vision_config
+
+    def set_gguf_parameters(self):
+        if "image_mean" not in self.preprocessor_config:
+            self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
+        if "image_std" not in self.preprocessor_config:
+            self.preprocessor_config["image_std"] = [0.229, 0.224, 0.225]
+
+        super().set_gguf_parameters()
+        hparams = self.global_config
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
+        self.gguf_writer.add_vision_use_gelu(True)
+        downsample_ratio = hparams.get("downsample_ratio", 0.5)
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".position_embd." in new_name or "pos_embed" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "input_conditioner" in name:
+            return
+
+        if name.startswith("vision_model.radio_model.model."):
+            if ".attn.qkv." in name:
+                wq, wk, wv = data_torch.chunk(3, dim=0)
+                yield from super().modify_tensors(wq, name.replace("attn.qkv", "attn.q"), bid)
+                yield from super().modify_tensors(wk, name.replace("attn.qkv", "attn.k"), bid)
+                yield from super().modify_tensors(wv, name.replace("attn.qkv", "attn.v"), bid)
+                return
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
+
+        # Handle projector tensors (mlp1.*)
+        if name.startswith("mlp1."):
+            yield from super().modify_tensors(data_torch, name, bid)
+            return
 
 
 @ModelBase.register("WavTokenizerDec")
@@ -9525,6 +9594,14 @@ class NemotronHModel(GraniteHybridModel):
             self.gguf_writer.add_add_bos_token(True)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision model and projector tensors for VLM models (handled by mmproj) (e.g., Nemotron Nano 12B v2 VL)
+        if name.startswith(("vision_model.", "mlp1.")):
+            return
+
+        # Strip language_model. prefix for VLM models (e.g., Nemotron Nano 12B v2 VL)
+        if name.startswith("language_model."):
+            name = name[len("language_model."):]
+
         if self.is_moe and bid is not None:
             if name.endswith("mixer.gate.e_score_correction_bias"):
                 new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")

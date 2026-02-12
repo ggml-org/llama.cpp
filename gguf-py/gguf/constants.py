@@ -3774,6 +3774,7 @@ class VisionProjectorType:
     MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
+    NEMOTRON_V2_VL = "nemotron_v2_vl"
 
 
 # Items here are (block size, type size)
