@@ -2,7 +2,7 @@
 	import { Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { MarkdownContent } from '$lib/components/app';
+	import { LazyMarkdownContent } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
@@ -145,7 +145,7 @@
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
-									<MarkdownContent class="markdown-system-content" content={message.content} />
+									<LazyMarkdownContent class="markdown-system-content" content={message.content} />
 								</div>
 							{:else}
 								<span
