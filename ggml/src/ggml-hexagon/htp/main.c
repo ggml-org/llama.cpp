@@ -189,7 +189,7 @@ static int vtcm_release_callback(unsigned int rctx, void * state) {
     // otherwise we'll release it once we're done with the current Op.
 
     if (ctx->vtcm_inuse) {
-        ctx->vtcm_needs_release = false;
+        ctx->vtcm_needs_release = true;
         return 0;
     }
 
