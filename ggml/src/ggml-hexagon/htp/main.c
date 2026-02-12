@@ -26,11 +26,9 @@
 #include "worker-pool.h"
 
 #ifdef HTP_HAS_HMX
-// Forward declarations for HMX infrastructure (implemented in separate source files)
-extern void hmx_manager_setup(void);
-extern void hmx_manager_reset(void);
-extern void init_precomputed_tables(uint8_t * vtcm_table);
-#endif
+#include "hmx/hmx-mgr.h"
+#include "hmx/hmx-ops.h"
+#endif // HTP_HAS_HMX
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     struct htp_context * ctx;
@@ -320,17 +318,23 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 #endif
 
 #ifdef HTP_HAS_HMX
-    // Reserve VTCM tail for precompute tables (256KB = 4 x 64KB exp2 table copies)
+    // Reserve VTCM tail for precompute tables (64KB x HTP_EXP2_TABLE_COPIES)
     {
-        const size_t table_size   = 65536 * 4;
+#ifndef HTP_EXP2_TABLE_COPIES
+#define HTP_EXP2_TABLE_COPIES 4
+#endif
+        const size_t table_size   = (size_t)65536 * HTP_EXP2_TABLE_COPIES;
         const size_t table_offset = (ctx->vtcm_size - table_size) & ~((size_t)65535);
         ctx->exp2_table        = ctx->vtcm_base + table_offset;
         ctx->vtcm_scratch_size = table_offset;
 
+        ctx->hmx_dma = dma_queue_create(16);
+
         hmx_manager_setup();
+        hmx_set_vtcm_state(ctx->vtcm_base, table_offset,
+                            ctx->exp2_table, ctx->hmx_dma, ctx->vtcm_rctx);
         init_precomputed_tables(ctx->exp2_table);
         ctx->hmx_enabled = 1;
-        ctx->hmx_dma     = dma_queue_create(16);
 
         FARF(HIGH, "HMX enabled: vtcm-scratch %zu exp2-table @%p",
              ctx->vtcm_scratch_size, (void *)ctx->exp2_table);

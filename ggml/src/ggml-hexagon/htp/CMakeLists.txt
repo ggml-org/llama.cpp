@@ -50,6 +50,15 @@ if (HTP_VTCM_SESSION_HOLD)
     target_compile_definitions(${HTP_LIB} PRIVATE HTP_VTCM_SESSION_HOLD=1)
 endif()
 
+# Number of exp2 lookup-table copies stored in VTCM for flash-attention.
+# Each copy is 64 KB; workers select a copy via worker_index % N to reduce
+# VTCM bank conflicts.  Set to 1 if profiling shows no benefit from duplicates
+# (saves 192 KB of VTCM when going from 4 → 1).
+set(HTP_EXP2_TABLE_COPIES "4" CACHE STRING
+    "Number of exp2 table copies in VTCM (1 or 4)")
+target_compile_definitions(${HTP_LIB} PRIVATE
+    HTP_EXP2_TABLE_COPIES=${HTP_EXP2_TABLE_COPIES})
+
 build_idl(htp_iface.idl ${HTP_LIB})
 
 set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
