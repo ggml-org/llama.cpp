@@ -16,6 +16,7 @@
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
+#include <openvino/op/convert_like.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/gather.hpp>
@@ -89,12 +90,14 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
                 auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
                 auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
                 auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-                auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+                auto three_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+                auto neg_one_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
                 auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
                 auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-                auto shape_of_inp_pos = std::make_shared<ov::op::v3::ShapeOf>(inp_pos);
-                auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(shape_of_inp_pos, two_1d, zero_1d);
-                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, gather_inp_pos}, 0);
+                auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(inp_pos, neg_one_1d, three_1d);
+                auto reshaped_inp_pos = std::make_shared<ov::op::v1::Reshape>(gather_inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {1}), false);
+                auto inp_pos_incremented = std::make_shared<ov::op::v1::Add>(reshaped_inp_pos, ov::op::v0::Constant::create(ov::element::i32, ov::Shape{1}, {1}));
+                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, std::make_shared<v1::ConvertLike>(inp_pos_incremented, token_len_per_seq)}, 0);
                 mask_sliced =
                     std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
                 mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);

@@ -57,6 +57,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
     static auto is_static = false;
+    static size_t stateful_kv_size = 0;
 
     // if (is_naive(cgraph)) {
     //     return naive_compute(cgraph, core, device, config);
@@ -106,12 +107,27 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             }
             ggml_decoder->add_extra_inputs();
             infer_request = infer_request_cache.at(key);
+
             if (stateful) {
                 const auto * inp_pos = get_inp_pos_tensor(cgraph);
                 int32_t * pos_data = (int32_t *) inp_pos->data;
+                auto pos_shape = ggml_decoder->get_shape(inp_pos);
                 if (pos_data[0] == 0) {
                     infer_request->reset_state();
-                }
+                    stateful_kv_size = pos_shape[3];
+                } else if (stateful_kv_size == pos_data[0]) {
+                    stateful_kv_size += pos_shape[3];
+                } else {
+                    auto states = infer_request->query_state();
+                    for (auto state : states) {
+                        auto state_tensor = state.get_state();
+                        ov::Coordinate begin = {0, 0, 0, 0};
+                        ov::Coordinate end = {state_tensor.get_shape()[0], static_cast<uint32_t>(pos_data[0]), state_tensor.get_shape()[2], state_tensor.get_shape()[3]};
+                        ov::Tensor new_state_tensor(state_tensor, begin, end);
+                        state.set_state(new_state_tensor);
+                    }
+                    stateful_kv_size = pos_data[0] + 1;
+                 }
             }
 
             decoder_end_time = ggml_time_us();
