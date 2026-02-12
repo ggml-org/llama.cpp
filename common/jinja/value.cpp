@@ -4,6 +4,7 @@
 // for converting from JSON to jinja values
 #include <nlohmann/json.hpp>
 
+#include <sstream>
 #include <string>
 #include <cctype>
 #include <vector>
@@ -716,24 +717,42 @@ const func_builtins & value_string_t::get_builtins() const {
         }},
         {"tojson", tojson},
         {"indent", [](const func_args &args) -> value {
-            // no support for "first" as that would require us to somehow access generation context
-            args.ensure_count(2, 4);
-            args.ensure_vals<value_string, value_int, value_bool, value_bool>(true, true, false, false);
-
-            auto input = args.get_pos(0);
-            auto arg0 = args.get_pos(1);
-
-            int count = arg0->as_int();
-            if (count <= 0) {
-                throw raised_exception("indent must be a positive number");
+            args.ensure_count(1, 4);
+            value val_input  = args.get_pos(0);
+            value val_width  = args.get_kwarg_or_pos("width", 1);
+            const bool first = args.get_kwarg_or_pos("first", 2)->as_bool(); // undefined == false
+            const bool blank = args.get_kwarg_or_pos("blank", 3)->as_bool(); // undefined == false
+            if (!is_val<value_string>(val_input)) {
+                throw raised_exception("indent() first argument must be a string");
+            }
+            std::string indent;
+            if (is_val<value_int>(val_width)) {
+                indent.assign(val_width->as_int(), ' ');
+            } else if (is_val<value_string>(val_width)) {
+                indent = val_width->as_string().str();
+            } else {
+                indent = "    ";
             }
             std::string indented;
-            for (int i = 0; i < count; i++) {
-                indented.append(" ");
+            std::istringstream iss = std::istringstream(val_input->as_string().str());
+            std::string line;
+            bool first_line = true;
+            while (std::getline(iss, line)) {
+                bool do_indent = true;
+                if (first_line) {
+                    first_line = false;
+                    do_indent &= first;
+                } else {
+                    indented.append("\n");
+                }
+                do_indent &= blank || !line.empty();
+                if (do_indent) {
+                   indented.append(indent);
+                }
+                indented.append(line);
             }
-            indented.append(input->as_string().str());
             auto res = mk_val<value_string>(indented);
-            res->val_str.mark_input_based_on(input->as_string());
+            res->val_str.mark_input_based_on(val_input->as_string());
             return res;
         }},
         {"join", [](const func_args &) -> value {

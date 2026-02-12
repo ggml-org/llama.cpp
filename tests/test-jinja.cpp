@@ -692,9 +692,21 @@ static void test_filters(testing & t) {
     );
 
     test_template(t, "indent",
-        "{{ data|indent(4)}}",
-        { "data", "foo" },
-        "    foo"
+        "{{ data|indent(4) }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n    bar"
+    );
+
+    test_template(t, "indent first only",
+        "{{ data|indent(width=4,first=true) }}",
+        {{ "data", "foo\nbar" }},
+        "    foo\n    bar"
+    );
+
+    test_template(t, "indent blank lines and first line",
+        "{{ data|indent(width=4,blank=true,first=true) }}",
+        {{ "data", "foo\n\nbar" }},
+        "    foo\n    \n    bar"
     );
 
     test_template(t, "chained filters",
