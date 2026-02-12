@@ -8484,6 +8484,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             }
         }
 
+        memset(K_f32, 0, DK * KV_TILE_SZ * sizeof(float));
+
         for (int64_t ic = 0; ic < nek1; ic += KV_TILE_SZ) {
             const int kv_tile = (int)std::min((int64_t)KV_TILE_SZ, nek1 - ic);
 
@@ -8511,7 +8513,6 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
 
             // Pack K tile transposed: K_f32[dk][kv] so KV_TILE is contiguous (SIMD dim)
             // Zero-pad the last tile so the GEMM always operates on KV_TILE_SZ columns
-            memset(K_f32, 0, DK * KV_TILE_SZ * sizeof(float));
             for (int tk = 0; tk < kv_tile; tk++) {
                 const char * k_data = (const char *)k->data + (ic + tk)*nbk1 + ik2*nbk2 + ik3*nbk3;
                 if (kv_type == GGML_TYPE_F16) {
