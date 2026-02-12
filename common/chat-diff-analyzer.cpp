@@ -125,9 +125,9 @@ static json build_tool_call(const std::string & name, const json & args, const s
 }
 
 static json first_tool_call_zero_args         = build_tool_call("foofoo", json::object(), "call00001");
-static json first_tool_call_one_arg           = build_tool_call("foofoo", json{ "first", "XXXX" }, "call00001");
-static json first_tool_call_one_arg_other_val = build_tool_call("foofoo",json{{ "first", "YYYY" }}, "call00001");
-static json first_tool_call_other_arg         = build_tool_call("foofoo",json{ { "second", "YYYY" }}, "call00001");
+static json first_tool_call_one_arg           = build_tool_call("foofoo", {{ "first", "XXXX" }}, "call00001");
+static json first_tool_call_one_arg_other_val = build_tool_call("foofoo", {{ "first", "YYYY" }}, "call00001");
+static json first_tool_call_other_arg         = build_tool_call("foofoo", {{ "second", "YYYY" }}, "call00001");
 
 static json first_tool_call =
     build_tool_call("foofoo", json{{ "first",  "XXXX" }, { "second", "YYYY" }}, "call00001");

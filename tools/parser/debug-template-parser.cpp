@@ -39,6 +39,7 @@ struct debug_options {
     bool             with_tools        = true;
     bool             generation_prompt = true;
     bool             enable_reasoning  = true;
+    bool             debug_jinja       = false;
     output_mode       mode             = output_mode::BOTH;
     input_message_type input_message     = input_message_type::NONE;
 };
@@ -88,6 +89,7 @@ static void print_usage(const char * program_name) {
     LOG_ERR("  --generation-prompt=0|1 Set add_generation_prompt (default: 1)\n");
     LOG_ERR("  --enable-reasoning=0|1  Enable reasoning parsing (default: 1)\n");
     LOG_ERR("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
+    LOG_ERR("  --debug-jinja           Enable Jinja fine-grained debug\n");
     LOG_ERR("  --input-message=TYPE    Message type to render:\n");
     LOG_ERR("                          content_only, reasoning_content, tool_call_only,\n");
     LOG_ERR("                          content_tool_call, reasoning_tool_call,\n");
@@ -112,7 +114,9 @@ static bool parse_options(int argc, char ** argv, debug_options & opts) {
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
 
-        if (arg == "--no-tools") {
+        if (arg == "--debug-jinja") {
+            opts.debug_jinja = true;
+        } else if (arg == "--no-tools") {
             opts.with_tools = false;
         } else if (arg.rfind("--generation-prompt=", 0) == 0) {
             opts.generation_prompt = parse_bool_option(arg.substr(20));
@@ -339,13 +343,13 @@ int main(int argc, char ** argv) {
     // Set log level to most verbose to capture all debug output
     common_log_set_verbosity_thold(99);
 
-    if (std::getenv("LLAMA_DEBUG_JINJA") != nullptr) {
-        jinja::enable_debug(true);
-    }
-
     debug_options opts;
     if (!parse_options(argc, argv, opts)) {
         return 1;
+    }
+
+    if (opts.debug_jinja || std::getenv("LLAMA_DEBUG_JINJA") != nullptr) {
+        jinja::enable_debug(true);
     }
 
     std::string template_source;
