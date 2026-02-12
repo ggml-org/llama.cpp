@@ -3641,6 +3641,10 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                         if (n_fuse > 1) {
                             ggml_tensor fused_add_node;
+                            // Let's ensure compilation fails should ggml_tensor at one point no-longer be trivially copyable.
+                            static_assert(
+                                std::is_trivially_copyable_v<ggml_tensor>,
+                                "ggml_tensor must be trivially copyable for memcpy usage in fused-add node-creation");
                             memcpy(&fused_add_node, node, sizeof(ggml_tensor));
                             for (int j = 0; j < n_fuse - 1; ++j) {
                                 fused_add_node.src[j + 2] = cgraph->nodes[i + j + 1]->src[1];
