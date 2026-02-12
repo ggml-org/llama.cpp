@@ -2786,9 +2786,10 @@ struct test_set : public test_case {
     const ggml_type type_dst;
     const std::array<int64_t, 4> ne;
     const int dim;
+    const bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR4(type_src, type_dst, ne, dim);
+        return VARS_TO_STR5(type_src, type_dst, ne, dim, inplace);
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -2796,8 +2797,8 @@ struct test_set : public test_case {
     }
 
     test_set(ggml_type type_src = GGML_TYPE_F32, ggml_type type_dst = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {6, 5, 4, 3}, int dim = 1)
-        : type_src(type_src), type_dst(type_dst), ne(ne), dim(dim) {}
+            std::array<int64_t, 4> ne = {6, 5, 4, 3}, int dim = 1, bool inplace = false)
+        : type_src(type_src), type_dst(type_dst), ne(ne), dim(dim), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
@@ -2808,7 +2809,7 @@ struct test_set : public test_case {
         for (int i = 0; i < dim; ++i) {
             ne_dst[i] *= 2;
         }
-        ggml_tensor* dst = ggml_new_tensor(ctx, type_dst, 4, ne_dst.data());
+        ggml_tensor * dst = ggml_new_tensor(ctx, type_dst, 4, ne_dst.data());
         ggml_set_param(dst);
         ggml_set_name(dst, "dst");
 
@@ -2816,9 +2817,16 @@ struct test_set : public test_case {
         for (int i = 0; i < dim; ++i) {
             offset += ((ne_dst[i] - ne[i])/2)*dst->nb[i];
         }
-        ggml_tensor * out = ggml_set(ctx, dst, src,
-            // The backward pass requires setting a contiguous region:
-            src->nb[1], src->nb[2], src->nb[3], offset);
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_set_inplace(ctx, dst, src,
+                    // The backward pass requires setting a contiguous region:
+                    src->nb[1], src->nb[2], src->nb[3], offset);
+        } else {
+            out = ggml_set(ctx, dst, src,
+                    // The backward pass requires setting a contiguous region:
+                    src->nb[1], src->nb[2], src->nb[3], offset);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -7428,11 +7436,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dup(GGML_TYPE_I16, {10,  8, 3, 1}, {1, 2, 0, 3}));
 
     for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
-        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim));
+        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim, false));
+        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim, true));
     }
 
     for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
-        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim));
+        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim, false));
+        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim, true));
     }
 
     // same-type copy
