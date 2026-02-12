@@ -57,7 +57,6 @@ static void test_nemotron_tool_format(testing & t);
 
 // CohereForAI template analysis tests
 static void test_cohere_reasoning_detection(testing & t);
-static void test_cohere_tool_format(testing & t);
 static void test_cohere_analysis(testing & t);
 
 // Marker separation
@@ -1283,18 +1282,18 @@ static void test_nemotron_reasoning_detection(testing & t) {
     auto analysis = differential_analyzer::analyze(tmpl);
 
     // Check reasoning markers
-    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.markers.reasoning_start);
-    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.markers.reasoning_end);
+    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
 
     // Check reasoning mode detection
     // Nemotron uses forced closed reasoning with add_generation_prompt
-    t.assert_equal("reasoning should be FORCED_CLOSED", reasoning_mode::FORCED_CLOSED, analysis.reasoning);
+    t.assert_equal("reasoning should be FORCED_CLOSED", reasoning_mode::FORCED_CLOSED, analysis.reasoning.mode);
 
     // Make sure reasoning markers don't spill over to content markers
-    t.assert_equal("content start should be empty", "", analysis.markers.content_start);
-    t.assert_equal("content end should be empty", "", analysis.markers.content_end);
+    t.assert_equal("content start should be empty", "", analysis.content.start);
+    t.assert_equal("content end should be empty", "", analysis.content.end);
 
-    t.assert_equal("content should be PLAIN", content_mode::PLAIN, analysis.content);
+    t.assert_equal("content should be PLAIN", content_mode::PLAIN, analysis.content.mode);
 }
 
 static void test_nemotron_tool_format(testing & t) {
@@ -1304,27 +1303,27 @@ static void test_nemotron_tool_format(testing & t) {
     auto analysis = differential_analyzer::analyze(tmpl);
 
     // Check tool markers - Nemotron uses per-call wrapping (each call individually wrapped)
-    t.assert_equal("tool_section_start should be empty (per-call format)", "", analysis.markers.tool_section_start);
-    t.assert_equal("tool_section_end should be empty (per-call format)", "", analysis.markers.tool_section_end);
-    t.assert_equal("per_call_start should be '<tool_call>\\n'", "<tool_call>\n", analysis.markers.per_call_start);
-    t.assert_equal("per_call_end should be '</tool_call>'", "</tool_call>", analysis.markers.per_call_end);
-    t.assert_true("should support parallel calls", analysis.supports_parallel_calls);
+    t.assert_equal("tool_section_start should be empty (per-call format)", "", analysis.tools.format.section_start);
+    t.assert_equal("tool_section_end should be empty (per-call format)", "", analysis.tools.format.section_end);
+    t.assert_equal("per_call_start should be '<tool_call>\\n'", "<tool_call>\n", analysis.tools.format.per_call_start);
+    t.assert_equal("per_call_end should be '</tool_call>'", "</tool_call>", analysis.tools.format.per_call_end);
+    t.assert_true("should support parallel calls", analysis.jinja_caps.supports_parallel_tool_calls);
 
     // Check function markers
-    t.assert_equal("func_name_prefix should be '<function='", "<function=", analysis.markers.func_name_prefix);
-    t.assert_equal("func_name_suffix should be '>\\n'", ">\n", analysis.markers.func_name_suffix);
-    t.assert_equal("func_close should be '</function>\\n'", "</function>\n", analysis.markers.func_close);
+    t.assert_equal("func_name_prefix should be '<function='", "<function=", analysis.tools.function.name_prefix);
+    t.assert_equal("func_name_suffix should be '>\\n'", ">\n", analysis.tools.function.name_suffix);
+    t.assert_equal("func_close should be '</function>\\n'", "</function>\n", analysis.tools.function.close);
 
     // Check argument markers (note: markers retain trailing newlines for proper parsing)
-    t.assert_equal("arg_name_prefix should be '<parameter='", "<parameter=", analysis.markers.arg_name_prefix);
-    t.assert_equal("arg_name_suffix should be '>\\n'", ">\n", analysis.markers.arg_name_suffix);
-    t.assert_equal("arg_value_suffix should be '</parameter>\\n'", "</parameter>\n", analysis.markers.arg_value_suffix);
+    t.assert_equal("arg_name_prefix should be '<parameter='", "<parameter=", analysis.tools.arguments.name_prefix);
+    t.assert_equal("arg_name_suffix should be '>\\n'", ">\n", analysis.tools.arguments.name_suffix);
+    t.assert_equal("arg_value_suffix should be '</parameter>\\n'", "</parameter>\n", analysis.tools.arguments.value_suffix);
 
     // Check format classification
-    t.assert_true("tool format should be TAG_WITH_TAGGED", analysis.tools == tool_format::TAG_WITH_TAGGED);
+    t.assert_true("tool format should be TAG_WITH_TAGGED", analysis.tools.format.mode == tool_format::TAG_WITH_TAGGED);
 
     // Verify tool support
-    t.assert_true("should support tools", analysis.supports_tools);
+    t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
 }
 
 static common_chat_template load_cohere_template(testing & t) {
@@ -1333,7 +1332,6 @@ static common_chat_template load_cohere_template(testing & t) {
 
 static void test_cohere_analysis(testing & t) {
     t.test("Cohere reasoning detection", test_cohere_reasoning_detection);
-    t.test("Cohere tool format", test_cohere_tool_format);
 }
 
 static void test_cohere_reasoning_detection(testing & t) {
@@ -1343,64 +1341,64 @@ static void test_cohere_reasoning_detection(testing & t) {
     auto analysis = differential_analyzer::analyze(tmpl);
 
     // Check reasoning markers - Cohere uses special token format
-    t.assert_equal("reasoning_start should be '<|START_THINKING|>'", "<|START_THINKING|>", analysis.markers.reasoning_start);
-    t.assert_equal("reasoning_end should be '<|END_THINKING|>'", "<|END_THINKING|>", analysis.markers.reasoning_end);
+    t.assert_equal("reasoning_start should be '<|START_THINKING|>'", "<|START_THINKING|>", analysis.reasoning.start);
+    t.assert_equal("reasoning_end should be '<|END_THINKING|>'", "<|END_THINKING|>", analysis.reasoning.end);
 
     // Check reasoning mode - Cohere only shows reasoning with tool calls (TOOLS_ONLY)
-    t.assert_equal("reasoning should be TOOLS_ONLY", reasoning_mode::TOOLS_ONLY, analysis.reasoning);
+    t.assert_equal("reasoning should be TOOLS_ONLY", reasoning_mode::TOOLS_ONLY, analysis.reasoning.mode);
 
     // Check content markers - Cohere wraps all content with START/END_RESPONSE
-    t.assert_equal("content_start should be '<|START_RESPONSE|>'", "<|START_RESPONSE|>", analysis.markers.content_start);
-    t.assert_equal("content_end should be '<|END_RESPONSE|>'", "<|END_RESPONSE|>", analysis.markers.content_end);
+    t.assert_equal("content_start should be '<|START_RESPONSE|>'", "<|START_RESPONSE|>", analysis.content.start);
+    t.assert_equal("content_end should be '<|END_RESPONSE|>'", "<|END_RESPONSE|>", analysis.content.end);
 
     // Content is always wrapped (both with and without tools)
-    t.assert_equal("content should be ALWAYS_WRAPPED", content_mode::ALWAYS_WRAPPED, analysis.content);
+    t.assert_equal("content should be ALWAYS_WRAPPED", content_mode::ALWAYS_WRAPPED, analysis.content.mode);
 }
 
-static void test_cohere_tool_format(testing & t) {
+static void test_tool_format_cohere(testing & t) {
     common_chat_template tmpl = load_cohere_template(t);
 
     // Run differential analysis
     auto analysis = differential_analyzer::analyze(tmpl);
 
     // Check tool section markers - Cohere uses ACTION markers
-    t.assert_equal("tool_section_start should be '<|START_ACTION|>'", "<|START_ACTION|>", analysis.markers.tool_section_start);
-    t.assert_equal("tool_section_end should be '<|END_ACTION|>'", "<|END_ACTION|>", analysis.markers.tool_section_end);
+    t.assert_equal("tool_section_start should be '<|START_ACTION|>'", "<|START_ACTION|>", analysis.tools.format.section_start);
+    t.assert_equal("tool_section_end should be '<|END_ACTION|>'", "<|END_ACTION|>", analysis.tools.format.section_end);
 
     // JSON_NATIVE format has no per-call markers
-    t.assert_equal("per_call_start should be empty", "", analysis.markers.per_call_start);
-    t.assert_equal("per_call_end should be empty", "", analysis.markers.per_call_end);
+    t.assert_equal("per_call_start should be empty", "", analysis.tools.format.per_call_start);
+    t.assert_equal("per_call_end should be empty", "", analysis.tools.format.per_call_end);
 
     // JSON_NATIVE format has empty function markers (no XML-style markers)
-    t.assert_equal("func_name_prefix should be empty", "", analysis.markers.func_name_prefix);
-    t.assert_equal("func_name_suffix should be empty", "", analysis.markers.func_name_suffix);
-    t.assert_equal("func_close should be empty", "", analysis.markers.func_close);
+    t.assert_equal("func_name_prefix should be empty", "", analysis.tools.function.name_prefix);
+    t.assert_equal("func_name_suffix should be empty", "", analysis.tools.function.name_suffix);
+    t.assert_equal("func_close should be empty", "", analysis.tools.function.close);
 
     // JSON_NATIVE format has empty args markers
-    t.assert_equal("args_start should be empty", "", analysis.markers.args_start);
-    t.assert_equal("args_end should be empty", "", analysis.markers.args_end);
+    t.assert_equal("args_start should be empty", "", analysis.tools.arguments.start);
+    t.assert_equal("args_end should be empty", "", analysis.tools.arguments.end);
 
     // JSON_NATIVE format has empty argument markers
-    t.assert_equal("arg_name_prefix should be empty", "", analysis.markers.arg_name_prefix);
-    t.assert_equal("arg_name_suffix should be empty", "", analysis.markers.arg_name_suffix);
-    t.assert_equal("arg_value_prefix should be empty", "", analysis.markers.arg_value_prefix);
-    t.assert_equal("arg_value_suffix should be empty", "", analysis.markers.arg_value_suffix);
-    t.assert_equal("arg_separator should be empty", "", analysis.markers.arg_separator);
+    t.assert_equal("arg_name_prefix should be empty", "", analysis.tools.arguments.name_prefix);
+    t.assert_equal("arg_name_suffix should be empty", "", analysis.tools.arguments.name_suffix);
+    t.assert_equal("arg_value_prefix should be empty", "", analysis.tools.arguments.value_prefix);
+    t.assert_equal("arg_value_suffix should be empty", "", analysis.tools.arguments.value_suffix);
+    t.assert_equal("arg_separator should be empty", "", analysis.tools.arguments.separator);
 
     // Check JSON field names - Cohere uses non-standard names
-    t.assert_equal("name_field should be 'tool_name'", "tool_name", analysis.name_field);
-    t.assert_equal("args_field should be 'parameters'", "parameters", analysis.args_field);
+    t.assert_equal("name_field should be 'tool_name'", "tool_name", analysis.tools.format.name_field);
+    t.assert_equal("args_field should be 'parameters'", "parameters", analysis.tools.format.args_field);
     // This isn't a real tool call id field, i.e. with the OpenAI tool call ID format
-    t.assert_equal("id_field should be 'tool_call_id'", "", analysis.id_field);
+    t.assert_equal("id_field should be 'tool_call_id'", "", analysis.tools.format.id_field);
 
     // Check format classification
-    t.assert_equal("tool format should be JSON_NATIVE", tool_format::JSON_NATIVE, analysis.tools);
+    t.assert_equal("tool format should be JSON_NATIVE", tool_format::JSON_NATIVE, analysis.tools.format.mode);
 
     // Check flags
-    t.assert_true("should support tools", analysis.supports_tools);
-    t.assert_true("should support parallel calls", analysis.supports_parallel_calls);
-    t.assert_true("should not require nonnull content", !analysis.requires_nonnull_content);
-    t.assert_true("tools_array_wrapped should be true", analysis.tools_array_wrapped);
+    t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
+    t.assert_true("should support parallel calls", analysis.jinja_caps.supports_parallel_tool_calls);
+    t.assert_true("should not require nonnull content", !analysis.content.requires_nonnull_content);
+    t.assert_true("tools_array_wrapped should be true", analysis.tools.format.tools_array_wrapped);
 }
 
 // ============================================================================

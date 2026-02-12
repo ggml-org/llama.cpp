@@ -42,7 +42,7 @@ static void caps_try_execute(jinja::program & prog,
         jinja::runtime runtime(ctx);
         auto results = runtime.execute(prog);
         auto parts = jinja::runtime::gather_string_parts(results);
-        std::string result = parts->as_string().str();
+        result = parts->as_string().str();
         success = true;
     } catch (const std::exception & e) {
         JJ_DEBUG("Exception during execution: %s", e.what());
@@ -95,6 +95,8 @@ caps caps_get(jinja::program & prog) {
         return v->stats.ops.find(op_name) != v->stats.ops.end();
     };
 
+    JJ_DEBUG("%s\n", ">>> Running capability check: typed content");
+
     // case: typed content support
     caps_try_execute(
         prog,
@@ -125,6 +127,7 @@ caps caps_get(jinja::program & prog) {
         }
     );
 
+    JJ_DEBUG("%s\n", ">>> Running capability check: system prompt");
 
     // case: system prompt support
     caps_try_execute(
@@ -155,6 +158,8 @@ caps caps_get(jinja::program & prog) {
         }
     );
 
+    JJ_DEBUG("%s\n", ">>> Running capability check: tool support");
+
     // case: tools support
     caps_try_execute(
         prog,
@@ -167,7 +172,7 @@ caps caps_get(jinja::program & prog) {
                 },
                 {
                     {"role", "assistant"},
-                    {"content", "Assistant message"},
+                    {"content", ""}, // Some templates expect content to be empty with tool calls
                     {"tool_calls", json::array({
                         {
                             {"id", "call00001"},
@@ -259,6 +264,8 @@ caps caps_get(jinja::program & prog) {
             }
         }
     );
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: preserve reasoning");
 
     // case: preserve reasoning content in chat history
     caps_try_execute(

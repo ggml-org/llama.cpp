@@ -419,33 +419,33 @@ int main(int argc, char ** argv) {
             LOG_ERR("\n=== Differential Analysis Results ===\n");
 
             LOG_ERR("\n--- Reasoning & Content Structure ---\n");
-            LOG_ERR("reasoning_mode: %s\n", mode_to_str(analysis.reasoning).c_str());
-            LOG_ERR("reasoning_start: '%s'\n", analysis.markers.reasoning_start.c_str());
-            LOG_ERR("reasoning_end: '%s'\n", analysis.markers.reasoning_end.c_str());
-            LOG_ERR("content_mode: %s\n", mode_to_str(analysis.content).c_str());
-            LOG_ERR("content_start: '%s'\n", analysis.markers.content_start.c_str());
-            LOG_ERR("content_end: '%s'\n", analysis.markers.content_end.c_str());
+            LOG_ERR("reasoning_mode: %s\n", mode_to_str(analysis.reasoning.mode).c_str());
+            LOG_ERR("reasoning_start: '%s'\n", analysis.reasoning.start.c_str());
+            LOG_ERR("reasoning_end: '%s'\n", analysis.reasoning.end.c_str());
+            LOG_ERR("content_mode: %s\n", mode_to_str(analysis.content.mode).c_str());
+            LOG_ERR("content_start: '%s'\n", analysis.content.start.c_str());
+            LOG_ERR("content_end: '%s'\n", analysis.content.end.c_str());
 
             LOG_ERR("\n--- Tool Call Structure ---\n");
-            LOG_ERR("tool_mode: %s\n", mode_to_str(analysis.tools).c_str());
-            LOG_ERR("supports_tools: %s\n", analysis.supports_tools ? "true" : "false");
-            LOG_ERR("supports_parallel_calls: %s\n", analysis.supports_parallel_calls ? "true" : "false");
-            LOG_ERR("tool_section_start: '%s'\n", analysis.markers.tool_section_start.c_str());
-            LOG_ERR("tool_section_end: '%s'\n", analysis.markers.tool_section_end.c_str());
-            LOG_ERR("per_call_start: '%s'\n", analysis.markers.per_call_start.c_str());
-            LOG_ERR("per_call_end: '%s'\n", analysis.markers.per_call_end.c_str());
-            LOG_ERR("func_name_prefix: '%s'\n", analysis.markers.func_name_prefix.c_str());
-            LOG_ERR("func_name_suffix: '%s'\n", analysis.markers.func_name_suffix.c_str());
-            LOG_ERR("func_close: '%s'\n", analysis.markers.func_close.c_str());
-            LOG_ERR("arg_name_prefix: '%s'\n", analysis.markers.arg_name_prefix.c_str());
-            LOG_ERR("arg_name_suffix: '%s'\n", analysis.markers.arg_name_suffix.c_str());
-            LOG_ERR("arg_value_prefix: '%s'\n", analysis.markers.arg_value_prefix.c_str());
-            LOG_ERR("arg_value_suffix: '%s'\n", analysis.markers.arg_value_suffix.c_str());
-            LOG_ERR("name_field: '%s'\n", analysis.name_field.c_str());
-            LOG_ERR("args_field: '%s'\n", analysis.args_field.c_str());
-            LOG_ERR("id_field: '%s'\n", analysis.id_field.c_str());
-            LOG_ERR("gen_id_field: '%s'\n", analysis.gen_id_field.c_str());
-            LOG_ERR("parameter_order: '%s'\n", std::accumulate(analysis.parameter_order.begin(), analysis.parameter_order.end(),
+            LOG_ERR("tool_mode: %s\n", mode_to_str(analysis.tools.format.mode).c_str());
+            LOG_ERR("supports_tools: %s\n", analysis.jinja_caps.supports_tools ? "true" : "false");
+            LOG_ERR("supports_parallel_calls: %s\n", analysis.jinja_caps.supports_parallel_tool_calls ? "true" : "false");
+            LOG_ERR("tool_section_start: '%s'\n", analysis.tools.format.section_start.c_str());
+            LOG_ERR("tool_section_end: '%s'\n", analysis.tools.format.section_end.c_str());
+            LOG_ERR("per_call_start: '%s'\n", analysis.tools.format.per_call_start.c_str());
+            LOG_ERR("per_call_end: '%s'\n", analysis.tools.format.per_call_end.c_str());
+            LOG_ERR("func_name_prefix: '%s'\n", analysis.tools.function.name_prefix.c_str());
+            LOG_ERR("func_name_suffix: '%s'\n", analysis.tools.function.name_suffix.c_str());
+            LOG_ERR("func_close: '%s'\n", analysis.tools.function.close.c_str());
+            LOG_ERR("arg_name_prefix: '%s'\n", analysis.tools.arguments.name_prefix.c_str());
+            LOG_ERR("arg_name_suffix: '%s'\n", analysis.tools.arguments.name_suffix.c_str());
+            LOG_ERR("arg_value_prefix: '%s'\n", analysis.tools.arguments.value_prefix.c_str());
+            LOG_ERR("arg_value_suffix: '%s'\n", analysis.tools.arguments.value_suffix.c_str());
+            LOG_ERR("name_field: '%s'\n", analysis.tools.format.name_field.c_str());
+            LOG_ERR("args_field: '%s'\n", analysis.tools.format.args_field.c_str());
+            LOG_ERR("id_field: '%s'\n", analysis.tools.format.id_field.c_str());
+            LOG_ERR("gen_id_field: '%s'\n", analysis.tools.format.gen_id_field.c_str());
+            LOG_ERR("parameter_order: '%s'\n", std::accumulate(analysis.tools.format.parameter_order.begin(), analysis.tools.format.parameter_order.end(),
                 std::string(""), [] (const std::string & a, const std::string & b) { return a.empty() ? b : a + ", " + b; }
                 ).c_str());
 
@@ -470,11 +470,13 @@ int main(int argc, char ** argv) {
                 LOG_ERR("  '%s'\n", token.c_str());
             }
 
-            LOG_ERR("\n=== Verifying created grammar ===\n");
-            auto * grammar = llama_grammar_init_impl(nullptr, parser_data.grammar.c_str(), "root",
-                                                     parser_data.grammar_lazy, nullptr, 0, nullptr, 0);
-            if (grammar != nullptr) {
-                LOG_ERR("\n=== Grammar successfully created ===\n");
+            if (!parser_data.grammar.empty()) {
+                LOG_ERR("\n=== Verifying created grammar ===\n");
+                auto * grammar = llama_grammar_init_impl(nullptr, parser_data.grammar.c_str(), "root",
+                                                         parser_data.grammar_lazy, nullptr, 0, nullptr, 0);
+                if (grammar != nullptr) {
+                    LOG_ERR("\n=== Grammar successfully created ===\n");
+                }
             }
         }
     } catch (const std::exception & e) {

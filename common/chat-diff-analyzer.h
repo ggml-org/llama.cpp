@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat.h"
+#include "jinja/caps.h"
 #include "nlohmann/json.hpp"
 
 #include <functional>
@@ -15,11 +16,11 @@ using json = nlohmann::ordered_json;
 // Parameters for template application
 // ============================================================================
 struct template_params {
-    json                                  messages;
-    json                                  tools;
-    bool                                  add_generation_prompt = false;
-    bool                                  enable_thinking       = true;
-    std::optional<json>                   extra_context = std::nullopt;
+    json                messages;
+    json                tools;
+    bool                add_generation_prompt = false;
+    bool                enable_thinking       = true;
+    std::optional<json> extra_context         = std::nullopt;
 };
 
 struct diff_split {
@@ -35,9 +36,9 @@ struct diff_split {
 
 // Result of compare_variants containing diff and original outputs
 struct compare_variants_result {
-    diff_split                 diff;
-    std::string                output_A;
-    std::string                output_B;
+    diff_split  diff;
+    std::string output_A;
+    std::string output_B;
 };
 
 // ============================================================================
@@ -77,15 +78,9 @@ struct marker_registry {
     std::string arg_separator;     // e.g., "", "\n", ","
 
     // === Call ID markers (for non-JSON formats with tool call IDs) ===
-    std::string call_id_prefix;       // e.g., "[CALL_ID]" (marker before call ID value)
-    std::string call_id_suffix;       // e.g., "" (marker after call ID value, before next section)
-
-    // === Special markers ===
-    std::string code_block_marker;    // e.g., "Action:" (for markdown code block format)
-    std::string code_block_language;  // e.g., "json"
-    std::string function_namespace;   // e.g., "functions." (for prefixed-indexed format)
+    std::string call_id_prefix;  // e.g., "[CALL_ID]" (marker before call ID value)
+    std::string call_id_suffix;  // e.g., "" (marker after call ID value, before next section)
 };
-
 
 // ============================================================================
 // Analysis Result Enums
@@ -93,13 +88,13 @@ struct marker_registry {
 
 // Reasoning handling mode (derived from R1-R3 comparisons)
 enum class reasoning_mode {
-    NONE,         // No reasoning markers detected
-    TAG_BASED,    // Standard tag-based: <think>...</think>
-    DELIMITER,    // Delimiter-based: [BEGIN FINAL RESPONSE] (reasoning ends at delimiter)
-    FORCED_OPEN,  // Template ends with open reasoning tag (empty start, non-empty end)
-    FORCED_CLOSED,// Template ends with open reasoning tag on enabled thinking but
-                  // with both opened and closed tag for disabled thinking
-    TOOLS_ONLY    // Only reason on tool calls, not on normal content
+    NONE,           // No reasoning markers detected
+    TAG_BASED,      // Standard tag-based: <think>...</think>
+    DELIMITER,      // Delimiter-based: [BEGIN FINAL RESPONSE] (reasoning ends at delimiter)
+    FORCED_OPEN,    // Template ends with open reasoning tag (empty start, non-empty end)
+    FORCED_CLOSED,  // Template ends with open reasoning tag on enabled thinking but
+                    // with both opened and closed tag for disabled thinking
+    TOOLS_ONLY      // Only reason on tool calls, not on normal content
 };
 
 inline std::ostream & operator<<(std::ostream & os, const reasoning_mode & mode) {
@@ -143,10 +138,10 @@ inline std::ostream & operator<<(std::ostream & os, const content_mode & mode) {
 
 // Call ID position in tool calls (for non-JSON formats)
 enum class call_id_position {
-    NONE,                    // No call ID support detected
-    PRE_FUNC_NAME,           // Call ID before function name: [CALL_ID]id[FUNC]name{args}
-    BETWEEN_FUNC_AND_ARGS,   // Call ID between function and args: [FUNC]name[CALL_ID]id{args}
-    POST_ARGS,               // Call ID after arguments: [FUNC]name{args}[CALL_ID]id
+    NONE,                   // No call ID support detected
+    PRE_FUNC_NAME,          // Call ID before function name: [CALL_ID]id[FUNC]name{args}
+    BETWEEN_FUNC_AND_ARGS,  // Call ID between function and args: [FUNC]name[CALL_ID]id{args}
+    POST_ARGS,              // Call ID after arguments: [FUNC]name{args}[CALL_ID]id
 };
 
 inline std::ostream & operator<<(std::ostream & os, const call_id_position & pos) {
@@ -166,10 +161,10 @@ inline std::ostream & operator<<(std::ostream & os, const call_id_position & pos
 
 // Tool call format classification (derived from T1-T5, A1-A3 comparisons)
 enum class tool_format {
-    NONE,              // No tool support detected
-    JSON_NATIVE,       // Pure JSON: {"name": "X", "arguments": {...}}
-    TAG_WITH_JSON,     // Tag-based with JSON args: <function=X>{...}</function>
-    TAG_WITH_TAGGED,   // Tag-based with tagged args: <param=key>value</param>
+    NONE,             // No tool support detected
+    JSON_NATIVE,      // Pure JSON: {"name": "X", "arguments": {...}}
+    TAG_WITH_JSON,    // Tag-based with JSON args: <function=X>{...}</function>
+    TAG_WITH_TAGGED,  // Tag-based with tagged args: <param=key>value</param>
 };
 
 inline std::ostream & operator<<(std::ostream & os, const tool_format & format) {
@@ -187,33 +182,77 @@ inline std::ostream & operator<<(std::ostream & os, const tool_format & format) 
     }
 }
 
+struct reasoning_analysis {
+    reasoning_mode mode = reasoning_mode::NONE;
+
+    std::string start;  // e.g., "<think>", "[THINK]", "<|START_THINKING|>", ""
+    std::string end;    // e.g., "</think>", "[BEGIN FINAL RESPONSE]", "<|END_THINKING|>"
+};
+
+struct content_analysis {
+    content_mode mode = content_mode::PLAIN;
+
+    std::string start;  // e.g., "<response>", ">>>all\n", ""
+    std::string end;    // e.g., "</response>", ""
+
+    bool requires_nonnull_content = false;
+};
+
+struct tool_format_analysis {
+    tool_format mode = tool_format::NONE;
+
+    std::string section_start;   // e.g., "<tool_call>", "[TOOL_CALLS]", ""
+    std::string section_end;     // e.g., "</tool_call>", ""
+    std::string per_call_start;  // e.g., "<|tool_call_begin|>", "" (for multi-call templates)
+    std::string per_call_end;    // e.g., "<|tool_call_end|>", ""
+
+    bool fun_name_is_key = false;      // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
+    bool tools_array_wrapped = false;  // Tool calls wrapped in JSON array [...]
+
+    std::string              function_field = "function";
+    std::string              name_field     = "name";
+    std::string              args_field     = "arguments";
+    std::string              id_field;
+    std::string              gen_id_field;
+    std::vector<std::string> parameter_order;
+};
+
+struct tool_function_analysis {
+    std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
+    std::string name_suffix;  // e.g., ">", "\"", ":0"
+    std::string close;        // e.g., "</function>", "" (for tag-based)
+};
+
+struct tool_arguments_analysis {
+    std::string start;          // e.g., "<|tool_call_argument_begin|>", "<args>"
+    std::string end;            // e.g., "<|tool_call_argument_end|>", "</args>"
+    std::string name_prefix;   // e.g., "<param=", "<arg_key>", "\""
+    std::string name_suffix;   // e.g., ">", "</arg_key>", "\":"
+    std::string value_prefix;  // e.g., "", "<arg_value>", ""
+    std::string value_suffix;  // e.g., "</param>", "</arg_value>", ""
+    std::string separator;     // e.g., "", "\n", ","
+};
+
+struct tool_id_analysis {
+    call_id_position pos = call_id_position::NONE;
+
+    std::string prefix;  // e.g., "[CALL_ID]" (marker before call ID value)
+    std::string suffix;  // e.g., "" (marker after call ID value, before next section)
+};
+
+struct tool_analysis {
+    tool_format_analysis    format;
+    tool_function_analysis  function;
+    tool_arguments_analysis arguments;
+    tool_id_analysis        call_id;
+};
+
 // Complete result of differential analysis
 struct diff_analysis_result {
-    // Classification results
-    reasoning_mode  reasoning = reasoning_mode::NONE;
-    content_mode    content   = content_mode::PLAIN;
-    tool_format     tools     = tool_format::NONE;
-
-    // All extracted markers
-    marker_registry markers;
-
-    // JSON field names (for JSON-based formats)
-    bool        fun_name_is_key = false;
-    std::string function_field  = "function";
-    std::string name_field      = "name";
-    std::string args_field      = "arguments";
-    std::string id_field;
-    std::string gen_id_field;
-    std::vector<std::string> parameter_order;
-
-    // Call ID position (for non-JSON formats)
-    call_id_position call_id_pos = call_id_position::NONE;
-
-    // Flags
-    bool supports_tools           = false;
-    bool supports_parallel_calls  = false;
-    bool requires_nonnull_content = false;
-    bool tools_array_wrapped      = false;  // Tool calls wrapped in JSON array [...]
+    jinja::caps        jinja_caps;
+    reasoning_analysis reasoning;
+    content_analysis   content;
+    tool_analysis      tools;
 
     // Preserved tokens for tokenizer (union of all non-empty markers)
     std::vector<std::string> preserved_tokens;
@@ -227,94 +266,102 @@ class differential_analyzer {
     static diff_analysis_result analyze(const common_chat_template & tmpl);
 
     // Phase-specific analysis (can be called individually for testing)
-    static void analyze_reasoning(const common_chat_template & tmpl, diff_analysis_result & result);
-    static void analyze_content(const common_chat_template & tmpl, diff_analysis_result & result);
-    static void analyze_tools(const common_chat_template & tmpl, diff_analysis_result & result);
-    static void analyze_arguments(const common_chat_template & tmpl, diff_analysis_result & result);
+    static reasoning_analysis analyze_reasoning(const common_chat_template & tmpl, bool supports_tools);
+    static content_analysis   analyze_content(const common_chat_template & tmpl, const reasoning_analysis & reasoning);
+    static tool_analysis      analyze_tools(const common_chat_template & tmpl,
+                                            const jinja::caps &          caps,
+                                            const reasoning_analysis &   reasoning);
 
     // Factorized differential comparison function (public for testing)
     // Takes base params and a single modifier lambda to create variant B
     // Returns compare_variants_result containing diff and both outputs, or std::nullopt on failure
     static std::optional<compare_variants_result> compare_variants(
-        const common_chat_template &                           tmpl,
-        const template_params &                                params_A,
-        const std::function<void(template_params &)> &         params_modifier);
+        const common_chat_template &                   tmpl,
+        const template_params &                        params_A,
+        const std::function<void(template_params &)> & params_modifier);
 
   private:
     // Comparison helpers (implement the comparison matrix from the plan)
 
-    // R1: Extract reasoning markers by comparing with/without reasoning_content
-    static void compare_reasoning_presence(const common_chat_template & tmpl, diff_analysis_result & result);
+    // 1. Reasoning analysis:
+    // Look for reasoning markers in rendered content
+    static void compare_reasoning_presence(const common_chat_template & tmpl, reasoning_analysis & reasoning);
 
-    // R2: Detect forced-open reasoning by comparing enable_thinking=false vs true
-    static void compare_thinking_enabled(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Compare generation prompt with enable_thinking=true vs false
+    static void compare_thinking_enabled(const common_chat_template & tmpl, reasoning_analysis & reasoning);
 
-    // R3: Detect reasoning scope (content-only vs with tools)
-    static void compare_reasoning_scope(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Check if reasoning is always possible or only in tool calls
+    static void compare_reasoning_scope(const common_chat_template & tmpl, reasoning_analysis & reasoning);
 
-    // C1: Extract content markers by comparing different content values
-    static void compare_content_values(const common_chat_template & tmpl, diff_analysis_result & result);
+    // 2. Content (fully inside analyze_content mentioned above)
 
-    // T1: Analyze the tool calls
-    static void analyze_tool_calls(const common_chat_template & tmpl, diff_analysis_result & result);
+    // 3. Tool calls
+    //    a. format
+    // Extract tool calling 'haystack' for further analysis and delegate further analysis based on format
+    static tool_format_analysis analyze_tool_calls(const common_chat_template & tmpl,
+                                                   const reasoning_analysis &   reasoning);
 
-    // Analyzes a tool call section to determine the format used (pure JSON, function name markers, or full markers)
-    static void analyze_tool_call_format(const std::string &    haystack,
-                                         const std::string &    fun_name_needle,
-                                         const std::string &    arg_name_needle,
-                                         diff_analysis_result & result);
+    // Analyze format based on position of function and argument name in needle
+    static tool_format_analysis analyze_tool_call_format(const std::string &        haystack,
+                                                         const std::string &        fun_name_needle,
+                                                         const std::string &        arg_name_needle,
+                                                         const reasoning_analysis & reasoning);
 
-    // Helper functions to handle the two branches of analyze_tool_call_format
+    // Analyze specifics of JSON native format (entire tool call is a JSON object)
     static void analyze_tool_call_format_json_native(const std::string &    clean_haystack,
                                                      const std::string &    fun_name_needle,
                                                      const std::string &    arg_name_needle,
-                                                     diff_analysis_result & result);
+                                                     tool_format_analysis & format);
 
+    // Analyze specifics of non-JSON native format (tags for function name or for function name and arguments)
     static void analyze_tool_call_format_non_json(const std::string &    clean_haystack,
                                                   const std::string &    fun_name_needle,
-                                                  diff_analysis_result & result);
+                                                  tool_format_analysis & format);
 
-    // T2: Check if markers are per call or per section
-    static void check_per_call_markers(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Check for and extract specific per-call markers for non-native-JSON templates with parallel call support
+    static void check_per_call_markers(const common_chat_template & tmpl, tool_format_analysis & result);
 
-    // T3: Extract call separator; also outputs second_call_content for per-call detection
-    static void extract_call_separator(const common_chat_template & tmpl, diff_analysis_result & result,
-                                       std::string & second_call_content);
+    // Logic below is only for non-JSON-native tool calling formats
+    // 3. b. function name
+    // Extract function name markers
+    static tool_function_analysis extract_function_markers(const common_chat_template & tmpl,
+                                                           const tool_format_analysis & analysis);
 
-    // T4: Analyze function name format and extract markers
-    static void extract_function_markers(const common_chat_template & tmpl,
-                                        diff_analysis_result & result);
+    // 4. c. function arguments
+    // Delegates to separate functions for: separator analysis, argument name analysis, argument value analysis
+    static tool_arguments_analysis analyze_arguments(const common_chat_template & tmpl,
+                                                     const tool_analysis &        analysis);
 
-    // T5: Extract argument separator
-    static void extract_argument_separator(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Extract argument name markers
+    static void extract_argument_name_markers(const common_chat_template & tmpl,
+                                              tool_arguments_analysis &    args_analysis);
 
-    // T6: Extract args container markers
-    static void extract_args_markers(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Extract argument value markers
+    static void extract_argument_value_markers(const common_chat_template & tmpl,
+                                               const tool_analysis &        analysis,
+                                               tool_arguments_analysis &    args_analysis);
 
-    // A1: Extract argument name markers
-    static void extract_argument_name_markers(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Extract argument separator, if specified (eg. <arg=foo>...</arg><sep><arg=bar>...</arg>)
+    static void extract_argument_separator(const common_chat_template & tmpl,
+                                           tool_arguments_analysis &    args_analysis);
 
-    // A2: Extract argument value markers
-    static void extract_argument_value_markers(const common_chat_template & tmpl, diff_analysis_result & result);
+    // Extract argument wrapper markers, if present (eg. '<args><arg=foo>...</arg><arg=bar>...</arg></args>')
+    static void extract_args_markers(const common_chat_template & tmpl,
+                                     const tool_analysis &        analysis,
+                                     tool_arguments_analysis &    args_analysis);
 
-    // T7: Extract call ID markers (for non-JSON formats)
-    static void extract_call_id_markers(const common_chat_template & tmpl, diff_analysis_result & result);
+    // 4. d. function call id
+    // Extract call ID markers, if present
+    static tool_id_analysis extract_call_id_markers(const common_chat_template & tmpl,
+                                                    tool_format_analysis       & analysis);
 
-    // Classify tool format based on extracted markers
-    static void classify_tool_format(diff_analysis_result & result);
-
-    // Classification helpers
+    // Collect tokens from entire analysis to preserve
     static void collect_preserved_tokens(diff_analysis_result & result);
 
-    // Utility: Apply template with given parameters
-    static std::string apply_template(const common_chat_template & tmpl,
-                                      const template_params &      params);
+    static std::string apply_template(const common_chat_template & tmpl, const template_params & params);
 };
 
-enum segment_type {
-    TEXT,
-    MARKER
-};
+enum segment_type { TEXT, MARKER };
 
 inline std::ostream & operator<<(std::ostream & os, const segment_type & type) {
     switch (type) {
@@ -329,7 +376,7 @@ inline std::ostream & operator<<(std::ostream & os, const segment_type & type) {
 
 struct segment {
     segment_type type;
-    std::string value;
+    std::string  value;
 
     segment(segment_type type, std::string value) : type(type), value(std::move(value)) {}
 };

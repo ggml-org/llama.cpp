@@ -32,6 +32,7 @@ static std::string HELP = R"(
 Usage: test-chat-template [OPTIONS] PATH_TO_TEMPLATE
 Options:
   -h, --help               Show this help message and exit.
+  --with-tools             Add a tool and a tool call to the default JSON input
   --json <path>            Path to the JSON input file.
   --stop-on-first-fail     Stop testing on the first failure (default: false).
   --no-common              Use direct Jinja engine instead of common chat templates (default: use common).
@@ -57,12 +58,65 @@ static std::string DEFAULT_JSON = R"({
     "add_generation_prompt": true
 })";
 
+static std::string DEFAULT_JSON_WITH_TOOLS = R"({
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hello, how are you?"
+        },
+        {
+            "role": "assistant",
+            "content": "I am fine, thank you!"
+        },
+        {
+            "role": "user",
+            "content": "Call a tool!"
+        },
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call00001",
+                    "type": "function",
+                    "function": {
+                        "name": "test",
+                        "arguments": { "arg": "hello" }
+                    }
+                }
+            ]
+        }
+    ],
+    "tools": [
+        {
+            "type": "function",
+            "function": {
+                "name": "test",
+                "description": "Test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "arg": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["arg"]
+            }
+        }
+    ],
+    "bos_token": "<s>",
+    "eos_token": "</s>",
+    "add_generation_prompt": true
+})";
+
+
 int main(int argc, char ** argv) {
     std::vector<std::string> args(argv, argv + argc);
 
     std::string tmpl_path;
     std::string json_path;
     std::string output_path;
+    std::string & json_to_use = DEFAULT_JSON;
     bool stop_on_first_fail = false;
     bool use_common = true;
 
@@ -74,6 +128,8 @@ int main(int argc, char ** argv) {
         if (args[i] == "--json" && i + 1 < args.size()) {
             json_path = args[i + 1];
             i++;
+        } else if (args[i] == "--with-tools") {
+            json_to_use = DEFAULT_JSON_WITH_TOOLS;
         } else if (args[i] == "--stop-on-first-fail") {
             stop_on_first_fail = true;
         } else if (args[i] == "--output" && i + 1 < args.size()) {
@@ -106,7 +162,7 @@ int main(int argc, char ** argv) {
             std::istreambuf_iterator<char>());
         input_json = json::parse(content);
     } else {
-        input_json = json::parse(DEFAULT_JSON);
+        input_json = json::parse(json_to_use);
     }
 
     std::filesystem::path p(tmpl_path);

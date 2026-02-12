@@ -27,7 +27,7 @@
     {%- set ns.is_first = false -%}
     {%- set ns.is_last_user = true -%}{{'<｜User｜>' + message['content']}}
   {%- endif -%}
-  {%- if message['role'] == 'assistant' and message['tool_calls'] is defined and message['tool_calls'] is not none -%}
+  {%- if message['role'] == 'assistant' and message['tool_calls'] -%}
     {%- if ns.is_last_user -%}{{'<｜Assistant｜></think>'}}
     {%- endif -%}
     {%- set ns.is_last_user = false -%}
@@ -35,7 +35,7 @@
     {%- set ns.is_tool = false -%}
     {%- for tool in message['tool_calls'] -%}
       {%- if not ns.is_first -%}
-        {%- if message['content'] is none -%}{{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
+        {%- if not message['content'] -%}{{'<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>'+ tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
           {%- else -%}{{message['content'] + '<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['function']['name'] + '<｜tool▁sep｜>' + tool['function']['arguments'] + '<｜tool▁call▁end｜>'}}
         {%- endif -%}
         {%- set ns.is_first = true -%}
@@ -43,7 +43,7 @@
       {%- endif -%}
     {%- endfor -%}{{'<｜tool▁calls▁end｜><｜end▁of▁sentence｜>'}}
   {%- endif -%}
-  {%- if message['role'] == 'assistant' and (message['tool_calls'] is not defined or message['tool_calls'] is none) -%}
+  {%- if message['role'] == 'assistant' and not message['tool_calls'] -%}
     {%- if ns.is_last_user -%}{{'<｜Assistant｜>'}}
       {%- if message['prefix'] is defined and message['prefix'] and thinking -%}{{'<think>'}}
         {%- else -%}{{'</think>'}}

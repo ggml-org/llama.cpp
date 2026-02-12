@@ -530,7 +530,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         auto            mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
-        t.assert_equal("content", "I need to get the weather.", msg.content);
+        t.assert_equal("content", "I need to get the weather.\n", msg.content);
         t.assert_equal("reasoning", "", msg.reasoning_content);
         t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
         if (!msg.tool_calls.empty()) {

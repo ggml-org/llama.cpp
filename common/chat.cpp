@@ -240,7 +240,7 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
         ? *chat_templates->template_tool_use
         : *chat_templates->template_default;
     diff_analysis_result result = differential_analyzer::analyze(tmpl);
-    detect |= result.reasoning != reasoning_mode::NONE;
+    detect |= result.reasoning.mode != reasoning_mode::NONE;
     return detect;
 }
 
