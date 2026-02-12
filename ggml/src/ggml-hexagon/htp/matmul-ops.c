@@ -2374,6 +2374,57 @@ static inline bool htp_is_permuted(const struct htp_tensor * t) {
     return t->nb[0] > t->nb[1] || t->nb[1] > t->nb[2] || t->nb[2] > t->nb[3];
 }
 
+static int htp_mminit_vec_dot(struct htp_matmul_context * mmctx, enum htp_data_type type) {
+    switch (type) {
+        case HTP_TYPE_Q4_0:
+            mmctx->type        = "q4x4x2-f32";
+            mmctx->vec_dot_1x1 = vec_dot_q4x4x2_q8x4x2_1x1;
+            mmctx->vec_dot_2x1 = vec_dot_q4x4x2_q8x4x2_2x1;
+            mmctx->vec_dot_2x2 = vec_dot_q4x4x2_q8x4x2_2x2;
+            return 0;
+        case HTP_TYPE_Q8_0:
+            mmctx->type        = "q8x4x2-f32";
+            mmctx->vec_dot_1x1 = vec_dot_q8x4x2_q8x4x2_1x1;
+            mmctx->vec_dot_2x1 = vec_dot_q8x4x2_q8x4x2_2x1;
+            mmctx->vec_dot_2x2 = vec_dot_q8x4x2_q8x4x2_2x2;
+            return 0;
+        case HTP_TYPE_MXFP4:
+            mmctx->type        = "mxfp4x4x2-f32";
+            mmctx->vec_dot_1x1 = vec_dot_mxfp4x4x2_q8x4x2_1x1;
+            mmctx->vec_dot_2x1 = vec_dot_mxfp4x4x2_q8x4x2_2x1;
+            mmctx->vec_dot_2x2 = vec_dot_mxfp4x4x2_q8x4x2_2x2;
+            return 0;
+        default:
+            return -1;
+    }
+}
+
+static void htp_mminit_spad(struct htp_ops_context * octx,
+                                 size_t dst_row_size,
+                                 size_t src0_row_size_padded,
+                                 size_t src1_row_size,
+                                 uint32_t src1_nrows,
+                                 size_t src2_spad_size_per_thread) {
+    octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
+    octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
+    octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
+
+    if (src2_spad_size_per_thread > 0) {
+        octx->src2_spad.size_per_thread = src2_spad_size_per_thread;
+        octx->src2_spad.size            = octx->src2_spad.size_per_thread;
+    }
+
+    // src0 spad is also used in dynamic quantizer to store padded src1 rows
+    size_t src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
+    if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
+        octx->src0_spad.size_per_thread = src1_row_size_padded;
+    }
+
+    octx->src1_spad.size = octx->src1_spad.size_per_thread;
+    octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
+    octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
+}
+
 int op_matmul(struct htp_ops_context * octx) {
     htp_matmul_tensors_preamble;
 
@@ -2385,9 +2436,8 @@ int op_matmul(struct htp_ops_context * octx) {
     const uint32_t src1_nrows = ne11 * ne12 * ne13;
 
     // Compute src0_nrows_per_thread
-    octx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
-    octx->src0_nrows_per_thread += (octx->src0_nrows_per_thread & 1);  // round up to even
-    mmctx->src0_nrows_per_thread = octx->src0_nrows_per_thread;
+    mmctx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
+    mmctx->src0_nrows_per_thread += (mmctx->src0_nrows_per_thread & 1); // round up to even
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
@@ -2401,156 +2451,76 @@ int op_matmul(struct htp_ops_context * octx) {
 
     bool need_quant = !(octx->flags & HTP_OPFLAGS_SKIP_QUANTIZE);
 
-    switch (src0->type) {
-        case HTP_TYPE_Q4_0:
-            quant_job_func     = quantize_f32_q8x4x2;
-            mmctx->type        = "q4x4x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_q4x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_q4x4x2_q8x4x2_2x1;
-            mmctx->vec_dot_2x2 = vec_dot_q4x4x2_q8x4x2_2x2;
+    if (src0->type == HTP_TYPE_F16) {
+        // Try optimized f16-f16 path first (src1 in VTCM)
+        const size_t f16_src1_row_size  = hex_round_up(ne10 * 2, 128);
+        const size_t f16_src1_spad_size = hex_round_up(f16_src1_row_size * src1_nrows, 256);
+        const size_t f16_src0_spad_size = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * octx->n_threads;
+        const size_t f16_dst_spad_size  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256) * octx->n_threads;
 
-            src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
+        const size_t f16_total_size = f16_src1_spad_size + f16_src0_spad_size + f16_dst_spad_size;
 
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
+        // Default matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
+        // It only supports 1-vs-N broadcasting (src0 is 2D) or standard 2D matmul.
+        const bool is_batched  = (ne02 > 1) || (ne03 > 1);
+        const bool is_permuted = htp_is_permuted(&octx->src0) || htp_is_permuted(&octx->src1);
 
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
+        if (!is_batched && !is_permuted && f16_total_size <= octx->ctx->vtcm_size) {
+            // Optimized path
+            quant_job_func     = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16 : quantize_f16_f16;
+            mmctx->type        = "f16-f16";
+            mmctx->vec_dot_1x1 = vec_dot_f16_f16_aa_1x1;
+            mmctx->vec_dot_2x1 = vec_dot_f16_f16_aa_2x1;
+            mmctx->vec_dot_2x2 = vec_dot_f16_f16_aa_2x2;
 
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
-
-        case HTP_TYPE_Q8_0:
-            quant_job_func     = quantize_f32_q8x4x2;
-            mmctx->type        = "q8x4x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_q8x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_q8x4x2_q8x4x2_2x1;
-            mmctx->vec_dot_2x2 = vec_dot_q8x4x2_q8x4x2_2x2;
-
-            src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
-
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
+            src1_row_size = f16_src1_row_size;  // row size post quantization
 
             octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
             octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
             octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
 
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
             octx->src1_spad.size = octx->src1_spad.size_per_thread;
             octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
             octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
+        } else {
+            // Fallback to f16/f32 (DDR) if src1 doesn't fit in VTCM or broadcasting is required
+            quant_job_func = NULL;
+            if (src1->type == HTP_TYPE_F32) {
+                mmctx->type        = "f16-f32";
+                mmctx->vec_dot_1x1 = vec_dot_f16_f32_uu_1x1;
+                matmul_job_func    = matmul_4d;
+            } else {
+                mmctx->type        = "f16-f16";
+                mmctx->vec_dot_1x1 = vec_dot_f16_f16_uu_1x1;
+                matmul_job_func    = matmul_4d;
+            }
 
-        case HTP_TYPE_MXFP4:
-            quant_job_func     = quantize_f32_q8x4x2;
-            mmctx->type        = "mxfp4x4x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_mxfp4x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_mxfp4x4x2_q8x4x2_2x1;
-            mmctx->vec_dot_2x2 = vec_dot_mxfp4x4x2_q8x4x2_2x2;
-
-            src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
-
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
+            src1_row_size = nb11;  // original row size in DDR
 
             octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
+            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size, 256);
+            octx->src1_spad.size_per_thread = hex_round_up(MM_SPAD_SRC1_NROWS * src1_row_size, 256);
 
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
             octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
+            octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
             octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
 
-        case HTP_TYPE_F16:
-            {
-                // Try optimized f16-f16 path first (src1 in VTCM)
-                const size_t f16_src1_row_size  = hex_round_up(ne10 * 2, 128);
-                const size_t f16_src1_spad_size = hex_round_up(f16_src1_row_size * src1_nrows, 256);
-                const size_t f16_src0_spad_size = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256) * octx->n_threads;
-                const size_t f16_dst_spad_size  = hex_round_up(MM_SPAD_DST_NROWS  * dst_row_size, 256) * octx->n_threads;
+            // Init fastdiv for matmul_4d (supports broadcasting)
+            mmctx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
+            mmctx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
+            mmctx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
+            mmctx->mm_div_r3       = init_fastdiv_values(src1->ne[3] / src0->ne[3]);
 
-                const size_t f16_total_size = f16_src1_spad_size + f16_src0_spad_size + f16_dst_spad_size;
-
-                // Default matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
-                // It only supports 1-vs-N broadcasting (src0 is 2D) or standard 2D matmul.
-                const bool is_batched  = (ne02 > 1) || (ne03 > 1);
-                const bool is_permuted = htp_is_permuted(&octx->src0) || htp_is_permuted(&octx->src1);
-
-                if (!is_batched && !is_permuted && f16_total_size <= octx->ctx->vtcm_size) {
-                    // Optimized path
-                    quant_job_func     = (src1->type == HTP_TYPE_F32) ? quantize_f32_f16 : quantize_f16_f16;
-                    mmctx->type        = "f16-f16";
-                    mmctx->vec_dot_1x1 = vec_dot_f16_f16_aa_1x1;
-                    mmctx->vec_dot_2x1 = vec_dot_f16_f16_aa_2x1;
-                    mmctx->vec_dot_2x2 = vec_dot_f16_f16_aa_2x2;
-
-                    src1_row_size = f16_src1_row_size; // row size post quantization
-
-                    octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-                    octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-                    octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-
-                    octx->src1_spad.size = octx->src1_spad.size_per_thread;
-                    octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-                    octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-                } else {
-                    // Fallback to f16/f32 (DDR) if src1 doesn't fit in VTCM or broadcasting is required
-                    quant_job_func  = NULL;
-                    if (src1->type == HTP_TYPE_F32) {
-                        mmctx->type        = "f16-f32";
-                        mmctx->vec_dot_1x1 = vec_dot_f16_f32_uu_1x1;
-                        matmul_job_func    = matmul_4d;
-                    } else {
-                        mmctx->type        = "f16-f16";
-                        mmctx->vec_dot_1x1 = vec_dot_f16_f16_uu_1x1;
-                        matmul_job_func    = matmul_4d;
-                    }
-
-                    src1_row_size = nb11; // original row size in DDR
-
-                    octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-                    octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size, 256);
-                    octx->src1_spad.size_per_thread = hex_round_up(MM_SPAD_SRC1_NROWS * src1_row_size, 256);
-
-                    octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-                    octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
-                    octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-
-                    // Init fastdiv for matmul_4d (supports broadcasting)
-                    mmctx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
-                    mmctx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
-                    mmctx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
-                    mmctx->mm_div_r3       = init_fastdiv_values(src1->ne[3] / src0->ne[3]);
-
-                    need_quant = false;
-                }
-            }
-            break;
-
-        default:
+            need_quant = false;
+        }
+    } else {
+        if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
             return HTP_STATUS_NO_SUPPORT;
+        }
+
+        quant_job_func = quantize_f32_q8x4x2;
+        src1_row_size  = q8x4x2_row_size(ne10);
+        htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, 0);
     }
 
     // VTCM scratchpads for all tensors
@@ -2625,91 +2595,15 @@ int op_matmul_id(struct htp_ops_context * octx) {
     size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
     size_t matrix_row_map_size    = n_as * ids->ne[0] * ids->ne[1] * sizeof(struct mmid_row_mapping);
 
-    switch (src0->type) {
-        case HTP_TYPE_Q4_0:
-            quant_job_func = quantize_f32_q8x4x2;
-            src1_row_size  = q8x4x2_row_size(ne10);  // row size post quantization
-
-            mmctx->type        = "q4x2x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_q4x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_q4x4x2_q8x4x2_2x1;
-
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-            octx->src2_spad.size_per_thread = hex_round_up(matrix_row_counts_size + matrix_row_map_size, 256);
-
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
-            octx->src2_spad.size = octx->src2_spad.size_per_thread;
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
-
-        case HTP_TYPE_Q8_0:
-            quant_job_func = quantize_f32_q8x4x2;
-            src1_row_size  = q8x4x2_row_size(ne10);  // row size post quantization
-
-            mmctx->type        = "q8x2x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_q8x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_q8x4x2_q8x4x2_2x1;
-
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-            octx->src2_spad.size_per_thread = hex_round_up(matrix_row_counts_size + matrix_row_map_size, 256);
-
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
-            octx->src2_spad.size = octx->src2_spad.size_per_thread;
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
-
-        case HTP_TYPE_MXFP4:
-            quant_job_func = quantize_f32_q8x4x2;
-            src1_row_size  = q8x4x2_row_size(ne10);  // row size post quantization
-
-            mmctx->type        = "mxfp4x2x2-f32";
-            mmctx->vec_dot_1x1 = vec_dot_mxfp4x4x2_q8x4x2_1x1;
-            mmctx->vec_dot_2x1 = vec_dot_mxfp4x4x2_q8x4x2_2x1;
-
-            // Entire src1 tensor is placed into the VTCM
-            // For other tensors we allocate N rows per thread, padded to HVX vector size
-            octx->dst_spad.size_per_thread  = hex_round_up(MM_SPAD_DST_NROWS * dst_row_size, 256);
-            octx->src0_spad.size_per_thread = hex_round_up(MM_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
-            octx->src1_spad.size_per_thread = hex_round_up(src1_row_size * src1_nrows, 256);
-            octx->src2_spad.size_per_thread = hex_round_up(matrix_row_counts_size + matrix_row_map_size, 256);
-
-            // src0 spad is also used in dynamic quantizer to store padded src1 rows
-            src1_row_size_padded = hex_round_up(src1_row_size, QK_Q8_0x4x2 * sizeof(float));
-            if (octx->src0_spad.size_per_thread < src1_row_size_padded) {
-                octx->src0_spad.size_per_thread = src1_row_size_padded;
-            }
-
-            octx->src2_spad.size = octx->src2_spad.size_per_thread;
-            octx->src1_spad.size = octx->src1_spad.size_per_thread;
-            octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
-            octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
-            break;
-
-        default:
-            return HTP_STATUS_NO_SUPPORT;
+    if (htp_mminit_vec_dot(mmctx, src0->type) != 0) {
+        return HTP_STATUS_NO_SUPPORT;
     }
+
+    quant_job_func = quantize_f32_q8x4x2;
+    src1_row_size  = q8x4x2_row_size(ne10);
+
+    const size_t src2_spad_size_per_thread = hex_round_up(matrix_row_counts_size + matrix_row_map_size, 256);
+    htp_mminit_spad(octx, dst_row_size, src0_row_size_padded, src1_row_size, src1_nrows, src2_spad_size_per_thread);
 
     size_t spad_size = octx->src2_spad.size + octx->src1_spad.size + octx->src0_spad.size + octx->dst_spad.size;
 
