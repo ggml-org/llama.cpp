@@ -25497,7 +25497,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         // Per-tensor event tracking: after each GPU op, record a barrier event
         // for dst so that GPU→CPU transitions can wait on specific tensors.
         // Skip for CPU-dispatched nodes (they are synchronous).
-        if (cpu_offload_active && !prev_on_cpu) {
+        if (cpu_offload_active && !prev_on_cpu && !g_ggml_sycl_graph_recording) {
             gpu_tensor_events[node] =
                 sycl_ctx->stream()->ext_oneapi_submit_barrier();
         }
