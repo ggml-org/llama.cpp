@@ -479,6 +479,22 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
+static bool tensor_requires_imatrix(const llama_model_quantize_params * params, const ggml_tensor * t, const ggml_type dst_type) {
+    if (!params->imatrix) {
+        if (
+            dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
+            dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_S  || (
+                dst_type == GGML_TYPE_IQ1_M && strcmp(t->name, "token_embd.weight") &&
+                strcmp(t->name, "output.weight")
+            ) || (
+                dst_type == GGML_TYPE_Q2_K && params->ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S &&
+                strcmp(t->name, "token_embd.weight") != 0
+            )
+        ) return true;
+    }
+    return false;
+}
+
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -741,6 +757,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         new_ofstream(0);
     }
 
+    // flag for `--dry-run`, to let the user know if imatrix will be required for a real
+    // quantization, as a courtesy
+    bool will_require_imatrix = false;
+
     for (const auto * it : tensors) {
         const auto & weight = *it;
         ggml_tensor * tensor = weight.tensor;
@@ -921,6 +941,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 new_size = tensor_size;
                 LLAMA_LOG_INFO("size = %8.3f MiB\n", new_size/1024.0/1024.0);
             }
+            if (!will_require_imatrix && tensor_requires_imatrix(params, tensor, new_type)) {
+                will_require_imatrix = true;
+            }
             total_size_org += tensor_size;
             total_size_new += new_size;
             continue;
@@ -957,12 +980,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         }
                     }
                 }
-                if ((new_type == GGML_TYPE_IQ2_XXS ||
-                    new_type == GGML_TYPE_IQ2_XS  ||
-                    new_type == GGML_TYPE_IQ2_S   ||
-                    new_type == GGML_TYPE_IQ1_S   ||
-                    (new_type == GGML_TYPE_IQ1_M && strcmp(tensor->name, "token_embd.weight") && strcmp(tensor->name, "output.weight"))  ||
-                    (new_type == GGML_TYPE_Q2_K && params->ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S && strcmp(tensor->name, "token_embd.weight") != 0)) && !imatrix) {
+                if (tensor_requires_imatrix(params, tensor, new_type)) {
                     LLAMA_LOG_ERROR("\n\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
@@ -1053,6 +1071,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     LLAMA_LOG_INFO("%s: model size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_org/1024.0/1024.0, total_size_org*8.0/ml.n_elements);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MiB (%.2f BPW)\n", __func__, total_size_new/1024.0/1024.0, total_size_new*8.0/ml.n_elements);
+    if (!params->imatrix && params->dry_run && will_require_imatrix) {
+        LLAMA_LOG_WARN("%s: WARNING: dry run completed successfully, but actually completing this quantization will require an imatrix!\n");
+    }
 
     if (qs.n_fallback > 0) {
         LLAMA_LOG_WARN("%s: WARNING: %d of %d tensor(s) required fallback quantization\n",
