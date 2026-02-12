@@ -479,20 +479,11 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-static bool tensor_requires_imatrix(const llama_model_quantize_params * params, const ggml_tensor * t, const ggml_type dst_type) {
-    if (
-        dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
+static bool tensor_type_requires_imatrix(const ggml_type dst_type) {
+    if (dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
         dst_type == GGML_TYPE_IQ3_XXS || dst_type == GGML_TYPE_IQ1_S  ||
         dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_M  ||
-        dst_type == GGML_TYPE_TQ1_0   || dst_type == GGML_TYPE_TQ2_0  ||
-        (
-            dst_type == GGML_TYPE_IQ1_M && strcmp(t->name, "token_embd.weight") &&
-            strcmp(t->name, "output.weight")
-        ) || (
-            dst_type == GGML_TYPE_Q2_K && params->ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S &&
-            strcmp(t->name, "token_embd.weight") != 0
-        )
-    ) {
+        dst_type == GGML_TYPE_TQ1_0   || dst_type == GGML_TYPE_TQ2_0) {
         return true;
     } else {
         return false;
@@ -941,7 +932,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
-                if (!will_require_imatrix && tensor_requires_imatrix(params, tensor, new_type)) {
+                if (!will_require_imatrix && tensor_type_requires_imatrix(new_type)) {
                     will_require_imatrix = true;
                 }
             } else {
@@ -984,7 +975,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         }
                     }
                 }
-                if (!imatrix && tensor_requires_imatrix(params, tensor, new_type)) {
+                if (!imatrix && tensor_type_requires_imatrix(new_type)) {
                     LLAMA_LOG_ERROR("\n\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
