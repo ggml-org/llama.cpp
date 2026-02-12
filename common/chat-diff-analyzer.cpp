@@ -478,7 +478,7 @@ content_analysis differential_analyzer::analyze_content(const common_chat_templa
     LOG_DBG(ANSI_ORANGE "Phase 2: Content analysis\n" ANSI_RESET);
 
     content_analysis result;
-    
+
     json assistant_content_only = json{
         { "role",    "assistant"     },
         { "content", "Response text" }
@@ -560,7 +560,7 @@ content_analysis differential_analyzer::analyze_content(const common_chat_templa
         result.mode = content_mode::ALWAYS_WRAPPED;
         // TODO: END_DELIMITED content mode - delimited at end but not at start?
     }
-    
+
     return result;
 }
 
