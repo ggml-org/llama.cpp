@@ -130,7 +130,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
     res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
-    res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
+    // non-UMA GPUs (AMD discrete) produce incorrect results with concurrent encoders
+    res->use_concurrency = props_dev->has_unified_memory && getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
     {
         const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
