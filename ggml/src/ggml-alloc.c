@@ -18,7 +18,7 @@
 #define AT_PRINTF(...)
 
 
-static bool ggml_is_view(const struct ggml_tensor * t) {
+bool ggml_is_view(const struct ggml_tensor * t) {
     return t->view_src != NULL;
 }
 
