@@ -40,6 +40,16 @@ target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
+# VTCM release strategy: hold VTCM for entire session (default ON)
+# ON:  VTCM is acquired once at session start; precompute tables stay persistent
+# OFF: Per-op acquire/release; VTCM shared with other DSP processes
+option(HTP_VTCM_SESSION_HOLD
+    "Hold VTCM for entire session instead of per-op acquire/release" ON)
+
+if (HTP_VTCM_SESSION_HOLD)
+    target_compile_definitions(${HTP_LIB} PRIVATE HTP_VTCM_SESSION_HOLD=1)
+endif()
+
 build_idl(htp_iface.idl ${HTP_LIB})
 
 set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
