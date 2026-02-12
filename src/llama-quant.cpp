@@ -480,19 +480,18 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
 }
 
 static bool tensor_requires_imatrix(const llama_model_quantize_params * params, const ggml_tensor * t, const ggml_type dst_type) {
-    if (!params->imatrix) {
-        if (
-            dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
-            dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_S  || (
-                dst_type == GGML_TYPE_IQ1_M && strcmp(t->name, "token_embd.weight") &&
-                strcmp(t->name, "output.weight")
-            ) || (
-                dst_type == GGML_TYPE_Q2_K && params->ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S &&
-                strcmp(t->name, "token_embd.weight") != 0
-            )
-        ) return true;
+    if (dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
+        dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_S  || (
+            dst_type == GGML_TYPE_IQ1_M && strcmp(t->name, "token_embd.weight") &&
+            strcmp(t->name, "output.weight")
+        ) || (
+            dst_type == GGML_TYPE_Q2_K && params->ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S &&
+            strcmp(t->name, "token_embd.weight") != 0
+        )) {
+        return true;
+    } else {
+        return false;
     }
-    return false;
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
