@@ -15,6 +15,7 @@ set(CMAKE_C_COMPILER ${RISCV_PREFIX}gcc)
 set(CMAKE_STRIP ${RISCV_PREFIX}strip)
 set(CMAKE_OBJDUMP ${RISCV_PREFIX}objdump)
 set(CMAKE_ADDR2LINE ${RISCV_PREFIX}addr2line)
+set(CMAKE_LINKER_TYPE LLD) # So the host can use MOLD
 
 message(STATUS "Using RISC-V toolchain at: ${TOOLCHAIN_ROOT}")
 message(STATUS "C compiler: ${CMAKE_C_COMPILER}")
