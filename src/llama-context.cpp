@@ -14,6 +14,32 @@
 #include <limits>
 #include <stdexcept>
 
+static bool model_supports_compute_type(enum llm_arch arch, ggml_type compute_type) {
+    // F32 is always supported - it's the default/safe precision
+    if (compute_type == GGML_TYPE_F32) {
+        return true;
+    }
+
+    // Nowadays FP16 and BF16 support is model-specific.
+    // Add models here as their required ops are 'compute_type' implemented and validated.
+    // Example (uncomment when ready):
+    // if (compute_type == GGML_TYPE_F16 || compute_type == GGML_TYPE_BF16) {
+    //     switch (arch) {
+    //         case LLM_ARCH_QWEN2:
+    //         case LLM_ARCH_QWEN2MOE:
+    //         case LLM_ARCH_QWEN3:
+    //         // ... other validated models
+    //             return true;
+    //         default:
+    //             return false;
+    //     }
+    // }
+
+    // No models enabled yet for non-F32 compute types
+    (void)arch;
+    return false;
+}
+
 //
 // llama_context
 //
@@ -164,6 +190,17 @@ llama_context::llama_context(
             // DEFAULT = no override, use model's native precision (F32 for now)
             cparams.compute_type = GGML_TYPE_F32;
             break;
+    }
+
+    // check if the model supports the requested compute type
+    if (cparams.compute_type != GGML_TYPE_F32) {
+        if (!model_supports_compute_type(model.arch, cparams.compute_type)) {
+            LLAMA_LOG_WARN("%s: model arch '%s' does not yet support compute_type %s, "
+                           "falling back to F32. To enable, the required ops must be implemented first.\n",
+                           __func__, llm_arch_name(model.arch),
+                           ggml_type_name(cparams.compute_type));
+            cparams.compute_type = GGML_TYPE_F32;
+        }
     }
 
     // with causal attention, the batch size is limited by the context size
