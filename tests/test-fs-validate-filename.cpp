@@ -63,11 +63,11 @@ int main(void) {
     test("trailing double dot",     false, "foo.."); // trailing dot
 
     // --- Control characters ---
-    test("null byte",               false, std::string("foo\x00bar", 7));
+    test("null byte",               false, std::string("foo\x00""bar", 7));
     test("newline",                 false, "foo\nbar");
     test("tab",                     false, "foo\tbar");
     test("C0 control (0x01)",       false, "foo\x01""bar");
-    test("DEL (0x7F)",              false, std::string("foo\x7f""bar"));
+    test("DEL (0x7F)",              false, "foo\x7f""bar");
     test("C1 control (0x80)",       false, "foo\xc2\x80""bar"); // U+0080
     test("C1 control (0x9F)",       false, "foo\xc2\x9f""bar"); // U+009F
 
@@ -101,13 +101,13 @@ int main(void) {
     test("acute accent U+00B4",         false, "foo\xc2\xb4""bar");     // / on CP 1253 (Greek)
 
     // --- Invalid UTF-8 ---
-    test("invalid continuation",    false, std::string("foo\x80""bar"));
-    test("truncated sequence",      false, std::string("foo\xc3"));
-    test("overlong slash (2-byte)", false, std::string("foo\xc0\xaf""bar", 6)); // U+002F as 2-byte
-    test("overlong dot (2-byte)",   false, std::string("foo\xc0\xae""bar", 6)); // U+002E as 2-byte
-    test("overlong 'a' (2-byte)",   false, std::string("foo\xc1\xa1""bar", 6)); // U+0061 as 2-byte
-    test("overlong 'A' (2-byte)",   false, std::string("foo\xc1\x81""bar", 6)); // U+0041 as 2-byte
-    test("overlong null (2-byte)",  false, std::string("foo\xc0\x80""bar", 6)); // U+0000 as 2-byte
+    test("invalid continuation",    false, "foo\x80""bar");
+    test("truncated sequence",      false, "foo\xc3");
+    test("overlong slash (2-byte)", false, "foo\xc0\xaf""bar"); // U+002F as 2-byte
+    test("overlong dot (2-byte)",   false, "foo\xc0\xae""bar"); // U+002E as 2-byte
+    test("overlong 'a' (2-byte)",   false, "foo\xc1\xa1""bar"); // U+0061 as 2-byte
+    test("overlong 'A' (2-byte)",   false, "foo\xc1\x81""bar"); // U+0041 as 2-byte
+    test("overlong null (2-byte)",  false, "foo\xc0\x80""bar"); // U+0000 as 2-byte
 
     // --- Paths without allow_subdirs ---
     test("forward slash blocked",   false, "foo/bar");
@@ -158,14 +158,14 @@ int main(void) {
     test("fullwidth period U+FF0E",     false, "unicode\xef\xbc\x8e""bad.bin");
 
     // --- Overlong encoding ---
-    test("overlong 0xC0 0x2E",          false, std::string("overlong\xc0\x2e""bad.bin"));
-    test("overlong 0xE0 0x40 0xAE",     false, std::string("overlong\xe0\x40\xae""bad.bin"));
-    test("overlong dot (2-byte)",       false, std::string("overlong\xc0\xae""bad.bin", 14));
-    test("overlong slash (2-byte)",     false, std::string("overlong\xc0\xaf""bad.bin", 14));
-    test("overlong slash (3-byte)",     false, std::string("overlong\xe0\x80\xaf""bad.bin", 15));
-    test("overlong 0xC0 0x2F",          false, std::string("overlong\xc0\x2f""bad.bin"));
-    test("overlong 0xC0 0x5C",          false, std::string("overlong\xc0\x5c""bad.bin"));
-    test("overlong 0xC0 0x80 0x5C",     false, std::string("overlong\xc0\x80\x5c""bad.bin"));
+    test("overlong 0xC0 0x2E",          false, "overlong\xc0\x2e""bad.bin");
+    test("overlong 0xE0 0x40 0xAE",     false, "overlong\xe0\x40\xae""bad.bin");
+    test("overlong dot (2-byte)",       false, "overlong\xc0\xae""bad.bin");
+    test("overlong slash (2-byte)",     false, "overlong\xc0\xaf""bad.bin");
+    test("overlong slash (3-byte)",     false, "overlong\xe0\x80\xaf""bad.bin");
+    test("overlong 0xC0 0x2F",          false, "overlong\xc0\x2f""bad.bin");
+    test("overlong 0xC0 0x5C",          false, "overlong\xc0\x5c""bad.bin");
+    test("overlong 0xC0 0x80 0x5C",     false, "overlong\xc0\x80\x5c""bad.bin");
 
     // --- fs_normalize_filepath ---
     test_normalize("passthrough simple",        "foo.txt",                              "foo.txt");
