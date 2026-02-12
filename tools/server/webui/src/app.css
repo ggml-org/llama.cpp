@@ -14,11 +14,11 @@
 	--popover-foreground: oklch(0.145 0 0);
 	--primary: oklch(0.205 0 0);
 	--primary-foreground: oklch(0.985 0 0);
-	--secondary: oklch(0.97 0 0);
+	--secondary: oklch(0.95 0 0);
 	--secondary-foreground: oklch(0.205 0 0);
 	--muted: oklch(0.97 0 0);
 	--muted-foreground: oklch(0.556 0 0);
-	--accent: oklch(0.97 0 0);
+	--accent: oklch(0.95 0 0);
 	--accent-foreground: oklch(0.205 0 0);
 	--destructive: oklch(0.577 0.245 27.325);
 	--border: oklch(0.875 0 0);
@@ -37,7 +37,7 @@
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
-	--code-background: oklch(0.975 0 0);
+	--code-background: oklch(0.985 0 0);
 	--code-foreground: oklch(0.145 0 0);
 	--layer-popover: 1000000;
 }
@@ -51,7 +51,7 @@
 	--popover-foreground: oklch(0.985 0 0);
 	--primary: oklch(0.922 0 0);
 	--primary-foreground: oklch(0.205 0 0);
-	--secondary: oklch(0.269 0 0);
+	--secondary: oklch(0.29 0 0);
 	--secondary-foreground: oklch(0.985 0 0);
 	--muted: oklch(0.269 0 0);
 	--muted-foreground: oklch(0.708 0 0);
@@ -116,12 +116,62 @@
 	--color-sidebar-ring: var(--sidebar-ring);
 }
 
+:root {
+	--chat-form-area-height: 8rem;
+	--chat-form-area-offset: 2rem;
+	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
+}
+
+@media (min-width: 640px) {
+	:root {
+		--chat-form-area-height: 24rem;
+		--chat-form-area-offset: 12rem;
+	}
+}
+
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
 	}
+
 	body {
 		@apply bg-background text-foreground;
+		scrollbar-width: thin;
+		scrollbar-gutter: stable;
+	}
+
+	/* Global scrollbar styling - visible only on hover */
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: transparent transparent;
+		transition: scrollbar-color 0.2s ease;
+	}
+
+	*:hover {
+		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+	}
+
+	*::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+
+	*::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		background: transparent;
+		border-radius: 3px;
+		transition: background 0.2s ease;
+	}
+
+	*:hover::-webkit-scrollbar-thumb {
+		background: hsl(var(--muted-foreground) / 0.3);
+	}
+
+	*::-webkit-scrollbar-thumb:hover {
+		background: hsl(var(--muted-foreground) / 0.5);
 	}
 }
 

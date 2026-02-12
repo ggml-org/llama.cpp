@@ -1,20 +1,23 @@
 <script lang="ts">
-	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles } from '@lucide/svelte';
+	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
 	import { BadgeChatStatistic } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
+	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
+	import { formatPerformanceTime } from '$lib/utils';
+	import { MS_PER_SECOND, DEFAULT_PERFORMANCE_TIME } from '$lib/constants/formatters';
 
 	interface Props {
 		predictedTokens?: number;
 		predictedMs?: number;
 		promptTokens?: number;
 		promptMs?: number;
-		// Live mode: when true, shows stats during streaming
 		isLive?: boolean;
-		// Whether prompt processing is still in progress
 		isProcessingPrompt?: boolean;
-		// Initial view to show (defaults to READING in live mode)
 		initialView?: ChatMessageStatsView;
+		agenticTimings?: ChatMessageAgenticTimings;
+		onActiveViewChange?: (view: ChatMessageStatsView) => void;
+		hideSummary?: boolean;
 	}
 
 	let {
@@ -24,11 +27,18 @@
 		promptMs,
 		isLive = false,
 		isProcessingPrompt = false,
-		initialView = ChatMessageStatsView.GENERATION
+		initialView = ChatMessageStatsView.GENERATION,
+		agenticTimings,
+		onActiveViewChange,
+		hideSummary = false
 	}: Props = $props();
 
-	let activeView: ChatMessageStatsView = $state(initialView);
+	let activeView: ChatMessageStatsView = $derived(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
+
+	$effect(() => {
+		onActiveViewChange?.(activeView);
+	});
 
 	// In live mode: auto-switch to GENERATION tab when prompt processing completes
 	$effect(() => {
@@ -56,30 +66,52 @@
 			predictedMs > 0
 	);
 
-	let tokensPerSecond = $derived(hasGenerationStats ? (predictedTokens! / predictedMs!) * 1000 : 0);
-	let timeInSeconds = $derived(
-		predictedMs !== undefined ? (predictedMs / 1000).toFixed(2) : '0.00'
+	let tokensPerSecond = $derived(
+		hasGenerationStats ? (predictedTokens! / predictedMs!) * MS_PER_SECOND : 0
+	);
+	let formattedTime = $derived(
+		predictedMs !== undefined ? formatPerformanceTime(predictedMs) : DEFAULT_PERFORMANCE_TIME
 	);
 
 	let promptTokensPerSecond = $derived(
 		promptTokens !== undefined && promptMs !== undefined && promptMs > 0
-			? (promptTokens / promptMs) * 1000
+			? (promptTokens / promptMs) * MS_PER_SECOND
 			: undefined
 	);
 
-	let promptTimeInSeconds = $derived(
-		promptMs !== undefined ? (promptMs / 1000).toFixed(2) : undefined
+	let formattedPromptTime = $derived(
+		promptMs !== undefined ? formatPerformanceTime(promptMs) : undefined
 	);
 
 	let hasPromptStats = $derived(
 		promptTokens !== undefined &&
 			promptMs !== undefined &&
 			promptTokensPerSecond !== undefined &&
-			promptTimeInSeconds !== undefined
+			formattedPromptTime !== undefined
 	);
 
 	// In live mode, generation tab is disabled until we have generation stats
 	let isGenerationDisabled = $derived(isLive && !hasGenerationStats);
+
+	let hasAgenticStats = $derived(agenticTimings !== undefined && agenticTimings.toolCallsCount > 0);
+
+	let agenticToolsPerSecond = $derived(
+		hasAgenticStats && agenticTimings!.toolsMs > 0
+			? (agenticTimings!.toolCallsCount / agenticTimings!.toolsMs) * MS_PER_SECOND
+			: 0
+	);
+
+	let formattedAgenticToolsTime = $derived(
+		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : DEFAULT_PERFORMANCE_TIME
+	);
+
+	let agenticTotalTimeMs = $derived(
+		hasAgenticStats
+			? agenticTimings!.toolsMs + agenticTimings!.llm.predicted_ms + agenticTimings!.llm.prompt_ms
+			: 0
+	);
+
+	let formattedAgenticTotalTime = $derived(formatPerformanceTime(agenticTotalTimeMs));
 </script>
 
 <div class="inline-flex items-center text-xs text-muted-foreground">
@@ -96,9 +128,11 @@
 						onclick={() => (activeView = ChatMessageStatsView.READING)}
 					>
 						<BookOpenText class="h-3 w-3" />
+
 						<span class="sr-only">Reading</span>
 					</button>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>Reading (prompt processing)</p>
 				</Tooltip.Content>
@@ -118,9 +152,11 @@
 					disabled={isGenerationDisabled}
 				>
 					<Sparkles class="h-3 w-3" />
+
 					<span class="sr-only">Generation</span>
 				</button>
 			</Tooltip.Trigger>
+
 			<Tooltip.Content>
 				<p>
 					{isGenerationDisabled
@@ -129,6 +165,52 @@
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
+
+		{#if hasAgenticStats}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<button
+						type="button"
+						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+						ChatMessageStatsView.TOOLS
+							? 'bg-background text-foreground shadow-sm'
+							: 'hover:text-foreground'}"
+						onclick={() => (activeView = ChatMessageStatsView.TOOLS)}
+					>
+						<Wrench class="h-3 w-3" />
+
+						<span class="sr-only">Tools</span>
+					</button>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>Tool calls</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+
+			{#if !hideSummary}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<button
+							type="button"
+							class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+							ChatMessageStatsView.SUMMARY
+								? 'bg-background text-foreground shadow-sm'
+								: 'hover:text-foreground'}"
+							onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
+						>
+							<Layers class="h-3 w-3" />
+
+							<span class="sr-only">Summary</span>
+						</button>
+					</Tooltip.Trigger>
+
+					<Tooltip.Content>
+						<p>Agentic summary</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+		{/if}
 	</div>
 
 	<div class="flex items-center gap-1 px-2">
@@ -139,17 +221,61 @@
 				value="{predictedTokens?.toLocaleString()} tokens"
 				tooltipLabel="Generated tokens"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{timeInSeconds}s"
+				value={formattedTime}
 				tooltipLabel="Generation time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
-				value="{tokensPerSecond.toFixed(2)} tokens/s"
+				value="{tokensPerSecond.toFixed(2)} t/s"
 				tooltipLabel="Generation speed"
+			/>
+		{:else if activeView === ChatMessageStatsView.TOOLS && hasAgenticStats}
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Wrench}
+				value="{agenticTimings!.toolCallsCount} calls"
+				tooltipLabel="Tool calls executed"
+			/>
+
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Clock}
+				value={formattedAgenticToolsTime}
+				tooltipLabel="Tool execution time"
+			/>
+
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Gauge}
+				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
+				tooltipLabel="Tool execution rate"
+			/>
+		{:else if activeView === ChatMessageStatsView.SUMMARY && hasAgenticStats}
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Layers}
+				value="{agenticTimings!.turns} turns"
+				tooltipLabel="Agentic turns (LLM calls)"
+			/>
+
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={WholeWord}
+				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
+				tooltipLabel="Total tokens generated"
+			/>
+
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Clock}
+				value={formattedAgenticTotalTime}
+				tooltipLabel="Total time (LLM + tools)"
 			/>
 		{:else if hasPromptStats}
 			<BadgeChatStatistic
@@ -158,12 +284,14 @@
 				value="{promptTokens} tokens"
 				tooltipLabel="Prompt tokens"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{promptTimeInSeconds}s"
+				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
 			/>
+
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
