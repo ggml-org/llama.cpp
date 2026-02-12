@@ -23897,6 +23897,11 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     return true;
 
 } catch (sycl::exception & e) {
+    // During graph recording, re-throw so the outer handler can
+    // gracefully disable graphs and fall back to direct execution.
+    if (g_ggml_sycl_graph_recording) {
+        throw;
+    }
     std::cerr << e.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::cerr << "Error OP " << ggml_op_name(dst->op) << std::endl;
     if (g_ggml_sycl_debug) {
