@@ -64,9 +64,12 @@ def test_anthropic_messages_basic():
     assert res.body["stop_reason"] in ["end_turn", "max_tokens"], f"Invalid stop_reason: {res.body.get('stop_reason')}"
     assert "usage" in res.body, "Missing 'usage' field"
     assert "input_tokens" in res.body["usage"], "Missing usage.input_tokens"
+    assert "cache_read_input_tokens" in res.body["usage"], "Missing usage.cache_read_input_tokens"
     assert "output_tokens" in res.body["usage"], "Missing usage.output_tokens"
     assert isinstance(res.body["usage"]["input_tokens"], int), "input_tokens should be integer"
+    assert isinstance(res.body["usage"]["cache_read_input_tokens"], int), "cache_read_input_tokens should be integer"
     assert isinstance(res.body["usage"]["output_tokens"], int), "output_tokens should be integer"
+    assert res.body["usage"]["cache_read_input_tokens"] >= 0, "cache_read_input_tokens should be >= 0"
     assert res.body["usage"]["output_tokens"] > 0, "Should have generated some tokens"
     # Anthropic API should NOT include timings
     assert "timings" not in res.body, "Anthropic API should not include timings field"
@@ -168,6 +171,9 @@ def test_anthropic_messages_streaming():
     assert message_start["message"]["content"] == []
     assert "usage" in message_start["message"]
     assert message_start["message"]["usage"]["input_tokens"] > 0
+    assert "cache_read_input_tokens" in message_start["message"]["usage"]
+    assert isinstance(message_start["message"]["usage"]["cache_read_input_tokens"], int)
+    assert message_start["message"]["usage"]["cache_read_input_tokens"] >= 0
 
     # Check content_block_start
     block_start = next(e for e in events if e["type"] == "content_block_start")
