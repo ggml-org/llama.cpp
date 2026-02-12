@@ -356,17 +356,39 @@ llama_context::llama_context(
                 buft = ggml_backend_sycl_host_compute_buffer_type(gpu_idx);
                 LLAMA_LOG_DEBUG("%s: using host compute buffer type for GPU %d in TP mode\n", __func__, gpu_idx);
             } else if (backend_type == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                // Host-pinned compute buffer: when enabled, cpu-dispatch.cpp fast-paths
-                // bypass staging memcpy entirely.  GPU kernels access host memory via PCIe
-                // (slower than VRAM), so this is only beneficial when most/all layers are
-                // on CPU and GPU compute is minimal.  Opt-in via GGML_SYCL_HOST_COMPUTE=1.
-                static bool sycl_host_compute = [] {
-                    const char * env = std::getenv("GGML_SYCL_HOST_COMPUTE");
-                    return env != nullptr && std::atoi(env) != 0;
-                }();
-                if (sycl_host_compute) {
+                // Host-pinned compute buffer: cpu-dispatch.cpp can read/write activations
+                // directly and avoid per-op D2H/H2D staging. Keep this opt-in via
+                // GGML_SYCL_HOST_COMPUTE=1 for now: default auto-enable with CPU offload
+                // has been observed to cause instability (UR_RESULT_ERROR_DEVICE_LOST)
+                // on level_zero:GPU + opencl:CPU configurations.
+                bool use_host_compute = false;
+                const char * env_host_compute = std::getenv("GGML_SYCL_HOST_COMPUTE");
+                if (env_host_compute != nullptr) {
+                    use_host_compute = std::atoi(env_host_compute) != 0;
+                } else {
+                    const char * env_cpu_offload = std::getenv("GGML_SYCL_CPU_OFFLOAD");
+                    if (env_cpu_offload != nullptr && std::atoi(env_cpu_offload) != 0) {
+                        if (!ggml_backend_sycl_cpu_offload_available()) {
+                            static bool warned_cpu_offload_unavailable = false;
+                            if (!warned_cpu_offload_unavailable) {
+                                LLAMA_LOG_WARN("%s: GGML_SYCL_CPU_OFFLOAD=1 but no SYCL CPU device is available; "
+                                               "keeping GPU compute buffers device-local\n", __func__);
+                                warned_cpu_offload_unavailable = true;
+                            }
+                        } else {
+                            static bool warned_host_compute_opt_in = false;
+                            if (!warned_host_compute_opt_in) {
+                                LLAMA_LOG_INFO("%s: GGML_SYCL_CPU_OFFLOAD=1 active; host-pinned compute buffers "
+                                               "remain opt-in (set GGML_SYCL_HOST_COMPUTE=1 to force)\n", __func__);
+                                warned_host_compute_opt_in = true;
+                            }
+                        }
+                    }
+                }
+                if (use_host_compute) {
                     buft = ggml_backend_sycl_cpu_offload_compute_buffer_type(gpu_idx);
-                    LLAMA_LOG_INFO("%s: using host-pinned compute buffer for GPU %d (CPU offload)\n", __func__, gpu_idx);
+                    LLAMA_LOG_INFO("%s: using host-pinned compute buffer for GPU %d (CPU offload path)\n",
+                                   __func__, gpu_idx);
                 }
             }
 #endif

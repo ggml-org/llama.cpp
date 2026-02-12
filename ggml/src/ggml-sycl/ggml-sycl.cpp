@@ -2970,6 +2970,10 @@ bool ggml_sycl_cpu_offload_available() {
     return ggml_sycl_info().has_cpu_device;
 }
 
+bool ggml_backend_sycl_cpu_offload_available(void) {
+    return ggml_sycl_cpu_offload_available();
+}
+
 sycl::queue * ggml_sycl_get_cpu_queue() {
     const auto & info = ggml_sycl_info();
     return info.has_cpu_device ? info.cpu_queue : nullptr;
@@ -25134,6 +25138,51 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     if (cpu_offload_active) {
         classify_cpu_layer_blocks(*sycl_ctx, cgraph, node_cpu_flags);
     }
+    static int retained_mode_env = -1;
+    if (retained_mode_env < 0) {
+        const char * env = std::getenv("GGML_SYCL_CPU_RETAINED");
+        retained_mode_env = (env != nullptr && std::atoi(env) != 0) ? 1 : 0;
+    }
+    const bool retained_mode_requested = cpu_offload_active && retained_mode_env != 0;
+    bool       has_gpu_islands = false;
+    if (retained_mode_requested) {
+        for (int8_t flag : node_cpu_flags) {
+            if (flag == FLAG_GPU_ISLAND) {
+                has_gpu_islands = true;
+                break;
+            }
+        }
+    }
+    bool using_cpu_offload_compute_buft = false;
+    if (retained_mode_requested) {
+        const ggml_backend_buffer_type_t offload_buft =
+            ggml_backend_sycl_cpu_offload_compute_buffer_type(sycl_ctx->device);
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            ggml_tensor * node = cgraph->nodes[i];
+            if (node && node->buffer && node->buffer->buft == offload_buft) {
+                using_cpu_offload_compute_buft = true;
+                break;
+            }
+        }
+    }
+
+    const bool retained_mode_enabled =
+        retained_mode_requested && !has_gpu_islands && !using_cpu_offload_compute_buft;
+    if (retained_mode_requested && has_gpu_islands) {
+        static std::atomic<bool> warned_gpu_islands{false};
+        if (!warned_gpu_islands.exchange(true)) {
+            GGML_LOG_WARN("[SYCL-CPU] GGML_SYCL_CPU_RETAINED=1 requested, but graph contains GPU islands; "
+                          "retained mode is disabled for safety.\n");
+        }
+    }
+    if (retained_mode_requested && using_cpu_offload_compute_buft) {
+        static std::atomic<bool> warned_host_compute{false};
+        if (!warned_host_compute.exchange(true)) {
+            GGML_LOG_WARN("[SYCL-CPU] GGML_SYCL_CPU_RETAINED=1 requested, but host-pinned CPU offload compute "
+                          "buffers are active; retained mode is disabled.\n");
+        }
+    }
+
     bool prev_on_cpu = false;
     bool retained_mode_active = false;
     std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
@@ -25514,16 +25563,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU per-tensor sync at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
 
-                    // Activate retained activation mode — subsequent CPU ops
-                    // keep intermediates in host scratch memory instead of
-                    // bouncing device↔host per op.
-                    // Retained activation mode disabled: the host scratch retention
-                    // mechanism has a data flow bug with view tensors (RESHAPE/PERMUTE)
-                    // causing output corruption. Individual CPU ops use staging (D2H/H2D
-                    // per op) which is correct but slower. Re-enable retained mode after
-                    // fixing the retained map interaction with ggml's view_src chain and
-                    // compute buffer address recycling.
-                    // TODO: fix retained activation mode (see flush_selective look-ahead)
+                    // Experimental retained activation mode: keep CPU-produced
+                    // intermediates in host scratch across CPU op chains to avoid
+                    // per-op D2H/H2D staging. Guarded behind GGML_SYCL_CPU_RETAINED=1.
+                    // For safety, disabled when GPU islands are present.
+                    if (retained_mode_enabled) {
+                        ggml_sycl_cpu_retained_init(sycl_ctx->device, sycl_ctx->stream());
+                        retained_mode_active = ggml_sycl_cpu_retained_active();
+                        GGML_SYCL_DEBUG("[RETAINED] Activated at GPU→CPU boundary (node %d)\n", i);
+                    }
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
