@@ -167,12 +167,15 @@ bool ggml_sycl_cpu_retained_active() {
 }
 
 void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst) {
-    // Retained activation is disabled: ggml's compute buffer allocator reuses
-    // device addresses for tensors with non-overlapping lifetimes, so flush_all()
-    // at CPU→GPU boundaries would write to recycled addresses and corrupt data.
-    // Returning nullptr forces the staging fallback path (correct but slower).
-    GGML_UNUSED(dst);
-    return nullptr;
+    if (!g_retained_active || !g_retained_scratch) {
+        return nullptr;
+    }
+    size_t nbytes = ggml_nbytes(dst);
+    void * ptr = scratch_alloc(nbytes);
+    if (ptr) {
+        g_retained_map[dst] = { ptr, nbytes };
+    }
+    return ptr;  // nullptr if scratch full → staging fallback
 }
 
 void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
@@ -198,6 +201,39 @@ void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
         gpu_q->wait();
     }
 
+    g_retained_map.clear();
+    scratch_reset();
+}
+
+void ggml_sycl_cpu_retained_flush_selective(
+        int device, sycl::queue * gpu_q,
+        const ggml_tensor * next_gpu_node)
+{
+    if (g_retained_map.empty() || !next_gpu_node) {
+        g_retained_map.clear();
+        scratch_reset();
+        return;
+    }
+
+    // Only flush retained tensors that are inputs to the next GPU node.
+    // Their device addresses are guaranteed valid (live dependencies in DAG).
+    for (int s = 0; s < GGML_MAX_SRC; s++) {
+        const ggml_tensor * src = next_gpu_node->src[s];
+        if (!src) break;
+        auto it = g_retained_map.find(src);
+        if (it == g_retained_map.end()) continue;
+
+        if (src->buffer && !ggml_backend_buffer_is_host(src->buffer)) {
+            void * device_ptr = ggml_sycl_get_data_ptr(src, device);
+            if (device_ptr) {
+                gpu_q->memcpy(device_ptr, it->second.host_ptr, it->second.size);
+            }
+        }
+    }
+    gpu_q->wait();
+
+    // Discard ALL retained data. Only the tensors above were flushed.
+    // Other tensors' device addresses may have been recycled — must NOT write.
     g_retained_map.clear();
     scratch_reset();
 }

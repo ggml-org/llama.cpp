@@ -25433,11 +25433,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
 
-                    // Flush all retained activations back to device before
-                    // GPU ops try to read them from device buffers.
+                    // Flush only retained activations that are inputs to the next GPU node.
+                    // Their device addresses are guaranteed valid (live dependencies in DAG).
                     if (retained_mode_active) {
-                        ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
-                        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device at boundary\n");
+                        ggml_sycl_cpu_retained_flush_selective(
+                            sycl_ctx->device, sycl_ctx->stream(), node);
+                        GGML_SYCL_DEBUG("[RETAINED] Selective flush at CPU→GPU boundary (node %s)\n",
+                                        node->name ? node->name : "(null)");
                         // Don't deactivate — just flush. Scratch offset resets on next
                         // GPU→CPU entry via retained_init(). This avoids re-allocating
                         // the 32MB scratch buffer for each CPU layer.
@@ -25844,9 +25846,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // End of graph compute — flush and deactivate any active retention mode
     // Note: g_preclassified_* cleanup handled by preclassify_guard_ RAII above
     if (retained_mode_active) {
+        // End of graph: flush ALL retained tensors to device then deactivate.
+        // flush_all is safe here (even for recycled addresses) because no more
+        // ops will execute — any stale writes are overwritten next graph_compute.
+        // We MUST flush the final output tensor so the caller reads correct data.
         ggml_sycl_cpu_retained_flush_all(sycl_ctx->device, sycl_ctx->stream());
-        GGML_SYCL_DEBUG("[RETAINED] Flush: retained activations flushed to device (end of graph)\n");
         ggml_sycl_cpu_retained_deactivate();
+        GGML_SYCL_DEBUG("[RETAINED] Flushed + deactivated at end of graph\n");
     }
 
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
