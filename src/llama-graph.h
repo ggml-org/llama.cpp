@@ -756,6 +756,14 @@ struct llm_graph_context {
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 
+    ggml_tensor * build_cast_to_compute_type( // intermediate computation precision.
+            ggml_context * ctx,
+             ggml_tensor * cur) const;
+
+    ggml_tensor * build_cast_to_f32(
+            ggml_context * ctx,
+             ggml_tensor * cur) const;
+
     //
     // common
     //

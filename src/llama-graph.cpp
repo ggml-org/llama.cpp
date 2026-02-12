@@ -862,6 +862,24 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     }
 }
 
+ggml_tensor * llm_graph_context::build_cast_to_compute_type(
+        ggml_context * ctx,
+         ggml_tensor * cur) const {
+    if (cparams.compute_type == GGML_TYPE_F32 || cur->type == cparams.compute_type) {
+        return cur;
+    }
+    return ggml_cast(ctx, cur, cparams.compute_type);
+}
+
+ggml_tensor * llm_graph_context::build_cast_to_f32(
+        ggml_context * ctx,
+         ggml_tensor * cur) const {
+    if (cur->type == GGML_TYPE_F32) {
+        return cur;
+    }
+    return ggml_cast(ctx, cur, GGML_TYPE_F32);
+}
+
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
                  int   il) const {

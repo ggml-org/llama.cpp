@@ -43,6 +43,20 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
     GGML_ABORT("fatal error");
 }
 
+const char * llama_compute_type_name(enum llama_compute_type compute_type) {
+    switch (compute_type) {
+        case LLAMA_COMPUTE_TYPE_DEFAULT:
+            return "default";
+        case LLAMA_COMPUTE_TYPE_F32:
+            return "f32";
+        case LLAMA_COMPUTE_TYPE_F16:
+            return "f16";
+        case LLAMA_COMPUTE_TYPE_BF16:
+            return "bf16";
+    }
+    GGML_ABORT("fatal error");
+}
+
 struct llama_device_memory_data {
     int64_t total;
     int64_t free;
