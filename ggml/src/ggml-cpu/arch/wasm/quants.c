@@ -269,11 +269,11 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         v128_t y0_l = wasm_v128_load(y0->qs);
         v128_t y0_h = wasm_v128_load(y0->qs + 16);
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
         // Compute dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_0ls, y0_l, wasm_i32x4_splat(0));
         dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_0hs, y0_h, dp0);
-#else
+#   else
         // Extend to i16x8 and compute dot products
         v128_t dx0l = wasm_i16x8_extend_low_i8x16(v0_0ls);
         v128_t dx0h = wasm_i16x8_extend_high_i8x16(v0_0ls);
@@ -295,7 +295,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i32x4_dot_i16x8(dx0hh, dy0hh)
             )
         );
-#endif
+#   endif
 
         // Load and process x1
         v128_t v0_1 = wasm_v128_load(x1->qs);
@@ -308,11 +308,11 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         v128_t y1_l = wasm_v128_load(y1->qs);
         v128_t y1_h = wasm_v128_load(y1->qs + 16);
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
         // Compute dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_1ls, y1_l, wasm_i32x4_splat(0));
         dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_1hs, y1_h, dp1);
-#else
+#   else
         // Extend to i16x8 and compute dot products
         v128_t dx1l = wasm_i16x8_extend_low_i8x16(v0_1ls);
         v128_t dx1h = wasm_i16x8_extend_high_i8x16(v0_1ls);
@@ -334,7 +334,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i32x4_dot_i16x8(dx1hh, dy1hh)
             )
         );
-#endif
+#   endif
 
         // Accumulate results with scaling
         float scale0 = GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d);
@@ -423,14 +423,14 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v1l = wasm_v128_load(y0->qs);
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
         // dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0lf, v1l, wasm_i32x4_splat(0));
         dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0hf, v1h, dp);
         
         sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
-#else
+#   else
         // int8x16 -> int16x8
         const v128_t v0lfl = wasm_i16x8_extend_low_i8x16 (v0lf);
         const v128_t v0lfh = wasm_i16x8_extend_high_i8x16(v0lf);
@@ -450,7 +450,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                             wasm_i32x4_add(wasm_i32x4_dot_i16x8(v0hfl, v1hl),
                                            wasm_i32x4_dot_i16x8(v0hfh, v1hh)))),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
-#endif
+#   endif
     }
 
     sumf = wasm_f32x4_extract_lane(sumv, 0) + wasm_f32x4_extract_lane(sumv, 1) +
@@ -527,14 +527,14 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v1l = wasm_v128_load(y0->qs);
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
         // dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0lf, v1l, wasm_i32x4_splat(0));
         dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0hf, v1h, dp);
         
         sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
-#else
+#   else
         // int8x16 -> int16x8
         const v128_t v0lfl = wasm_i16x8_extend_low_i8x16 (v0lf);
         const v128_t v0lfh = wasm_i16x8_extend_high_i8x16(v0lf);
@@ -554,7 +554,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                             wasm_i32x4_add(wasm_i32x4_dot_i16x8(v0hfl, v1hl),
                                            wasm_i32x4_dot_i16x8(v0hfh, v1hh)))),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
-#endif
+#   endif
     }
 
     sumf = wasm_f32x4_extract_lane(sumv, 0) + wasm_f32x4_extract_lane(sumv, 1) +
@@ -600,12 +600,11 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t y0_0 = wasm_v128_load(y0->qs);
         const v128_t y0_1 = wasm_v128_load(y0->qs + 16);
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
         // Compute dot products using relaxed SIMD - processes full i8x16 vectors
         v128_t sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(x0_0, y0_0, wasm_i32x4_splat(0));
         sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(x0_1, y0_1, sum_dots);
-#else
-
+#   else
         // Extend 8-bit to 16-bit
         const v128_t x0_0l = wasm_i16x8_extend_low_i8x16(x0_0);
         const v128_t x0_0h = wasm_i16x8_extend_high_i8x16(x0_0);
@@ -625,8 +624,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         // Sum all dot products
         const v128_t sum_dots = wasm_i32x4_add(wasm_i32x4_add(dx0_0, dx0_1), wasm_i32x4_add(dx1_0, dx1_1));
-#endif
-
+#   endif
         // Convert to float and accumulate
         const float scale = GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d);
         sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(sum_dots), wasm_f32x4_splat(scale)));
@@ -715,11 +713,11 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 v128_t q2_shift_1 = wasm_u8x16_shr(q2_1, shift);
                 v128_t q2_bits_1 = wasm_v128_and(q2_shift_1, wasm_i8x16_splat(0x03));
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
                 // Calculate dot products using relaxed SIMD
                 v128_t p_sum0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q2_bits_0, q8_0, wasm_i32x4_splat(0));
                 v128_t p_sum1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q2_bits_1, q8_1, wasm_i32x4_splat(0));
-#else
+#   else
 
                 // Calculate dot products
                 v128_t p0 = wasm_i32x4_dot_i16x8(
@@ -741,7 +739,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                
                 v128_t p_sum0 = wasm_i32x4_add(p0, p1);
                 v128_t p_sum1 = wasm_i32x4_add(p2, p3);
-#endif
+#   endif
 
                 // Accumulate scaled results
                 v128_t scaled = wasm_i32x4_add(
@@ -961,14 +959,14 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             q8 += 64;
 
             // Low nibble products
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
             v128_t vacc1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
                 q4l0, q8x0, wasm_i32x4_splat(0)
             );
             vacc1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
                 q4l1, q8x1, vacc1
             );
-#else
+#   else
             v128_t vacc1 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q4l0),
                 wasm_i16x8_extend_low_i8x16(q8x0)
@@ -985,10 +983,10 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q4l1),
                 wasm_i16x8_extend_high_i8x16(q8x1)
             ));
-#endif
+#   endif
 
             // High nibble products
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
 
             v128_t vacc2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
                 q4h0, q8x2, wasm_i32x4_splat(0)
@@ -996,7 +994,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             vacc2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
                 q4h1, q8x3, vacc2
             );
-#else
+#   else
 
             v128_t vacc2 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q4h0),
@@ -1014,7 +1012,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q4h1),
                 wasm_i16x8_extend_high_i8x16(q8x3)
             ));
-#endif
+#   endif
 
             // Accumulate scaled results
             int32_t vacc1_sum = wasm_i32x4_extract_lane(vacc1, 0) + wasm_i32x4_extract_lane(vacc1, 1) +
@@ -1122,11 +1120,11 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             v128_t q8_3 = wasm_v128_load(q8 + 48);
             q8 += 64;
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
             // Process low quants using relaxed SIMD
             v128_t sum_low = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q5l_0, q8_0, wasm_i32x4_splat(0));
             sum_low = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q5l_1, q8_1, sum_low);
-#else
+#   else
             // Process low quants
             v128_t pl0 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q5l_0),
@@ -1145,13 +1143,13 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q8_1)
             ));
             v128_t sum_low = wasm_i32x4_add(pl0, pl1);
-#endif
+#   endif
 
-#if defined(__wasm_relaxed_simd__)
+#   if defined(__wasm_relaxed_simd__)
             // Process high quants using relaxed SIMD
             v128_t sum_high = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q5h_0, q8_2, wasm_i32x4_splat(0));
             sum_high = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q5h_1, q8_3, sum_high);
-#else
+#   else
             // Process high quants
             v128_t ph0 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q5h_0),
@@ -1170,7 +1168,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q8_3)
             ));
             v128_t sum_high = wasm_i32x4_add(ph0, ph1);
-#endif
+#   endif
 
             // Accumulate with scale factors
             int32_t sl = wasm_i32x4_extract_lane(sum_low, 0) + wasm_i32x4_extract_lane(sum_low, 1) +
