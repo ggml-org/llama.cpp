@@ -21,6 +21,7 @@
 		chatStore,
 		errorDialog,
 		isLoading,
+		isChatStreaming,
 		isEditing,
 		getAddFilesHandler
 	} from '$lib/stores/chat.svelte';
@@ -71,6 +72,8 @@
 
 	let emptyFileNames = $state<string[]>([]);
 
+	let initialMessage = $state('');
+
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
@@ -79,7 +82,7 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 
-	let isCurrentConversationLoading = $derived(isLoading());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
 	let isRouter = $derived(isRouterMode());
 
@@ -221,6 +224,14 @@
 		}
 	}
 
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+
+		await chatStore.addSystemPrompt();
+	}
+
 	function handleScroll() {
 		if (disableAutoScroll || !chatScrollContainer) return;
 
@@ -343,6 +354,12 @@
 		if (!disableAutoScroll) {
 			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
+
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			uploadedFiles = pendingDraft.files;
+		}
 	});
 
 	$effect(() => {
@@ -428,11 +445,13 @@
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					disabled={hasPropsError || isEditing()}
+					{initialMessage}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={false}
 					bind:uploadedFiles
 				/>
@@ -486,11 +505,13 @@
 			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
 				<ChatForm
 					disabled={hasPropsError}
+					{initialMessage}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={true}
 					bind:uploadedFiles
 				/>
