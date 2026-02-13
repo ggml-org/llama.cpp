@@ -138,10 +138,6 @@ static json second_tool_call =
 static json first_tool_call_alt_id =
     build_tool_call("foofoo", json{{ "first",  "XXXX" }, { "second", "YYYY" }}, "call99999");
 
-// ============================================================================
-// analyze_template
-// ============================================================================
-
 analyze_template::analyze_template(const common_chat_template & tmpl)
     : jinja_caps(tmpl.original_caps())
     , reasoning(tmpl, jinja_caps.supports_tool_calls)
@@ -191,10 +187,6 @@ void analyze_template::collect_preserved_tokens() {
     add_token(tools.call_id.prefix);
     add_token(tools.call_id.suffix);
 }
-
-// ============================================================================
-// analyze_reasoning
-// ============================================================================
 
 analyze_reasoning::analyze_reasoning(const common_chat_template & tmpl, bool supports_tools)
     : analyze_base(tmpl) {
@@ -454,10 +446,6 @@ void analyze_reasoning::compare_reasoning_scope() {
     }
 }
 
-// ============================================================================
-// analyze_content
-// ============================================================================
-
 analyze_content::analyze_content(const common_chat_template & tmpl, const analyze_reasoning & reasoning)
     : analyze_base(tmpl) {
     LOG_DBG(ANSI_ORANGE "Phase 2: Content analysis\n" ANSI_RESET);
@@ -548,10 +536,6 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
 bool analyze_content::is_always_wrapped() const {
     return mode == content_mode::ALWAYS_WRAPPED && !start.empty() && !end.empty();
 }
-
-// ============================================================================
-// analyze_tools
-// ============================================================================
 
 analyze_tools::analyze_tools(const common_chat_template & tmpl,
                              const jinja::caps &          caps,

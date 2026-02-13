@@ -74,10 +74,6 @@ common_chat_params universal_peg_generator::generate_parser(const common_chat_te
     return data;
 }
 
-// ============================================================================
-// analyze_template::build_parser - orchestrates parser building
-// ============================================================================
-
 common_peg_arena analyze_template::build_parser(const templates_params & inputs) const {
     return build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
         p.set_allow_python_dict_format(true);
@@ -107,10 +103,6 @@ common_peg_arena analyze_template::build_parser(const templates_params & inputs)
     });
 }
 
-// ============================================================================
-// analyze_reasoning::build_parser
-// ============================================================================
-
 common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) const {
     auto & p = ctx.p;
 
@@ -139,10 +131,6 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
     return p.eps();
 }
 
-// ============================================================================
-// analyze_content::build_parser
-// ============================================================================
-
 common_peg_parser analyze_content::build_parser(parser_build_context & ctx) const {
     auto & p = ctx.p;
 
@@ -163,10 +151,6 @@ common_peg_parser analyze_content::build_optional_wrapped(parser_build_context &
     }
     return p.eps();
 }
-
-// ============================================================================
-// analyze_tools::build_parser - dispatches to format-specific builders
-// ============================================================================
 
 common_peg_parser analyze_tools::build_parser(parser_build_context & ctx) const {
     switch (format.mode) {
