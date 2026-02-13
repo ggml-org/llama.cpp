@@ -1943,7 +1943,11 @@ struct test_unary : public test_case {
 
         ggml_tensor * a;
         if (v & 1) {
-            auto ne = ne_a; ne[0] *= 3;
+            auto ne = ne_a;
+            ne[0] *= 3;
+            ne[1] *= 2;
+            ne[2] *= 5;
+            ne[3] *= 4;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             if (grad_supported) {
                 ggml_set_param(a);
@@ -2964,11 +2968,12 @@ struct test_bin_bcast : public test_case {
     const std::array<int64_t, 4> ne;
     const std::array<int, 4> nr;
     int nf; // number of fused ops, nf == 1 -> single op (no fusion)
+    bool perm1; // permute src1?
 
     bool run_whole_graph() override { return nf > 1; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, nr, nf);
+        return VARS_TO_STR5(type, ne, nr, nf, perm1);
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -2978,8 +2983,9 @@ struct test_bin_bcast : public test_case {
     test_bin_bcast(op_t op, ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 1, 1},
             std::array<int, 4> nr = {1, 2, 1, 1},
-            int nf = 1)
-        : op(op), type(type), ne(ne), nr(nr), nf(nf) {}
+            int nf = 1,
+            bool perm1 = false)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         GGML_ASSERT(nf <= 16);
@@ -2989,12 +2995,19 @@ struct test_bin_bcast : public test_case {
 
         ggml_tensor * b[16];
         for (int i = 0; i < nf; ++i) {
-            b[i] = ggml_new_tensor(ctx, type, 4, ne.data());
+            if (perm1) {
+                const int p[4] = { 1, 2, 0, 3 }; // hardcoded for now
+
+                b[i] = ggml_new_tensor_4d(ctx, type, ne[p[0]], ne[p[1]], ne[p[2]], ne[p[3]]);
+                b[i] = ggml_permute(ctx, b[i], p[0], p[1], p[2], p[3]);
+            } else {
+                b[i] = ggml_new_tensor(ctx, type, 4, ne.data());
+            }
             ggml_set_name(b[i], (std::string("b") + std::to_string(i)).c_str());
         }
 
         // The backward pass supports broadcasting only for GGML_ADD:
-        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1;
+        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1 && !perm1;
         if (grad_supported) {
             ggml_set_param(a);
             ggml_set_param(b[0]);
@@ -5894,33 +5907,36 @@ struct test_pad_ext : public test_case {
     const int rp2;
     const int lp3;
     const int rp3;
-    const bool v;
+    const int tfrm; // 0 - none, 1 - non-cont, 2 - perm
     const bool circular;
 
     std::string vars() override {
-        return VARS_TO_STR12(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, v, circular);
+        return VARS_TO_STR12(type, ne_a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, tfrm, circular);
     }
 
     test_pad_ext(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 512, 3, 1},
             int lp0 = 1, int rp0 = 1, int lp1 = 1, int rp1 = 1,
             int lp2 = 1, int rp2 = 1, int lp3 = 1, int rp3 = 1,
-            bool v = false, bool circular = false)
+            int tfrm = 0, bool circular = false)
         : type(type), ne_a(ne_a), lp0(lp0), rp0(rp0), lp1(lp1), rp1(rp1), lp2(lp2), rp2(rp2), lp3(lp3), rp3(rp3),
-          v(v), circular(circular) {}
+          tfrm(tfrm), circular(circular) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_name(a, "a");
 
-        if (v) {
+        if (tfrm == 1) {
             a = ggml_view_4d(ctx, a, (a->ne[0] + 1) / 2, (a->ne[1] + 1) / 2, (a->ne[2] + 1) / 2, (a->ne[3] + 1) / 2, a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view of a");
+        } else if (tfrm == 2) {
+            a = ggml_permute(ctx, a, 2, 1, 0, 3);
+            ggml_set_name(a, "permuted a");
         }
 
         ggml_tensor * out = circular
             ? ggml_pad_ext_circular(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3)
-            : ggml_pad_ext(ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
+            : ggml_pad_ext         (ctx, a, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3);
         ggml_set_name(out, "out");
 
         return out;
@@ -7474,25 +7490,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr) {
+    auto add_test_bin_bcast = [&](ggml_type type, std::array<int64_t, 4> ne, std::array<int, 4> nr, bool perm1 = false) {
         for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
-            test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr));
+            test_cases.emplace_back(new test_bin_bcast(op, type, ne, nr, 1, perm1));
         }
     };
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
-        add_test_bin_bcast(type, {1, 1, 8, 1}, {1, 1, 1, 1});
-        add_test_bin_bcast(type, {1, 1, 1, 1}, {32, 1, 1, 1});
-        add_test_bin_bcast(type, {1, 1, 320, 320}, {1, 1, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 1, 1}, {1, 1, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 1}, {1, 1, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 1, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {2, 1, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 2, 1, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 1, 2, 1});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 1, 1, 2});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 1, 2, 2});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {1, 2, 2, 2});
-        add_test_bin_bcast(type, {10, 5, 4, 3}, {2, 2, 2, 2});
+        for (bool perm1 : {false, true}) {
+            add_test_bin_bcast(type, {1,  1,   8,   1}, {1,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {1,  1,   1,   1}, {32, 1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {1,  1, 320, 320}, {1,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   1,   1}, {1,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   1}, {1,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {2,  1, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  2, 1, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  1, 2, 1}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  1, 1, 2}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  1, 2, 2}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {1,  2, 2, 2}, perm1);
+            add_test_bin_bcast(type, {10, 5,   4,   3}, {2,  2, 2, 2}, perm1);
+        }
 
         // test case for k_bin_bcast_unravel in CUDA backend
         add_test_bin_bcast(type, {1, 1, 65536, 1}, {256, 1, 1, 1});
@@ -7879,20 +7897,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_round     (type));
         test_cases.emplace_back(new test_trunc     (type));
         test_cases.emplace_back(new test_sqr       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sqr       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_sqrt      (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sqrt      (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_log       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_log       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_sin       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_sin       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_cos       (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_cos       (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_clamp     (type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_clamp     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
+        test_cases.emplace_back(new test_leaky_relu(type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_floor     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_floor     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_ceil      (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_ceil      (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_round     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_round     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_round     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
-        test_cases.emplace_back(new test_trunc     (type, { 1024, 1024, 1, 1 }));
+        test_cases.emplace_back(new test_trunc     (type, {1024, 1024, 1, 1}));
     }
 
     test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
@@ -8107,24 +8132,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_sum());
-    test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 2, 1, 3}));  // row-contiguous but non-contiguous
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 3, 2, 1}));
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_mean());
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 256, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32768, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
+    test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, false));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, false, true));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, true));
-    test_cases.emplace_back(new test_mean());
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, true, false));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, false, true));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, true, true));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
@@ -8198,10 +8229,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 200, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 384, 64, 4, 4 }));
 
-    for (bool v : {false, true}) {
+    for (int tfrm : {0, 1, 2}) {
         for (bool circular : {false, true}) {
-            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, v, circular));
-            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, v, circular));
+            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 1, 0, 1, 0, 0, 0, 0, tfrm, circular));
+            test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {11, 22, 33, 44}, 1, 2, 3, 4, 5, 6, 7, 8, tfrm, circular));
         }
     }
 
@@ -8520,7 +8551,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                     test_cases.emplace_back(new test_rope(type, { 80,  32, 512, 1},  20, GGML_ROPE_TYPE_NEOX, 512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // neox (stablelm)
                     test_cases.emplace_back(new test_rope(type, { 64,   8, 512, 1},  64, GGML_ROPE_TYPE_NEOX, 512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // neox (falcon 40B)
                     test_cases.emplace_back(new test_rope(type, {128,  12, 512, 1}, 128, GGML_ROPE_TYPE_MROPE,  512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // rope_multi,m-rope (qwen2vl 2B)
-                    test_cases.emplace_back(new test_rope(type, {128,  12, 2, 1}, 128, GGML_ROPE_TYPE_IMROPE,  512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // rope_multi,imrope (qwen3vl 2B)
+                    test_cases.emplace_back(new test_rope(type, {128,  12, 512, 1}, 128, GGML_ROPE_TYPE_IMROPE,  512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // rope_multi,imrope (qwen3vl 2B)
                     test_cases.emplace_back(new test_rope(type, { 80,  16, 2, 1},  80, GGML_ROPE_TYPE_VISION, 512, 1.0f, 0.0f, 1.0f, ff, v, fw)); // rope_multi,m-rope (qwen2vl ViT)
                 }
             }

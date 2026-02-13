@@ -305,7 +305,10 @@ static bool common_pull_file(httplib::Client & cli,
     );
 
     if (!res) {
-        LOG_ERR("%s: error during download. Status: %d\n", __func__, res ? res->status : -1);
+        LOG_ERR("%s: download failed: %s (status: %d)\n",
+                __func__,
+                httplib::to_string(res.error()).c_str(),
+                res ? res->status : -1);
         return false;
     }
 
