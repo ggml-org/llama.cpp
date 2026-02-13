@@ -229,6 +229,27 @@ struct htp_fa_context {
     bool is_q_fp32;
 };
 
+static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, HVX_Vector vs) {
+    assert((size_t) dst % 128 == 0);
+    assert((size_t) src % 128 == 0);
+
+    const HVX_Vector * restrict vsrc = (const HVX_Vector * restrict) src;
+    HVX_Vector * restrict vdst       = (HVX_Vector * restrict) dst;
+
+    const uint32_t nvec = n / VLEN_FP32;
+    const uint32_t nloe = n % VLEN_FP32;
+
+    uint32_t i = 0;
+    #pragma unroll(4)
+    for (; i < nvec; ++i) {
+        vdst[i] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs));
+    }
+    if (nloe) {
+        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs);
+        hvx_vec_store_a(&vdst[i], nloe * sizeof(float), Q6_Vsf_equals_Vqf32(v));
+    }
+}
+
 static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void * data) {
     struct htp_fa_context * factx = (struct htp_fa_context *) data;
     const struct htp_ops_context * octx = factx->octx;
@@ -319,8 +340,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         const uint32_t h = iq2; // head index
         const float slope = (factx->max_bias > 0.0f) ? (h < factx->n_head_log2 ? powf(factx->m0, h + 1) : powf(factx->m1, 2*(h - factx->n_head_log2) + 1)) : 1.0f;
 
-        float S = 0.0f;      // sum
-        float M = -INFINITY; // maximum KQ value
+        HVX_Vector S_vec = hvx_vec_splat_f32(0.0f);
+        HVX_Vector M_vec = hvx_vec_splat_f32(-INFINITY);
 
         // Clear accumulator
         hvx_splat_f32_a(spad_a, 0, DV);
@@ -408,25 +429,22 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 }
 
                 scores_x4.v[iv] = scores;
-                v_max = Q6_Vsf_vmax_VsfVsf(scores, v_max);
+                v_max = hvx_vec_reduce_max2_f32(scores, v_max); // All lanes have block max
             }
 
             {
                 // 4. Online Softmax Update
-                v_max = hvx_vec_reduce_max_f32(v_max);
-                float m_block = hvx_vec_get_f32(v_max);
-                float M_old = M;
-                float M_new = (m_block > M) ? m_block : M;
-                M = M_new;
+                HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
+                HVX_Vector diff_vec  = Q6_Vqf32_vsub_VsfVsf(M_vec, M_new_vec);
+                HVX_Vector ms_vec    = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(diff_vec));
+                M_vec = M_new_vec;
 
-                const float ms = expf(M_old - M_new);
-                hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
+                hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
 
-                HVX_Vector M_new_vec = hvx_vec_splat_f32(M_new);
                 HVX_Vector p_sum_vec = hvx_vec_splat_f32(0.0f);
                 for (uint32_t ic2 = 0, iv = 0; ic2 + VLEN_FP32 <= current_block_size; ic2 += VLEN_FP32, ++iv) {
                     HVX_Vector scores = scores_x4.v[iv];
-                    HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_new_vec);
+                    HVX_Vector scores_shifted = Q6_Vqf32_vsub_VsfVsf(scores, M_vec);
                     HVX_Vector P = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(scores_shifted));
 
                     p_sum_vec = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(p_sum_vec, P));
@@ -443,8 +461,12 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 }
 
                 p_sum_vec = hvx_vec_reduce_sum_f32(p_sum_vec);
-                S = S * ms + hvx_vec_get_f32(p_sum_vec);
+                S_vec = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(S_vec, ms_vec)), p_sum_vec));
             }
+
+            // Sync scalars for leftover/next block if needed
+            float M = hvx_vec_get_f32(M_vec);
+            float S = hvx_vec_get_f32(S_vec);
 
             // Leftover
             for (; ic < current_block_size; ++ic) {
@@ -461,23 +483,28 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 }
 
                 const float Mold = M;
-                float ms = 1.0f;
                 float vs = 1.0f;
 
                 if (s_val > M) {
                     M = s_val;
-                    ms = expf(Mold - M);
-                    hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
+                    HVX_Vector diff_vec = hvx_vec_splat_f32(Mold - M);
+                    HVX_Vector ms_vec   = hvx_vec_exp_f32(diff_vec);
+                    hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
+
+                    float ms = hvx_vec_get_f32(ms_vec);
+                    S = S * ms + vs;
                 } else {
-                    vs = expf(s_val - M);
+                    HVX_Vector diff_vec = hvx_vec_splat_f32(s_val - M);
+                    vs = hvx_vec_get_f32(hvx_vec_exp_f32(diff_vec));
+                    S += vs;
                 }
 
                 const uint8_t * v_ptr = v_base + ic * factx->size_v_row_padded;
 
                 hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, vs);
-
-                S = S * ms + vs;
             }
+            M_vec = hvx_vec_splat_f32(M);
+            S_vec = hvx_vec_splat_f32(S);
 
             // Issue DMA for next+1 block (if exists)
             if (ib + 2 < factx->n_blocks) {
@@ -502,20 +529,26 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         }
 
         // sinks
+        float M = hvx_vec_get_f32(M_vec);
+        float S = hvx_vec_get_f32(S_vec);
+
         if (sinks) {
             const float s = ((float *)((char *) sinks->data))[h];
 
-            float ms = 1.0f;
             float vs = 1.0f;
 
             if (s > M) {
-                ms = expf(M - s);
-                hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
-            } else {
-                vs = expf(s - M);
-            }
+                HVX_Vector diff_vec = hvx_vec_splat_f32(M - s);
+                HVX_Vector ms_vec   = hvx_vec_exp_f32(diff_vec);
+                hvx_scale_vec_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms_vec);
 
-            S = S * ms + vs;
+                float ms = hvx_vec_get_f32(ms_vec);
+                S = S * ms + vs;
+            } else {
+                HVX_Vector diff_vec = hvx_vec_splat_f32(s - M);
+                vs = hvx_vec_get_f32(hvx_vec_exp_f32(diff_vec));
+                S += vs;
+            }
         }
 
         const float S_inv = S == 0.0f ? 0.0f : 1.0f/S;
