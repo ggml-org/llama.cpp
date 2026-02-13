@@ -873,7 +873,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                   "        - target type: %s\n"
                                   "============================================================================\n\n",
                     name.c_str(), ggml_type_name(target_type));
-                throw new std::runtime_error("this quantization requires an imatrix!");
+                throw std::runtime_error("this quantization requires an imatrix!");
             }
         }
     }
@@ -981,7 +981,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // the --dry-run option calculates the final quantization size without quantizting
             if (do_quantize) {
                 new_size = ggml_nrows(tensor) * ggml_row_size(new_type, tensor->ne[0]);
-                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB (%s)\n",
+                LLAMA_LOG_INFO("size = %8.3f MiB -> %8.3f MiB (%s)\n",
                                tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
@@ -1097,7 +1097,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
 #endif
                 }
-                LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
+                LLAMA_LOG_INFO("size = %8.3f MiB -> %8.3f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }
             total_size_org += tensor_size;
             total_size_new += new_size;
