@@ -66,10 +66,10 @@ OutputVector translate_rope(const NodeContext & context) {
     }
 
     const int mode = op_params[2];
+    constexpr int ROPE_TYPE_NORMAL = 0;
     constexpr int ROPE_TYPE_NEOX = 2;
-    constexpr int ROPE_TYPE_NORM = 0;
 
-    if (mode == ROPE_TYPE_NORM) {
+    if (mode == ROPE_TYPE_NORMAL) {
         auto neg_one = ov::op::v0::Constant::create(ov::element::i64, {1}, {-1});
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});

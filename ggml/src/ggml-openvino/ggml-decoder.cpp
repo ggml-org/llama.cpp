@@ -568,20 +568,20 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
             // F16/F32/BF16 weight with shared-memory constant
             auto * weight_extra = static_cast<ggml_openvino_weight_extra *>(tensor->extra);
             if (weight_extra->weight_node) {
-                GGML_LOG_DEBUG("%s: using pre-built weight node for %s\n", __func__, tensor->name);
+                // GGML_LOG_DEBUG("%s: using pre-built weight node for %s\n", __func__, tensor->name);
                 return weight_extra->weight_node;
             }
         } else if (extra_base->type == ggml_openvino_extra_base::Type::QUANTIZED_WEIGHT) {
             // Quantized weight with pre-extracted data
             auto * quant_extra = static_cast<ggml_openvino_quantized_weight_extra *>(tensor->extra);
             if (quant_extra->weight_node) {
-                GGML_LOG_DEBUG("%s: using pre-extracted quantized weight node for %s\n", __func__, tensor->name);
+                // GGML_LOG_DEBUG("%s: using pre-extracted quantized weight node for %s\n", __func__, tensor->name);
                 return quant_extra->weight_node;
             }
         }
     }
 
-    GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
+    // GGML_LOG_DEBUG("%s: creating new weight node for %s\n", __func__, tensor->name);
     static const std::set<ggml_type> weight_types = {GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16,
                                                      GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
                                                      GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K};

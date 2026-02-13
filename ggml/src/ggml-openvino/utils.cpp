@@ -38,19 +38,31 @@
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
-    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-        std::string filename = "cgraph_ov.txt";
-        GgmlOvDecoder::dump_cgraph(cgraph, filename);
-    }
+    try {
+        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+            std::string filename = "cgraph_ov.txt";
+            GgmlOvDecoder::dump_cgraph(cgraph, filename);
+        }
 
-    // Use device from singleton (initialized during backend init)
-    const auto & device = ggml_openvino_get_device_name();
-    const auto is_static = ggml_openvino_is_npu();
-    bool stateful = false;
-    if (getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !is_static) {
-        stateful = true;
+        // Use device from singleton (initialized during backend init)
+        const auto & device = ggml_openvino_get_device_name();
+        const auto is_static = ggml_openvino_is_npu();
+        bool stateful = false;
+        if (getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !is_static) {
+            stateful = true;
+        }
+
+        return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
+    } catch (const ov::Exception & e) {
+        // GGML_LOG_ERROR("GGML OpenVINO backend ov::Exception: %s\n", e.what());
+        return GGML_STATUS_FAILED;
+    } catch (const std::exception & e) {
+        // GGML_LOG_ERROR("GGML OpenVINO backend std::exception: %s\n", e.what());
+        return GGML_STATUS_FAILED;
+    } catch (...) {
+        // GGML_LOG_ERROR("GGML OpenVINO backend unknown exception\n");
+        return GGML_STATUS_FAILED;
     }
-    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
 }
 
 enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device, bool stateful) {
@@ -453,9 +465,6 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
                                const ov::AnyMap & config) {
     if (cgraph->n_nodes == 1 && (cgraph->nodes[0]->op == GGML_OP_NONE || cgraph->nodes[0]->op == GGML_OP_VIEW)) {
         return GGML_STATUS_SUCCESS;
-    }
-    if (cgraph->nodes[0]->op == GGML_OP_FLASH_ATTN_EXT) {
-        return GGML_STATUS_FAILED;
     }
 
     auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
