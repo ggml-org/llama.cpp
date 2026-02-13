@@ -1246,7 +1246,6 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                 {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)}
             }},
             {"usage", {
-                {"cache_read_input_tokens", cache_read_input_tokens},
                 {"output_tokens", n_decoded}
             }}
         }}
