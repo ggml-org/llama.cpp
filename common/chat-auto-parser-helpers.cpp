@@ -244,6 +244,9 @@ std::string after_common_suffix(const std::string & full, const std::string & le
     return full.substr(pos + common_suffix_len);
 }
 
+// TODO: segmentize will treat a JSON array inside tags as a tag: <calls>[{ "fun": { ... } }]</calls> will be three markers
+// not too worried about that because it hasn't turned out as a problem anywhere, but noting here in case it will
+// Might have to put some restrictions on tag contents as well (like "no { }")
 std::vector<segment> segmentize_markers(const std::string & text) {
     std::vector<segment> retval;
     bool in_marker = false;
