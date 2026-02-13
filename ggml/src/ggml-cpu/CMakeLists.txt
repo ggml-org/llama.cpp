@@ -572,7 +572,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         FetchContent_Declare(KleidiAI_Download
             URL ${KLEIDIAI_DOWNLOAD_URL}
             DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
+            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5}
+            EXCLUDE_FROM_ALL)
 
         FetchContent_MakeAvailable(KleidiAI_Download)
         FetchContent_GetProperties(KleidiAI_Download
@@ -584,11 +585,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
 
         add_compile_definitions(GGML_USE_CPU_KLEIDIAI)
-
-        # Remove kleidiai target after fetching it
-        if (TARGET kleidiai)
-            set_target_properties(kleidiai PROPERTIES EXCLUDE_FROM_ALL TRUE)
-        endif()
 
         list(APPEND GGML_CPU_SOURCES
             ggml-cpu/kleidiai/kleidiai.cpp
