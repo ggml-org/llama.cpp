@@ -177,6 +177,31 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 }
 
+void tag_based_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
+    arena.visit(result, [this](const common_peg_ast_node & node) {
+        if (!node.tag.empty()) {
+            tags[node.tag] = std::string(node.text);
+        }
+    });
+}
+
+tagged_parse_result tagged_peg_parser::parse_and_extract(const std::string & input, bool is_partial) const {
+    common_peg_parse_context ctx(input, is_partial);
+    auto parse_result = arena.parse(ctx);
+
+    tag_based_peg_mapper mapper;
+    mapper.from_ast(ctx.ast, parse_result);
+
+    return { std::move(parse_result), std::move(mapper.tags) };
+}
+
+tagged_peg_parser build_tagged_peg_parser(
+    const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn) {
+    common_peg_parser_builder builder;
+    builder.set_root(fn(builder));
+    return { builder.build() };
+}
+
 common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::string &       tag_name,
                                                                  const std::string &       marker,
                                                                  const common_peg_parser & p) {

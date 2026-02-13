@@ -138,6 +138,27 @@ inline common_peg_arena build_chat_peg_unified_parser(
     return builder.build();
 }
 
+class tag_based_peg_mapper {
+  public:
+    std::map<std::string, std::string> tags;
+
+    void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+};
+
+struct tagged_parse_result {
+    common_peg_parse_result              result;
+    std::map<std::string, std::string> tags;
+};
+
+struct tagged_peg_parser {
+    common_peg_arena arena;
+
+    tagged_parse_result parse_and_extract(const std::string & input, bool is_partial = false) const;
+};
+
+tagged_peg_parser build_tagged_peg_parser(
+    const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn);
+
 class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
     std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
     common_chat_tool_call *              current_tool          = nullptr;

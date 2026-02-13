@@ -20,6 +20,7 @@ static void test_example_qwen3_coder(testing & t);
 static void test_example_qwen3_non_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
 static void test_prefix_tool_names(testing & t);
+static void test_tagged_peg_parser(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -37,6 +38,7 @@ int main(int argc, char * argv[]) {
     t.test("qwen3 non-coder", test_example_qwen3_non_coder);
     t.test("comparison", test_command7_parser_compare);
     t.test("prefix tool names", test_prefix_tool_names);
+    t.test("tagged peg parser", test_tagged_peg_parser);
 
     return t.summary();
 }
@@ -876,5 +878,62 @@ static void test_prefix_tool_names(testing & t) {
         if (!msg.tool_calls.empty()) {
             t.assert_equal("tool name", "special_function", msg.tool_calls[0].name);
         }
+    });
+}
+
+static void test_tagged_peg_parser(testing & t) {
+    t.test("basic tag extraction", [&](testing & t) {
+        auto parser = build_tagged_peg_parser([](common_peg_parser_builder & p) {
+            return p.tag("greeting", p.until(" ")) + " " + p.tag("name", p.rest()) + p.end();
+        });
+
+        auto result = parser.parse_and_extract("Hello World");
+        t.assert_true("success", result.result.success());
+        t.assert_equal("greeting tag", "Hello", result.tags.at("greeting"));
+        t.assert_equal("name tag", "World", result.tags.at("name"));
+    });
+
+    t.test("duplicate tags overwrite", [&](testing & t) {
+        auto parser = build_tagged_peg_parser([](common_peg_parser_builder & p) {
+            return p.tag("item", p.until(",")) + "," + p.tag("item", p.rest()) + p.end();
+        });
+
+        auto result = parser.parse_and_extract("first,second");
+        t.assert_true("success", result.result.success());
+        t.assert_equal("item tag", "second", result.tags.at("item"));
+    });
+
+    t.test("no tags extracted", [&](testing & t) {
+        auto parser = build_tagged_peg_parser([](common_peg_parser_builder & p) {
+            return p.rest() + p.end();
+        });
+
+        auto result = parser.parse_and_extract("Hello");
+        t.assert_true("success", result.result.success());
+        t.assert_equal("empty tags", 0u, result.tags.size());
+    });
+
+    t.test("structured extraction", [&](testing & t) {
+        auto parser = build_tagged_peg_parser([](common_peg_parser_builder & p) {
+            auto header = p.tag("header", p.until("\n"));
+            auto body = p.tag("body", p.rest());
+            return header + "\n" + body + p.end();
+        });
+
+        auto result = parser.parse_and_extract("Title\nBody content here");
+        t.assert_true("success", result.result.success());
+        t.assert_equal("header", "Title", result.tags.at("header"));
+        t.assert_equal("body", "Body content here", result.tags.at("body"));
+    });
+
+    t.test("partial parse", [&](testing & t) {
+        auto parser = build_tagged_peg_parser([](common_peg_parser_builder & p) {
+            return p.tag("prefix", p.until(":")) + ":" + p.tag("value", p.rest()) + p.end();
+        });
+
+        auto result = parser.parse_and_extract("key:val", true);
+        t.assert_true("not fail", !result.result.fail());
+        t.assert_equal("prefix tag", "key", result.tags.at("prefix"));
+        t.assert_equal("value tag", "val", result.tags.at("value"));
     });
 }
