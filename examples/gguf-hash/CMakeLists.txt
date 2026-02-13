@@ -20,3 +20,11 @@ target_link_libraries(${TARGET} PRIVATE sha256)
 
 target_link_libraries(${TARGET} PRIVATE ggml ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if (CMAKE_SYSTEM_PROCESSOR STREQUAL "riscv64")
+    if (GGML_RVV)
+        message(STATUS "gguf-hash: RISC-V Vector support enabled")
+        target_compile_options(xxhash PRIVATE -march=rv64gcv -mabi=lp64d)
+        target_compile_options(${TARGET} PRIVATE -march=rv64gcv -mabi=lp64d)
+    endif()
+endif()
