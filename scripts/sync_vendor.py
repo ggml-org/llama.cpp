@@ -2,6 +2,8 @@
 
 import urllib.request
 
+HTTPLIB_VERSION = "f80864ca031932351abef49b74097c67f14719c6"
+
 vendor = {
     "https://github.com/nlohmann/json/releases/latest/download/json.hpp":     "vendor/nlohmann/json.hpp",
     "https://github.com/nlohmann/json/releases/latest/download/json_fwd.hpp": "vendor/nlohmann/json_fwd.hpp",
@@ -12,8 +14,8 @@ vendor = {
     # "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.23/miniaudio.h": "vendor/miniaudio/miniaudio.h",
     "https://github.com/mackron/miniaudio/raw/669ed3e844524fcd883231b13095baee9f6de304/miniaudio.h": "vendor/miniaudio/miniaudio.h",
 
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.30.1/httplib.h": "vendor/cpp-httplib/httplib.h",
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.30.1/LICENSE":   "vendor/cpp-httplib/LICENSE",
+    f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/httplib.h": "vendor/cpp-httplib/httplib.h",
+    f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/LICENSE":   "vendor/cpp-httplib/LICENSE",
 
     "https://raw.githubusercontent.com/sheredom/subprocess.h/b49c56e9fe214488493021017bf3954b91c7c1f5/subprocess.h": "vendor/sheredom/subprocess.h",
 }

@@ -42,7 +42,6 @@ struct llama_hparams {
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
-    uint32_t n_embd_features = 0;
     uint32_t n_layer;
     int32_t n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
     uint32_t n_rot;
@@ -53,8 +52,8 @@ struct llama_hparams {
     uint32_t n_rel_attn_bkts = 0;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
-    uint32_t n_embd_head_k_mla = 0;
-    uint32_t n_embd_head_v_mla = 0;
+    uint32_t n_embd_head_k_mla_impl = 0;
+    uint32_t n_embd_head_v_mla_impl = 0;
 
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
@@ -137,6 +136,9 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for Kimi Linear KDA
+    uint32_t n_embd_head_kda = 0;
+
     // for hybrid state space models
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
@@ -164,7 +166,7 @@ struct llama_hparams {
     uint32_t n_cls_out = 1;
 
     // output embedding dimension (0 = use n_embd)
-    uint32_t n_embd_out = 0;
+    uint32_t n_embd_out_impl = 0;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
@@ -195,13 +197,18 @@ struct llama_hparams {
     uint32_t n_deepstack_layers = 0;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
-    // ref: https://github.com/ggerganov/llama.cpp/pull/8141
+    // ref: https://github.com/ggml-org/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
     uint32_t    dec_n_layer        = 0;
 
     enum llama_pooling_type      pooling_type            = LLAMA_POOLING_TYPE_NONE;
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
+
+
+    // Step35: optional per-layer clamps for (Swi)GLU
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
@@ -239,7 +246,7 @@ struct llama_hparams {
     uint32_t n_embd_inp() const;
 
     // dimension of output embeddings
-    uint32_t get_n_embd_out() const;
+    uint32_t n_embd_out() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
@@ -268,6 +275,12 @@ struct llama_hparams {
     uint32_t n_pos_per_embd() const;
 
     bool is_swa(uint32_t il) const;
+
+    // note: currently only support if either all or none of the layers are MLA
+    bool is_mla() const;
+
+    uint32_t n_embd_head_k_mla() const;
+    uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
 
