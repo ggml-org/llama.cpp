@@ -1906,6 +1906,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_conv_transpose_2d(params, tensor);
             } break;
+        case GGML_OP_ISTFT:
+            {
+                ggml_compute_forward_istft(params, tensor);
+            } break;
         case GGML_OP_POOL_1D:
             {
                 ggml_compute_forward_pool_1d(params, tensor);
@@ -2318,6 +2322,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_ISTFT:
             {
                 n_tasks = n_threads;
             } break;
@@ -2862,6 +2867,14 @@ struct ggml_cplan ggml_graph_plan(
 
                         cur += sizeof(ggml_fp16_t)*ne00*ne01*ne02*ne03;
                         cur += sizeof(ggml_fp16_t)*ne10*ne11*ne12;
+                    } break;
+                case GGML_OP_ISTFT:
+                    {
+                        // Scratch for irfft results + hann² envelope:
+                        // two buffers of n_frames * n_fft floats each
+                        const int32_t n_fft    = node->op_params[0];
+                        const int64_t n_frames = node->src[0]->ne[2];
+                        cur = 2 * sizeof(float) * n_frames * n_fft;
                     } break;
                 case GGML_OP_TOP_K:
                     {

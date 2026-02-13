@@ -4744,6 +4744,40 @@ struct test_conv_transpose_1d : public test_case {
     }
 };
 
+// GGML_OP_ISTFT
+struct test_istft : public test_case {
+    const int n_fft;
+    const int hop_length;
+    const int win_length;
+    const int n_frames;
+
+    std::string vars() override {
+        return VARS_TO_STR4(n_fft, hop_length, win_length, n_frames);
+    }
+
+    test_istft(int n_fft = 1280, int hop_length = 320,
+               int win_length = 1280, int n_frames = 87)
+        : n_fft(n_fft), hop_length(hop_length),
+          win_length(win_length), n_frames(n_frames) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        int n_freq = n_fft / 2 + 1;
+        // Input: complex spectrogram [2, n_freq, n_frames]
+        ggml_tensor * spec = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, n_freq, n_frames);
+        ggml_set_name(spec, "spectrogram");
+
+        ggml_tensor * out = ggml_istft(ctx, spec, n_fft, hop_length, win_length);
+        ggml_set_name(out, "audio");
+
+        return out;
+    }
+
+    // iSTFT involves trig functions — need looser tolerance than default 1e-7
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+};
+
 // GGML_OP_CONV_TRANSPOSE_2D
 struct test_conv_transpose_2d : public test_case {
     const std::array<int64_t, 4> ne_input;
@@ -7370,6 +7404,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_transpose_1d({3,2,1,1}, {3,1,2,1}, 1, 0, 1));
     test_cases.emplace_back(new test_conv_transpose_1d({2,1,1,1}, {3,1,1,1}, 1, 0, 1));
 
+    // ISTFT — TTS spectral reconstruction
+    test_cases.emplace_back(new test_istft());                              // default: TTS params
+    test_cases.emplace_back(new test_istft(1280, 320, 1280, 10));           // few frames
+    test_cases.emplace_back(new test_istft(512, 128, 512, 50));             // smaller FFT
+    test_cases.emplace_back(new test_istft(1024, 256, 1024, 30));           // power-of-2 FFT
+
     test_cases.emplace_back(new test_conv_transpose_2d({3, 2, 3, 1}, {2, 2, 1, 3}, 1));
     test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2));
     test_cases.emplace_back(new test_conv_transpose_2d({129, 63, 35, 1}, {3, 3, 48, 35}, 1));
@@ -8505,6 +8545,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1));
     test_cases.emplace_back(new test_conv_transpose_2d({16, 16, 16, 1}, {3, 3, 8, 16}, 1));
     test_cases.emplace_back(new test_conv_transpose_2d({10, 10, 9, 1}, {3, 3, 1, 9}, 2));
+
+    test_cases.emplace_back(new test_istft(1280, 320, 1280, 87));   // short TTS
+    test_cases.emplace_back(new test_istft(1280, 320, 1280, 712));  // long TTS
 
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, {256, 256, 3, 1}));
 

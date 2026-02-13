@@ -529,6 +529,7 @@ extern "C" {
         GGML_OP_CONV_3D,
         GGML_OP_CONV_2D_DW,
         GGML_OP_CONV_TRANSPOSE_2D,
+        GGML_OP_ISTFT,
         GGML_OP_POOL_1D,
         GGML_OP_POOL_2D,
         GGML_OP_POOL_2D_BACK,
@@ -2109,6 +2110,17 @@ extern "C" {
             int                   n_channels,
             int                   n_batch,
             int                   n_channels_out);
+
+    // inverse short-time Fourier transform
+    // spectrogram: [n_fft, n_frames, 2] complex (interleaved re/im in last dim)
+    // output: [n_samples] real PCM audio
+    // includes irfft + Hann window + overlap-add
+    GGML_API struct ggml_tensor * ggml_istft(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * spectrogram,
+            int                   n_fft,
+            int                   hop_length,
+            int                   win_length);
 
     enum ggml_op_pool {
         GGML_OP_POOL_MAX,

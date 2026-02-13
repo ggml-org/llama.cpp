@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <vector>
 
 // ggml_compute_forward_dup
 
@@ -7106,6 +7107,145 @@ void ggml_compute_forward_conv_2d_dw(
         ggml_compute_forward_conv_2d_dw_cwhn(params, src, kernel, dst, p);
     } else {
         GGML_ABORT("non-contiguous memory layout not supported");
+    }
+}
+
+// ggml_compute_forward_istft
+//
+// iSTFT = inverse Short-Time Fourier Transform. Converts a complex spectrogram
+// back to real audio. Three steps per frame:
+//   1. irfft (complex→real via direct inverse DFT, O(n²) per frame)
+//   2. Hann window multiplication
+//   3. Overlap-add (fold) — frames overlap by (win_length - hop_length) samples
+//
+// Threading: each thread irfft's its own frames into a shared scratch buffer
+// (n_frames × n_fft). Thread 0 then does the sequential fold + normalize.
+
+// Direct inverse real FFT using Hermitian symmetry.
+// For a real-valued signal of length n_fft with n_freq = n_fft/2+1 complex bins:
+//   out[j] = (1/n_freq) * (X[0].re
+//            + 2 * sum_{k=1}^{n_freq-2} (X[k].re*cos(2πkj/n_fft) - X[k].im*sin(2πkj/n_fft))
+//            + X[n_freq-1].re*cos(2π(n_freq-1)j/n_fft) - X[n_freq-1].im*sin(2π(n_freq-1)j/n_fft))
+// This matches the Vulkan istft.comp shader algorithm.
+static void ggml_irfft_direct(
+        const float * cplx_in,   // interleaved [re,im] × n_freq
+        float       * out,       // real output, length n_fft
+        int           n_fft,
+        int           n_freq) {
+
+    const float inv_n_freq = 1.0f / (float)n_freq;
+    const float two_pi_over_n = 6.28318530718f / (float)n_fft;
+
+    for (int j = 0; j < n_fft; j++) {
+        const float angle_base = two_pi_over_n * (float)j;
+        float val = 0.0f;
+
+        // DC component (k=0): cos(0)=1, sin(0)=0
+        val += cplx_in[0];
+
+        // Middle frequencies (k=1..n_freq-2): doubled due to Hermitian symmetry
+        for (int k = 1; k < n_freq - 1; k++) {
+            float re = cplx_in[k * 2 + 0];
+            float im = cplx_in[k * 2 + 1];
+            float angle = angle_base * (float)k;
+            val += 2.0f * (re * cosf(angle) - im * sinf(angle));
+        }
+
+        // Nyquist component (k=n_freq-1): appears once
+        {
+            int k = n_freq - 1;
+            float re = cplx_in[k * 2 + 0];
+            float im = cplx_in[k * 2 + 1];
+            float angle = angle_base * (float)k;
+            val += re * cosf(angle) - im * sinf(angle);
+        }
+
+        out[j] = val * inv_n_freq;
+    }
+}
+
+void ggml_compute_forward_istft(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src = dst->src[0];
+
+    const int32_t n_fft       = dst->op_params[0];
+    const int32_t hop_length  = dst->op_params[1];
+    const int32_t win_length  = dst->op_params[2];
+    const int32_t n_frames    = (int32_t)src->ne[2];
+    const int32_t n_freq      = n_fft / 2 + 1;
+    const int32_t n_pad       = (win_length - hop_length) / 2;
+    const int64_t n_out_full  = (int64_t)(n_frames - 1) * hop_length + win_length;
+    const int64_t n_out       = n_out_full - 2 * n_pad;
+
+    GGML_ASSERT(dst->ne[0] == n_out);
+    GGML_ASSERT(src->ne[0] == 2);        // interleaved re/im
+    GGML_ASSERT(src->ne[1] == n_freq);   // frequency bins
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    // Scratch space from graph planner (requested in ggml-cpu.c extra_work_size):
+    // Layout: [all_res: n_frames * n_fft floats][all_hann2: n_frames * n_fft floats]
+    const int64_t scratch_per_buf = (int64_t)n_frames * n_fft;
+    float * all_res   = (float *)params->wdata;
+    float * all_hann2 = all_res + scratch_per_buf;
+
+    // Thread 0 zeroes the scratch buffers
+    if (ith == 0) {
+        memset(all_res,   0, scratch_per_buf * sizeof(float));
+        memset(all_hann2, 0, scratch_per_buf * sizeof(float));
+    }
+
+    ggml_barrier(params->threadpool);
+
+    // Hann window (each thread computes — cheap, avoids shared state)
+    std::vector<float> hann(win_length);
+    for (int i = 0; i < win_length; i++) {
+        hann[i] = 0.5f * (1.0f - cosf(2.0f * M_PI * i / win_length));
+    }
+
+    const float * src_data = (const float *)src->data;
+    float       * dst_data = (float *)dst->data;
+
+    // Phase 1: each thread irfft's + windows its assigned frames.
+    // Each thread writes to non-overlapping frame indices, so no data race.
+    std::vector<float> frame_real(n_fft);
+
+    for (int l = ith; l < n_frames; l += nth) {
+        const float * frame_cplx = src_data + (int64_t)l * n_freq * 2;
+
+        ggml_irfft_direct(frame_cplx, frame_real.data(), n_fft, n_freq);
+
+        for (int j = 0; j < n_fft; j++) {
+            all_res  [(int64_t)l * n_fft + j] = frame_real[j] * hann[j];
+            all_hann2[(int64_t)l * n_fft + j] = hann[j] * hann[j];
+        }
+    }
+
+    ggml_barrier(params->threadpool);
+
+    // Phase 2: thread 0 does overlap-add (fold) + normalize — sequential
+    if (ith == 0) {
+        std::vector<float> audio(n_out_full, 0.0f);
+        std::vector<float> env(n_out_full, 0.0f);
+
+        for (int l = 0; l < n_frames; l++) {
+            int64_t offset = (int64_t)l * hop_length;
+            for (int j = 0; j < win_length; j++) {
+                int64_t idx = offset + j;
+                if (idx < n_out_full) {
+                    audio[idx] += all_res  [(int64_t)l * n_fft + j];
+                    env[idx]   += all_hann2[(int64_t)l * n_fft + j];
+                }
+            }
+        }
+
+        // normalize by windowed envelope, trim padding
+        for (int64_t i = 0; i < n_out; i++) {
+            dst_data[i] = (env[i + n_pad] > 0.0f) ? audio[i + n_pad] / env[i + n_pad] : 0.0f;
+        }
     }
 }
 

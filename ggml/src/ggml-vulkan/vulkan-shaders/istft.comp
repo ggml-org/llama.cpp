@@ -1,0 +1,95 @@
+#version 450
+
+// iSTFT single-pass compute shader — one thread per output sample
+//
+// Each thread computes one output PCM sample by gathering contributions from
+// all overlapping spectrogram frames. For each frame, it evaluates the
+// inverse DFT at the sample's position within that frame.
+//
+// Complexity per output sample: O(overlap_count * n_freq)
+//   where overlap_count = win_length / hop_length (typically 4)
+//   and n_freq = n_fft/2 + 1 (typically 641)
+//
+// This is O(n^2) per frame but fully parallelized across all output samples.
+// For the TTS workload (~80K output samples), the GPU fills easily.
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly  buffer Src { float data_src[]; };  // complex spectrogram [2, n_freq, n_frames]
+layout(binding = 1) writeonly buffer Dst { float data_dst[]; };  // output audio [n_out]
+
+layout(push_constant) uniform PushConstants {
+    uint32_t n_fft;
+    uint32_t n_freq;       // n_fft/2 + 1
+    uint32_t n_frames;
+    uint32_t hop_length;
+    uint32_t win_length;
+    uint32_t n_pad;
+    uint32_t n_out;
+} p;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= p.n_out) return;
+
+    // Map output index to pre-trim position
+    uint i_full = i + p.n_pad;
+
+    float audio_sum = 0.0;
+    float env_sum   = 0.0;
+
+    // Find overlapping frames: frame l covers samples [l*hop .. l*hop + win - 1]
+    // This sample is at i_full, so l*hop <= i_full < l*hop + win
+    int l_min = max(0, int(i_full) - int(p.win_length) + 1);
+    l_min = (l_min + int(p.hop_length) - 1) / int(p.hop_length);  // ceil division
+    int l_max = min(int(p.n_frames) - 1, int(i_full) / int(p.hop_length));
+
+    float inv_n_freq = 1.0 / float(p.n_freq);
+    float two_pi_over_n = 6.28318530718 / float(p.n_fft);
+
+    for (int l = l_min; l <= l_max; l++) {
+        uint frame_start = uint(l) * p.hop_length;
+        uint j = i_full - frame_start;  // position within this frame's window
+
+        // Hann window at position j
+        float hann = 0.5 * (1.0 - cos(6.28318530718 * float(j) / float(p.win_length)));
+
+        // Compute inverse DFT at position j for this frame's spectrum
+        // irfft: out[j] = (1/N) * sum_{k=0}^{N-1} X[k] * exp(i*2*pi*k*j/n_fft)
+        // For real signal, using Hermitian symmetry:
+        // out[j] = (1/n_freq) * (X[0].re + 2*sum_{k=1}^{n_freq-2} (X[k].re*cos - X[k].im*sin) + X[n_freq-1].re * cos)
+        uint src_offset = uint(l) * p.n_freq * 2;
+
+        float val = 0.0;
+        float angle_base = two_pi_over_n * float(j);
+
+        // DC component (k=0)
+        val += data_src[src_offset + 0];  // X[0].real, cos(0)=1
+
+        // Middle frequencies (k=1 to n_freq-2): count twice due to Hermitian symmetry
+        for (uint k = 1; k < p.n_freq - 1; k++) {
+            float re = data_src[src_offset + k * 2 + 0];
+            float im = data_src[src_offset + k * 2 + 1];
+            float angle = angle_base * float(k);
+            val += 2.0 * (re * cos(angle) - im * sin(angle));
+        }
+
+        // Nyquist component (k=n_freq-1)
+        {
+            uint k = p.n_freq - 1;
+            float re = data_src[src_offset + k * 2 + 0];
+            float im = data_src[src_offset + k * 2 + 1];
+            float angle = angle_base * float(k);
+            val += re * cos(angle) - im * sin(angle);
+        }
+
+        val *= inv_n_freq;
+
+        audio_sum += val * hann;
+        env_sum   += hann * hann;
+    }
+
+    data_dst[i] = (env_sum > 0.0) ? audio_sum / env_sum : 0.0;
+}

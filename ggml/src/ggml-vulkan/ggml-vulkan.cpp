@@ -804,6 +804,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
     vk_pipeline pipeline_timestep_embedding_f32;
     vk_pipeline pipeline_conv_transpose_1d_f32;
+    vk_pipeline pipeline_istft_f32;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
@@ -1405,6 +1406,16 @@ struct vk_op_conv_transpose_1d_push_constants {
     uint32_t nb1;
 
     int32_t s0;
+};
+
+struct vk_op_istft_push_constants {
+    uint32_t n_fft;
+    uint32_t n_freq;
+    uint32_t n_frames;
+    uint32_t hop_length;
+    uint32_t win_length;
+    uint32_t n_pad;
+    uint32_t n_out;
 };
 
 struct vk_op_pool2d_push_constants {
@@ -4401,6 +4412,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_timestep_embedding_f32, "timestep_embedding_f32", timestep_embedding_f32_len, timestep_embedding_f32_data, "main", 2, sizeof(vk_op_timestep_embedding_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_conv_transpose_1d_f32, "conv_transpose_1d_f32", conv_transpose_1d_f32_len, conv_transpose_1d_f32_data, "main", 3, sizeof(vk_op_conv_transpose_1d_push_constants), {1, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_istft_f32, "istft_f32", istft_f32_len, istft_f32_data, "main", 2, sizeof(vk_op_istft_push_constants), {256, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {512, 1, 1}, {}, 1);
 
@@ -9230,6 +9243,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_conv_transpose_1d_f32;
         }
         return nullptr;
+    case GGML_OP_ISTFT:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_istft_f32;
+        }
+        return nullptr;
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_pool2d_f32;
@@ -9611,6 +9629,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_1D:
         {
             elements = {uint32_t(src0->ne[1]), 1, 1}; // parallelize in {Cout, 1, 1}
+        } break;
+    case GGML_OP_ISTFT:
+        {
+            elements = {uint32_t(dst->ne[0]), 1, 1};  // one thread per output sample
         } break;
     case GGML_OP_POOL_2D:
         {
@@ -11303,6 +11325,33 @@ static void ggml_vk_conv_transpose_1d(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_CONV_TRANSPOSE_1D, std::move(p));
 }
 
+static void ggml_vk_istft(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    // src0: [2, n_freq, n_frames] — complex spectrogram (interleaved re/im)
+    // dst:  [n_out] — real PCM audio
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    const int32_t n_fft       = dst->op_params[0];
+    const int32_t hop_length  = dst->op_params[1];
+    const int32_t win_length  = dst->op_params[2];
+    const int32_t n_freq      = n_fft / 2 + 1;
+    const int32_t n_frames    = (int32_t)src0->ne[2];
+    const int32_t n_pad       = (win_length - hop_length) / 2;
+    const int32_t n_out       = (int32_t)dst->ne[0];
+
+    vk_op_istft_push_constants p{};
+    p.n_fft       = static_cast<uint32_t>(n_fft);
+    p.n_freq      = static_cast<uint32_t>(n_freq);
+    p.n_frames    = static_cast<uint32_t>(n_frames);
+    p.hop_length  = static_cast<uint32_t>(hop_length);
+    p.win_length  = static_cast<uint32_t>(win_length);
+    p.n_pad       = static_cast<uint32_t>(n_pad);
+    p.n_out       = static_cast<uint32_t>(n_out);
+
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_ISTFT, std::move(p));
+}
+
 static void ggml_vk_pool_2d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     uint32_t op = static_cast<uint32_t>(dst->op_params[0]);
     const int32_t k1 = dst->op_params[1];
@@ -12753,6 +12802,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_CONV_TRANSPOSE_1D:
         ggml_vk_conv_transpose_1d(ctx, compute_ctx, src0, src1, node);
+
+        break;
+    case GGML_OP_ISTFT:
+        ggml_vk_istft(ctx, compute_ctx, src0, node);
 
         break;
     case GGML_OP_POOL_2D:
@@ -15076,6 +15129,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_ISTFT:
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
@@ -15836,6 +15891,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         } else if (tensor->op == GGML_OP_CONV_TRANSPOSE_2D) {
             const int32_t s = tensor->op_params[0];
             tensor_clone = ggml_conv_transpose_2d_p0(ggml_ctx, src_clone[0], src_clone[1], s);
+        } else if (tensor->op == GGML_OP_ISTFT) {
+            const int32_t n_fft       = tensor->op_params[0];
+            const int32_t hop_length  = tensor->op_params[1];
+            const int32_t win_length  = tensor->op_params[2];
+            tensor_clone = ggml_istft(ggml_ctx, src_clone[0], n_fft, hop_length, win_length);
         } else if (tensor->op == GGML_OP_LEAKY_RELU) {
             const float * op_params = (const float *)tensor->op_params;
             tensor_clone = ggml_leaky_relu(ggml_ctx, src_clone[0], op_params[0], false);

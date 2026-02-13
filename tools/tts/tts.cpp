@@ -5,6 +5,9 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-alloc.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -113,168 +116,74 @@ static bool save_wav16(const std::string & fname, const std::vector<float> & dat
     return file.good();
 }
 
-static void fill_hann_window(int length, bool periodic, float * output) {
-    int offset = -1;
-    if (periodic) {
-        offset = 0;
-    }
-    for (int i = 0; i < length; i++) {
-        output[i] = 0.5 * (1.0 - cosf((2.0 * M_PI * i) / (length + offset)));
-    }
-}
-
-// very poor-man fft
-static void twiddle(float * real, float * imag, int k, int N) {
-    float angle = 2 * M_PI * k / N;
-    *real = cos(angle);
-    *imag = sin(angle);
-}
-
-static void irfft(int n, const float * inp_cplx, float * out_real) {
-    int N = n / 2 + 1;
-
-    std::vector<float> real_input(N);
-    std::vector<float> imag_input(N);
-    for (int i = 0; i < N; ++i) {
-        real_input[i] = inp_cplx[2 * i];
-        imag_input[i] = inp_cplx[2 * i + 1];
-    }
-
-    std::vector<float> real_output(n);
-    std::vector<float> imag_output(n);
-
-    for (int k = 0; k < n; ++k) {
-        real_output[k] = 0.0f;
-        imag_output[k] = 0.0f;
-        for (int m = 0; m < N; ++m) {
-            float twiddle_real;
-            float twiddle_imag;
-
-            twiddle(&twiddle_real, &twiddle_imag, k * m, n);
-
-            real_output[k] += real_input[m] * twiddle_real - imag_input[m] * twiddle_imag;
-            imag_output[k] += real_input[m] * twiddle_imag + imag_input[m] * twiddle_real;
-        }
-    }
-
-    for (int i = 0; i < n; ++i) {
-        out_real[i] = real_output[i] / N;
-    }
-}
-
-//
-//  y = torch.nn.functional.fold(
-//       data, output_size=(1, output_size), kernel_size=(1, self.win_length), stride=(1, self.hop_length),
-//  )[:, 0, 0, pad:-pad]
-//
-// data.shape =  torch.Size([1, 1280, 261])
-// output_size =  84480
-// win_length =  1280
-// hop_length =  320
-// pad =  480
-//
-static void fold(const std::vector<float> & data, int64_t n_out, int64_t n_win, int64_t n_hop, int64_t n_pad, std::vector<float> & output) {
-    int64_t output_height = n_out;
-    int64_t kernel_w = n_win;
-    int64_t stride_w = n_hop;
-    int64_t width    = n_out;
-
-    output.resize(width, 0.0f);
-
-    int64_t col_idx = 0;
-    for (int64_t w_col = 0; w_col < width; ++w_col) {
-        int64_t start = w_col * stride_w - n_pad;
-        int64_t end   = start + kernel_w;
-
-        for (int64_t w_im = start; w_im < end; ++w_im) {
-            if (w_im >= 0 && w_im < output_height && col_idx < (int64_t) data.size()) {
-                output[w_im] += data[col_idx];
-            }
-            col_idx++;
-        }
-    }
-
-    output.resize(n_out - 2 * n_pad);
-}
-
-// TODO: not optimized at all
+// Spectral ops via ggml_istft — dispatches to Vulkan GPU when available, CPU fallback.
+// Preprocessing (transpose, exp, polar→cartesian) stays in C++ since it's O(n) and fast.
 static std::vector<float> embd_to_audio(
         const float * embd,
         const int n_codes,
         const int n_embd,
         const int n_thread) {
-    const int n_fft = 1280;
-    const int n_hop = 320;
-    const int n_win = 1280;
-    const int n_pad = (n_win - n_hop)/2;
-    const int n_out = (n_codes - 1)*n_hop + n_win;
+    const int n_fft  = 1280;
+    const int n_hop  = 320;
+    const int n_win  = 1280;
+    const int n_freq = n_fft / 2 + 1;  // 641
+    const int n_pad  = (n_win - n_hop) / 2;
+    const int64_t n_out = (int64_t)(n_codes - 1) * n_hop + n_win - 2 * n_pad;
 
-    std::vector<float> hann(n_fft);
+    GGML_ASSERT(n_embd == 2 * n_freq);  // magnitude + phase
 
-    fill_hann_window(hann.size(), true, hann.data());
+    // --- Preprocessing: embeddings → complex spectrogram [2, n_freq, n_codes] ---
+    // Layout for ggml_istft: ne[0]=2 (re/im interleaved), ne[1]=n_freq, ne[2]=n_frames
+    std::vector<float> spec(2 * n_freq * n_codes);
 
-    int n_spec = n_embd*n_codes;
+    for (int l = 0; l < n_codes; l++) {
+        for (int k = 0; k < n_freq; k++) {
+            float mag = embd[l * n_embd + k];
+            float phi = embd[l * n_embd + k + n_freq];
 
-    std::vector<float> E (n_spec);
-    std::vector<float> S (n_spec);
-    std::vector<float> ST(n_spec);
-
-    for (int l = 0; l < n_codes; ++l) {
-        for (int k = 0; k < n_embd; ++k) {
-            E[k*n_codes + l] = embd[l*n_embd + k];
-        }
-    }
-
-    for (int k = 0; k < n_embd/2; ++k) {
-        for (int l = 0; l < n_codes; ++l) {
-            float mag = E[(k           )*n_codes + l];
-            float phi = E[(k + n_embd/2)*n_codes + l];
-
-            mag = exp(mag);
-
-            if (mag > 1e2) {
-                mag = 1e2;
+            mag = expf(mag);
+            if (mag > 1e2f) {
+                mag = 1e2f;
             }
-            S[2*(k*n_codes + l) + 0] = mag*cosf(phi);
-            S[2*(k*n_codes + l) + 1] = mag*sinf(phi);
+
+            // Store as [2, n_freq, n_codes]: index = (l * n_freq + k) * 2
+            spec[(l * n_freq + k) * 2 + 0] = mag * cosf(phi);
+            spec[(l * n_freq + k) * 2 + 1] = mag * sinf(phi);
         }
     }
 
-    for (int l = 0; l < n_codes; ++l) {
-        for (int k = 0; k < n_embd/2; ++k) {
-            ST[l*n_embd + 2*k + 0] = S[2*(k*n_codes + l) + 0];
-            ST[l*n_embd + 2*k + 1] = S[2*(k*n_codes + l) + 1];
-        }
-    }
+    // --- Build ggml graph with ggml_istft ---
+    struct ggml_init_params ggml_params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 3 + ggml_graph_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    struct ggml_context * ctx = ggml_init(ggml_params);
 
-    std::vector<float> res  (n_codes*n_fft);
-    std::vector<float> hann2(n_codes*n_fft);
+    struct ggml_tensor * spectrogram = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, n_freq, n_codes);
+    struct ggml_tensor * audio_out   = ggml_istft(ctx, spectrogram, n_fft, n_hop, n_win);
 
-    std::vector<std::thread> workers(n_thread);
-    for (int i = 0; i < n_thread; ++i) {
-        workers[i] = std::thread([&, i]() {
-            for (int l = i; l < n_codes; l += n_thread) {
-                irfft(n_fft, ST.data() + l*n_embd, res.data() + l*n_fft);
-                for (int j = 0; j < n_fft; ++j) {
-                    res  [l*n_fft + j] *= hann[j];
-                    hann2[l*n_fft + j]  = hann[j] * hann[j];
-                }
-            }
-        });
-    }
-    for (int i = 0; i < n_thread; ++i) {
-        workers[i].join();
-    }
+    struct ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, audio_out);
 
-    std::vector<float> audio;
-    std::vector<float> env;
+    // --- Allocate and compute on CPU backend ---
+    // When run standalone, uses CPU. When integrated into a full ggml pipeline
+    // with Vulkan, ggml_istft dispatches to the Vulkan compute shader.
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    ggml_backend_cpu_set_n_threads(backend, n_thread);
 
-    fold(res,   n_out, n_win, n_hop, n_pad, audio);
-    fold(hann2, n_out, n_win, n_hop, n_pad, env); // TODO: can be done once
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    ggml_backend_tensor_set(spectrogram, spec.data(), 0, spec.size() * sizeof(float));
+    ggml_backend_graph_compute(backend, graph);
 
-    for (size_t i = 0; i < audio.size(); ++i) {
-        audio[i] /= env[i];
-    }
+    // Read result
+    std::vector<float> audio(n_out);
+    ggml_backend_tensor_get(audio_out, audio.data(), 0, n_out * sizeof(float));
+
+    // Cleanup
+    ggml_backend_buffer_free(buf);
+    ggml_backend_free(backend);
+    ggml_free(ctx);
 
     return audio;
 }

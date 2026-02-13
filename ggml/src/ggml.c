@@ -1003,6 +1003,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CONV_3D",
     "CONV_2D_DW",
     "CONV_TRANSPOSE_2D",
+    "ISTFT",
     "POOL_1D",
     "POOL_2D",
     "POOL_2D_BACK",
@@ -1047,7 +1048,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1112,6 +1113,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "conv_3d(x)",
     "conv_2d_dw(x)",
     "conv_transpose_2d(x)",
+    "istft(x)",
     "pool_1d(x)",
     "pool_2d(x)",
     "pool_2d_back(x)",
@@ -1156,7 +1158,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4814,6 +4816,34 @@ struct ggml_tensor * ggml_conv_transpose_2d_p0(
     result->op     = GGML_OP_CONV_TRANSPOSE_2D;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+// ggml_istft
+
+struct ggml_tensor * ggml_istft(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * spectrogram,
+        int                   n_fft,
+        int                   hop_length,
+        int                   win_length) {
+    // spectrogram: [2, n_fft/2+1, n_frames] — complex interleaved (re/im), freq bins, frames
+    GGML_ASSERT(spectrogram->ne[0] == 2);
+    GGML_ASSERT(spectrogram->ne[1] == n_fft / 2 + 1);
+
+    const int64_t n_frames = spectrogram->ne[2];
+    const int64_t n_pad = (win_length - hop_length) / 2;
+    const int64_t n_out = (n_frames - 1) * hop_length + win_length - 2 * n_pad;
+
+    const int64_t ne[4] = { n_out, 1, 1, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 1, ne);
+
+    int32_t params[] = { n_fft, hop_length, win_length };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_ISTFT;
+    result->src[0] = spectrogram;
 
     return result;
 }
