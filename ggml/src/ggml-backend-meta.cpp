@@ -204,7 +204,7 @@ ggml_backend_dev_t ggml_backend_meta_dev_simple_dev(ggml_backend_dev_t meta_dev,
 
 ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud) {
-    GGML_ASSERT(n_devs == 1 || n_devs == 2 || n_devs == 4 || n_devs == 8);
+    GGML_ASSERT(n_devs <= GGML_BACKEND_META_MAX_DEVICES);
     static std::vector<std::unique_ptr<ggml_backend_meta_device_context>>         ctxs;
     static std::map<ggml_backend_meta_device_context, struct ggml_backend_device> meta_devs;
 
@@ -441,7 +441,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor(ggml_backend_buffer
         ggml_set_name(t_ij, tensor->name);
         t_ij->buffer = simple_buf;
         t_ij->view_offs = tensor->view_offs;
-        if (t_ij->view_offs > tensor->nb[split_dim]) {
+        if (split_dim >= 0 && split_dim < GGML_MAX_DIMS && t_ij->view_offs > tensor->nb[split_dim]) {
             t_ij->view_offs = t_ij->view_offs * ne[split_dim]/tensor->ne[split_dim];
         }
         t_ij->view_src = tensor->view_src;
