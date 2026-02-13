@@ -3774,6 +3774,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--mcp-config"}, "FILE",
+        "path to MCP configuration file",
+        [](common_params & params, const std::string & value) {
+            params.mcp_config = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--mcp-yolo"},
+        "auto-approve all MCP tool calls (no user confirmation)",
+        [](common_params & params) {
+            params.mcp_yolo = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI}));
+
     return ctx_arg;
 }
 

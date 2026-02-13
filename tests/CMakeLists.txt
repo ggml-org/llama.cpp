@@ -1,5 +1,9 @@
 llama_add_compile_flags()
 
+add_executable(test-mcp-integration test-mcp-integration.cpp)
+    target_link_libraries(test-mcp-integration PRIVATE common)
+target_include_directories(test-mcp-integration PRIVATE ../tools/cli)
+
 function(llama_build source)
     set(TEST_SOURCES ${source} ${ARGN})
 

@@ -3,6 +3,7 @@
 #include "console.h"
 // #include "log.h"
 
+#include "mcp.hpp"
 #include "server-context.h"
 #include "server-task.h"
 
@@ -48,10 +49,12 @@ static void signal_handler(int) {
 #endif
 
 struct cli_context {
-    server_context ctx_server;
-    json messages = json::array();
+    server_context          ctx_server;
+    json                    messages = json::array();
+    json                    tools    = json::array();
     std::vector<raw_buffer> input_files;
-    task_params defaults;
+    task_params             defaults;
+    std::set<std::string>   approved_requests;
 
     // thread for showing "loading" animation
     std::atomic<bool> loading_show;
@@ -68,7 +71,7 @@ struct cli_context {
         // defaults.return_progress = true; // TODO: show progress
     }
 
-    std::string generate_completion(result_timings & out_timings) {
+    std::string generate_completion(result_timings & out_timings, server_task_result_ptr & out_result) {
         server_response_reader rd = ctx_server.get_response_reader();
         auto chat_params = format_chat();
         {
@@ -110,11 +113,12 @@ struct cli_context {
                 } else {
                     console::error("Error: %s\n", err_data.dump().c_str());
                 }
+                out_result = std::move(result);
                 return curr_content;
             }
-            auto res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
+            auto *res_partial = dynamic_cast<server_task_result_cmpl_partial *>(result.get());
             if (res_partial) {
-                out_timings = std::move(res_partial->timings);
+                out_timings = res_partial->timings;
                 for (const auto & diff : res_partial->oaicompat_msg_diffs) {
                     if (!diff.content_delta.empty()) {
                         if (is_thinking) {
@@ -137,9 +141,10 @@ struct cli_context {
                     }
                 }
             }
-            auto res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+            auto *res_final = dynamic_cast<server_task_result_cmpl_final *>(result.get());
             if (res_final) {
-                out_timings = std::move(res_final->timings);
+                out_timings = res_final->timings;
+                out_result  = std::move(result);
                 break;
             }
             result = rd.next(should_stop);
@@ -160,20 +165,18 @@ struct cli_context {
             buf.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             input_files.push_back(std::move(buf));
             return mtmd_default_marker();
-        } else {
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-            return content;
         }
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     }
 
-    common_chat_params format_chat() {
+    common_chat_params format_chat() const {
         auto meta = ctx_server.get_meta();
         auto & chat_params = meta.chat_params;
 
         common_chat_templates_inputs inputs;
         inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
-        inputs.tools                 = {}; // TODO
-        inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+        inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
+        inputs.tool_choice           = tools.empty() ? COMMON_CHAT_TOOL_CHOICE_NONE : COMMON_CHAT_TOOL_CHOICE_AUTO;
         inputs.json_schema           = ""; // TODO
         inputs.grammar               = ""; // TODO
         inputs.use_jinja             = chat_params.use_jinja;
@@ -229,7 +232,29 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    console::log("\nLoading model... "); // followed by loading animation
+    // Initialize MCP
+    mcp_context mcp;
+    if (!params.mcp_config.empty()) {
+        if (mcp.load_config(params.mcp_config, params.mcp_servers)) {
+            mcp.set_yolo(params.mcp_yolo);
+            auto mcp_tools = mcp.get_tools();
+            for (const auto & t : mcp_tools) {
+                json tool = {
+                    { "type",     "function"                                                                    },
+                    { "function",
+                     { { "name", t.name }, { "description", t.description }, { "parameters", t.input_schema } } }
+                };
+                ctx_cli.tools.push_back(tool);
+            }
+            if (!ctx_cli.tools.empty()) {
+                console::log("Enabled %d MCP tools\n", (int) ctx_cli.tools.size());
+            }
+        } else {
+            console::error("Failed to load MCP config: %s\n", params.mcp_config.c_str());
+        }
+    }
+
+    console::log("\nLoading model... ");  // followed by loading animation
     console::spinner::start();
     if (!ctx_cli.ctx_server.load_model(params)) {
         console::spinner::stop();
@@ -337,7 +362,8 @@ int main(int argc, char ** argv) {
         // process commands
         if (string_starts_with(buffer, "/exit")) {
             break;
-        } else if (string_starts_with(buffer, "/regen")) {
+        }
+        if (string_starts_with(buffer, "/regen")) {
             if (ctx_cli.messages.size() >= 2) {
                 size_t last_idx = ctx_cli.messages.size() - 1;
                 ctx_cli.messages.erase(last_idx);
@@ -388,11 +414,85 @@ int main(int argc, char ** argv) {
             cur_msg.clear();
         }
         result_timings timings;
-        std::string assistant_content = ctx_cli.generate_completion(timings);
-        ctx_cli.messages.push_back({
-            {"role",    "assistant"},
-            {"content", assistant_content}
-        });
+        while (true) {
+            server_task_result_ptr result;
+            std::string            assistant_content = ctx_cli.generate_completion(timings, result);
+            auto *                 res_final         = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+
+            if (res_final && !res_final->oaicompat_msg.tool_calls.empty()) {
+                ctx_cli.messages.push_back(res_final->oaicompat_msg.to_json_oaicompat());
+
+                for (const auto & tc : res_final->oaicompat_msg.tool_calls) {
+                    json args;
+                    try {
+                        if (tc.arguments.empty()) {
+                            args = json::object();
+                        } else {
+                            args = json::parse(tc.arguments);
+                        }
+                    } catch (...) {
+                        json err_msg = {
+                            { "role",         "tool"                    },
+                            { "content",      "Error parsing arguments" },
+                            { "tool_call_id", tc.id                     },
+                            { "name",         tc.name                   }
+                        };
+                        ctx_cli.messages.push_back(err_msg);
+                        continue;
+                    }
+
+                    std::string request_id = tc.name + tc.arguments;
+                    if (!mcp.get_yolo() &&
+                        ctx_cli.approved_requests.find(request_id) == ctx_cli.approved_requests.end()) {
+                        // Prompt user
+                        fprintf(stdout, "\n\n\033[1;33mTool call: %s\033[0m\n", tc.name.c_str());
+                        fprintf(stdout, "Arguments: %s\n", args.dump(2).c_str());
+                        fprintf(stdout, "Approve? [y]es, [n]o, [A]lways allow feature: ");
+                        fflush(stdout);
+
+                        char        c = ' ';
+                        std::string line;
+
+                        console::readline(line, false);
+                        if (!line.empty()) {
+                            c = line[0];
+                        }
+
+                        if (c == 'y' || c == 'Y') {
+                            // approved once
+                        } else if (c == 'A') {
+                            ctx_cli.approved_requests.insert(request_id);
+                        } else {
+                            json err_msg = {
+                                { "role",         "tool"                       },
+                                { "content",      "User denied tool execution" },
+                                { "tool_call_id", tc.id                        },
+                                { "name",         tc.name                      }
+                            };
+                            ctx_cli.messages.push_back(err_msg);
+                            continue;
+                        }
+                    }
+
+                    json res      = mcp.call_tool(tc.name, args);
+                    json tool_msg = {
+                        { "role",         "tool"     },
+                        { "content",      res.dump() },
+                        { "tool_call_id", tc.id      },
+                        { "name",         tc.name    }
+                    };
+                    ctx_cli.messages.push_back(tool_msg);
+                }
+                // continue loop to generate with tool results
+            } else {
+                json assistant_msg = {
+                    {"role",   "assistant"},
+                    {"content", assistant_content}
+                };
+                ctx_cli.messages.push_back(assistant_msg);
+                break;
+            }
+        }
         console::log("\n");
 
         if (params.show_timings) {
