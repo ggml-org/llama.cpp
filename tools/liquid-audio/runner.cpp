@@ -71,8 +71,16 @@ struct audio_context {
         mparams.use_gpu               = params.mmproj_use_gpu;
         mparams.print_timings         = true;
         mparams.n_threads             = params.cpuparams.n_threads;
-        mparams.vocoder_path          = params.vocoder.model.path.c_str();
-        mparams.tokenizer_path        = params.vocoder.speaker_file.c_str();
+        const bool has_vocoder    = !params.vocoder.model.path.empty();
+        const bool has_detokenizer = !params.vocoder.speaker_file.empty();
+        const bool enable_audio_output = has_vocoder && has_detokenizer;
+        if (enable_audio_output) {
+            mparams.vocoder_path   = params.vocoder.model.path.c_str();
+            mparams.tokenizer_path = params.vocoder.speaker_file.c_str();
+        } else if (has_vocoder || has_detokenizer) {
+            LOG_WRN("%s: audio output disabled: both -mv (vocoder) and --tts-speaker-file (audio detokenizer) are required\n",
+                    __func__);
+        }
         mtmd_ctx_audio.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!mtmd_ctx_audio.get()) {
             LOG_ERR("Failed to load audio model from %s\n", clip_path);
@@ -96,8 +104,23 @@ class Runner::RunnerImpl {
                  const text_callback_t &                   text_callback,
                  const audio_callback_t &                  audio_callback,
                  const std::vector<mtmd_output_modality> & modalities) {
-        mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
-        mtmd_audio_output_start_new_turn(ctx.mtmd_ctx_audio.get());
+        const bool audio_output_supported = mtmd_support_audio_output(ctx.mtmd_ctx_audio.get());
+        if (audio_output_supported) {
+            mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
+            mtmd_audio_output_start_new_turn(ctx.mtmd_ctx_audio.get());
+        } else {
+            bool requested_audio = false;
+            for (const auto modality : modalities) {
+                if (modality == MTMD_OUTPUT_MODALITY_AUDIO) {
+                    requested_audio = true;
+                    break;
+                }
+            }
+            if (requested_audio) {
+                LOG_WRN("%s: requested audio output, but vocoder/audio detokenizer are not available; falling back to text-only output\n",
+                        __func__);
+            }
+        }
 
         std::vector<common_chat_msg> msgs;
         for (const auto & message : messages) {
@@ -155,7 +178,6 @@ class Runner::RunnerImpl {
         for (const auto & [p, desc] : {
                  std::pair{ params.model.path,         "-m"       },
                  std::pair{ params.mmproj.path,        "--mmproj" },
-                 std::pair{ params.vocoder.model.path, "-mv"      },
         }) {
             if (p.empty()) {
                 LOG_ERR("ERR: Missing %s argument\n", desc);
@@ -202,7 +224,12 @@ class Runner::RunnerImpl {
         ctx.n_past = 0;
     }
 
-    int get_output_sample_rate() const { return mtmd_audio_output_get_sample_rate(ctx.mtmd_ctx_audio.get()); }
+    int get_output_sample_rate() const {
+        if (!mtmd_support_audio_output(ctx.mtmd_ctx_audio.get())) {
+            return 0;
+        }
+        return mtmd_audio_output_get_sample_rate(ctx.mtmd_ctx_audio.get());
+    }
 
   private:
     audio_context ctx;
