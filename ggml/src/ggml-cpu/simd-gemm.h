@@ -5,6 +5,7 @@
 #include "ggml-cpu-impl.h"
 #include "vec.h"
 #include "common.h"
+#include "simd-mappings.h"
 
 
 // TODO: add support for sizeless vector types
