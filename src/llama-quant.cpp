@@ -175,7 +175,7 @@ static void llama_tensor_dequantize_impl(
     workers.clear();
 }
 
-static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype) {
+static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, bool update_stats) {
     const std::string name = ggml_get_name(tensor);
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
@@ -257,7 +257,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if (name.find("attn_v.weight") != std::string::npos) {
             if (qs.model.hparams.n_gqa() >= 4 || qs.model.hparams.n_expert >= 4) new_type = GGML_TYPE_Q4_K;
             else new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
-            ++qs.i_attention_wv;
+            if (update_stats) {
+                ++qs.i_attention_wv;
+            }
         }
         else if (qs.model.hparams.n_expert == 8 && name.find("attn_k.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
@@ -266,7 +268,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             if (qs.i_ffn_down < qs.n_ffn_down/8) {
                 new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
             }
-            ++qs.i_ffn_down;
+            if (update_stats) {
+                ++qs.i_ffn_down;
+            }
         }
         else if (name.find("attn_output.weight") != std::string::npos) {
             if (qs.model.hparams.n_expert == 8) {
@@ -313,7 +317,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // TODO: explore better strategies
             new_type = GGML_TYPE_Q8_0;
         }
-        ++qs.i_attention_wv;
+        if (update_stats) {
+            ++qs.i_attention_wv;
+        }
     } else if (name.find("attn_k.weight") != std::string::npos) {
         if (qs.model.hparams.n_expert == 8) {
             // for the 8-expert model, bumping this to Q8_0 trades just ~128MB
@@ -377,7 +383,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // same quantization as before imatrix stuff, and b) Q4_1/Q5_1 do go crazy on ffn_down without an imatrix.
             new_type = ftype == LLAMA_FTYPE_MOSTLY_Q4_0 ? GGML_TYPE_Q4_1 : GGML_TYPE_Q5_1;
         }
-        ++qs.i_ffn_down;
+        if (update_stats) {
+            ++qs.i_ffn_down;
+        }
     } else if (name.find("attn_output.weight") != std::string::npos) {
         if (arch != LLM_ARCH_FALCON) {
             if (qs.model.hparams.n_expert == 8) {
@@ -411,7 +419,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
-        ++qs.i_ffn_gate;
+        if (update_stats) {
+            ++qs.i_ffn_gate;
+        }
     }
     else if (name.find("ffn_up") != std::string::npos) {
         auto info = layer_info(qs.i_ffn_up, qs.n_ffn_up, name.c_str());
@@ -419,7 +429,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
-        ++qs.i_ffn_up;
+        if (update_stats) {
+            ++qs.i_ffn_up;
+        }
     }
 
     return new_type;
@@ -583,7 +595,7 @@ static ggml_type tensor_get_target_type(
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
         if (!manual) {
-            new_type = llama_tensor_get_type(qs, new_type, tensor, params->ftype);
+            new_type = llama_tensor_get_type(qs, new_type, tensor, params->ftype, update_stats);
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type
@@ -625,8 +637,8 @@ static ggml_type tensor_get_target_type(
                 if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
                     new_type = GGML_TYPE_F16;
                 }
-                LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
                 if (update_stats) {
+                    LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
                     ++qs.n_fallback;
                 }
             }
