@@ -441,6 +441,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (GGML_SYSTEM_ARCH STREQUAL "riscv64")
         message(STATUS "riscv64 detected")
         list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/riscv/dispatch.cpp
             ggml-cpu/arch/riscv/quants.c
             ggml-cpu/arch/riscv/repack.cpp
             )

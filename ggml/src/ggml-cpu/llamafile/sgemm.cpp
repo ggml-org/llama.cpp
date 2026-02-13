@@ -391,6 +391,8 @@ template <> inline vfloat16m2_t load(const ggml_fp16_t *p) {
 template <> inline vfloat16m4_t load(const ggml_fp16_t *p) {
     return __riscv_vle16_v_f16m4(reinterpret_cast<const _Float16 *>(p), __riscv_vsetvlmax_e16m4());
 }
+#endif
+#if defined(__riscv_v) && __riscv_v >= 1000000
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
 }
@@ -432,6 +434,8 @@ template <> inline vfloat16m2_t set_zero() {
 template <> inline vfloat16m4_t set_zero() {
     return __riscv_vfmv_v_f_f16m4(0, __riscv_vsetvlmax_e16m4());
 }
+#endif
+#if defined(__riscv_v) && __riscv_v >= 1000000
 template <> inline vfloat32m1_t set_zero() {
     return __riscv_vfmv_v_f_f32m1(0.0f, __riscv_vsetvlmax_e32m1());
 }
@@ -446,7 +450,7 @@ template <> inline vfloat32m8_t set_zero() {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v) && __riscv_v >= 1000000
 template <typename T> size_t vlmax() {
     if constexpr (std::is_same_v<T, vfloat16mf2_t>) { return  __riscv_vsetvlmax_e16mf2(); }
     else if constexpr (std::is_same_v<T, vfloat16m1_t>) { return  __riscv_vsetvlmax_e16m1(); }
@@ -633,7 +637,7 @@ class tinyBLAS {
     const int64_t ldc;
 };
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v) && __riscv_v >= 1000000
 template <typename D, typename V, typename TA, typename TB, typename TC>
 class tinyBLAS_RVV {
   public:
