@@ -7267,7 +7267,8 @@ class Cohere2Model(TextModel):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Cohere2 runtime in llama.cpp expects no bias tensors; skip them at conversion time.
+        # Cohere2 runtime in llama.cpp expects no bias tensors; 
+        # the actual weight only contains 0-value tensors as bias, we can skip them
         if name.endswith(".bias"):
             if torch.any(data_torch != 0):
                 raise ValueError(f"Bias tensor {name!r} is not zero.")
