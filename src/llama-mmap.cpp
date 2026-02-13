@@ -564,7 +564,7 @@ struct llama_mmap::impl {
                 }
             }
             if (!CloseHandle(hMapping)) {
-                LLAMA_LOG_WARN("warning: CloseHandle failed: %s\n", 
+                LLAMA_LOG_WARN("warning: CloseHandle failed: %s\n",
                         llama_format_win_err(GetLastError()).c_str());
             }
         }
