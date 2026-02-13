@@ -13,6 +13,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define GGML_COMMON_DECL_C
+#include "ggml-common.h"
+
 #include "hmx-utils.h"
 #include "hmx-hvx-convert.h"
 #include "hmx-hvx-internal.h"
@@ -238,8 +241,8 @@ typedef struct {
   } while (0)
 
 static inline HVX_Vector dequantize_single_q4_0_group(const block_q4_0 *group, const HVX_Vector vlut_cvt) {
-  HVX_Vector vq = hmx_vmemu(&(group->quants));
-  HVX_Vector vs = hmx_vmemu(&(group->scale));
+  HVX_Vector vq = hmx_vmemu(&(group->qs));
+  HVX_Vector vs = hmx_vmemu(&(group->d));
 
   HVX_Vector v_scales = Q6_V_lo_W(Q6_Wh_vlut16_VbVhR_nomatch(Q6_V_vzero(), vs, 0));
 
@@ -272,8 +275,8 @@ static inline HVX_Vector dequantize_single_q4_0_group(const block_q4_0 *group, c
 }
 
 static inline HVX_Vector dequantize_single_q8_0_group(const block_q8_0 *group) {
-  HVX_Vector vq = hmx_vmemu(&(group->quants));
-  HVX_Vector vs = hmx_vmemu(&(group->scale));
+  HVX_Vector vq = hmx_vmemu(&(group->qs));
+  HVX_Vector vs = hmx_vmemu(&(group->d));
 
   HVX_Vector v_scales = Q6_V_lo_W(Q6_Wh_vlut16_VbVhR_nomatch(Q6_V_vzero(), vs, 0));
 

@@ -8,6 +8,9 @@
 //   - simple_flash_attn_f32_core and naive_flash_attn removed (not in main path).
 //   - simple_flash_attn_sp_hdim branch removed (not ported).
 
+#pragma clang diagnostic ignored "-Wunused-function"
+#pragma clang diagnostic ignored "-Wunused-variable"
+
 #include <assert.h>
 #include <math.h>
 #include <stdbool.h>
@@ -862,9 +865,8 @@ int simple_flash_attn(struct htp_context *ctx,
     return -1;
   }
 
-  const int    n_workers            = ctx->n_threads;
   const size_t vtcm_size_per_thread = 1024 * 1024;
-  assert(n_workers * vtcm_size_per_thread <= 6 * 1024 * 1024);  // don't use too much VTCM
+  assert(ctx->n_threads * vtcm_size_per_thread <= 6 * 1024 * 1024);  // don't use too much VTCM
 
   simple_fa_task_state_t state;
   state.O          = O;
