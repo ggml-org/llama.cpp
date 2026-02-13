@@ -304,17 +304,19 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         } else {
             const uint3 ne3_fastdiv = init_fastdiv_values((uint32_t) ne3);
             if constexpr (sizeof...(I) > 0) {
+                // TODO revisit this invocation, variadic templates are difficult to use with cudaLaunchKernelEx
                 k_bin_bcast<bin_op, src0_t, src1_t, dst_t><<<block_nums, block_dims, 0, stream>>>(
                     src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
                     /* s0, */ s1, s2, s3,
                     /* s00,*/ s01, s02, s03,
                     /* s10,*/ s11, s12, s13, (const src1_t *) dst->src[I + 1]->data...);
             } else {
-                k_bin_bcast<bin_op, src0_t, src1_t, dst_t><<<block_nums, block_dims, 0, stream>>>(
+                auto pdl_cfg = ggml_cuda_pdl_config(block_nums, block_dims, 0, stream);
+                CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, k_bin_bcast<bin_op, src0_t, src1_t, dst_t>,
                     src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3_fastdiv, ne10, ne11, ne12, ne13,
                     /* s0, */ s1, s2, s3,
                     /* s00,*/ s01, s02, s03,
-                    /* s10,*/ s11, s12, s13);
+                    /* s10,*/ s11, s12, s13));
             }
         }
     }
