@@ -37,6 +37,6 @@ try:
     ])
     os.remove("split.py")
     os.remove("httplib.h")
-except subprocess.CalledProcessError as e:
-    print(f"Error running split.py: {e}")
+except Exception as e:
+    print(f"Error: {e}")
     sys.exit(1)
