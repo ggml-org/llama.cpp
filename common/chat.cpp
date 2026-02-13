@@ -583,6 +583,18 @@ std::string common_chat_format_example(const struct common_chat_templates * tmpl
     "  {{- '<|im_start|>assistant\n' -}}\n" \
     "{%- endif -%}"
 
+#define LLAMA2_TEMPLATE_SRC \
+    "{{- bos_token }}{%- for message in messages -%}" \
+    "    {%- if message['role'] == 'system' -%}" \
+    "        {{- '[INST] <<SYS>>\\n' + message['content'] + '\\n<</SYS>>\\n\\n' -}}" \
+    "    {%- elif message['role'] == 'user' -%}" \
+    "        {{- '[INST] ' + message['content'] + ' [/INST]' -}}" \
+    "    {%- elif message['role'] == 'assistant' -%}" \
+    "        {{- ' ' + message['content'] + ' ' + eos_token -}}{%- if not loop.last -%}{{- bos_token }}{%- endif -%}" \
+    "    {%- endif -%}" \
+    "{%- endfor -%}" \
+    "{%- if add_generation_prompt -%}{{- ' ' }}{%- endif -%}"
+
 void common_chat_templates_free(struct common_chat_templates * tmpls) {
     delete tmpls;
 }
@@ -634,7 +646,18 @@ common_chat_templates_ptr common_chat_templates_init(
         if (!template_tool_use_src.empty()) {
             default_template_src = template_tool_use_src;
         } else {
-            default_template_src = CHATML_TEMPLATE_SRC;
+            char arch_buf[128];
+            if (model && llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf)) >= 0) {
+                std::string arch(arch_buf);
+                if (arch == "llama") {
+                    default_template_src = LLAMA2_TEMPLATE_SRC;
+                    LOG_INF("%s: using llama2 chat template as default for llama architecture\n", __func__);
+                } else {
+                    default_template_src = CHATML_TEMPLATE_SRC;
+                }
+            } else {
+                default_template_src = CHATML_TEMPLATE_SRC;
+            }
         }
     }
 
