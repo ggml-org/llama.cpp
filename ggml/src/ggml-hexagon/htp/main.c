@@ -26,7 +26,6 @@
 #include "worker-pool.h"
 
 #ifdef HTP_HAS_HMX
-#include "hmx/hmx-mgr.h"
 #include "hmx/hmx-ops.h"
 #endif // HTP_HAS_HMX
 
@@ -145,9 +144,6 @@ AEEResult htp_iface_disable_etm(remote_handle64 handle) {
 }
 
 static int vtcm_acquire(struct htp_context * ctx) {
-#ifdef HTP_HAS_HMX
-    bool was_valid = ctx->vtcm_valid;
-#endif
     int err;
     if (!ctx->vtcm_valid) {
         // Temporarily bump thread priority to make sure it's higher than other sessions.
@@ -168,16 +164,17 @@ static int vtcm_acquire(struct htp_context * ctx) {
             abort();
         }
         ctx->vtcm_valid = true;
-    }
-
-    ctx->vtcm_inuse = true;
-
 #ifdef HTP_HAS_HMX
-    if (!was_valid && ctx->hmx_enabled) {
+    if (ctx->hmx_enabled) {
         // VTCM was preempted then re-acquired: refill precompute tables
         init_precomputed_tables(ctx->exp2_table);
     }
 #endif
+    }
+
+    ctx->vtcm_inuse = true;
+
+
 
     return 0;
 }
@@ -259,17 +256,6 @@ static void vtcm_free(struct htp_context * ctx) {
     }
 }
 
-// Per-operation VTCM acquire/release wrappers.
-// In session-hold mode, VTCM is locked for the entire session and per-op
-// acquire/release becomes a no-op, keeping vtcm_inuse permanently true.
-#ifdef HTP_VTCM_SESSION_HOLD
-static inline int vtcm_op_acquire(struct htp_context * ctx) { (void)ctx; return 0; }
-static inline int vtcm_op_release(struct htp_context * ctx) { (void)ctx; return 0; }
-#else
-static inline int vtcm_op_acquire(struct htp_context * ctx) { return vtcm_acquire(ctx); }
-static inline int vtcm_op_release(struct htp_context * ctx) { return vtcm_release(ctx); }
-#endif
-
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
@@ -307,16 +293,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
         return AEE_ENOMEMORY;
     }
 
-#ifdef HTP_VTCM_SESSION_HOLD
-    // Session-hold mode: lock VTCM at session start, hold until session end.
-    // This keeps vtcm_inuse=true so the release callback never releases VTCM.
-    if (vtcm_acquire(ctx) != 0) {
-        FARF(ERROR, "Unable to acquire VTCM for session hold");
-        vtcm_free(ctx);
-        return AEE_ENOMEMORY;
-    }
-#endif
-
 #ifdef HTP_HAS_HMX
     // Reserve VTCM tail for precompute tables (64KB x HTP_EXP2_TABLE_COPIES)
     {
@@ -328,11 +304,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
         ctx->exp2_table        = ctx->vtcm_base + table_offset;
         ctx->vtcm_scratch_size = table_offset;
 
-        ctx->hmx_dma = dma_queue_create(16);
-
-        hmx_manager_setup();
-        hmx_set_vtcm_state(ctx->vtcm_base, table_offset,
-                            ctx->exp2_table, ctx->hmx_dma, ctx->vtcm_rctx);
         init_precomputed_tables(ctx->exp2_table);
         ctx->hmx_enabled = 1;
 
@@ -401,18 +372,12 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_queue_delete(ctx->dma[i]);
     }
-
 #ifdef HTP_HAS_HMX
     if (ctx->hmx_enabled) {
-        dma_queue_delete(ctx->hmx_dma);
-        hmx_manager_reset();
         ctx->hmx_enabled = 0;
     }
 #endif
 
-#ifdef HTP_VTCM_SESSION_HOLD
-    vtcm_release(ctx);
-#endif
 
     vtcm_free(ctx);
 
@@ -504,9 +469,9 @@ static void proc_matmul_req(struct htp_context *     ctx,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_matmul(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -580,9 +545,9 @@ static void proc_cpy_req(struct htp_context * ctx, struct htp_general_req * req,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_cpy(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -652,9 +617,9 @@ static void proc_get_rows_req(struct htp_context * ctx, struct htp_general_req *
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_get_rows(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -696,9 +661,9 @@ static void proc_matmul_id_req(struct htp_context *     ctx,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_matmul_id(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -735,9 +700,9 @@ static void proc_binary_req(struct htp_context * ctx, struct htp_general_req * r
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_binary(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -776,9 +741,9 @@ static void proc_add_id_req(struct htp_context * ctx, struct htp_general_req * r
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_binary(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -815,9 +780,9 @@ static void proc_unary_req(struct htp_context * ctx, struct htp_general_req * re
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_unary(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -947,13 +912,13 @@ static void proc_activations_req(struct htp_context *     ctx,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         if (octx.op == HTP_OP_SOFTMAX) {
             rsp_status = op_softmax(&octx);
         } else {
             rsp_status = op_activations(&octx);
         }
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -1005,9 +970,9 @@ static void proc_rope_req(struct htp_context *     ctx,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_rope(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -1044,9 +1009,9 @@ static void proc_set_rows_req(struct htp_context * ctx, struct htp_general_req *
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_set_rows(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);
@@ -1096,9 +1061,9 @@ static void proc_flash_attn_ext_req(struct htp_context *     ctx,
     profile_start(&prof);
 
     uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
-    if (vtcm_op_acquire(ctx) == AEE_SUCCESS) {
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
         rsp_status = op_flash_attn_ext(&octx);
-        vtcm_op_release(ctx);
+        vtcm_release(ctx);
     }
 
     profile_stop(&prof);

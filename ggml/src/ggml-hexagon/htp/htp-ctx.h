@@ -34,7 +34,6 @@ struct htp_context {
     // HMX acceleration fields (v73+, enabled by compile-time HTP_HAS_HMX)
 #ifdef HTP_HAS_HMX
     int        hmx_enabled;       // Runtime flag: HMX initialisation succeeded
-    dma_queue *hmx_dma;           // HMX-dedicated DMA queue
     size_t     vtcm_scratch_size; // Usable dynamic scratch (vtcm_size minus tail reservation)
     uint8_t *  exp2_table;        // Precomputed exp2 table address at VTCM tail
 #endif

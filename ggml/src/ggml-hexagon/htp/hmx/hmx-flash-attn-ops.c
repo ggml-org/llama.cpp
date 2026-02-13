@@ -3,8 +3,8 @@
 //
 // Changes from the original:
 //   - All symbols prefixed with hmx_ to avoid collisions with hexagon HVX headers.
-//   - vtcm_manager replaced with global hmx_vtcm_base / hmx_exp2_table from hmx-mgr.h.
-//   - worker_pool API replaced with hmx_worker_pool prefixed API.
+//   - vtcm_manager / hmx-mgr globals replaced with htp_context fields.
+//   - hmx_worker_pool replaced with main worker_pool API.
 //   - simple_flash_attn_f32_core and naive_flash_attn removed (not in main path).
 //   - simple_flash_attn_sp_hdim branch removed (not ported).
 
@@ -14,25 +14,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "hmx-mgr.h"
 #include "hmx-utils.h"
 #include "hmx-hvx-convert.h"
 #include "hmx-hvx-internal.h"
 #include "hmx-hvx-math.h"
-#include "hmx-worker-pool.h"
+#include "../htp-ctx.h"
+#include "../worker-pool.h"
+#include <HAP_compute_res.h>
 
 // for debug
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 
 typedef struct {
-  hmx_worker_synctoken_t sync_ctx;
-  unsigned int       task_id;
   int                n_tasks;
-  // int                n_tot_chunks;
-  // int                n_chunks_per_task;
   uint8_t           *vtcm_base;
   size_t             vtcm_size_per_thread;
+  uint32_t           vtcm_rctx;
+  uint8_t           *exp2_table;
   // params
   __fp16            *O;
   const __fp16      *Q, *K, *V, *mask;
@@ -146,7 +145,7 @@ void fa_f16_find_chunk_size(size_t *blk_r, size_t *blk_c, int gqa_factor, int he
 void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_limit, __fp16 *restrict O,
                                 const __fp16 *restrict Q, const __fp16 *restrict K, const __fp16 *restrict V,
                                 const __fp16 *restrict qk_mask, int qo_len, int kv_len, int n_heads, int n_kv_heads,
-                                int head_dim, int worker_index) {
+                                int head_dim, int worker_index, uint32_t vtcm_rctx, uint8_t *exp2_table) {
   // "compile-time" configs
   // TODO: make them real compile-time constants (constexpr or template parameters)
   const int G = n_heads / n_kv_heads;  // GQA factor
@@ -244,7 +243,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
   const int    sub_table_idx  = worker_index % HTP_EXP2_TABLE_COPIES;
   const size_t sub_table_size = 65536;
 
-  uint8_t *vtcm_exp2_table_base = hmx_exp2_table;
+  uint8_t *vtcm_exp2_table_base = exp2_table;
   uint8_t *vtcm_exp2_table      = vtcm_exp2_table_base + sub_table_idx * sub_table_size;
   if (!enable_vgather_exp) {
     (void) vtcm_exp2_table;
@@ -397,7 +396,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
       // compute dot product of tiles: dot(Q[Br', D], K[Bc, D]) ==> [Br', Bc]
       TIMER_START(qk_dot);
       {
-        hmx_unit_acquire();
+        HAP_compute_res_hmx_lock(vtcm_rctx);
         {
           hmx_set_output_scales(hmx_output_scales_qk);
           for (int r = 0; r < n_row_tiles; ++r) {
@@ -411,7 +410,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
             }
           }
         }
-        hmx_unit_release();
+        HAP_compute_res_hmx_unlock(vtcm_rctx);
       }
       TIMER_STOP(qk_dot);
 
@@ -702,7 +701,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
           Q6_vscatter_QRMVhV(q_32_elems_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
         }
 
-        hmx_unit_acquire();
+        HAP_compute_res_hmx_lock(vtcm_rctx);
         {
           hmx_set_output_scales(hmx_output_scales_id);
           for (int r = 0; r < n_row_tiles; ++r) {
@@ -727,7 +726,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
             }
           }
         }
-        hmx_unit_release();
+        HAP_compute_res_hmx_unlock(vtcm_rctx);
 
         swap_ptr(&o_tile_curr, &o_tile_prev);
       }
@@ -752,7 +751,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
         Q6_vscatter_QRMVhV(q_32_elems_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
       }
 
-      hmx_unit_acquire();
+      HAP_compute_res_hmx_lock(vtcm_rctx);
       {
         hmx_set_output_scales(hmx_output_scales_id);
         for (int r = 0; r < n_row_tiles; ++r) {
@@ -767,7 +766,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
           }
         }
       }
-      hmx_unit_release();
+      HAP_compute_res_hmx_unlock(vtcm_rctx);
     }
     TIMER_STOP(o_scale);
 
@@ -841,24 +840,17 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
 #endif
 }
 
-void simple_flash_attn_worker(void *data, int worker_index) {
+void simple_flash_attn_worker(unsigned int n, unsigned int i, void *data) {
   simple_fa_task_state_t *s = (simple_fa_task_state_t *) data;
 
-  uint8_t *vtcm       = s->vtcm_base + worker_index * s->vtcm_size_per_thread;
+  uint8_t *vtcm       = s->vtcm_base + i * s->vtcm_size_per_thread;
   uint8_t *vtcm_limit = vtcm + s->vtcm_size_per_thread;
 
-  while (1) {
-    unsigned int task_id = hmx_worker_pool_atomic_inc_return(&(s->task_id)) - 1;
-    if (task_id >= s->n_tasks) {
-      break;
-    }
-
-    int kv_head_idx = task_id;
+  for (unsigned int task = i; task < (unsigned int)s->n_tasks; task += n) {
+    int kv_head_idx = task;
     simple_flash_attn_f16_core(kv_head_idx, vtcm, vtcm_limit, s->O, s->Q, s->K, s->V, s->mask, s->qo_len, s->kv_len,
-                               s->n_heads, s->n_kv_heads, s->head_dim, worker_index);
+                               s->n_heads, s->n_kv_heads, s->head_dim, i, s->vtcm_rctx, s->exp2_table);
   }
-
-  hmx_worker_pool_synctoken_jobdone(&(s->sync_ctx));
 }
 
 /**
@@ -869,7 +861,8 @@ void simple_flash_attn_worker(void *data, int worker_index) {
  * Q: [qo_len, n_heads, head_dim], K/V: [kv_len, n_kv_heads, head_dim]
  * mask: [qo_len*, kv_len] broadcast to each head (first dimension maybe larger than qo_len)
  */
-int simple_flash_attn(__fp16 *restrict O, const __fp16 *restrict Q, const __fp16 *restrict K, const __fp16 *restrict V,
+int simple_flash_attn(struct htp_context *ctx,
+                      __fp16 *restrict O, const __fp16 *restrict Q, const __fp16 *restrict K, const __fp16 *restrict V,
                       const __fp16 *restrict mask, int qo_len, int kv_len, int n_heads, int n_kv_heads, int head_dim) {
   assert(head_dim % 64 == 0);
   if (n_heads % n_kv_heads != 0) {
@@ -877,7 +870,7 @@ int simple_flash_attn(__fp16 *restrict O, const __fp16 *restrict Q, const __fp16
     return -1;
   }
 
-  const int    n_workers            = hmx_num_hvx128_contexts;
+  const int    n_workers            = ctx->n_threads;
   const size_t vtcm_size_per_thread = 1024 * 1024;
   assert(n_workers * vtcm_size_per_thread <= 6 * 1024 * 1024);  // don't use too much VTCM
 
@@ -897,22 +890,15 @@ int simple_flash_attn(__fp16 *restrict O, const __fp16 *restrict Q, const __fp16
   // size_t n_tot_chunks      = qo_len * n_kv_heads;
   // size_t n_chunks_per_task = hmx_ceil_div(n_tot_chunks, n_workers);
 
-  state.task_id              = 0;
   state.n_tasks              = n_kv_heads;
-  state.vtcm_base            = hmx_vtcm_base;
+  state.vtcm_base            = ctx->vtcm_base;
   state.vtcm_size_per_thread = vtcm_size_per_thread;
-
-  hmx_worker_pool_job_t job;
-  job.fptr = simple_flash_attn_worker;
-  job.dptr = &state;
+  state.vtcm_rctx            = ctx->vtcm_rctx;
+  state.exp2_table           = ctx->exp2_table;
 
   int64_t t0 = HAP_perf_get_time_us();
 
-  hmx_worker_pool_synctoken_init(&(state.sync_ctx), n_workers);
-  for (int i = 0; i < n_workers; ++i) {
-    hmx_worker_pool_submit(hmx_default_pool_ctx, job);  // use default worker pool
-  }
-  hmx_worker_pool_synctoken_wait(&(state.sync_ctx));
+  worker_pool_run_func(ctx->worker_pool, simple_flash_attn_worker, &state, ctx->n_threads);
 
   int64_t elapsed_us = HAP_perf_get_time_us() - t0;
   FARF(ALWAYS, "%s: %lld us, qo_len=%d kv_len=%d n_heads=%d n_kv_heads=%d head_dim=%d", __func__, elapsed_us, qo_len,

@@ -40,16 +40,6 @@ target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
-# VTCM release strategy: hold VTCM for entire session (default ON)
-# ON:  VTCM is acquired once at session start; precompute tables stay persistent
-# OFF: Per-op acquire/release; VTCM shared with other DSP processes
-option(HTP_VTCM_SESSION_HOLD
-    "Hold VTCM for entire session instead of per-op acquire/release" ON)
-
-if (HTP_VTCM_SESSION_HOLD)
-    target_compile_definitions(${HTP_LIB} PRIVATE HTP_VTCM_SESSION_HOLD=1)
-endif()
-
 # Number of exp2 lookup-table copies stored in VTCM for flash-attention.
 # Each copy is 64 KB; workers select a copy via worker_index % N to reduce
 # VTCM bank conflicts.  Set to 1 if profiling shows no benefit from duplicates

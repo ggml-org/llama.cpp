@@ -15,24 +15,29 @@
 extern "C" {
 #endif
 
+struct htp_context;  // forward declaration
+
 // RMS normalisation (HVX-accelerated, used by both HMX and fallback paths)
 int hvx_rms_norm_f32(float *restrict dst, const float *restrict src, int ne0, int ne1);
 
 // HMX matrix multiplication — tile-permuted FP16 weights, FP32 activation/output
-int hmx_mat_mul_permuted_w16a32(float *restrict dst,
+int hmx_mat_mul_permuted_w16a32(struct htp_context *ctx,
+                                float *restrict dst,
                                 const float *activation,
                                 const __fp16 *permuted_weight,
                                 int m, int k, int n);
 
 // HMX matrix multiplication — tile-permuted quantised weights (Q4_0/Q8_0/IQ4_NL)
-int hmx_mat_mul_permuted_qk_0_d16a32(float *restrict dst,
+int hmx_mat_mul_permuted_qk_0_d16a32(struct htp_context *ctx,
+                                      float *restrict dst,
                                       const float *activation,
                                       const uint8_t *permuted_weight,
                                       int m, int k, int n,
                                       int weight_type);
 
 // HMX flash attention — FP16 in/out
-int simple_flash_attn(__fp16 *restrict O,
+int simple_flash_attn(struct htp_context *ctx,
+                      __fp16 *restrict O,
                       const __fp16 *restrict Q,
                       const __fp16 *restrict K,
                       const __fp16 *restrict V,
