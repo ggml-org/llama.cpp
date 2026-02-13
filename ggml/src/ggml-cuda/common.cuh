@@ -30,7 +30,7 @@
 #include <unordered_set>
 #include <vector>
 
-#if defined(GGML_USE_HIP)
+#if defined(GGML_HIP_GFX906)
 #include "gfx906/gfx906-config.h"
 #if GFX906_KVQ_MOE_CACHE_ENABLED
 #include "gfx906/quantize/q8-cache.cuh"
@@ -1426,6 +1426,10 @@ struct ggml_backend_cuda_context {
     explicit ggml_backend_cuda_context(int device) :
         device(device),
         name(GGML_CUDA_NAME + std::to_string(device)) {
+#if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
+        // Initialize the Q8 cache arena
+        q8_cache.init();
+#endif
     }
 
     ggml_cuda_stream_context concurrent_stream_context;
@@ -1474,12 +1478,14 @@ struct ggml_backend_cuda_context {
     }
 
 #if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
-    q8_hashmap_cache q8_cache;
+    q8_cache_arena q8_cache;
     std::unordered_map<const ggml_tensor*, prequantized_q8_info> fusion_prequant_map;
     std::unordered_set<const ggml_tensor*> fusion_handled_mul_nodes;
-    std::vector<std::unique_ptr<ggml_cuda_pool_alloc<char>>> fusion_q8_buffers;
+    // Note: No slot tracking needed - bump allocator reset handles cleanup
 
-    void clear_q8_cache() { q8_cache.clear(); }
+    void new_q8_epoch() {
+        q8_cache.reset();
+    }
 #endif
 };
 

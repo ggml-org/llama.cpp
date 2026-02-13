@@ -9,8 +9,8 @@
 
 using namespace ggml_cuda_mma;
 
-// GFX906 MMQ optimizations (vectorized loads and prefetch)
-#ifdef GGML_USE_HIP
+// GFX906 MMQ optimizations
+#ifdef GGML_HIP_GFX906
     #include "gfx906/matmul/mmq.cuh"
     #include "gfx906/gfx906-config.h"
     #include "gfx906/matmul/mmq-prefetch.cuh"
@@ -19,13 +19,12 @@ using namespace ggml_cuda_mma;
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 
 // GFX906-optimized MMQ configuration
-#ifdef GGML_USE_HIP
-    #define MMQ_ITER_K GFX906_MMQ_ITER_K
+#ifdef GGML_HIP_GFX906
     #define MMQ_NWARPS GFX906_MMQ_NWARPS
 #else
-    #define MMQ_ITER_K 256
     #define MMQ_NWARPS 8
 #endif
+#define MMQ_ITER_K 256
 #define MMQ_ITER_K_MXFP4_FP4 512
 
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
@@ -40,22 +39,11 @@ enum mmq_q8_1_ds_layout {
 };
 
 struct block_q8_1_mmq {
-    // The y float data is converted to a data layout that can simply be copied to shared memory as a contiguous block.
-    // The y float data is first grouped as blocks of 128 values.
-    // These blocks are then treated as individual data values and transposed.
-    //
-    // To avoid shared memory bank conflicts each block is padded with 16 bytes.
-    // This padding is also used to store block scales/partial sums.
-    // The scales multiplied with the quantized data are equal to the unquantized values.
-    // The partial sums are obtained by summing up a subgroup of the contained values (prior to quantization)
-    //     and are only needed for performance reasons.
-    //
-    // The exact data stored depends on the x data type.
+    //gfx906 fork: this is equivalent to the union of the block_q8_1 struct in ggml-common.h with an alternative layout for the scales and sums optimized for MMQ kernels.
     union {
         float d4[4];    // 1 32 bit scale per 32 values, stored as d0,d1,d2,d3
         half2 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
-        half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values,
-                        //     stored as d0,d1,s1,s2,s3,s4,s5
+        half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values, stored as d0,d1,s1,s2,s3,s4,s5
     };
     int8_t qs[4*QK8_1]; // 128 values quantized to 8 bit each
 };
@@ -64,6 +52,7 @@ struct block_fp4_mmq {
     uint32_t d4[4];       // 8 E8M0 scales (1 per 32 values), 2 packed per uint32: d4[0]={s0,s1}, d4[1]={s2,s3}, etc.
     int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte), 8 blocks of 32 values
 };
+
 
 static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
@@ -264,14 +253,6 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 // block_q8_1_mmq has (128 8-bit ints == 32 32-bit ints + 4 32-bit scales)
 #define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
-
-// LDS stride for Y-tile - PADDING ANALYSIS RESULTS:
-// Original stride 40: 40 mod 32 = 8 → 4-way bank conflicts (9.3% LDS stalls)
-// Tested: Padded stride 41 with dst_idx = l + l/40 mapping
-// Result: -3.5% slower (1180 vs 1223 t/s) even with proper shared mem allocation
-// Root cause: Division overhead in store loop outweighs bank conflict reduction
-// The bank conflicts occur during vec_dot reads, but the overhead is in stores
-// Conclusion: Keep original stride - bank conflicts are cheaper than index math
 #define MMQ_TILE_Y_K_LDS MMQ_TILE_Y_K
 
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {

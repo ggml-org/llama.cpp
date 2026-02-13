@@ -153,19 +153,39 @@ static inline bool try_rms_mul_mmq_fusion(
     if (use_cuda_graph && cuda_graph_update_required) {
         return false;
     }
+    
+    // Check if the MUL output is a cache candidate (multi-consumer)
+    // If so, we need to store in the main cache for proper lookup
+    const ggml_tensor* mul_output = decision.mul_node;
+    ggml_tensor* rms_norm = cgraph->nodes[node_idx];
+    
+    // DIAGNOSTIC: Check both tensors to see which one matches
+    bool mul_is_candidate = cuda_ctx->q8_cache.is_cache_candidate(mul_output, 0);
+    bool rms_is_candidate = cuda_ctx->q8_cache.is_cache_candidate(rms_norm, 0);
+    
+
+    
+    // Current behavior: check MUL output (possibly wrong?)
+    bool is_multi_consumer = mul_is_candidate;
+    // Alternative: should we check RMS_NORM output instead?
+    // bool is_multi_consumer = rms_is_candidate;
 
     // Execute fusion
-    ggml_tensor* rms_norm = cgraph->nodes[node_idx];
     const ggml_tensor* input = rms_norm->src[0];
     const int64_t ncols = input->ne[0];
     const int64_t nrows = ggml_nrows(input);
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const size_t q8_buffer_size = ggml_cuda_get_q8_1_buffer_size(ncols, nrows, cc);
 
-    auto pool_alloc = std::make_unique<ggml_cuda_pool_alloc<char>>();
-    pool_alloc->alloc(cuda_ctx->pool(), q8_buffer_size);
-    char* buffer_ptr = pool_alloc->get();
-    cuda_ctx->fusion_q8_buffers.push_back(std::move(pool_alloc));
+    // Bump allocate from arena for fusion buffer
+    // Use layer-aware allocation to ensure memory is in correct slot
+    void* arena_ptr = cuda_ctx->q8_cache.allocate(mul_output, q8_buffer_size);
+    if (!arena_ptr) {
+        // Arena full - cannot fuse
+        return false;
+    }
+    
+    char* buffer_ptr = static_cast<char*>(arena_ptr);
 
     // Store dimensions for MMQ consumers
     prequantized_q8_info info;
@@ -180,7 +200,22 @@ static inline bool try_rms_mul_mmq_fusion(
     ggml_cuda_op_rms_norm_fused_q8_1(*cuda_ctx, rms_norm, buffer_ptr, decision.ds_layout,
                                       mul_weights, decision.mul_weight_src);
 
-    // Store in map for MUL_MAT consumers
+    // For multi-consumer tensors, ALSO store in main cache
+    // This allows subsequent MUL_MAT ops to find via normal lookup
+    if (is_multi_consumer) {
+        // Get layout from decision
+        int layout = static_cast<int>(decision.ds_layout);
+        
+        // DEBUG: Log what we're storing
+        fprintf(stderr, "[FUSION STORE] '%s' (layer=%d) in slot for MMQ lookup\n", 
+                mul_output->name, cuda_ctx->q8_cache.get_layer_from_tensor(mul_output));
+        
+        // Store in cache with proper dimensions
+        cuda_ctx->q8_cache.store(mul_output, layout, buffer_ptr, q8_buffer_size,
+                                  info.ne10, info.ne11, info.ne12, info.ne13);
+    }
+
+    // Also store in fusion map for backward compatibility
     cuda_ctx->fusion_prequant_map[decision.mul_node] = info;
     cuda_ctx->fusion_handled_mul_nodes.insert(decision.mul_node);
 
@@ -210,7 +245,6 @@ static inline bool try_prequantized_mul_mat(ggml_backend_cuda_context* cuda_ctx,
     if (it == cuda_ctx->fusion_prequant_map.end()) {
         return false;
     }
-
     const prequantized_q8_info& info = it->second;
 
     if (info.ne10 != node->src[1]->ne[0] || info.ne11 != node->src[1]->ne[1] ||
@@ -227,7 +261,7 @@ static inline bool try_prequantized_mul_mat(ggml_backend_cuda_context* cuda_ctx,
 static inline void clear_fusion_state(ggml_backend_cuda_context* cuda_ctx) {
     cuda_ctx->fusion_prequant_map.clear();
     cuda_ctx->fusion_handled_mul_nodes.clear();
-    cuda_ctx->fusion_q8_buffers.clear();
+    // Note: No cleanup needed for fusion buffers - arena reset handles it
 }
 
 #endif // GGML_USE_HIP && GFX906_KVQ_MOE_CACHE_ENABLED

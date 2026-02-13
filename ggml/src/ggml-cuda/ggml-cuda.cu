@@ -67,6 +67,41 @@
 
 #if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
 #include "ggml-cuda/gfx906/fused/graph-fusion.cuh"
+
+// Uses tensor NAMES instead of pointers (pointers change between graph builds)
+void q8_cache_arena::analyze_graph(const ggml_cgraph* cgraph) {
+    cache_candidate_names.clear();
+    consumer_counts.clear();  
+    // Count consumers per tensor name (only MUL_MAT ops)
+    std::unordered_map<std::string, int> consumer_count;
+    
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor* node = cgraph->nodes[i];
+        
+        // Only count MUL_MAT consumers
+        if (node->op == GGML_OP_MUL_MAT) {
+            // src[1] is the activation tensor (src[0] is weights)
+            const ggml_tensor* src1 = node->src[1];
+            const ggml_tensor* src0 = node->src[0]; // weights
+            if (src1 && src1->name[0] != '\0') {
+                consumer_count[src1->name]++;
+            }
+        }
+    }
+    int candidates = 0;
+    for (const auto& [name, count] : consumer_count) {
+        if (count >= 2) {
+            cache_candidate_names.insert(name);
+            candidates++;
+        }
+        consumer_counts[name] = count;
+    }
+    
+#if Q8_CACHE_DIAGNOSTICS
+    fprintf(stderr, "[Q8 Cache] Analysis: %d tensors with 2+ consumers (total names=%zu)\n", 
+            candidates, cache_candidate_names.size());
+#endif
+}
 #endif
 
 #include "ggml.h"
@@ -558,7 +593,7 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
 
 #if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
-    q8_cache.free_all();
+    q8_cache.cleanup();
 #endif
 
     if (copy_event != nullptr) {
@@ -3452,7 +3487,9 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     const bool integrated            = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
 #if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
-    cuda_ctx->clear_q8_cache();
+    // Analyze graph for multi-consumer tensors, then reset arena
+    cuda_ctx->q8_cache.analyze_graph(cgraph);
+    cuda_ctx->new_q8_epoch();
 #endif
 
     ggml_cuda_stream_context & stream_ctx = cuda_ctx->stream_context();
@@ -3484,8 +3521,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
         if (!use_cuda_graph || cuda_graph_update_required) {
 #if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
-            // Sync before clearing fusion buffers (skip during graph capture)
-            if (!cuda_ctx->fusion_q8_buffers.empty() && !use_cuda_graph) {
+            // Sync before clearing fusion state (skip during graph capture)
+            if (!cuda_ctx->fusion_prequant_map.empty() && !use_cuda_graph) {
                 CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
             }
             clear_fusion_state(cuda_ctx);

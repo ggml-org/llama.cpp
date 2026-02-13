@@ -3,7 +3,7 @@
 #include "ggml.h"
 #include "rope.cuh"
 
-#ifdef GGML_USE_HIP
+#ifdef GGML_HIP_GFX906
 #include "gfx906/attention/rope.cuh"
 #include "gfx906/gfx906-config.h"
 #endif
@@ -371,7 +371,7 @@ static void rope_multi_cuda(
         const rope_corr_dims corr_dims, const float * freq_factors, const mrope_sections sections, const bool is_imrope, cudaStream_t stream) {
     GGML_ASSERT(ne0 % 2 == 0);
 
-#if defined(GGML_USE_HIP) && defined(GFX906_ROPE_ENABLED)
+#if defined(GGML_HIP_GFX906) && defined(GFX906_ROPE_ENABLED)
     // GFX906-optimized kernel using __sincosf and precomputed theta_power
     const gfx906_rope_corr_dims & gfx906_corr = reinterpret_cast<const gfx906_rope_corr_dims &>(corr_dims);
     const gfx906_mrope_sections & gfx906_sects = reinterpret_cast<const gfx906_mrope_sections &>(sections);
