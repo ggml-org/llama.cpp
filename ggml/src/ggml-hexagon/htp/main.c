@@ -1072,6 +1072,154 @@ static void proc_flash_attn_ext_req(struct htp_context *     ctx,
     send_htp_rsp(ctx, req->op, rsp_status, &bufs[last_buf], 1, &prof);
 }
 
+#ifdef HTP_HAS_HMX
+// ---------------------------------------------------------------------------
+// HMX operation wrappers — self-contained, bypass htp_ops_context / htp_spad.
+// VTCM, DMA and thread dispatch are managed inside the HMX kernels.
+// ---------------------------------------------------------------------------
+
+static void proc_hmx_matmul_req(struct htp_context *     ctx,
+                                struct htp_general_req * req,
+                                struct dspqueue_buffer * bufs,
+                                size_t                   n_bufs) {
+    (void) n_bufs;
+
+    struct dspqueue_buffer rsp_bufs[1];
+    rsp_bufs[0].fd     = bufs[2].fd;
+    rsp_bufs[0].ptr    = bufs[2].ptr;
+    rsp_bufs[0].size   = bufs[2].size;
+    rsp_bufs[0].offset = bufs[2].offset;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);
+
+    // src0 = weights, src1 = activation, dst = output
+    void  * wgt = (void  *) bufs[0].ptr;
+    float * act = (float *) bufs[1].ptr;
+    float * dst = (float *) bufs[2].ptr;
+
+    int m = (int) req->src1.ne[1];  // activation rows
+    int k = (int) req->src0.ne[0];  // inner dimension
+    int n = (int) req->src0.ne[1];  // weight columns
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        int ret = -1;
+        switch (req->src0.type) {
+            case HTP_TYPE_F16:
+                ret = hmx_mat_mul_permuted_w16a32(ctx, dst, act,
+                                                  (const __fp16 *) wgt, m, k, n);
+                break;
+            default:
+                // Q4_0, Q8_0, IQ4_NL etc.: req->src0.type value matches
+                // HMX_TYPE_* constants (both mirror the ggml_type enum).
+                ret = hmx_mat_mul_permuted_qk_0_d16a32(ctx, dst, act,
+                                                       (const uint8_t *) wgt,
+                                                       m, k, n, (int) req->src0.type);
+                break;
+        }
+        if (ret == 0) {
+            rsp_status = HTP_STATUS_OK;
+        }
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
+static void proc_hmx_flash_attn_req(struct htp_context *     ctx,
+                                     struct htp_general_req * req,
+                                     struct dspqueue_buffer * bufs,
+                                     uint32_t                 n_bufs) {
+    // HMX simple_flash_attn operates entirely in FP16.
+    // If Q (src0) is not FP16 we fall back to the HVX path.
+    if (req->src0.type != HTP_TYPE_F16) {
+        proc_flash_attn_ext_req(ctx, req, bufs, n_bufs);
+        return;
+    }
+
+    __fp16 * Q = (__fp16 *) bufs[0].ptr;
+    __fp16 * K = (__fp16 *) bufs[1].ptr;
+    __fp16 * V = (__fp16 *) bufs[2].ptr;
+
+    int last_buf = 3;
+    __fp16 * mask = NULL;
+    if (req->src3.ne[0]) {
+        mask = (__fp16 *) bufs[last_buf++].ptr;
+    }
+    if (req->src4.ne[0]) {
+        last_buf++;  // skip sinks — not consumed by HMX FA
+    }
+    __fp16 * O = (__fp16 *) bufs[last_buf].ptr;
+
+    int head_dim   = (int) req->src0.ne[0];
+    int qo_len     = (int) req->src0.ne[1];
+    int n_heads    = (int) req->src0.ne[2];
+    int kv_len     = (int) req->src1.ne[1];
+    int n_kv_heads = (int) req->src1.ne[2];
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        int ret = simple_flash_attn(ctx, O, Q, K, V, mask,
+                                    qo_len, kv_len, n_heads, n_kv_heads, head_dim);
+        if (ret == 0) {
+            rsp_status = HTP_STATUS_OK;
+        }
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+
+    struct dspqueue_buffer rsp_buf = bufs[last_buf];
+    rsp_buf.flags = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
+                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);
+
+    send_htp_rsp(ctx, req->op, rsp_status, &rsp_buf, 1, &prof);
+}
+
+static void proc_hmx_rms_norm_req(struct htp_context *     ctx,
+                                   struct htp_general_req * req,
+                                   struct dspqueue_buffer * bufs,
+                                   size_t                   n_bufs) {
+    (void) n_bufs;
+
+    struct dspqueue_buffer rsp_bufs[1];
+    rsp_bufs[0].fd     = bufs[1].fd;
+    rsp_bufs[0].ptr    = bufs[1].ptr;
+    rsp_bufs[0].size   = bufs[1].size;
+    rsp_bufs[0].offset = bufs[1].offset;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);
+
+    float * src = (float *) bufs[0].ptr;
+    float * dst = (float *) bufs[1].ptr;
+    int ne0 = (int) req->src0.ne[0];
+    int ne1 = (int) req->src0.ne[1];
+    if (ne1 == 0) { ne1 = 1; }
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        int ret = hvx_rms_norm_f32(dst, src, ne0, ne1);
+        if (ret == 0) {
+            rsp_status = HTP_STATUS_OK;
+        }
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+#endif // HTP_HAS_HMX
+
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
     struct htp_context * ctx = (struct htp_context *) context;
 
@@ -1124,7 +1272,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     FARF(ERROR, "Bad matmul-req buffer list");
                     continue;
                 }
-                proc_matmul_req(ctx, &req, bufs, n_bufs);
+#ifdef HTP_HAS_HMX
+                if (ctx->hmx_enabled) {
+                    proc_hmx_matmul_req(ctx, &req, bufs, n_bufs);
+                } else
+#endif
+                {
+                    proc_matmul_req(ctx, &req, bufs, n_bufs);
+                }
                 break;
 
             case HTP_OP_MUL_MAT_ID:
@@ -1147,12 +1302,25 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_RMS_NORM:
+                if (n_bufs != 2) {
+                    FARF(ERROR, "Bad unary-req buffer list");
+                    continue;
+                }
+#ifdef HTP_HAS_HMX
+                if (ctx->hmx_enabled) {
+                    proc_hmx_rms_norm_req(ctx, &req, bufs, n_bufs);
+                } else
+#endif
+                {
+                    proc_unary_req(ctx, &req, bufs);
+                }
+                break;
+
             case HTP_OP_SCALE:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
                 }
-
                 proc_unary_req(ctx, &req, bufs);
                 break;
 
@@ -1220,7 +1388,14 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     FARF(ERROR, "Bad flash-attn-ext-req buffer list");
                     continue;
                 }
-                proc_flash_attn_ext_req(ctx, &req, bufs, n_bufs);
+#ifdef HTP_HAS_HMX
+                if (ctx->hmx_enabled) {
+                    proc_hmx_flash_attn_req(ctx, &req, bufs, n_bufs);
+                } else
+#endif
+                {
+                    proc_flash_attn_ext_req(ctx, &req, bufs, n_bufs);
+                }
                 break;
 
             case HTP_OP_SET_ROWS:
