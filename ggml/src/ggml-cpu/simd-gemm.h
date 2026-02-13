@@ -11,11 +11,11 @@
 // TODO: add support for sizeless vector types
 #if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !defined(__riscv_v_intrinsic)
 
-// TODO: untested on avx512 and arm
+// TODO: untested on avx512
 // These are in units of GGML_F32_EPR
 #if defined(__AVX512F__) || defined (__ARM_NEON__)
-    static constexpr int GEMM_RM = 6;
-    static constexpr int GEMM_RN = 4; // 24+4+1 = 29/32
+    static constexpr int GEMM_RM = 4;
+    static constexpr int GEMM_RN = 4; // 16+4+1 = 25/32
 #elif defined(__AVX2__) || defined(__AVX__)
     static constexpr int GEMM_RM = 6;
     static constexpr int GEMM_RN = 2; // 12+2+1 = 15/16
@@ -66,7 +66,7 @@ static void simd_gemm(
     float       * GGML_RESTRICT C,
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
-    int M, int64_t K, int64_t N)
+    int64_t M, int64_t K, int64_t N)
 {
     static constexpr int KN = GGML_F32_EPR;
 
@@ -115,7 +115,7 @@ static void simd_gemm(
     float       * GGML_RESTRICT C,
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
-    int M, int64_t K, int64_t N)
+    int64_t M, int64_t K, int64_t N)
 {
     for (int i = 0; i < M; i++) {
         for (int64_t j = 0; j < N; j++) {
