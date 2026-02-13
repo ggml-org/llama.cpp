@@ -1373,10 +1373,6 @@ struct clip_model_loader {
         model.norm_embd_b = get_tensor(string_format(TN_NORM_EMBD, "bias"),   false);
 
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
-        if (!model.position_embeddings) {
-            // fallback for models using tensor name without .weight suffix
-            model.position_embeddings = get_tensor(string_format("%s.position_embd", prefix), false);
-        }
 
         if (model.proj_type == PROJECTOR_TYPE_GEMMA3NV) {
             hparams.n_layer = 0; // gemma3n does not use normal layer structure

@@ -772,9 +772,6 @@ class TextModel(ModelBase):
         if "text_config" in self.hparams:
             # move the text_config to the root level
             self.hparams = {**self.hparams, **self.hparams["text_config"]}
-        if "llm_config" in self.hparams:
-            # also handle llm_config for VLM models (e.g., Nemotron Nano 12B v2 VL)
-            self.hparams = {**self.hparams, **self.hparams["llm_config"]}
 
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -4061,7 +4058,7 @@ class InternVisionModel(MmprojModel):
 
 @ModelBase.register(
     "NemotronH_Nano_VL_V2",
-    "RADIOModel"
+    "RADIOModel",
 )
 class NemotronNanoV2VLModel(MmprojModel):
     # ViT-Huge architecture parameters for RADIO v2.5-h
@@ -4109,20 +4106,19 @@ class NemotronNanoV2VLModel(MmprojModel):
         if "input_conditioner" in name:
             return
 
-        if name.startswith("vision_model.radio_model.model."):
-            if ".attn.qkv." in name:
-                wq, wk, wv = data_torch.chunk(3, dim=0)
-                yield from super().modify_tensors(wq, name.replace("attn.qkv", "attn.q"), bid)
-                yield from super().modify_tensors(wk, name.replace("attn.qkv", "attn.k"), bid)
-                yield from super().modify_tensors(wv, name.replace("attn.qkv", "attn.v"), bid)
-                return
-            yield from super().modify_tensors(data_torch, name, bid)
-            return
+        # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
+        if "patch_generator.pos_embed" in name and not name.endswith(".weight"):
+            name += ".weight"
 
-        # Handle projector tensors (mlp1.*)
-        if name.startswith("mlp1."):
+        # Reshape linear patch embedding to conv2d format for ggml_conv_2d
+        # From [n_embd, patch_size*patch_size*3] to [n_embd, 3, patch_size, patch_size]
+        if "patch_generator.embedder" in name:
+            patch_size = self.hparams["patch_size"]
+            n_embd = self.hparams["hidden_size"]
+            data_torch = data_torch.reshape(n_embd, 3, patch_size, patch_size)
+
+        if name.startswith("vision_model.radio_model.model.") or name.startswith("mlp1."):
             yield from super().modify_tensors(data_torch, name, bid)
-            return
 
 
 @ModelBase.register("WavTokenizerDec")
@@ -7106,6 +7102,8 @@ class Mamba2Model(TextModel):
         if hparams is None:
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
                 hparams = json.load(f)
+        if "llm_config" in hparams:
+            hparams["text_config"] = hparams["llm_config"]
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
         self.d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or 2 * self.d_model

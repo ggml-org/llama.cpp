@@ -1368,7 +1368,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
             "visual.blocks.{bid}.attn.qkv", # qwen3vl
             "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
-            "vision_tower.encoder.blocks.{bid}.wqkv" # Kimi-K2.5
+            "vision_tower.encoder.blocks.{bid}.wqkv", # Kimi-K2.5
             "vision_model.radio_model.model.blocks.{bid}.attn.qkv", # Nemotron Nano v2 VL
         ),
 
@@ -1383,7 +1383,6 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
-            "vision_model.radio_model.model.blocks.{bid}.attn.q", # Nemotron Nano v2 VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1402,7 +1401,6 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.k_proj",
-            "vision_model.radio_model.model.blocks.{bid}.attn.k", # Nemotron Nano v2 VL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1420,7 +1418,6 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wv", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
-            "vision_model.radio_model.model.blocks.{bid}.attn.v", # Nemotron Nano v2 VL
             "siglip2.vision_model.encoder.layers.{bid}.self_attn.v_proj",
         ),
 
