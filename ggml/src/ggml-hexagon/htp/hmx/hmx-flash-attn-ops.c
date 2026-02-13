@@ -236,15 +236,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
     d_tile_vscatter_offsets[i * 2 + 1] = i * 136 + 6;
   }
 
-  // alternative computation method
-#ifndef HTP_EXP2_TABLE_COPIES
-#define HTP_EXP2_TABLE_COPIES 4
-#endif
-  const int    sub_table_idx  = worker_index % HTP_EXP2_TABLE_COPIES;
-  const size_t sub_table_size = 65536;
-
-  uint8_t *vtcm_exp2_table_base = exp2_table;
-  uint8_t *vtcm_exp2_table      = vtcm_exp2_table_base + sub_table_idx * sub_table_size;
+  uint8_t *vtcm_exp2_table = exp2_table;
   if (!enable_vgather_exp) {
     (void) vtcm_exp2_table;
   }

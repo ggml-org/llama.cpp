@@ -294,12 +294,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
     }
 
 #ifdef HTP_HAS_HMX
-    // Reserve VTCM tail for precompute tables (64KB x HTP_EXP2_TABLE_COPIES)
+    // Reserve VTCM tail for the exp2 lookup table (64 KB)
     {
-#ifndef HTP_EXP2_TABLE_COPIES
-#define HTP_EXP2_TABLE_COPIES 4
-#endif
-        const size_t table_size   = (size_t)65536 * HTP_EXP2_TABLE_COPIES;
+        const size_t table_size   = (size_t)65536;
         const size_t table_offset = (ctx->vtcm_size - table_size) & ~((size_t)65535);
         ctx->exp2_table        = ctx->vtcm_base + table_offset;
         ctx->vtcm_scratch_size = table_offset;
