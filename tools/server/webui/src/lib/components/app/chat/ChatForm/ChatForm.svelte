@@ -289,7 +289,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
+	class="relative {INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
 		? 'cursor-not-allowed opacity-60'
 		: ''} {className}"
 	data-slot="chat-form"
@@ -304,10 +304,11 @@
 	/>
 
 	<div
-		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
+		class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
 		onpaste={handlePaste}
 	>
 		<ChatFormTextarea
+			class="px-5 py-1.5 md:pt-0"
 			bind:this={textareaRef}
 			bind:value={message}
 			onKeydown={handleKeydown}
@@ -315,6 +316,7 @@
 		/>
 
 		<ChatFormActions
+			class="px-3"
 			bind:this={chatFormActionsRef}
 			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
 			hasText={message.trim().length > 0}

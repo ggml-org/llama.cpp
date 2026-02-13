@@ -14,6 +14,7 @@ export { default as ChatAttachmentThumbnailImage } from './chat/ChatAttachments/
 export { default as ChatAttachmentsList } from './chat/ChatAttachments/ChatAttachmentsList.svelte';
 export { default as ChatAttachmentsViewAll } from './chat/ChatAttachments/ChatAttachmentsViewAll.svelte';
 export { default as ChatForm } from './chat/ChatForm/ChatForm.svelte';
+export { default as ChatFormActionAttachmentsDropdown } from './chat/ChatForm/ChatFormActions/ChatFormActionAttachmentsDropdown.svelte';
 export { default as ChatFormActionFileAttachments } from './chat/ChatForm/ChatFormActions/ChatFormActionFileAttachments.svelte';
 export { default as ChatFormActionRecord } from './chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 export { default as ChatFormActions } from './chat/ChatForm/ChatFormActions/ChatFormActions.svelte';
