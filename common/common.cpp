@@ -1804,7 +1804,7 @@ bool common_prompt_batch_decode(
     const std::vector<llama_token> & tokens,
                                int & n_past,
                                int   n_batch,
-            const std::string_view & state_path,
+                  std::string_view   state_path,
                               bool   save_state) {
     const int n_eval = tokens.size();
     if (n_eval == 0) {
