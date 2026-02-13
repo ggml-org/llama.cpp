@@ -379,4 +379,12 @@ struct segment {
     std::string  value;
 
     segment(segment_type type, std::string value) : type(type), value(std::move(value)) {}
+
+    bool operator==(const segment & other) const {
+        return type == other.type && value == other.value;
+    }
+
+    bool operator!=(const segment & other) const {
+        return !(*this == other);
+    }
 };

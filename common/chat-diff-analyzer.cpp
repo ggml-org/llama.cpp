@@ -3,6 +3,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
+#include "llama.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 
@@ -381,17 +382,14 @@ void differential_analyzer::compare_thinking_enabled(const common_chat_template 
         }
     }
 
-    // Check for slash-in-tag pattern: <think> vs </think>
-    // diff shows: suffix="think>", left="/", right="" (or vice versa)
     if (reasoning.start.empty() && reasoning.end.empty()) {
-        if (diff.right.empty() && trim_whitespace(diff.left) == "/") {
-            auto seg_A = segmentize_markers(trim_trailing_whitespace(comparison->output_A));
-            auto seg_B = segmentize_markers(trim_trailing_whitespace(comparison->output_B));
-            if (!seg_A.empty() && !seg_B.empty() && seg_A[seg_A.size() - 1].type == segment_type::MARKER &&
-                seg_B[seg_B.size() - 1].type == segment_type::MARKER) {
-                reasoning.mode  = reasoning_mode::FORCED_CLOSED;
-                reasoning.start = seg_B[seg_B.size() - 1].value;
-                reasoning.end   = seg_A[seg_A.size() - 1].value;
+        if (!diff.left.empty() && !diff.right.empty()) {
+            auto seg_A = segmentize_markers(trim_trailing_whitespace(diff.left));
+            auto seg_B = segmentize_markers(trim_trailing_whitespace(diff.right));
+            if (seg_A.size() == 1 && seg_B.size() == 1) {
+                reasoning.mode = reasoning_mode::FORCED_CLOSED;
+                reasoning.start = seg_B[0].value;
+                reasoning.end = seg_A[0].value;
             }
         }
     }
@@ -739,7 +737,7 @@ void differential_analyzer::analyze_tool_call_format_json_native(const std::stri
     };
     // now let's check if we're in an array construction, mark it if so and get out of it
     if (json_start > 0 && space_or_bracket(true, clean_haystack[json_start - 1])) {
-        for (--json_start; space_or_bracket(true, clean_haystack[json_start]) && json_start >= 0; json_start--) {
+        for (--json_start; space_or_bracket(true, clean_haystack[json_start]) && json_start > 0; json_start--) {
             if (clean_haystack[json_start] == '[') {
                 format.tools_array_wrapped = true;
                 break;
@@ -900,7 +898,9 @@ void differential_analyzer::check_per_call_markers(const common_chat_template & 
         return;
     }
 
-    std::string second_tool_content = trim_leading_whitespace(one_vs_two->diff.right);
+    diff_split filter_common_call_part = calculate_diff_split(one_vs_two->diff.suffix, one_vs_two->diff.right);
+
+    std::string second_tool_content = trim_leading_whitespace(filter_common_call_part.right);
     if (!result.section_start.empty() &&
         second_tool_content.find(result.section_start) == 0) {
         result.per_call_start = result.section_start;
@@ -945,8 +945,6 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
     }
 
     const auto & diff = comparison->diff;
-    LOG_DBG("T3 diff - suffix: '%s'\n", diff.suffix.c_str());
-    LOG_DBG("T3 diff - left: '%s', right: '%s'\n", diff.left.c_str(), diff.right.c_str());
 
     if (diff.left.find("foofoo") != std::string::npos && diff.right.find("barbar") != std::string::npos) {
         std::string prefix_marker;
@@ -1371,8 +1369,6 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
     }
 
     const auto & diff = comparison->diff;
-    LOG_DBG("T6 diff (call_id) - prefix: '%s', suffix: '%s'\n", diff.prefix.c_str(), diff.suffix.c_str());
-    LOG_DBG("T6 diff (call_id) - left: '%s', right: '%s'\n", diff.left.c_str(), diff.right.c_str());
 
     if (diff.left.empty() && diff.right.empty()) {
         return result;
@@ -1447,7 +1443,6 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
             for (size_t i = 0; i < suffix_segments.size(); i++) {
                 if (suffix_segments[i].type == segment_type::MARKER) {
                     result.suffix = suffix_segments[i].value;
-                    LOG_DBG("T6: call_id_suffix='%s'\n", result.suffix.c_str());
                     break;
                 }
                 // Stop if we hit the args
@@ -1468,7 +1463,6 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
                 for (int i = (int) segments.size() - 1; i >= 0; i--) {
                     if (segments[i].type == segment_type::MARKER) {
                         result.prefix = segments[i].value;
-                        LOG_DBG("T6: call_id_prefix='%s'\n", result.prefix.c_str());
                         break;
                     }
                 }

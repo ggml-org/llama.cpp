@@ -217,6 +217,12 @@ static void test_calculate_diff_split_identical(testing & t) {
     t.assert_equal("left should be empty", "", result.left);
     t.assert_equal("right should be empty", "", result.right);
     t.assert_equal("suffix should be empty", "", result.suffix);
+
+    result = calculate_diff_split("<row><row><row><your><boat><gently>", "<row><row><row><your><boat><gently>");
+    t.assert_equal("prefix should be '<row><row><row><your><boat><gently>'", "<row><row><row><your><boat><gently>", result.prefix);
+    t.assert_equal("left should be empty", "", result.left);
+    t.assert_equal("right should be empty", "", result.right);
+    t.assert_equal("suffix should be empty", "", result.suffix);
 }
 
 static void test_calculate_diff_split_common_prefix(testing & t) {
@@ -894,8 +900,8 @@ static void test_seed_oss_call_count(testing & t) {
     t.assert_true("T2 right should contain value4", diff.right.find("value4") != std::string::npos);
     t.assert_true("T2 right should contain second tool_call end", diff.right.find("</seed:tool_call>") != std::string::npos);
 
-    // Suffix should be the eos token
-    t.assert_equal("T2 suffix should be '<seed:eos>'", "<seed:eos>", diff.suffix);
+    // Suffix should end with the eos token
+    t.assert_equal("T2 suffix should end with '<seed:eos>'", "<seed:eos>", diff.suffix.substr(diff.suffix.length() - 10, 10));
 }
 
 // T3: Compare different function names
