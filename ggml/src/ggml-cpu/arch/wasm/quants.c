@@ -270,7 +270,6 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         v128_t y0_h = wasm_v128_load(y0->qs + 16);
 
 #   if defined(__wasm_relaxed_simd__)
-        // Compute dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_0ls, y0_l, wasm_i32x4_splat(0));
         dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_0hs, y0_h, dp0);
 #   else
@@ -309,7 +308,6 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         v128_t y1_h = wasm_v128_load(y1->qs + 16);
 
 #   if defined(__wasm_relaxed_simd__)
-        // Compute dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_1ls, y1_l, wasm_i32x4_splat(0));
         dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0_1hs, y1_h, dp1);
 #   else
@@ -424,7 +422,6 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
 
 #   if defined(__wasm_relaxed_simd__)
-        // dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0lf, v1l, wasm_i32x4_splat(0));
         dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0hf, v1h, dp);
         
@@ -528,7 +525,6 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
 
 #   if defined(__wasm_relaxed_simd__)
-        // dot product using relaxed SIMD - processes full i8x16 vectors
         v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0lf, v1l, wasm_i32x4_splat(0));
         dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v0hf, v1h, dp);
         
@@ -601,7 +597,6 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t y0_1 = wasm_v128_load(y0->qs + 16);
 
 #   if defined(__wasm_relaxed_simd__)
-        // Compute dot products using relaxed SIMD - processes full i8x16 vectors
         v128_t sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(x0_0, y0_0, wasm_i32x4_splat(0));
         sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(x0_1, y0_1, sum_dots);
 #   else
@@ -714,11 +709,9 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 v128_t q2_bits_1 = wasm_v128_and(q2_shift_1, wasm_i8x16_splat(0x03));
 
 #   if defined(__wasm_relaxed_simd__)
-                // Calculate dot products using relaxed SIMD
                 v128_t p_sum0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q2_bits_0, q8_0, wasm_i32x4_splat(0));
                 v128_t p_sum1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q2_bits_1, q8_1, wasm_i32x4_splat(0));
 #   else
-
                 // Calculate dot products
                 v128_t p0 = wasm_i32x4_dot_i16x8(
                     wasm_i16x8_extend_low_i8x16(q8_0),
@@ -987,7 +980,6 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             // High nibble products
 #   if defined(__wasm_relaxed_simd__)
-
             v128_t vacc2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
                 q4h0, q8x2, wasm_i32x4_splat(0)
             );
@@ -995,7 +987,6 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 q4h1, q8x3, vacc2
             );
 #   else
-
             v128_t vacc2 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q4h0),
                 wasm_i16x8_extend_low_i8x16(q8x2)
