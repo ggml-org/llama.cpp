@@ -35,8 +35,9 @@ try:
         "--extension", "cpp",
         "--out", "vendor/cpp-httplib"
     ])
-    os.remove("split.py")
-    os.remove("httplib.h")
 except Exception as e:
     print(f"Error: {e}") # noqa: NP100
     sys.exit(1)
+finally:
+    os.remove("split.py")
+    os.remove("httplib.h")
