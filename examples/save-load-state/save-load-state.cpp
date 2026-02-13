@@ -2,7 +2,6 @@
 #include "common.h"
 #include "llama.h"
 
-#include <filesystem>
 #include <vector>
 #include <cstdio>
 
@@ -13,7 +12,7 @@ int main(int argc, char ** argv) {
     params.prompt = "The quick brown fox";
     params.sampling.seed = 1234;
 
-    std::filesystem::path state_file = "dump_state.bin";
+    const std::string_view state_file = "dump_state.bin";
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
@@ -100,7 +99,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> unused_sts(tokens.size()); // unused session tokens.
     size_t n_token_count_out = 0;
 
-    if (!llama_state_load_file(ctx2, state_file.string().c_str(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+    if (!llama_state_load_file(ctx2, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         fprintf(stderr, "\n%s : failed to load state\n", __func__);
         return 1;
     }
@@ -154,7 +153,7 @@ int main(int argc, char ** argv) {
     // load state (rng, logits, embedding and kv_cache) from file
     n_token_count_out = 0;
 
-    if (!llama_state_load_file(ctx3, state_file.string().c_str(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
+    if (!llama_state_load_file(ctx3, state_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
         fprintf(stderr, "\n%s : failed to load state\n", __func__);
         return 1;
     }

@@ -5,7 +5,6 @@
 #include "ggml-opt.h"
 #include "llama-cpp.h"
 
-#include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
@@ -790,7 +789,7 @@ bool common_prompt_batch_decode(
     const std::vector<llama_token> & embd,
                                int & n_past,
                                int   n_batch,
-       const std::filesystem::path & state_path,
+            const std::string_view & state_path,
                               bool   save_state,
                               bool   is_last_batch = true);
 
