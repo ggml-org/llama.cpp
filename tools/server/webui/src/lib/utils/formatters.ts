@@ -51,3 +51,75 @@ export function formatNumber(num: number | unknown): string {
 
 	return num.toLocaleString();
 }
+
+/**
+ * Format JSON string with pretty printing (2-space indentation)
+ * Returns original string if parsing fails
+ *
+ * @param jsonString - JSON string to format
+ * @returns Pretty-printed JSON string or original if invalid
+ */
+export function formatJsonPretty(jsonString: string): string {
+	try {
+		const parsed = JSON.parse(jsonString);
+		return JSON.stringify(parsed, null, 2);
+	} catch {
+		return jsonString;
+	}
+}
+
+/**
+ * Format time as HH:MM:SS in 24-hour format
+ *
+ * @param date - Date object to format
+ * @returns Formatted time string (HH:MM:SS)
+ */
+export function formatTime(date: Date): string {
+	return date.toLocaleTimeString('en-US', {
+		hour12: false,
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit'
+	});
+}
+
+/**
+ * Formats milliseconds to a human-readable time string for performance metrics.
+ * Examples: "4h 12min 54s", "12min 34s", "45s", "0.5s"
+ *
+ * @param ms - Time in milliseconds
+ * @returns Formatted time string
+ */
+export function formatPerformanceTime(ms: number): string {
+	if (ms < 0) return '0s';
+
+	const totalSeconds = ms / 1000;
+
+	if (totalSeconds < 1) {
+		return `${totalSeconds.toFixed(1)}s`;
+	}
+
+	if (totalSeconds < 10) {
+		return `${totalSeconds.toFixed(1)}s`;
+	}
+
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = Math.floor(totalSeconds % 60);
+
+	const parts: string[] = [];
+
+	if (hours > 0) {
+		parts.push(`${hours}h`);
+	}
+
+	if (minutes > 0) {
+		parts.push(`${minutes}min`);
+	}
+
+	if (seconds > 0 || parts.length === 0) {
+		parts.push(`${seconds}s`);
+	}
+
+	return parts.join(' ');
+}
