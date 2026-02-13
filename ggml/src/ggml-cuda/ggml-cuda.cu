@@ -82,7 +82,6 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
-#include <regex>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -2874,7 +2873,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
     const std::string nemotron_h_block_out_prefix      = "nemotron_h_block_out";
     const std::string mamba2_y_add_d_prefix            = "mamba2_y_add_d";
     const std::string qwen3next_diag_mask              = "diag_mask";
-    const std::regex  delta_net_linear_attn(R"(new_state-\d+)");
+    const std::string delta_net_linear_attn_prefix     = "new_state-";
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -2906,7 +2905,7 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             strncmp(node->name, nemotron_h_block_out_prefix.c_str(), nemotron_h_block_out_prefix.size()) != 0 &&
             strncmp(node->name, mamba2_y_add_d_prefix.c_str(), mamba2_y_add_d_prefix.size()) != 0 &&
             strncmp(node->name, qwen3next_diag_mask.c_str(), qwen3next_diag_mask.size()) != 0 &&
-            !std::regex_match(node->name, delta_net_linear_attn)) {
+            strncmp(node->name, delta_net_linear_attn_prefix.c_str(), delta_net_linear_attn_prefix.size()) != 0) {
             // disable CUDA graphs for batch size > 1 for now while excluding the matrix-matrix addition as part of Gemma3n's `project_per_layer_input` operation
             // by means of matching node names. See
             // https://github.com/ggml-org/llama.cpp/blob/f9a31eea06a859e34cecb88b4d020c7f03d86cc4/src/llama-model.cpp#L10199-L10241 and
