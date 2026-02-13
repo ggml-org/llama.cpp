@@ -118,6 +118,33 @@
 #   define GGML_CUDA_PDL_LC() cudaTriggerProgrammaticLaunchCompletion()
 #endif
 
+struct ggml_cuda_pdl_config {
+    cudaLaunchAttribute attr;
+    cudaLaunchConfig_t  cfg;
+
+    ggml_cuda_pdl_config(dim3 grid, dim3 block, size_t shmem, cudaStream_t s) {
+        attr.id = cudaLaunchAttributeProgrammaticStreamSerialization;
+        attr.val.programmaticStreamSerializationAllowed = 1;
+
+        cfg = {};
+        cfg.gridDim          = grid;
+        cfg.blockDim         = block;
+        cfg.dynamicSmemBytes = shmem;
+        cfg.stream           = s;
+        cfg.attrs            = &attr;
+        cfg.numAttrs         = 1;
+    }
+
+    // Delete due to &attr
+    ggml_cuda_pdl_config(const ggml_cuda_pdl_config&) = delete;
+    ggml_cuda_pdl_config& operator=(const ggml_cuda_pdl_config&) = delete;
+    ggml_cuda_pdl_config& operator=(ggml_cuda_pdl_config&&) = delete;
+
+    ggml_cuda_pdl_config(ggml_cuda_pdl_config&& o) noexcept : attr(o.attr), cfg(o.cfg) {
+        cfg.attrs = &attr;
+    }
+};
+
 #ifdef __CUDA_ARCH_LIST__
 constexpr bool ggml_cuda_has_arch_impl(int) {
     return false;
