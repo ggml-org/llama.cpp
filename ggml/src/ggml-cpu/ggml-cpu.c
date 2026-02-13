@@ -2090,7 +2090,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
-static void set_numa_thread_affinity(int thread_n) {
+void ggml_cpu_set_numa_thread_affinity(int thread_n) {
     if (!ggml_is_numa()) {
         return;
     }
@@ -2158,7 +2158,7 @@ static void clear_numa_thread_affinity(void) {
 #else
 // TODO: Windows etc.
 // (the linux implementation may also work on BSD, someone should test)
-static void set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
+void ggml_cpu_set_numa_thread_affinity(int thread_n) { UNUSED(thread_n);  }
 static void clear_numa_thread_affinity(void) {}
 #endif
 
@@ -2936,7 +2936,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     const struct ggml_cgraph * cgraph = tp->cgraph;
     const struct ggml_cplan  * cplan  = tp->cplan;
 
-    set_numa_thread_affinity(state->ith);
+    ggml_cpu_set_numa_thread_affinity(state->ith);
 
     struct ggml_compute_params params = {
         /*.ith        =*/ state->ith,
