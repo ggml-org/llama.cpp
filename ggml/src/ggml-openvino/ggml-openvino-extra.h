@@ -83,7 +83,7 @@ const std::string & ggml_openvino_get_device_name();
 bool ggml_openvino_is_npu();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
-std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor);
+std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant = false);
 
 // =====================================================
 // OpenVINO Tensor Extra Types
@@ -160,7 +160,7 @@ struct ggml_openvino_extracted_layout {
 };
 
 // Calculate the buffer layout for extracted quantized data
-ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor);
+ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor, bool use_bias = false);
 
 ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
 

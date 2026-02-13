@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <openvino/core/except.hpp>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
 #include <openvino/core/parallel.hpp>
@@ -18,6 +19,7 @@
 #include <openvino/core/type/element_type.hpp>
 #include <openvino/core/type/element_type_traits.hpp>
 #include <openvino/core/type/float16.hpp>
+#include <openvino/op/add.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/multiply.hpp>
@@ -82,28 +84,41 @@ void extract_q4_0_data(const ggml_tensor * tensor,
 void extract_q4_1_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr) {
+                       ov::Tensor & zp_arr,
+                       bool use_bias) {
     const uint64_t bytes_per_block = 20;  // 2 bytes scale, 2 bytes min, 32x0.5 byte weights
 
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
 
-    ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
-        float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
-        float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
-        scales[i] = ov::float16(scale);
-        // zp = -min / scale (bias = min, so zp = -bias/scale)
-        uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::round(-min / scale) : 0;
-        // Pack two 4-bit zero points per byte
-        if (i % 2 == 0) {
-            zp[i / 2] = zp_val & 0x0F;   // Lower nibble
-        } else {
-            zp[i / 2] |= (zp_val << 4);  // Upper nibble
-        }
-        unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
-    });
+    if (use_bias) {
+        // Store bias (min) directly as f16 instead of computing u4 zero points
+        auto * bias = zp_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
+            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
+            scales[i] = ov::float16(scale);
+            bias[i] = ov::float16(min);  // bias = min, dequant: w*s + bias
+            unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
+        });
+    } else {
+        auto * zp = static_cast<uint8_t *>(zp_arr.data());
+        ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
+            float scale = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block))));
+            float min = static_cast<float>(ov::float16::from_bits(*((uint16_t *) (data + i * bytes_per_block + 2))));
+            scales[i] = ov::float16(scale);
+            // zp = -min / scale (bias = min, so zp = -bias/scale)
+            uint8_t zp_val = (scale != 0.0f) ? (uint8_t) std::round(-min / scale) : 0;
+            // Pack two 4-bit zero points per byte
+            if (i % 2 == 0) {
+                zp[i / 2] = zp_val & 0x0F;   // Lower nibble
+            } else {
+                zp[i / 2] |= (zp_val << 4);  // Upper nibble
+            }
+            unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
+        });
+    }
 }
 
 // Extracts (weight, scales, zp) from Q8_0 tensors.
@@ -164,14 +179,18 @@ void unpack_256_4(const uint8_t * data, uint8_t * dst) {
 void extract_q4_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr) {
+                       ov::Tensor & zp_arr,
+                       bool use_bias) {
     const uint64_t bytes_per_block = 2 + 2 + 12 + 128;
     const uint64_t n_super_block = tensor->nb[3] / bytes_per_block;
 
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
+
+    // For bias path, zp_arr holds f16 bias values; for zp path, it holds packed u4 zero points
+    auto * zp_u4 = use_bias ? nullptr : static_cast<uint8_t *>(zp_arr.data());
+    auto * bias_f16 = use_bias ? zp_arr.data<ov::element_type_traits<ov::element::f16>::value_type>() : nullptr;
 
     ov::parallel_for(n_super_block, [&](size_t i) {
         uint8_t * block_data = data + i * bytes_per_block;
@@ -205,17 +224,22 @@ void extract_q4_k_data(const ggml_tensor * tensor,
         min_vals[6] = scale_mins * static_cast<float>((*(qs1 + 10) >> 4) | ((*(qs1 + 6) >> 6) << 4));
         min_vals[7] = scale_mins * static_cast<float>((*(qs1 + 11) >> 4) | ((*(qs1 + 7) >> 6) << 4));
 
-        // Store scales and compute zero points
+        // Store scales and compute zero points or bias
         for (int j = 0; j < 8; j++) {
             scales[i * 8 + j] = ov::float16(scale_vals[j]);
-            // zp = min / scale (since bias = -min and zp = -bias/scale)
-            uint8_t zp_val = (scale_vals[j] != 0.0f) ? (uint8_t) std::round(min_vals[j] / scale_vals[j]) : 0;
-            // Pack two 4-bit zero points per byte
-            size_t idx = i * 8 + j;
-            if (idx % 2 == 0) {
-                zp[idx / 2] = zp_val & 0x0F;
+            if (use_bias) {
+                // Store bias = -min directly as f16, dequant: w*s + bias
+                bias_f16[i * 8 + j] = ov::float16(-min_vals[j]);
             } else {
-                zp[idx / 2] |= (zp_val << 4);
+                // zp = min / scale (since bias = -min and zp = -bias/scale)
+                uint8_t zp_val = (scale_vals[j] != 0.0f) ? (uint8_t) std::round(min_vals[j] / scale_vals[j]) : 0;
+                // Pack two 4-bit zero points per byte
+                size_t idx = i * 8 + j;
+                if (idx % 2 == 0) {
+                    zp_u4[idx / 2] = zp_val & 0x0F;
+                } else {
+                    zp_u4[idx / 2] |= (zp_val << 4);
+                }
             }
         }
         unpack_256_4(block_data + 16, weights + i * 128);
@@ -285,14 +309,18 @@ static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t * d, uint8
 void extract_q5_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr) {
+                       ov::Tensor & zp_arr,
+                       bool use_bias) {
     const uint64_t bytes_per_block = 4 + 12 + 32 + 128;
     const uint64_t n_super_block = tensor->nb[3] / bytes_per_block;
 
     auto * data = static_cast<uint8_t *>(tensor->data);
     auto * weights = static_cast<uint8_t *>(weights_arr.data());
     auto * scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    auto * zp = static_cast<uint8_t *>(zp_arr.data());
+
+    // For bias path, zp_arr holds f16 bias values; for zp path, it holds u8 zero points
+    auto * zp_u8 = use_bias ? nullptr : static_cast<uint8_t *>(zp_arr.data());
+    auto * bias_f16 = use_bias ? zp_arr.data<ov::element_type_traits<ov::element::f16>::value_type>() : nullptr;
 
     ov::parallel_for(n_super_block, [&](size_t i) {
         uint8_t * block_data = data + i * bytes_per_block;
@@ -325,9 +353,15 @@ void extract_q5_k_data(const ggml_tensor * tensor,
 
             scales[i * 8 + is] = ov::float16(d1);
             scales[i * 8 + is + 1] = ov::float16(d2);
-            // zp = min / scale (since bias = -min and zp = -bias/scale)
-            zp[i * 8 + is] = (d1 != 0.0f) ? (uint8_t) std::round(m1 / d1) : 0;
-            zp[i * 8 + is + 1] = (d2 != 0.0f) ? (uint8_t) std::round(m2 / d2) : 0;
+            if (use_bias) {
+                // Store bias = -min directly as f16, dequant: w*s + bias
+                bias_f16[i * 8 + is] = ov::float16(-m1);
+                bias_f16[i * 8 + is + 1] = ov::float16(-m2);
+            } else {
+                // zp = min / scale (since bias = -min and zp = -bias/scale)
+                zp_u8[i * 8 + is] = (d1 != 0.0f) ? (uint8_t) std::round(m1 / d1) : 0;
+                zp_u8[i * 8 + is + 1] = (d2 != 0.0f) ? (uint8_t) std::round(m2 / d2) : 0;
+            }
 
             // Extract weights for first 32 elements (matching deq formula exactly)
             for (int l = 0; l < 32; ++l) {
@@ -349,10 +383,14 @@ void extract_q5_k_data(const ggml_tensor * tensor,
 
 // TODO Reorder for make_intX_weights
 
-ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight, ov::Tensor & scales, ov::Tensor & zp, size_t group_size) {
+ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
+                                       ov::Tensor & scales,
+                                       ov::Tensor & zp,
+                                       size_t group_size,
+                                       bool use_bias) {
     ov::Shape orig_shape = weight.get_shape();
 
-    // Expand dimensions for scales and zp
+    // Expand dimensions for scales and zp/bias
     auto scale_shape = scales.get_shape();
     auto zp_shape = zp.get_shape();
     bool is_scalar_zp = zp_shape.empty();  // Symmetric quantization
@@ -377,36 +415,45 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight, ov::Tensor & scales,
                                                                static_cast<uint8_t *>(weight.data()), nullptr);
     weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);
-
-    // Zero point is already in U8 format from extraction
-    auto zero_point = std::make_shared<ov::op::v0::Constant>(zp);
-    float zp_value;
-    if (ov::op::util::get_single_value(zero_point, zp_value)) {
-        zero_point = ov::op::v0::Constant::create(zero_point->get_element_type(), {}, {zp_value});
-    }
-
-    // Quantization operations
     auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
-    auto zero_point_f16 = std::make_shared<ov::op::v0::Convert>(zero_point, ov::element::f16);
 
-    auto w_zp = std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point_f16, ov::op::AutoBroadcastType::NUMPY);
-    ov::Output<ov::Node> w_zp_s =
-        std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+    ov::Output<ov::Node> result;
+    if (use_bias && !is_scalar_zp) {
+        // Bias path: w * s + b (zp tensor holds f16 bias values)
+        auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
+        auto w_s = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+        result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+    } else {
+        // Zero point path: (w - zp) * s
+        auto zero_point = std::make_shared<ov::op::v0::Constant>(zp);
+        float zp_value;
+        if (ov::op::util::get_single_value(zero_point, zp_value)) {
+            zero_point = ov::op::v0::Constant::create(zero_point->get_element_type(), {}, {zp_value});
+        }
+        auto zero_point_f16 = std::make_shared<ov::op::v0::Convert>(zero_point, ov::element::f16);
+        auto w_zp =
+            std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_point_f16, ov::op::AutoBroadcastType::NUMPY);
+        result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+    }
 
     if (packed_shape.size() != 2) {
         // If not requantized channel-wise case, reshape back to original shape
         auto final_shape =
             std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{orig_shape.size()}, orig_shape);
-        w_zp_s = std::make_shared<ov::op::v1::Reshape>(w_zp_s, final_shape, false);
+        result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
     }
 
-    return std::make_shared<ov::op::v0::Convert>(w_zp_s, ov::element::f32);
+    return std::make_shared<ov::op::v0::Convert>(result, ov::element::f32);
 }
 
-ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight, ov::Tensor & scales, ov::Tensor & zp, size_t group_size) {
+ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
+                                       ov::Tensor & scales,
+                                       ov::Tensor & zp,
+                                       size_t group_size,
+                                       bool use_bias) {
     ov::Shape orig_weight_shape = weight.get_shape();
 
-    // Expand dimensions for scales and zp
+    // Expand dimensions for scales and zp/bias
     ov::Shape scale_shape = scales.get_shape();
     auto zp_shape = zp.get_shape();
     bool is_scalar_zp = zp_shape.empty();  // Symmetric quantization
@@ -431,32 +478,35 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight, ov::Tensor & scales,
                                                                static_cast<uint8_t *>(weight.data()), nullptr);
     weights_node->get_rt_info()["__gguf_tensor_holder"] = weight;
     auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
-
-    // Zero point is already in U4 format from extraction
-    auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zp);
-    float zp_value;
-    if (ov::op::util::get_single_value(zero_points_node, zp_value)) {
-        zero_points_node = ov::op::v0::Constant::create(zero_points_node->get_element_type(), {}, {zp_value});
-    }
-    auto zero_points_f16 = std::make_shared<ov::op::v0::Convert>(zero_points_node, ov::element::f16);
-
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);
 
-    // Perform dequantization
-    auto w_zp = std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_points_f16, ov::op::AutoBroadcastType::NUMPY);
-
-    ov::Output<ov::Node> w_zp_s =
-        std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+    ov::Output<ov::Node> result;
+    if (use_bias && !is_scalar_zp) {
+        // Bias path: w * s + b (zp tensor holds f16 bias values)
+        auto bias_f16 = std::make_shared<ov::op::v0::Constant>(zp);
+        auto w_s = std::make_shared<ov::op::v1::Multiply>(weights_f16, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+        result = std::make_shared<ov::op::v1::Add>(w_s, bias_f16, ov::op::AutoBroadcastType::NUMPY);
+    } else {
+        // Zero point path: (w - zp) * s
+        auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zp);
+        float zp_value;
+        if (ov::op::util::get_single_value(zero_points_node, zp_value)) {
+            zero_points_node = ov::op::v0::Constant::create(zero_points_node->get_element_type(), {}, {zp_value});
+        }
+        auto zero_points_f16 = std::make_shared<ov::op::v0::Convert>(zero_points_node, ov::element::f16);
+        auto w_zp =
+            std::make_shared<ov::op::v1::Subtract>(weights_f16, zero_points_f16, ov::op::AutoBroadcastType::NUMPY);
+        result = std::make_shared<ov::op::v1::Multiply>(w_zp, scales_f16, ov::op::AutoBroadcastType::NUMPY);
+    }
 
     if (packed_shape.size() != 2) {
         // If not requantized channel-wise case, reshape back to original shape
         auto final_shape = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{orig_weight_shape.size()},
                                                                   orig_weight_shape);
-
-        w_zp_s = std::make_shared<ov::op::v1::Reshape>(w_zp_s, final_shape, false);
+        result = std::make_shared<ov::op::v1::Reshape>(result, final_shape, false);
     }
 
-    return std::make_shared<ov::op::v0::Convert>(w_zp_s, ov::element::f32);
+    return std::make_shared<ov::op::v0::Convert>(result, ov::element::f32);
 }
 
 // Extract quantized weights from tensor and create weight subgraph
@@ -464,7 +514,8 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
                                                     const void * data,
                                                     ov::Tensor & weights,
                                                     ov::Tensor & scales,
-                                                    ov::Tensor & zp) {
+                                                    ov::Tensor & zp,
+                                                    bool use_bias) {
     // Create a temporary tensor for extraction functions that read from tensor->data
     ggml_tensor temp_tensor = *tensor;
     temp_tensor.data = const_cast<void *>(data);
@@ -499,10 +550,10 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         extract_q4_0_data(&temp_tensor, weights, scales, zp);
         break;
     case GGML_TYPE_Q4_1:
-        extract_q4_1_data(&temp_tensor, weights, scales, zp);
+        extract_q4_1_data(&temp_tensor, weights, scales, zp, use_bias);
         break;
     case GGML_TYPE_Q4_K:
-        extract_q4_k_data(&temp_tensor, weights, scales, zp);
+        extract_q4_k_data(&temp_tensor, weights, scales, zp, use_bias);
         break;
     case GGML_TYPE_Q8_0:
         extract_q8_0_data(&temp_tensor, weights, scales, zp);
@@ -511,7 +562,7 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
         extract_q6_k_data(&temp_tensor, weights, scales, zp);
         break;
     case GGML_TYPE_Q5_K:
-        extract_q5_k_data(&temp_tensor, weights, scales, zp);
+        extract_q5_k_data(&temp_tensor, weights, scales, zp, use_bias);
         break;
     default:
         throw std::runtime_error("Unsupported quantized type: " + std::string(ggml_type_name(tensor->type)));
@@ -520,9 +571,9 @@ std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
     // Create the OpenVINO weight subgraph
     ov::Output<ov::Node> weight_node;
     if (is_u4) {
-        weight_node = make_int4_weights(weights, scales, zp, weights_per_block);
+        weight_node = make_int4_weights(weights, scales, zp, weights_per_block, use_bias);
     } else {
-        weight_node = make_int8_weights(weights, scales, zp, weights_per_block);
+        weight_node = make_int8_weights(weights, scales, zp, weights_per_block, use_bias);
     }
 
     auto result = weight_node.get_node_shared_ptr();
@@ -576,7 +627,7 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     return result;
 }
 
-OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr) {
+OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr, bool use_bias) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(data != nullptr);
 
@@ -619,10 +670,17 @@ OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, vo
         OPENVINO_THROW("Unsupported weight tensor type: ", ggml_type_name(tensor->type));
     }
 
-    result.layout = ggml_openvino_get_extracted_layout(tensor);
+    result.layout = ggml_openvino_get_extracted_layout(tensor, use_bias);
     const auto & layout = result.layout;
     if (layout.total_size == 0) {
         OPENVINO_THROW("Unsupported quantized type: ", ggml_type_name(tensor->type));
+    }
+
+    if (use_bias) {
+        OPENVINO_ASSERT(!layout.is_requant,
+                        "use_bias is only used for test-backend-ops, which should not have requantization");
+        // bias node will be created on the fly and not use backend buffer
+        output_base_ptr = nullptr;
     }
 
     // F16 requant path - no separate scales/zp needed in result
@@ -653,14 +711,20 @@ OvWeight process_weight_tensor(const ggml_tensor * tensor, const void * data, vo
     } else {
         result.weights = ov::Tensor(weight_type, node_shape);
         result.scales = ov::Tensor(ov::element::f16, scale_shape);
-        result.zp = ov::Tensor(weight_type, zp_shape);
+        if (use_bias && !layout.is_symmetric) {
+            // bias only has effect for asymmetric quant
+            result.zp = ov::Tensor(ov::element::f16, zp_shape);
+        } else {
+            result.zp = ov::Tensor(weight_type, zp_shape);
+        }
     }
 
     if (layout.is_requant && layout.requant_type.has_value()) {
         result.weight_node = requantize_to_buffers(tensor, data, layout.requant_type.value(), layout.weights_per_block,
                                                    result.weights, result.scales, result.zp);
     } else {
-        result.weight_node = extract_quantized_weights(tensor, data, result.weights, result.scales, result.zp);
+        result.weight_node =
+            extract_quantized_weights(tensor, data, result.weights, result.scales, result.zp, use_bias);
     }
 
     return result;

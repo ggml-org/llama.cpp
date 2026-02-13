@@ -6,6 +6,7 @@
 #include <cstring>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
+#include <optional>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;
@@ -164,7 +165,7 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
 }
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
-std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor) {
+std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor, bool no_requant) {
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
         return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
     }
@@ -173,6 +174,9 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     }
     if (ggml_openvino_is_npu()) {
         return ExtraQuantType::Q4_0_128;
+    }
+    if (no_requant) {
+        return std::nullopt;
     }
     switch (tensor->type) {
     case GGML_TYPE_Q6_K:
@@ -187,7 +191,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
 // Extracted Layout Calculation
 // =====================================================
 
-ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor) {
+ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor, bool use_bias) {
     ggml_openvino_extracted_layout layout = {};
     layout.is_symmetric = false;
 
@@ -204,7 +208,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     const size_t alignment = 64;  // Good for SIMD
 
     // Check if requantization is needed (NPU-specific)
-    auto requant_type = ggml_openvino_get_requant_type(tensor);
+    auto requant_type = ggml_openvino_get_requant_type(tensor, use_bias);
     if (requant_type.has_value()) {
         layout.is_requant = true;
         layout.requant_type = requant_type;

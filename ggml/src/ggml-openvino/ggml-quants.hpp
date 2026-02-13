@@ -16,7 +16,8 @@ void extract_q4_0_data(const ggml_tensor * tensor,
 void extract_q4_1_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr);
+                       ov::Tensor & zp_arr,
+                       bool use_bias = false);
 
 void extract_q8_0_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
@@ -28,12 +29,14 @@ void unpack_256_4(const uint8_t* data, uint8_t* dst);
 void extract_q4_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr);
+                       ov::Tensor & zp_arr,
+                       bool use_bias = false);
 
 void extract_q5_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
                        ov::Tensor & scales_arr,
-                       ov::Tensor & zp_arr);
+                       ov::Tensor & zp_arr,
+                       bool use_bias = false);
 
 void extract_q6_k_data(const ggml_tensor * tensor,
                        ov::Tensor & weights_arr,
@@ -45,12 +48,14 @@ static constexpr size_t GGML_QUANTIZATION_GROUP_SIZE = 32;
 ov::Output<ov::Node> make_int8_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
-                                       size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
+                                       size_t group_size = GGML_QUANTIZATION_GROUP_SIZE,
+                                       bool use_bias = false);
 
 ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
                                        ov::Tensor & scales,
                                        ov::Tensor & zp,
-                                       size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
+                                       size_t group_size = GGML_QUANTIZATION_GROUP_SIZE,
+                                       bool use_bias = false);
 
 // Extract quantized weights from tensor and create weight subgraph
 // If weights/scales/zp are provided (non-empty), uses them as output buffers
@@ -61,7 +66,8 @@ std::shared_ptr<ov::Node> extract_quantized_weights(
     const void * data,  // Source data pointer (may differ from tensor->data)
     ov::Tensor & weights,
     ov::Tensor & scales,
-    ov::Tensor & zp);
+    ov::Tensor & zp,
+    bool use_bias = false);  // Use fp bias instead of quantized zero_point (for test-backend-ops)
 
 // Requantize weights from tensor to target format, writing to provided buffers
 // For F16 target, only weights buffer is used (scales/zp ignored)
@@ -112,8 +118,9 @@ struct OvWeight {
 // Returns OvWeight with the weight node and optional quantized tensors
 OvWeight process_weight_tensor(
     const ggml_tensor * tensor,
-    const void * data,                  // Source data pointer (may differ from tensor->data)
-    void * output_base_ptr = nullptr);  // Base pointer for output buffers (or nullptr for internal allocation)
+    const void * data,                 // Source data pointer (may differ from tensor->data)
+    void * output_base_ptr = nullptr,  // Base pointer for output buffers (or nullptr for internal allocation)
+    bool use_bias = false);            // Use fp bias instead of quantized zero_point, only used in test-backend-ops
 
 void quantize_q4_0(const float * x,
                    ov::Tensor & weights_arr,

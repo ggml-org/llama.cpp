@@ -922,6 +922,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     default:
         break;
     }
+    if (op->op == GGML_OP_GET_ROWS) {
+        if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K)) {
+            // ERR = 0.000000306 > 0.000000100   GET_ROWS(type=q4_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
+            // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
+            return true;
+        }
+    }
     return false;
 }
 

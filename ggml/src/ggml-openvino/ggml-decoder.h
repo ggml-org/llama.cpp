@@ -104,7 +104,7 @@ public:
 
     virtual ov::PartialShape get_output_shape(int node_idx) const override;
 
-    virtual ov::element::Type get_output_type(const int node_idx) const override;
+    virtual ov::element::Type get_output_type(int node_idx) const override;
 
     virtual int32_t * get_input_op_params(int node_idx, const std::string & name) const override;
 
@@ -184,9 +184,10 @@ public:
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
 
-    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor * tensor);
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor * tensor, bool naive = false);
 
-    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(ggml_cgraph * cgraph);
+    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(ggml_cgraph * cgraph,
+                                                                                bool naive = false);
 
     const ggml_tensor * get_tensor_used_op(const ggml_tensor * tensor) const;
 
@@ -207,6 +208,7 @@ public:
     bool m_is_static = false;
     bool m_is_stateful = false;
     bool m_is_prefill = false;
+    bool m_naive = false;
     int m_prefill_chunk_size = 0;
 
     static ov::Shape get_shape(const ggml_tensor * tensor);
@@ -265,7 +267,7 @@ public:
     }
 
 private:
-    void set_input_output(ggml_tensor * node, bool naive = false);
+    void set_input_output(ggml_tensor * node);
     int compute_op_case(const ggml_tensor * node) const;
 
     void validate_cgraph() const;

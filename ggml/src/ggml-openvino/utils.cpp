@@ -127,7 +127,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
                 if (pos_data[0] == 0) {
                     infer_request->reset_state();
                     stateful_kv_size = pos_shape[3];
-                } else if (stateful_kv_size == pos_data[0]) {
+                } else if (stateful_kv_size == static_cast<size_t>(pos_data[0])) {
                     stateful_kv_size += pos_shape[3];
                 } else {
                     auto states = infer_request->query_state();
@@ -139,7 +139,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
                         state.set_state(new_state_tensor);
                     }
                     stateful_kv_size = pos_data[0] + 1;
-                 }
+                }
             }
 
             decoder_end_time = ggml_time_us();
@@ -467,10 +467,10 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
         return GGML_STATUS_SUCCESS;
     }
 
-    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+    bool naive = true;
+    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, naive);
     auto decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights);
     auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
-    auto naive = true;
     auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
     if (getenv("GGML_OPENVINO_DUMP_IR")) {
         ov::serialize(model, "IR_naive.xml");
