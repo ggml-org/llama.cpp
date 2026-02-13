@@ -570,6 +570,7 @@ class ModelBase:
                         self.match_model_tensor_name(new_name, key, bid)
                         for key in (
                             gguf.MODEL_TENSOR.FFN_GATE_INP,
+                            gguf.MODEL_TENSOR.FFN_GATE_INP_SHEXP,
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
                             gguf.MODEL_TENSOR.SSM_CONV1D,
