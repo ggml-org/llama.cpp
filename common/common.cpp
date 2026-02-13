@@ -1242,7 +1242,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
             return res;
         }
 
-        int err = llama_apply_adapter_cvec(
+        int err = llama_set_adapter_cvec(
                 lctx,
                 cvec.data.data(),
                 cvec.data.size(),
@@ -1344,7 +1344,7 @@ std::string get_model_endpoint() {
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
-    std::vector<llama_adapter_lora*> loras;
+    std::vector<llama_adapter_lora *> loras;
     std::vector<float> scales;
 
     for (auto & la: lora) {
@@ -1352,7 +1352,7 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
         scales.push_back(la.scale);
     }
 
-    llama_put_adapter_loras(ctx, loras.size(), loras.data(), scales.data());
+    llama_set_adapters_lora(ctx, loras.data(), loras.size(), scales.data());
 }
 
 struct llama_model_params common_model_params_to_llama(common_params & params) {
