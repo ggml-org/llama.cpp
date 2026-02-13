@@ -553,11 +553,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     return quantize;
 }
 
-static ggml_type get_tensor_target_type(
+static ggml_type tensor_get_target_type(
                   quantize_state_impl & qs,
     const llama_model_quantize_params * params,
                     const ggml_tensor * tensor,
-                            ggml_type   default_type
+                            ggml_type   default_type,
+                                 bool   update_stats // should we update qs or no?
 ) {
     ggml_type new_type = default_type;
     // get more optimal quantization type based on the tensor shape, layer, etc.
@@ -597,7 +598,9 @@ static ggml_type get_tensor_target_type(
                 LLAMA_LOG_WARN("\n\n%s : tensor cols %" PRId64 " x %" PRId64 " are not divisible by %" PRId64 ", required for %s", __func__, nx, ny, qk_k, ggml_type_name(new_type));
                 convert_incompatible_tensor = true;
             } else {
-                ++qs.n_k_quantized;
+                if (update_stats) {
+                    ++qs.n_k_quantized;
+                }
             }
 
             if (convert_incompatible_tensor) {
@@ -623,7 +626,9 @@ static ggml_type get_tensor_target_type(
                     new_type = GGML_TYPE_F16;
                 }
                 LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
-                ++qs.n_fallback;
+                if (update_stats) {
+                    ++qs.n_fallback;
+                }
             }
         }
     }
@@ -851,7 +856,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         // TODO: we could save this per-tensor and correlate it with the vector of tensors so we
         //       don't have to call this function again later (currently twice per tensor)
-        ggml_type target_type = get_tensor_target_type(qs, params, tensor, default_type);
+        ggml_type target_type = tensor_get_target_type(qs, params, tensor, default_type, false);
 
         if (!params->imatrix &&
             tensor_allows_quantization(params, model.arch, tensor) &&
@@ -957,7 +962,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         // if so, what will be the target type?
         if (do_quantize) {
-            new_type = get_tensor_target_type(qs, params, tensor, default_type);
+            new_type = tensor_get_target_type(qs, params, tensor, default_type, true);
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
             do_quantize = tensor->type != new_type;
