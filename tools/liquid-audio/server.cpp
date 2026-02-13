@@ -139,6 +139,8 @@ int main(int argc, char ** argv) {
     LOG_INF("Model loaded successfully!\n");
 
     httplib::Server svr;
+    // keep request handling single-threaded to avoid per-thread allocator arena growth.
+    svr.new_task_queue = [] { return new httplib::ThreadPool(1); };
     svr.set_default_headers({
         { "Server", "lfm2-audio-server" }
     });
