@@ -30,7 +30,7 @@ static inline void simd_gemm_ukernel(
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
     int64_t K, int64_t N,
-    int ii, int64_t jj)
+    int64_t ii, int64_t jj)
 {
     static constexpr int KN = GGML_F32_EPR;
 
@@ -70,7 +70,7 @@ static void simd_gemm(
 {
     static constexpr int KN = GGML_F32_EPR;
 
-    int ii = 0;
+    int64_t ii = 0;
     for (; ii + GEMM_RM <= M; ii += GEMM_RM) {
         int64_t jj = 0;
         for (; jj + GEMM_RN * KN <= N; jj += GEMM_RN * KN) {
@@ -117,7 +117,7 @@ static void simd_gemm(
     const float * GGML_RESTRICT B,
     int64_t M, int64_t K, int64_t N)
 {
-    for (int i = 0; i < M; i++) {
+    for (int64_t i = 0; i < M; i++) {
         for (int64_t j = 0; j < N; j++) {
             float sum = C[i * N + j];
             for (int64_t kk = 0; kk < K; kk++) {
