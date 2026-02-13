@@ -522,6 +522,9 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
             }
 
             std::string src_name(src->name);
+            if (is_rope_freqs_weight(src, node)) {
+                src_name = "rope_freqs.weight";
+            }
             if (!src->view_src) {
                 ggml_backend_buffer * buffer = src->buffer;
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type)) {
