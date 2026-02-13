@@ -9,8 +9,8 @@ ggml_cgraph * clip_graph_nemotron_v2_vl::build() {
 
     ggml_tensor * inp = build_inp();
 
-    ggml_tensor * pos_embd = resize_position_embeddings();
-    inp = ggml_add(ctx0, inp, pos_embd);
+    // add position embeddings (pre-downsampled during GGUF conversion for fixed 512x512 input)
+    inp = ggml_add(ctx0, inp, model.position_embeddings);
     cb(inp, "inp_pos", -1);
 
     inp = ggml_concat(ctx0, model.class_embedding, inp, 1);
