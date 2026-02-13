@@ -30,7 +30,7 @@ static inline void simd_gemm_ukernel(
     const float * GGML_RESTRICT A,
     const float * GGML_RESTRICT B,
     int64_t K, int64_t N,
-    int64_t ii, int64_t jj)
+    int ii, int jj)
 {
     static constexpr int KN = GGML_F32_EPR;
 
@@ -70,9 +70,9 @@ static void simd_gemm(
 {
     static constexpr int KN = GGML_F32_EPR;
 
-    int64_t ii = 0;
+    int ii = 0;
     for (; ii + GEMM_RM <= M; ii += GEMM_RM) {
-        int64_t jj = 0;
+        int jj = 0;
         for (; jj + GEMM_RN * KN <= N; jj += GEMM_RN * KN) {
             simd_gemm_ukernel<GEMM_RM, GEMM_RN>(C, A, B, K, N, ii, jj);
         }
@@ -92,7 +92,7 @@ static void simd_gemm(
 
     // Tail rows: one at a time
     for (; ii < M; ii++) {
-        int64_t jj = 0;
+        int jj = 0;
         for (; jj + GEMM_RN * KN <= N; jj += GEMM_RN * KN) {
             simd_gemm_ukernel<1, GEMM_RN>(C, A, B, K, N, ii, jj);
         }
