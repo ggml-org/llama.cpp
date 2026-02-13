@@ -11,6 +11,7 @@
 #include "jinja/value.h"
 #include "jinja/runtime.h"
 #include "jinja/caps.h"
+#include "peg-parser.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -1368,12 +1369,16 @@ common_chat_msg common_chat_parse(const std::string &               input,
     return common_chat_peg_parse(params.parser, input, is_partial, params);
 }
 
-common_chat_msg common_chat_peg_parse(const common_peg_arena &          parser,
+common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
                                       const std::string &               input,
                                       bool                              is_partial,
                                       const common_chat_parser_params & params) {
-    if (parser.empty()) {
-        throw std::runtime_error("Failed to parse due to missing parser definition.");
+    const common_peg_arena & parser = src_parser.empty() ?
+        build_chat_peg_unified_parser([](common_chat_peg_unified_builder & p) { return p.content(p.rest()) + p.end(); }) :
+        src_parser;
+
+        if (src_parser.empty()) {
+        LOG_WRN("No parser definition detected, assuming pure content parser.");
     }
 
     LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), input.c_str());
