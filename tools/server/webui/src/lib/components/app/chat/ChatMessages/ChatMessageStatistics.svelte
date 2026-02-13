@@ -28,7 +28,7 @@
 		initialView = ChatMessageStatsView.GENERATION
 	}: Props = $props();
 
-	let activeView: ChatMessageStatsView = $state(initialView);
+	let activeView: ChatMessageStatsView = $derived(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
 
 	// In live mode: auto-switch to GENERATION tab when prompt processing completes

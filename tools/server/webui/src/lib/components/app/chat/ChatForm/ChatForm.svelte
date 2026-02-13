@@ -57,13 +57,13 @@
 	let currentConfig = $derived(config());
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
-	let message = $state(initialMessage);
+	let message = $derived(initialMessage);
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
-	let previousIsLoading = $state(isLoading);
-	let previousInitialMessage = $state(initialMessage);
+	let previousIsLoading = $derived(isLoading);
+	let previousInitialMessage = $derived(initialMessage);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
