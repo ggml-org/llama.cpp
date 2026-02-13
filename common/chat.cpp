@@ -65,15 +65,18 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     } else if (!content_parts.empty()) {
         if (concat_typed_text) {
             std::string text;
+            bool last_was_media_marker = false;
+            // join parts with newline, do not add newline before or after media markers
             for (const auto & part : content_parts) {
-                if (part.type != "text") {
+                if (part.type != "text" && part.type != "media_marker") {
                     LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
                     continue;
                 }
-                if (!text.empty()) {
+                if (part.type != "media_marker" && !last_was_media_marker && !text.empty()) {
                     text += '\n';
                 }
-                text += part.text;
+                last_was_media_marker  = (part.type == "media_marker");
+                text           += part.text;
             }
             jmsg["content"] = text;
         } else {
@@ -319,7 +322,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text") {
+                        if (type != "text" && type != "media_marker") {
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
