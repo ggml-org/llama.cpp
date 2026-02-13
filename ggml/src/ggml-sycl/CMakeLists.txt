@@ -808,6 +808,35 @@ if (GGML_SYCL_BUILD_XMX_TESTS AND GGML_SYCL_TARGET STREQUAL "INTEL")
 
     # Test 18: UnifiedKernel Operation Tests (TDD)
     # Tests RMS norm and SiLU mul operations for persistent kernel
+    add_executable(test-sycl-runtime-alloc
+        tests/test-unified-runtime-alloc.cpp
+        unified-cache.cpp
+        pinned-pool.cpp
+    )
+    target_include_directories(test-sycl-runtime-alloc PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../include
+    )
+    target_compile_options(test-sycl-runtime-alloc PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_link_options(test-sycl-runtime-alloc PRIVATE ${XMX_TEST_SYCL_OPTIONS})
+    target_compile_definitions(test-sycl-runtime-alloc PRIVATE
+        GGML_SYCL_WARP_SIZE=32
+        GGML_SYCL_DNNL=${GGML_SYCL_DNNL}
+    )
+    target_link_libraries(test-sycl-runtime-alloc PRIVATE ggml-base ggml)
+    if (IntelSYCL_FOUND)
+        target_link_libraries(test-sycl-runtime-alloc PRIVATE IntelSYCL::SYCL_CXX)
+    endif()
+    add_test(NAME sycl-runtime-alloc COMMAND test-sycl-runtime-alloc)
+    set_tests_properties(sycl-runtime-alloc PROPERTIES
+        LABELS "sycl;allocator;runtime;tdd"
+        TIMEOUT 180
+        ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:$ENV{LD_LIBRARY_PATH}"
+    )
+
+    # Test 18: UnifiedKernel Operation Tests (TDD)
+    # Tests RMS norm and SiLU mul operations for persistent kernel
     add_executable(test-unified-kernel-ops
         tests/test-unified-kernel-ops.cpp
         unified-kernel.cpp

@@ -15,8 +15,6 @@
 #include <algorithm>
 #include <cstdio>
 
-void * ggml_sycl_malloc_device(size_t size, const sycl::queue & queue, const char * tag);
-
 namespace ggml_sycl {
 
 ComputeBufferManager::ComputeBufferManager(sycl::queue & queue) :
@@ -28,12 +26,9 @@ ComputeBufferManager::~ComputeBufferManager() {
     std::lock_guard<std::mutex> lock(pool_mutex_);
     for (auto & buf : pool_) {
         if (buf.ptr != nullptr) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, buf.size);
-            try {
-                sycl::free(buf.ptr, queue_);
-            } catch (const sycl::exception & e) {
-                // Ignore errors during cleanup (SYCL runtime may already be destroyed)
-                fprintf(stderr, "[ComputeBufferManager] Warning: failed to free buffer: %s\n", e.what());
+            if (!ggml_sycl::unified_free(buf.handle)) {
+                fprintf(stderr, "[ComputeBufferManager] Warning: failed to free buffer %p (%zu bytes)\n",
+                        buf.ptr, buf.size);
             }
         }
     }
@@ -43,15 +38,14 @@ ComputeBufferManager::~ComputeBufferManager() {
     {
         std::lock_guard<std::mutex> scratch_lock(scratch_mutex_);
         if (scratch_ptr_ != nullptr) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_);
-            try {
-                sycl::free(scratch_ptr_, queue_);
-            } catch (const sycl::exception & e) {
-                fprintf(stderr, "[ComputeBufferManager] Warning: failed to free scratch: %s\n", e.what());
+            if (!ggml_sycl::unified_free(scratch_handle_)) {
+                fprintf(stderr, "[ComputeBufferManager] Warning: failed to free scratch %p (%zu bytes)\n",
+                        scratch_ptr_, scratch_capacity_);
             }
             scratch_ptr_      = nullptr;
             scratch_size_     = 0;
             scratch_capacity_ = 0;
+            scratch_handle_   = {};
         }
     }
 }
@@ -88,6 +82,7 @@ void * ComputeBufferManager::allocate(size_t size, const char * name) {
     new_buf.in_use     = true;
     new_buf.alloc_time = current_time();
     new_buf.name       = name;
+    unified_lookup(ptr, &new_buf.handle);
     pool_.push_back(new_buf);
 
     return ptr;
@@ -248,19 +243,20 @@ ComputeBuffer * ComputeBufferManager::find_free_buffer(size_t size) {
 }
 
 void * ComputeBufferManager::allocate_new_buffer(size_t size) {
-    void * ptr = nullptr;
-    ggml_sycl::unified_cache_add_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
-    try {
-        ptr = ggml_sycl_malloc_device(size, queue_, "compute_buffer");
-    } catch (const sycl::exception & e) {
-        fprintf(stderr, "[ComputeBufferManager] SYCL allocation failed for %zu bytes: %s\n", size, e.what());
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
+    ggml_sycl::alloc_request req;
+    req.queue                          = &queue_;
+    req.device                         = device_id_;
+    req.size                           = size;
+    req.intent.role                    = ggml_sycl::alloc_role::COMPUTE;
+    req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
+    req.intent.constraints.must_device = true;
+
+    ggml_sycl::alloc_handle handle;
+    if (!ggml_sycl::unified_alloc(req, &handle)) {
+        fprintf(stderr, "[ComputeBufferManager] allocation failed for %zu bytes\n", size);
         return nullptr;
     }
-    if (!ptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, size, ggml_sycl::runtime_category::COMPUTE);
-    }
-    return ptr;
+    return handle.ptr;
 }
 
 void ComputeBufferManager::grow_scratch(size_t new_size) {
@@ -270,35 +266,34 @@ void ComputeBufferManager::grow_scratch(size_t new_size) {
 
     // Free old scratch if exists
     if (scratch_ptr_ != nullptr) {
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, scratch_capacity_, ggml_sycl::runtime_category::COMPUTE);
-        try {
-            sycl::free(scratch_ptr_, queue_);
-        } catch (const sycl::exception & e) {
-            fprintf(stderr, "[ComputeBufferManager] Warning: failed to free old scratch: %s\n", e.what());
+        if (!ggml_sycl::unified_free(scratch_handle_)) {
+            fprintf(stderr, "[ComputeBufferManager] Warning: failed to free old scratch %p (%zu bytes)\n",
+                    scratch_ptr_, scratch_capacity_);
         }
-        scratch_ptr_ = nullptr;
+        scratch_ptr_    = nullptr;
+        scratch_handle_ = {};
     }
 
     // Allocate new scratch
-    try {
-        ggml_sycl::unified_cache_add_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
-        scratch_ptr_      = ggml_sycl_malloc_device(new_size, queue_, "compute_buffer_scratch");
-        if (!scratch_ptr_) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
-            scratch_capacity_ = 0;
-            scratch_size_     = 0;
-            return;
-        }
-        scratch_capacity_ = new_size;
-        scratch_size_     = new_size;
-    } catch (const sycl::exception & e) {
-        fprintf(stderr, "[ComputeBufferManager] SYCL scratch allocation failed for %zu bytes: %s\n", new_size,
-                e.what());
-        ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, new_size, ggml_sycl::runtime_category::COMPUTE);
+    ggml_sycl::alloc_request req;
+    req.queue                          = &queue_;
+    req.device                         = device_id_;
+    req.size                           = new_size;
+    req.intent.role                    = ggml_sycl::alloc_role::COMPUTE;
+    req.intent.category                = ggml_sycl::runtime_category::COMPUTE;
+    req.intent.constraints.must_device = true;
+
+    if (!ggml_sycl::unified_alloc(req, &scratch_handle_) || scratch_handle_.ptr == nullptr) {
+        fprintf(stderr, "[ComputeBufferManager] scratch allocation failed for %zu bytes\n", new_size);
         scratch_ptr_      = nullptr;
         scratch_capacity_ = 0;
         scratch_size_     = 0;
+        scratch_handle_   = {};
+        return;
     }
+    scratch_ptr_      = scratch_handle_.ptr;
+    scratch_capacity_ = new_size;
+    scratch_size_     = new_size;
 }
 
 uint64_t ComputeBufferManager::current_time() {

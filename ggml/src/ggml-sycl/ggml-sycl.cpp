@@ -3238,11 +3238,8 @@ struct ggml_backend_sycl_buffer_context {
     queue_ptr   stream;
     std::string name;
     bool        supports_soa_reorder;  // Device capability (not tensor state)
-    size_t      size_bytes           = 0;
-    bool        counts_runtime_bytes = false;
-    bool        counts_runtime_host_bytes = false;
-
-    bool        uses_pinned_pool    = false;
+    size_t      size_bytes             = 0;
+    ggml_sycl::alloc_handle managed_alloc{};
     // Track both tensor and extra so we can null tensor->extra on reset
     std::vector<std::pair<ggml_tensor *, ggml_tensor_extra_gpu *>> tensor_extras;
     // TP compute buffer support: per-device pointers
@@ -3250,16 +3247,15 @@ struct ggml_backend_sycl_buffer_context {
     bool      is_tp_compute_buffer               = false;
     void *    tp_dev_ptrs[GGML_SYCL_MAX_DEVICES] = { nullptr };
     queue_ptr tp_streams[GGML_SYCL_MAX_DEVICES]  = { nullptr };
+    ggml_sycl::alloc_handle tp_allocs[GGML_SYCL_MAX_DEVICES] = {};
     ggml_backend_sycl_buffer_context(int       device,
                                      void *    dev_ptr,
                                      queue_ptr stream,
-                                     size_t    size_bytes,
-                                     bool      counts_runtime_bytes) :
+                                     size_t    size_bytes) :
         device(device),
         dev_ptr(dev_ptr),
         stream(stream),
         size_bytes(size_bytes),
-        counts_runtime_bytes(counts_runtime_bytes),
         supports_soa_reorder(ggml_sycl_info().devices[device].supports_soa_reorder) {
 
         check_allow_gpu_index(device);
@@ -3268,46 +3264,22 @@ struct ggml_backend_sycl_buffer_context {
     ~ggml_backend_sycl_buffer_context() {
         // Free TP compute buffer pointers
         if (is_tp_compute_buffer) {
-            if (counts_runtime_bytes) {
-                // Device compute buffer: one allocation per TP device.
-                for (int dev_id = 0; dev_id < GGML_SYCL_MAX_DEVICES; ++dev_id) {
-                    void * ptr = tp_dev_ptrs[dev_id];
-                    if (!ptr) {
-                        continue;
-                    }
-                    ggml_sycl_set_device(dev_id);
-                    queue_ptr q = tp_streams[dev_id];
-                    if (q == nullptr) {
-                        q = &(ggml_sycl_get_device(dev_id).default_queue());
-                    }
-                    ggml_sycl::unified_cache_sub_runtime_bytes(dev_id, size_bytes, ggml_sycl::runtime_category::KV_CACHE);
-                    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *q)));
-                    tp_dev_ptrs[dev_id] = nullptr;
+            std::unordered_set<uint64_t> freed;
+            for (int dev_id = 0; dev_id < GGML_SYCL_MAX_DEVICES; ++dev_id) {
+                const auto & h = tp_allocs[dev_id];
+                if (h.ptr == nullptr || h.alloc_id == 0) {
+                    continue;
                 }
-            } else if (counts_runtime_host_bytes) {
-                // Shared host compute buffer: single allocation.
-                if (dev_ptr != nullptr && stream != nullptr) {
-                    ggml_sycl_set_device(device);
-                    ggml_sycl::unified_cache_sub_runtime_host_bytes(size_bytes);
-                    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
+                if (!freed.insert(h.alloc_id).second) {
+                    continue;
                 }
+                (void) ggml_sycl::unified_free(h);
             }
-        } else if (dev_ptr != nullptr) {
+        } else if (managed_alloc.ptr != nullptr) {
+            (void) ggml_sycl::unified_free(managed_alloc);
+        } else if (dev_ptr != nullptr && stream != nullptr) {
             ggml_sycl_set_device(device);
-
-            if (counts_runtime_bytes) {
-                ggml_sycl::unified_cache_sub_runtime_bytes(device, size_bytes, ggml_sycl::runtime_category::KV_CACHE);
-            }
-            if (counts_runtime_host_bytes) {
-                ggml_sycl::unified_cache_sub_runtime_host_bytes(size_bytes);
-            }
-            if (uses_pinned_pool) {
-                if (auto * hcache = ggml_sycl::get_host_cache_for_device(device)) {
-                    hcache->free_pinned_runtime(dev_ptr, size_bytes);
-                }
-            } else {
-                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
-            }
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
         }
         // Release extra used by tensors and null tensor->extra to avoid dangling pointers
         for (auto & [tensor, extra] : tensor_extras) {
@@ -6436,133 +6408,58 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             effective_mem_type = GGML_SYCL_MEM_HOST;
         }
     }
-    const bool reserve_device = (effective_mem_type == GGML_SYCL_MEM_DEVICE || effective_mem_type == GGML_SYCL_MEM_SHARED);
-    const bool reserve_host   = (effective_mem_type == GGML_SYCL_MEM_HOST);
-    if (reserve_device) {
-        ggml_sycl::unified_cache_add_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
+    if (effective_mem_type == GGML_SYCL_MEM_SHARED) {
+        GGML_LOG_WARN("[SYCL] buffer type requested shared USM; routing to host pinned via unified allocator\n");
+        effective_mem_type = GGML_SYCL_MEM_HOST;
     }
-    if (reserve_host) {
-        ggml_sycl::unified_cache_add_runtime_host_bytes(size);
+
+    const bool is_compute_buft =
+        buft_ctx->name.find("_Compute") != std::string::npos ||
+        buft_ctx->name.find("HostCompute") != std::string::npos ||
+        buft_ctx->name.find("CpuOffloadCompute") != std::string::npos;
+    const ggml_sycl::alloc_role alloc_role =
+        is_compute_buft ? ggml_sycl::alloc_role::COMPUTE : ggml_sycl::alloc_role::KV;
+    const ggml_sycl::runtime_category alloc_cat =
+        is_compute_buft ? ggml_sycl::runtime_category::COMPUTE : ggml_sycl::runtime_category::KV_CACHE;
+
+    // In TP mode, use the shared-context queue for the main allocation if available.
+    queue_ptr alloc_stream = buft_ctx->stream;
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+        sycl::queue * tp_queue = ggml_sycl_get_tp_queue(buft_ctx->device);
+        if (tp_queue != nullptr) {
+            alloc_stream = tp_queue;
+        }
     }
-    // Allocate memory based on buffer type's memory type setting
-    switch (effective_mem_type) {
-        case GGML_SYCL_MEM_HOST:
-            if (buft_ctx->use_pinned_pool) {
-                if (auto * hcache = ggml_sycl::get_host_cache_for_device(buft_ctx->device)) {
-                    dev_ptr = hcache->allocate_pinned_runtime(size, ggml_sycl::pinned_chunk_pool::DEFAULT_ALIGNMENT);
-                }
-                if (!dev_ptr) {
-                    GGML_LOG_ERROR("[SYCL] KV pinned pool allocation failed (size=%zu)\n", size);
-                    if (reserve_device) {
-                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
-                    }
-                    if (reserve_host) {
-                        ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-                    }
-                    return nullptr;
-                }
-                break;
+
+    ggml_sycl::alloc_request req;
+    req.queue                               = alloc_stream;
+    req.device                              = buft_ctx->device;
+    req.size                                = size;
+    req.intent.role                         = alloc_role;
+    req.intent.category                     = alloc_cat;
+    req.intent.constraints.use_pinned_pool  = buft_ctx->use_pinned_pool;
+    req.intent.constraints.must_device      = (effective_mem_type == GGML_SYCL_MEM_DEVICE);
+    req.intent.constraints.must_host_pinned = (effective_mem_type == GGML_SYCL_MEM_HOST);
+
+    if (effective_mem_type == GGML_SYCL_MEM_DEVICE) {
+        const size_t safe_alloc = ggml_sycl_get_safe_max_alloc_size(buft_ctx->device);
+        if (safe_alloc > 0 && size > safe_alloc) {
+            if (!buft_ctx->allow_shared_fallback) {
+                return nullptr;
             }
-            // Pinned host memory - accessible from all devices (used for TP compute buffers)
-            // In TP mode, use the shared context so memory is accessible from all TP devices
-            if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-                sycl::queue * tp_queue = ggml_sycl_get_tp_queue(buft_ctx->device);
-                if (tp_queue != nullptr) {
-                    dev_ptr = ggml_sycl_malloc_host(size, *tp_queue, "buft:host");
-                    GGML_SYCL_DEBUG("TP: Allocated %zu bytes HOST memory in shared context\n", size);
-                } else {
-                    dev_ptr = ggml_sycl_malloc_host(size, *stream, "buft:host");
-                }
-            } else {
-                dev_ptr = ggml_sycl_malloc_host(size, *stream, "buft:host");
-            }
-            break;
-        case GGML_SYCL_MEM_SHARED:
-            // Unified shared memory - auto-migrating between host and device
-            // In TP mode, use the shared context
-
-            if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-                sycl::queue * tp_queue = ggml_sycl_get_tp_queue(buft_ctx->device);
-                if (tp_queue != nullptr) {
-                    dev_ptr = ggml_sycl_malloc_shared(size, *tp_queue, "buft:shared");
-                    GGML_SYCL_DEBUG("TP: Allocated %zu bytes SHARED memory in shared context\n", size);
-                } else {
-                    dev_ptr = ggml_sycl_malloc_shared(size, *stream, "buft:shared");
-                }
-            } else {
-                dev_ptr = ggml_sycl_malloc_shared(size, *stream, "buft:shared");
-            }
-            break;
-        case GGML_SYCL_MEM_DEVICE:
-        default:
-            // GPU device memory - fastest but device-local
-            // In TP mode, use the shared context so operations can access memory across devices
-            const size_t safe_alloc = ggml_sycl_get_safe_max_alloc_size(buft_ctx->device);
-            if (safe_alloc > 0 && size > safe_alloc) {
-
-                if (!buft_ctx->allow_shared_fallback) {
-                    if (reserve_device) {
-                        ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
-                    }
-                    if (reserve_host) {
-                        ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-                    }
-                    return nullptr;
-                }
-                GGML_LOG_INFO(
-                    "SYCL: Large buffer (%zu MB) exceeds safe alloc (%zu MB), using shared memory to work around "
-                    "driver limitation\n",
-
-                    size / (1024 * 1024), safe_alloc / (1024 * 1024));
-                if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-                    sycl::queue * tp_queue = ggml_sycl_get_tp_queue(buft_ctx->device);
-                    if (tp_queue != nullptr) {
-                        dev_ptr = ggml_sycl_malloc_shared(size, *tp_queue, "buft:fallback_shared");
-                    } else {
-                        dev_ptr = ggml_sycl_malloc_shared(size, *stream, "buft:fallback_shared");
-
-                    }
-                } else {
-                    dev_ptr = ggml_sycl_malloc_shared(size, *stream, "buft:fallback_shared");
-                }
-            } else {
-                // Normal path: use device memory for smaller allocations
-                if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-                    sycl::queue * tp_queue = ggml_sycl_get_tp_queue(buft_ctx->device);
-                    if (tp_queue != nullptr) {
-                        dev_ptr = ggml_sycl_malloc_device(size, *tp_queue, "buft:device");
-                        // DEBUG: Check if allocation overlaps with L31 FFN gate weight region
-                        uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
-                        uintptr_t alloc_start     = (uintptr_t) dev_ptr;
-                        uintptr_t alloc_end       = alloc_start + size;
-                        if (buft_ctx->device == 0 && alloc_start <= l31_weight_addr && alloc_end > l31_weight_addr) {
-                            fprintf(stderr,
-                                    "TP DEBUG ALLOC OVERLAP! device=%d ptr=%p size=%zu overlaps L31 weight at 0x%llx\n",
-                                    buft_ctx->device, dev_ptr, size, (unsigned long long) l31_weight_addr);
-                        }
-                        GGML_SYCL_DEBUG("TP: Allocated %zu bytes DEVICE memory in shared context for device %d at %p\n",
-                                        size, buft_ctx->device, dev_ptr);
-                    } else {
-                        dev_ptr = ggml_sycl_malloc_device(size, *stream, "buft:device");
-                    }
-                } else {
-                    dev_ptr = ggml_sycl_malloc_device(size, *stream, "buft:device");
-                }
-
-            }
-            break;
+            GGML_LOG_INFO("SYCL: Large buffer (%zu MB) exceeds safe alloc (%zu MB), using host-pinned fallback\n",
+                          size / (1024 * 1024), safe_alloc / (1024 * 1024));
+            req.intent.constraints.must_device      = false;
+            req.intent.constraints.must_host_pinned = true;
+        }
     }
-    if (!dev_ptr) {
+
+    ggml_sycl::alloc_handle main_alloc{};
+    if (!ggml_sycl::unified_alloc(req, &main_alloc) || main_alloc.ptr == nullptr) {
         GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, size);
-        if (reserve_device) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(buft_ctx->device, size, ggml_sycl::runtime_category::KV_CACHE);
-        }
-        if (reserve_host) {
-            ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-        }
-
         return nullptr;
     }
+    dev_ptr = main_alloc.ptr;
     // In TP mode, use the shared-context queue for the buffer context
     queue_ptr ctx_stream = buft_ctx->stream;
 
@@ -6572,13 +6469,9 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             ctx_stream = tp_queue;
         }
     }
-    const bool counts_runtime_bytes = reserve_device;
-    const bool counts_runtime_host_bytes = reserve_host;
-
     ggml_backend_sycl_buffer_context * ctx =
-        new ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, ctx_stream, size, counts_runtime_bytes);
-    ctx->counts_runtime_host_bytes = counts_runtime_host_bytes;
-    ctx->uses_pinned_pool = buft_ctx->use_pinned_pool && (effective_mem_type == GGML_SYCL_MEM_HOST);
+        new ggml_backend_sycl_buffer_context(buft_ctx->device, dev_ptr, ctx_stream, size);
+    ctx->managed_alloc = main_alloc;
     // In TP mode, allocate device memory on ALL TP devices for compute buffers
 
     // This allows each device to have its own copy of compute buffers
@@ -6586,6 +6479,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
         ctx->is_tp_compute_buffer          = true;
         ctx->tp_dev_ptrs[buft_ctx->device] = dev_ptr;  // Already allocated for main device
         ctx->tp_streams[buft_ctx->device]  = ctx_stream;
+        ctx->tp_allocs[buft_ctx->device]   = main_alloc;
 
         // Allocate on other local TP devices (in multi-process mode, only 1 device is visible)
 
@@ -6599,17 +6493,19 @@ static ggml_backend_buffer_t ggml_backend_sycl_buffer_type_alloc_buffer(ggml_bac
             ggml_sycl_set_device(dev_id);
             sycl::queue * tp_queue = ggml_sycl_get_tp_queue(dev_id);
             if (tp_queue != nullptr) {
-                void * ptr = nullptr;
+                ggml_sycl::alloc_request tp_req = req;
+                tp_req.queue = tp_queue;
+                tp_req.device = dev_id;
+                tp_req.intent.constraints.must_device = true;
+                tp_req.intent.constraints.must_host_pinned = false;
+                tp_req.intent.constraints.use_pinned_pool = false;
 
-                ggml_sycl::unified_cache_add_runtime_bytes(dev_id, size);
-                ptr = ggml_sycl_malloc_device(size, *tp_queue, "tp_compute_buffer");
-                if (!ptr) {
-                    ggml_sycl::unified_cache_sub_runtime_bytes(dev_id, size);
-                }
-                if (ptr != nullptr) {
+                ggml_sycl::alloc_handle tp_alloc{};
+                if (ggml_sycl::unified_alloc(tp_req, &tp_alloc) && tp_alloc.ptr != nullptr) {
+                    void * ptr              = tp_alloc.ptr;
                     ctx->tp_dev_ptrs[dev_id]  = ptr;
-
                     ctx->tp_streams[dev_id]   = tp_queue;
+                    ctx->tp_allocs[dev_id]    = tp_alloc;
 
                     // DEBUG: Check if allocation overlaps with L31 FFN gate weight region
                     uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
@@ -9585,29 +9481,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_compute_buffer_alloc(ggml_ba
 
         int primary_device = buft_ctx->device;
         size               = std::max(size, (size_t) 1);
-        GGML_SYCL_DEBUG("SYCL TP: Allocating SHARED compute buffer (malloc_shared) for %d TP devices (size=%zu)\n",
+        GGML_SYCL_DEBUG("SYCL TP: Allocating shared host-pinned compute buffer for %d TP devices (size=%zu)\n",
                         g_sycl_tp_config.world_size, size);
-        // Get shared context for TP mode
-        sycl::context * tp_context = ggml_sycl_get_tp_context();
-        if (tp_context == nullptr) {
-            GGML_LOG_ERROR("%s: TP shared context not initialized\n", __func__);
-
-            return nullptr;
-        }
-        // Allocate HOST memory in the SHARED CONTEXT so all devices can access it
-
-        // malloc_host allocates pinned host memory accessible from all devices in the context
-        void * shared_ptr = nullptr;
-        ggml_sycl::unified_cache_add_runtime_host_bytes(size);
-        SYCL_CHECK(CHECK_TRY_ERROR(shared_ptr = (void *) sycl::malloc_host(size, *tp_context)));
-        if (!shared_ptr) {
-            ggml_sycl::unified_cache_sub_runtime_host_bytes(size);
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of host memory for TP\n", __func__, size);
-            return nullptr;
-
-        }
-        ggml_sycl_alloc_trace_record("host", size, "tp_compute_host");
-        GGML_SYCL_DEBUG("SYCL TP: Allocated HOST compute buffer (malloc_host): %p (size=%zu)\n", shared_ptr, size);
 
         // Get primary device's queue for buffer context
         ggml_sycl_set_device(primary_device);
@@ -9616,9 +9491,28 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_compute_buffer_alloc(ggml_ba
             auto & primary_dpct_dev = ggml_sycl_get_device(primary_device);
             primary_stream          = &(primary_dpct_dev.default_queue());
         }
+
+        ggml_sycl::alloc_request req;
+        req.queue                               = primary_stream;
+        req.device                              = primary_device;
+        req.size                                = size;
+        req.intent.role                         = ggml_sycl::alloc_role::COMPUTE;
+        req.intent.category                     = ggml_sycl::runtime_category::HOST_COMPUTE;
+        req.intent.constraints.must_host_pinned = true;
+        req.intent.constraints.must_device      = false;
+
+        ggml_sycl::alloc_handle host_alloc{};
+        if (!ggml_sycl::unified_alloc(req, &host_alloc) || host_alloc.ptr == nullptr) {
+            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of host memory for TP\n", __func__, size);
+            return nullptr;
+        }
+        void * shared_ptr = host_alloc.ptr;
+        GGML_SYCL_DEBUG("SYCL TP: Allocated HOST compute buffer via unified allocator: %p (size=%zu)\n", shared_ptr,
+                        size);
+
         ggml_backend_sycl_buffer_context * ctx =
-            new ggml_backend_sycl_buffer_context(primary_device, shared_ptr, primary_stream, size, false);
-        ctx->counts_runtime_host_bytes = true;
+            new ggml_backend_sycl_buffer_context(primary_device, shared_ptr, primary_stream, size);
+        ctx->managed_alloc       = host_alloc;
         ctx->is_tp_compute_buffer = true;
         // In multi-process mode, we only have ONE device visible per process
         // world_size is the MPI world size, not the number of local devices
@@ -9627,6 +9521,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_compute_buffer_alloc(ggml_ba
             int local_dev               = 0;  // Local device ID is always 0 in multi-process mode
             ctx->tp_dev_ptrs[local_dev] = shared_ptr;
             ctx->tp_streams[local_dev]  = ggml_sycl_get_tp_queue(local_dev);
+            ctx->tp_allocs[local_dev]   = host_alloc;
             if (ctx->tp_streams[local_dev] == nullptr) {
 
                 auto & dpct_dev            = ggml_sycl_get_device(local_dev);
@@ -9643,6 +9538,7 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_compute_buffer_alloc(ggml_ba
 
                 ctx->tp_dev_ptrs[dev_id] = shared_ptr;  // Same pointer for all!
                 ctx->tp_streams[dev_id]  = ggml_sycl_get_tp_queue(dev_id);
+                ctx->tp_allocs[dev_id]   = host_alloc;
 
                 if (ctx->tp_streams[dev_id] == nullptr) {
 
@@ -9701,9 +9597,8 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffer_type(int device
 }
 
 // CPU-offload compute buffer type:
-// Allocates host-pinned memory (sycl::malloc_host) with the SYCL buffer interface.
+// Allocates host-pinned memory through unified allocator policy.
 // Reports is_host=true so cpu-dispatch.cpp fast-paths bypass staging memcpy.
-// GPU kernels can still access host-pinned memory via PCIe (slower but functional).
 // Used when GGML_SYCL_CPU_OFFLOAD=1 to avoid staging overhead for CPU-dispatched layers.
 static const char * ggml_backend_sycl_cpu_offload_compute_buffer_type_name(ggml_backend_buffer_type_t buft) {
     static std::string name = GGML_SYCL_NAME "_CpuOffloadCompute";
@@ -24137,8 +24032,14 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend, const ggm
 static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_context * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
+    if (ggml_sycl::unified_alloc_strict_mode()) {
+        (void) ggml_sycl::unified_alloc_validate_registry(sycl_ctx->device, "pre_synchronize");
+    }
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR(stream->wait_and_throw()));
+    if (ggml_sycl::unified_alloc_strict_mode()) {
+        (void) ggml_sycl::unified_alloc_validate_registry(sycl_ctx->device, "post_synchronize");
+    }
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -27385,25 +27286,36 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
         }
 
         const size_t bytes = ggml_nbytes(tensor);
-        void * dst_ptr = sycl::malloc_device(bytes, *q);
-        if (!dst_ptr) {
+        ggml_sycl::alloc_request mat_req;
+        mat_req.queue                          = q;
+        mat_req.device                         = ctx.device;
+        mat_req.size                           = bytes;
+        mat_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+        mat_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+        mat_req.intent.constraints.must_device = true;
+        ggml_sycl::alloc_handle dst_alloc{};
+        if (!ggml_sycl::unified_alloc(mat_req, &dst_alloc) || dst_alloc.ptr == nullptr) {
             GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate %zu bytes for materialized tensor\n", bytes);
             return nullptr;
         }
+        void * dst_ptr = dst_alloc.ptr;
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc dst_ptr=%p bytes=%zu\n", dst_ptr, bytes);
         }
-        kernel.add_temp_device_alloc(dst_ptr, bytes);
+        kernel.add_temp_device_alloc_handle(dst_alloc);
 
-        auto * meta_dev = sycl::malloc_device<StridedCopyMeta>(1, *q);
-        if (!meta_dev) {
+        ggml_sycl::alloc_request meta_req = mat_req;
+        meta_req.size = sizeof(StridedCopyMeta);
+        ggml_sycl::alloc_handle meta_alloc{};
+        if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
             GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta\n");
             return nullptr;
         }
+        auto * meta_dev = static_cast<StridedCopyMeta *>(meta_alloc.ptr);
         if (log_ops && (max_ops_limit <= 0 || ops_added >= max_ops_limit - 2)) {
             GGML_LOG_INFO("[PERSISTENT-TG] resolve_input_ptr: alloc meta_dev=%p\n", (void *) meta_dev);
         }
-        kernel.add_temp_device_alloc(meta_dev, sizeof(StridedCopyMeta));
+        kernel.add_temp_device_alloc_handle(meta_alloc);
 
         StridedCopyMeta meta = {};
         for (int d = 0; d < GGML_MAX_DIMS; d++) {
@@ -27550,13 +27462,21 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
             return ptr;
         }
 
-        void * dev_ptr = sycl::malloc_device(bytes, *q);
-        if (!dev_ptr) {
+        ggml_sycl::alloc_request stage_req;
+        stage_req.queue                          = q;
+        stage_req.device                         = ctx.device;
+        stage_req.size                           = bytes;
+        stage_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+        stage_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+        stage_req.intent.constraints.must_device = true;
+        ggml_sycl::alloc_handle stage_alloc{};
+        if (!ggml_sycl::unified_alloc(stage_req, &stage_alloc) || stage_alloc.ptr == nullptr) {
             GGML_LOG_ERROR("[PERSISTENT-TG] %s device alloc failed (%zu bytes)\n", tag, bytes);
             return nullptr;
         }
+        void * dev_ptr = stage_alloc.ptr;
 
-        kernel.add_temp_device_alloc(dev_ptr, bytes);
+        kernel.add_temp_device_alloc_handle(stage_alloc);
         ggml_sycl_safe_memcpy(*q, dev_ptr, ptr, bytes, {});
         q->wait_and_throw();
         return dev_ptr;
@@ -27917,18 +27837,29 @@ static bool extract_persistent_plan(ggml_sycl::UnifiedKernel & kernel,
                                 cos_cache[j] = cosf(theta);
                                 sin_cache[j] = sinf(theta);
                             }
-                            d_cos = sycl::malloc_device<float>(half_dim, *q);
-                            d_sin = sycl::malloc_device<float>(half_dim, *q);
-                            if (!d_cos || !d_sin) {
-                                if (d_cos) sycl::free(d_cos, *q);
-                                if (d_sin) sycl::free(d_sin, *q);
+                            ggml_sycl::alloc_request rope_req;
+                            rope_req.queue                          = q;
+                            rope_req.device                         = ctx.device;
+                            rope_req.size                           = half_dim * sizeof(float);
+                            rope_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+                            rope_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+                            rope_req.intent.constraints.must_device = true;
+                            ggml_sycl::alloc_handle cos_alloc{};
+                            ggml_sycl::alloc_handle sin_alloc{};
+                            if (!ggml_sycl::unified_alloc(rope_req, &cos_alloc) ||
+                                !ggml_sycl::unified_alloc(rope_req, &sin_alloc) ||
+                                cos_alloc.ptr == nullptr || sin_alloc.ptr == nullptr) {
+                                (void) ggml_sycl::unified_free(cos_alloc);
+                                (void) ggml_sycl::unified_free(sin_alloc);
                                 fast_path_ok = false;
                                 break;
                             }
+                            d_cos = static_cast<float *>(cos_alloc.ptr);
+                            d_sin = static_cast<float *>(sin_alloc.ptr);
                             q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
                             q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
-                            kernel.add_temp_device_alloc(d_cos, half_dim * sizeof(float));
-                            kernel.add_temp_device_alloc(d_sin, half_dim * sizeof(float));
+                            kernel.add_temp_device_alloc_handle(cos_alloc);
+                            kernel.add_temp_device_alloc_handle(sin_alloc);
                             rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
                         }
 
@@ -29174,23 +29105,30 @@ full_build:
                         sin_cache[j] = sinf(theta);
                     }
 
-                    d_cos = sycl::malloc_device<float>(half_dim, *q);
-                    d_sin = sycl::malloc_device<float>(half_dim, *q);
-                    if (!d_cos || !d_sin) {
+                    ggml_sycl::alloc_request rope_req;
+                    rope_req.queue                          = q;
+                    rope_req.device                         = ctx.device;
+                    rope_req.size                           = half_dim * sizeof(float);
+                    rope_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+                    rope_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+                    rope_req.intent.constraints.must_device = true;
+                    ggml_sycl::alloc_handle cos_alloc{};
+                    ggml_sycl::alloc_handle sin_alloc{};
+                    if (!ggml_sycl::unified_alloc(rope_req, &cos_alloc) ||
+                        !ggml_sycl::unified_alloc(rope_req, &sin_alloc) ||
+                        cos_alloc.ptr == nullptr || sin_alloc.ptr == nullptr) {
                         GGML_LOG_ERROR("[PERSISTENT-TG] ROPE cache alloc failed (half_dim=%d)\n", half_dim);
-                        if (d_cos) {
-                            sycl::free(d_cos, *q);
-                        }
-                        if (d_sin) {
-                            sycl::free(d_sin, *q);
-                        }
+                        (void) ggml_sycl::unified_free(cos_alloc);
+                        (void) ggml_sycl::unified_free(sin_alloc);
                         return false;
                     }
+                    d_cos = static_cast<float *>(cos_alloc.ptr);
+                    d_sin = static_cast<float *>(sin_alloc.ptr);
                     q->memcpy(d_cos, cos_cache.data(), half_dim * sizeof(float)).wait();
                     q->memcpy(d_sin, sin_cache.data(), half_dim * sizeof(float)).wait();
 
-                    kernel.add_temp_device_alloc(d_cos, half_dim * sizeof(float));
-                    kernel.add_temp_device_alloc(d_sin, half_dim * sizeof(float));
+                    kernel.add_temp_device_alloc_handle(cos_alloc);
+                    kernel.add_temp_device_alloc_handle(sin_alloc);
                     rope_cache_by_pos.emplace(rope_cache_key, std::make_pair(d_cos, d_sin));
                 }
 
@@ -29824,12 +29762,20 @@ full_build:
                 meta.idx_type = idx_type;
                 meta.pad = 0;
 
-                auto * meta_dev = sycl::malloc_device<SetRowsMeta>(1, *q);
-                if (!meta_dev) {
+                ggml_sycl::alloc_request meta_req;
+                meta_req.queue                          = q;
+                meta_req.device                         = ctx.device;
+                meta_req.size                           = sizeof(SetRowsMeta);
+                meta_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+                meta_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+                meta_req.intent.constraints.must_device = true;
+                ggml_sycl::alloc_handle meta_alloc{};
+                if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate SetRowsMeta\n");
                     return false;
                 }
-                kernel.add_temp_device_alloc(meta_dev, sizeof(SetRowsMeta));
+                auto * meta_dev = static_cast<SetRowsMeta *>(meta_alloc.ptr);
+                kernel.add_temp_device_alloc_handle(meta_alloc);
                 q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
 
                 const int64_t n_elements = meta.nc * meta.nr * meta.ne02 * meta.ne03;
@@ -29918,12 +29864,20 @@ full_build:
                 meta.type_size = (int32_t) ggml_type_size(node->type);
                 meta.pad = 0;
 
-                auto * meta_dev = sycl::malloc_device<StridedCopyMeta>(1, *q);
-                if (!meta_dev) {
+                ggml_sycl::alloc_request meta_req;
+                meta_req.queue                          = q;
+                meta_req.device                         = ctx.device;
+                meta_req.size                           = sizeof(StridedCopyMeta);
+                meta_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+                meta_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+                meta_req.intent.constraints.must_device = true;
+                ggml_sycl::alloc_handle meta_alloc{};
+                if (!ggml_sycl::unified_alloc(meta_req, &meta_alloc) || meta_alloc.ptr == nullptr) {
                     GGML_LOG_ERROR("[PERSISTENT-TG] Failed to allocate StridedCopyMeta for CONT\n");
                     return false;
                 }
-                kernel.add_temp_device_alloc(meta_dev, sizeof(StridedCopyMeta));
+                auto * meta_dev = static_cast<StridedCopyMeta *>(meta_alloc.ptr);
+                kernel.add_temp_device_alloc_handle(meta_alloc);
                 q->memcpy(meta_dev, &meta, sizeof(meta)).wait();
 
                 const int64_t n_elements = ggml_nelements(node->src[0]);
@@ -30309,11 +30263,19 @@ static void debug_validate_persistent_set_rows(ggml_backend_sycl_context & ctx) 
         GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: zero-sized dst buffer\n");
         return;
     }
-    void * tmp_dst = sycl::malloc_device(dst_bytes, *q);
-    if (!tmp_dst) {
+    ggml_sycl::alloc_request tmp_req;
+    tmp_req.queue                          = q;
+    tmp_req.device                         = ctx.device;
+    tmp_req.size                           = dst_bytes;
+    tmp_req.intent.role                    = ggml_sycl::alloc_role::GRAPH_TMP;
+    tmp_req.intent.category                = ggml_sycl::runtime_category::GRAPH;
+    tmp_req.intent.constraints.must_device = true;
+    ggml_sycl::scoped_unified_alloc tmp_alloc(tmp_req);
+    if (!tmp_alloc) {
         GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate skipped: alloc %zu bytes failed\n", dst_bytes);
         return;
     }
+    void * tmp_dst = tmp_alloc.get();
     dst.data = tmp_dst;
     q->memset(tmp_dst, 0, dst_bytes).wait();
 
@@ -30332,7 +30294,6 @@ static void debug_validate_persistent_set_rows(ggml_backend_sycl_context & ctx) 
     if (idx_val < 0 || idx_val >= meta.ne1) {
         GGML_LOG_WARN("[PERSISTENT-TG] SET_ROWS validate: index out of range (%lld)\n",
                       (long long) idx_val);
-        sycl::free(tmp_dst, *q);
         return;
     }
 
@@ -30364,7 +30325,6 @@ static void debug_validate_persistent_set_rows(ggml_backend_sycl_context & ctx) 
                       (long long) i, expected, actual, expected - actual);
     }
 
-    sycl::free(tmp_dst, *q);
 }
 
 /**

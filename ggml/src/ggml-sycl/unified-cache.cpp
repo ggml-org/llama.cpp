@@ -42,6 +42,8 @@ static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_baseline{};
 static std::atomic<size_t> g_runtime_cat_bytes[GGML_SYCL_MAX_DEVICES][static_cast<int>(runtime_category::COUNT)]{};
 static std::atomic<size_t>                                   g_runtime_reserved_host_bytes{};
+static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_managed_reserved_bytes{};
+static std::atomic<size_t>                                    g_runtime_managed_reserved_host_bytes{};
 static std::atomic<bool> g_atexit_registered{ false };   // Ensure atexit handler registered once
 static std::atomic<int> g_host_cache_guard_errors{ 0 };
 static std::atomic<int> g_host_cache_guard_enabled{ -1 };
@@ -49,8 +51,82 @@ static constexpr size_t k_host_cache_guard_bytes   = 64;
 static constexpr uint8_t k_host_cache_guard_pattern = 0xA5;
 static std::atomic<int> g_cache_assert_enabled{ -1 };
 static std::atomic<int> g_copy_trace_enabled{ -1 };
+static std::mutex g_runtime_alloc_mutex;
+static std::atomic<uint64_t> g_runtime_alloc_id{ 1 };
+
+struct runtime_alloc_record {
+    alloc_handle handle{};
+    sycl::queue * queue = nullptr;
+    bool uses_pinned_pool = false;
+    std::string cohort_id;
+};
+
+static std::unordered_map<void *, runtime_alloc_record> g_runtime_alloc_registry;
+static std::unordered_map<std::string, alloc_tier> g_runtime_cohort_tier;
 
 static int get_device_id_from_queue(sycl::queue & queue);
+
+static const char * alloc_tier_name(alloc_tier tier) {
+    switch (tier) {
+        case alloc_tier::DEVICE_VRAM: return "device_vram";
+        case alloc_tier::HOST_PINNED: return "host_pinned";
+        case alloc_tier::MMAP_TRACKED: return "mmap_tracked";
+        default: return "unknown";
+    }
+}
+
+static runtime_category category_from_role(alloc_role role) {
+    switch (role) {
+        case alloc_role::KV:        return runtime_category::KV_CACHE;
+        case alloc_role::COMPUTE:   return runtime_category::COMPUTE;
+        case alloc_role::STAGING:   return runtime_category::STAGING;
+        case alloc_role::GRAPH_TMP: return runtime_category::GRAPH;
+        case alloc_role::TP_TMP:    return runtime_category::GRAPH;
+        case alloc_role::WEIGHT:
+        case alloc_role::OTHER:
+        default:                    return runtime_category::OTHER;
+    }
+}
+
+static inline void unified_managed_add_device_bytes(int device, size_t bytes) {
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES || bytes == 0) {
+        return;
+    }
+    g_runtime_managed_reserved_bytes[device].fetch_add(bytes, std::memory_order_relaxed);
+}
+
+static inline void unified_managed_sub_device_bytes(int device, size_t bytes) {
+    if (device < 0 || device >= GGML_SYCL_MAX_DEVICES || bytes == 0) {
+        return;
+    }
+    g_runtime_managed_reserved_bytes[device].fetch_sub(bytes, std::memory_order_relaxed);
+}
+
+static inline void unified_managed_add_host_bytes(size_t bytes) {
+    if (bytes == 0) {
+        return;
+    }
+    g_runtime_managed_reserved_host_bytes.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+static inline void unified_managed_sub_host_bytes(size_t bytes) {
+    if (bytes == 0) {
+        return;
+    }
+    g_runtime_managed_reserved_host_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+}
+
+bool unified_alloc_strict_mode() {
+    static std::atomic<int> s_strict{ -1 };
+    int cached = s_strict.load(std::memory_order_acquire);
+    if (cached >= 0) {
+        return cached != 0;
+    }
+    const char * env = std::getenv("GGML_SYCL_UNIFIED_ALLOC_STRICT");
+    const int strict = (env && std::atoi(env) != 0) ? 1 : 0;
+    s_strict.store(strict, std::memory_order_release);
+    return strict != 0;
+}
 
 static bool parse_env_mb_value(const char * name, size_t & out_mb) {
     const char * env = std::getenv(name);
@@ -4637,6 +4713,324 @@ void set_unified_cache_host_budget_pct(int pct) {
         pct = 100;
     }
     g_unified_cache_host_budget_pct = pct;
+}
+
+alloc_tier unified_select_tier(const alloc_request & req) {
+    if (req.intent.constraints.must_device) {
+        return alloc_tier::DEVICE_VRAM;
+    }
+    if (req.intent.constraints.must_host_pinned) {
+        return alloc_tier::HOST_PINNED;
+    }
+
+    if (req.intent.constraints.prefer_same_tier_as_cohort && req.intent.cohort_id && req.intent.cohort_id[0] != '\0') {
+        std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+        auto it = g_runtime_cohort_tier.find(req.intent.cohort_id);
+        if (it != g_runtime_cohort_tier.end()) {
+            return it->second;
+        }
+    }
+
+    if (req.device >= 0) {
+        if (auto * cache = get_unified_cache_for_device(req.device)) {
+            if (req.size > cache->available()) {
+                return alloc_tier::HOST_PINNED;
+            }
+        }
+    }
+    return alloc_tier::DEVICE_VRAM;
+}
+
+static bool unified_free_record(const runtime_alloc_record & rec) {
+    bool ok = true;
+    if (rec.handle.tier == alloc_tier::DEVICE_VRAM) {
+        unified_cache_sub_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+        unified_managed_sub_device_bytes(rec.handle.device, rec.handle.size);
+    } else if (rec.handle.tier == alloc_tier::HOST_PINNED || rec.handle.tier == alloc_tier::MMAP_TRACKED) {
+        unified_cache_sub_runtime_host_bytes(rec.handle.size);
+        unified_managed_sub_host_bytes(rec.handle.size);
+    }
+
+    try {
+        if (rec.handle.tier == alloc_tier::MMAP_TRACKED) {
+            return true;
+        }
+        if (rec.uses_pinned_pool) {
+            if (auto * hcache = get_host_cache_for_device(rec.handle.device)) {
+                hcache->free_pinned_runtime(rec.handle.ptr, rec.handle.size);
+            }
+        } else if (rec.queue != nullptr && rec.handle.ptr != nullptr) {
+            sycl::free(rec.handle.ptr, *rec.queue);
+        } else if (rec.handle.ptr != nullptr && rec.handle.device >= 0 && rec.handle.device < GGML_SYCL_MAX_DEVICES) {
+            auto & q = ggml_sycl_get_device(rec.handle.device).default_queue();
+            sycl::free(rec.handle.ptr, q);
+        }
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] free failed ptr=%p size=%zu dev=%d tier=%s: %s\n",
+                       rec.handle.ptr, rec.handle.size, rec.handle.device, alloc_tier_name(rec.handle.tier), e.what());
+        ok = false;
+    } catch (const std::exception & e) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] free failed ptr=%p size=%zu dev=%d tier=%s: %s\n",
+                       rec.handle.ptr, rec.handle.size, rec.handle.device, alloc_tier_name(rec.handle.tier), e.what());
+        ok = false;
+    }
+
+    if (!ok) {
+        if (rec.handle.tier == alloc_tier::DEVICE_VRAM) {
+            unified_cache_add_runtime_bytes(rec.handle.device, rec.handle.size, rec.handle.category);
+            unified_managed_add_device_bytes(rec.handle.device, rec.handle.size);
+        } else if (rec.handle.tier == alloc_tier::HOST_PINNED || rec.handle.tier == alloc_tier::MMAP_TRACKED) {
+            unified_cache_add_runtime_host_bytes(rec.handle.size);
+            unified_managed_add_host_bytes(rec.handle.size);
+        }
+    }
+    return ok;
+}
+
+bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = {};
+
+    if (req_in.size == 0) {
+        return true;
+    }
+
+    alloc_request req = req_in;
+    if (req.queue == nullptr && req.device >= 0 && req.device < GGML_SYCL_MAX_DEVICES) {
+        req.queue = &ggml_sycl_get_device(req.device).default_queue();
+    }
+    if (req.queue == nullptr) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] invalid request: missing queue\n");
+        return false;
+    }
+    if (req.device < 0) {
+        req.device = get_device_id_from_queue(*req.queue);
+    }
+    if (req.device < 0 || req.device >= GGML_SYCL_MAX_DEVICES) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] invalid request: device=%d\n", req.device);
+        return false;
+    }
+
+    if (req.intent.constraints.must_device && req.intent.constraints.must_host_pinned) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] invalid request: both must_device and must_host_pinned are set\n");
+        return false;
+    }
+
+    runtime_category cat =
+        req.intent.category == runtime_category::OTHER ? category_from_role(req.intent.role) : req.intent.category;
+    alloc_tier tier = unified_select_tier(req);
+    if (tier == alloc_tier::MMAP_TRACKED) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] MMAP_TRACKED runtime allocations are not supported in unified_alloc\n");
+        return false;
+    }
+    if (req.intent.constraints.must_device) {
+        tier = alloc_tier::DEVICE_VRAM;
+    }
+    if (req.intent.constraints.must_host_pinned) {
+        tier = alloc_tier::HOST_PINNED;
+    }
+
+    const size_t alloc_size = std::max<size_t>(req.size, 1);
+    bool reserve_device = (tier == alloc_tier::DEVICE_VRAM);
+    bool reserve_host   = (tier == alloc_tier::HOST_PINNED);
+    if (reserve_device) {
+        unified_cache_add_runtime_bytes(req.device, alloc_size, cat);
+        unified_managed_add_device_bytes(req.device, alloc_size);
+    } else if (reserve_host) {
+        unified_cache_add_runtime_host_bytes(alloc_size);
+        unified_managed_add_host_bytes(alloc_size);
+    }
+
+    bool   uses_pinned_pool = false;
+    void * ptr              = nullptr;
+    if (tier == alloc_tier::DEVICE_VRAM) {
+        ptr = ggml_sycl_malloc_device(alloc_size, *req.queue, "unified_alloc:device");
+    } else {
+        if (req.intent.constraints.use_pinned_pool) {
+            if (auto * hcache = get_host_cache_for_device(req.device)) {
+                ptr = hcache->allocate_pinned_runtime(alloc_size, pinned_chunk_pool::DEFAULT_ALIGNMENT);
+                uses_pinned_pool = (ptr != nullptr);
+            }
+        }
+        if (!ptr) {
+            ptr = ggml_sycl_malloc_host(alloc_size, *req.queue, "unified_alloc:host");
+        }
+    }
+
+    if (!ptr) {
+        if (reserve_device) {
+            unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
+            unified_managed_sub_device_bytes(req.device, alloc_size);
+        } else if (reserve_host) {
+            unified_cache_sub_runtime_host_bytes(alloc_size);
+            unified_managed_sub_host_bytes(alloc_size);
+        }
+        return false;
+    }
+
+    runtime_alloc_record rec;
+    rec.handle.ptr      = ptr;
+    rec.handle.size     = alloc_size;
+    rec.handle.device   = req.device;
+    rec.handle.tier     = tier;
+    rec.handle.role     = req.intent.role;
+    rec.handle.category = cat;
+    rec.handle.alloc_id = g_runtime_alloc_id.fetch_add(1, std::memory_order_relaxed);
+    rec.queue           = req.queue;
+    rec.uses_pinned_pool = uses_pinned_pool;
+    if (req.intent.cohort_id && req.intent.cohort_id[0] != '\0') {
+        rec.cohort_id = req.intent.cohort_id;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+        if (g_runtime_alloc_registry.find(ptr) != g_runtime_alloc_registry.end()) {
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] duplicate pointer registration ptr=%p size=%zu tier=%s\n",
+                           ptr, alloc_size, alloc_tier_name(tier));
+            if (reserve_device) {
+                unified_cache_sub_runtime_bytes(req.device, alloc_size, cat);
+                unified_managed_sub_device_bytes(req.device, alloc_size);
+            } else if (reserve_host) {
+                unified_cache_sub_runtime_host_bytes(alloc_size);
+                unified_managed_sub_host_bytes(alloc_size);
+            }
+            if (uses_pinned_pool) {
+                if (auto * hcache = get_host_cache_for_device(req.device)) {
+                    hcache->free_pinned_runtime(ptr, alloc_size);
+                }
+            } else {
+                sycl::free(ptr, *req.queue);
+            }
+            return false;
+        }
+        g_runtime_alloc_registry.emplace(ptr, rec);
+        if (!rec.cohort_id.empty()) {
+            g_runtime_cohort_tier[rec.cohort_id] = tier;
+        }
+    }
+
+    *out = rec.handle;
+    return true;
+}
+
+bool unified_lookup(void * ptr, alloc_handle * out) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = {};
+    if (ptr == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+    auto it = g_runtime_alloc_registry.find(ptr);
+    if (it == g_runtime_alloc_registry.end()) {
+        return false;
+    }
+    *out = it->second.handle;
+    return true;
+}
+
+bool unified_free_ptr(void * ptr, int expected_device) {
+    if (ptr == nullptr) {
+        return true;
+    }
+
+    runtime_alloc_record rec;
+    {
+        std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+        auto it = g_runtime_alloc_registry.find(ptr);
+        if (it == g_runtime_alloc_registry.end()) {
+            if (unified_alloc_strict_mode()) {
+                GGML_LOG_ERROR("[UNIFIED-ALLOC] strict unknown free ptr=%p expected_device=%d\n", ptr, expected_device);
+            }
+            return false;
+        }
+        if (expected_device >= 0 && expected_device != it->second.handle.device) {
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] free device mismatch ptr=%p expected=%d actual=%d\n",
+                           ptr, expected_device, it->second.handle.device);
+            return false;
+        }
+        rec = it->second;
+    }
+
+    if (!unified_free_record(rec)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+    auto it = g_runtime_alloc_registry.find(ptr);
+    if (it != g_runtime_alloc_registry.end() && it->second.handle.alloc_id == rec.handle.alloc_id) {
+        g_runtime_alloc_registry.erase(it);
+    }
+    return true;
+}
+
+bool unified_free(const alloc_handle & handle) {
+    if (handle.ptr == nullptr) {
+        return true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+        auto it = g_runtime_alloc_registry.find(handle.ptr);
+        if (it == g_runtime_alloc_registry.end()) {
+            if (unified_alloc_strict_mode()) {
+                GGML_LOG_ERROR("[UNIFIED-ALLOC] strict stale/unknown handle free ptr=%p alloc_id=%llu\n",
+                               handle.ptr, static_cast<unsigned long long>(handle.alloc_id));
+            }
+            return false;
+        }
+        if (handle.alloc_id != 0 && it->second.handle.alloc_id != handle.alloc_id) {
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] stale handle free ptr=%p expected_alloc_id=%llu actual_alloc_id=%llu\n",
+                           handle.ptr,
+                           static_cast<unsigned long long>(handle.alloc_id),
+                           static_cast<unsigned long long>(it->second.handle.alloc_id));
+            return false;
+        }
+    }
+
+    return unified_free_ptr(handle.ptr, handle.device);
+}
+
+bool unified_alloc_validate_registry(int device, const char * where) {
+    std::array<size_t, GGML_SYCL_MAX_DEVICES> registry_device{};
+    size_t                                     registry_host = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_runtime_alloc_mutex);
+        for (const auto & kv : g_runtime_alloc_registry) {
+            const alloc_handle & h = kv.second.handle;
+            if (h.tier == alloc_tier::DEVICE_VRAM) {
+                if (h.device >= 0 && h.device < GGML_SYCL_MAX_DEVICES) {
+                    registry_device[h.device] += h.size;
+                }
+            } else if (h.tier == alloc_tier::HOST_PINNED || h.tier == alloc_tier::MMAP_TRACKED) {
+                registry_host += h.size;
+            }
+        }
+    }
+
+    bool ok = true;
+    for (int d = 0; d < GGML_SYCL_MAX_DEVICES; ++d) {
+        if (device >= 0 && d != device) {
+            continue;
+        }
+        const size_t tracked = g_runtime_managed_reserved_bytes[d].load(std::memory_order_relaxed);
+        const size_t reg     = registry_device[d];
+        if (tracked != reg) {
+            ok = false;
+            GGML_LOG_WARN("[UNIFIED-ALLOC] managed registry mismatch%s%s dev=%d tracked=%zu registry=%zu\n",
+                          where ? " at " : "", where ? where : "", d, tracked, reg);
+        }
+    }
+    const size_t tracked_host = g_runtime_managed_reserved_host_bytes.load(std::memory_order_relaxed);
+    if (tracked_host != registry_host) {
+        ok = false;
+        GGML_LOG_WARN("[UNIFIED-ALLOC] managed registry mismatch%s%s host tracked=%zu registry=%zu\n",
+                      where ? " at " : "", where ? where : "", tracked_host, registry_host);
+    }
+    return ok;
 }
 
 void unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat) {

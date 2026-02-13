@@ -1034,6 +1034,107 @@ enum class runtime_category : uint8_t {
     COUNT        = 6
 };
 
+// Unified runtime allocation API.
+// Managed runtime allocations must flow through this API so budget accounting,
+// placement policy, and pointer registry stay consistent.
+enum class alloc_tier : uint8_t {
+    DEVICE_VRAM = 0,
+    HOST_PINNED = 1,
+    MMAP_TRACKED = 2,
+};
+
+enum class alloc_role : uint8_t {
+    WEIGHT    = 0,
+    COMPUTE   = 1,
+    KV        = 2,
+    STAGING   = 3,
+    GRAPH_TMP = 4,
+    TP_TMP    = 5,
+    OTHER     = 6,
+};
+
+struct alloc_constraints {
+    bool must_device               = false;
+    bool must_host_pinned          = false;
+    bool prefer_same_tier_as_cohort = false;
+    bool use_pinned_pool           = false;
+};
+
+struct alloc_intent {
+    alloc_role        role      = alloc_role::OTHER;
+    runtime_category  category  = runtime_category::OTHER;
+    const char *      cohort_id = nullptr;
+    alloc_constraints constraints;
+};
+
+struct alloc_request {
+    sycl::queue * queue  = nullptr;
+    int           device = -1;
+    size_t        size   = 0;
+    alloc_intent  intent;
+};
+
+struct alloc_handle {
+    void *           ptr      = nullptr;
+    size_t           size     = 0;
+    int              device   = -1;
+    alloc_tier       tier     = alloc_tier::DEVICE_VRAM;
+    alloc_role       role     = alloc_role::OTHER;
+    runtime_category category = runtime_category::OTHER;
+    uint64_t         alloc_id = 0;
+};
+
+bool      unified_alloc(const alloc_request & req, alloc_handle * out);
+bool      unified_free(const alloc_handle & handle);
+bool      unified_free_ptr(void * ptr, int expected_device = -1);
+bool      unified_lookup(void * ptr, alloc_handle * out);
+alloc_tier unified_select_tier(const alloc_request & req);
+bool      unified_alloc_validate_registry(int device = -1, const char * where = nullptr);
+bool      unified_alloc_strict_mode();
+
+class scoped_unified_alloc {
+  public:
+    scoped_unified_alloc() = default;
+    explicit scoped_unified_alloc(const alloc_request & req) { allocate(req); }
+    ~scoped_unified_alloc() { reset(); }
+
+    scoped_unified_alloc(const scoped_unified_alloc &) = delete;
+    scoped_unified_alloc & operator=(const scoped_unified_alloc &) = delete;
+
+    scoped_unified_alloc(scoped_unified_alloc && other) noexcept : handle_(other.release()) {}
+    scoped_unified_alloc & operator=(scoped_unified_alloc && other) noexcept {
+        if (this != &other) {
+            reset();
+            handle_ = other.release();
+        }
+        return *this;
+    }
+
+    bool allocate(const alloc_request & req) {
+        reset();
+        return unified_alloc(req, &handle_);
+    }
+
+    void reset() {
+        if (handle_.ptr != nullptr) {
+            (void) unified_free(handle_);
+            handle_ = {};
+        }
+    }
+
+    void * get() const { return handle_.ptr; }
+    const alloc_handle & handle() const { return handle_; }
+    alloc_handle release() {
+        alloc_handle out = handle_;
+        handle_          = {};
+        return out;
+    }
+    explicit operator bool() const { return handle_.ptr != nullptr; }
+
+  private:
+    alloc_handle handle_{};
+};
+
 // Track runtime buffers that must not be evicted from VRAM (compute, KV, etc.)
 void   unified_cache_add_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);
 void   unified_cache_sub_runtime_bytes(int device, size_t bytes, runtime_category cat = runtime_category::OTHER);

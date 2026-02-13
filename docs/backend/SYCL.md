@@ -803,6 +803,17 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Known Issues
 
+## Runtime Allocation Policy
+
+- Managed runtime allocations must go through unified allocator APIs in `unified-cache.cpp`.
+- Do not add new direct `sycl::malloc_device`, `sycl::malloc_host`, or `sycl::malloc_shared` calls in managed runtime paths.
+- Use `./scripts/check-sycl-alloc-usage.sh` to validate policy compliance locally.
+- Allowed managed placement tiers are:
+  - device VRAM (`malloc_device`)
+  - host pinned (`malloc_host`)
+  - mmap tracked reservations (budget accounting only)
+- Shared USM (`malloc_shared`) is not allowed for managed CPU-offload/host-compute paths.
+
 - `Split-mode:[row]` is not supported.
 
 ## Q&A

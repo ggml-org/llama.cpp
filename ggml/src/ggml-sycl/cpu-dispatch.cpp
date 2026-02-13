@@ -104,6 +104,7 @@ static void *                                          g_retained_scratch     = 
 static size_t                                          g_retained_scratch_cap = 0;
 static size_t                                          g_retained_scratch_off = 0;  // bump allocator offset
 static int                                             g_retained_device      = -1;
+static ggml_sycl::alloc_handle                         g_retained_scratch_alloc{};
 
 struct retained_entry {
     void * host_ptr;   // pointer into g_retained_scratch
@@ -132,12 +133,16 @@ void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
     GGML_ASSERT(!g_retained_scratch || gpu_q == g_retained_gpu_q);
     if (!g_retained_scratch) {
         constexpr size_t DEFAULT_SCRATCH_SIZE = 32 * 1024 * 1024;  // 32MB
-        g_retained_scratch = sycl::malloc_host(DEFAULT_SCRATCH_SIZE, *gpu_q);
-        if (g_retained_scratch) {
+        ggml_sycl::alloc_request req;
+        req.queue                               = gpu_q;
+        req.device                              = device;
+        req.size                                = DEFAULT_SCRATCH_SIZE;
+        req.intent.role                         = ggml_sycl::alloc_role::COMPUTE;
+        req.intent.category                     = ggml_sycl::runtime_category::HOST_COMPUTE;
+        req.intent.constraints.must_host_pinned = true;
+        if (ggml_sycl::unified_alloc(req, &g_retained_scratch_alloc)) {
+            g_retained_scratch     = g_retained_scratch_alloc.ptr;
             g_retained_scratch_cap = DEFAULT_SCRATCH_SIZE;
-            ggml_sycl::unified_cache_add_runtime_bytes(
-                device, DEFAULT_SCRATCH_SIZE,
-                ggml_sycl::runtime_category::HOST_COMPUTE);
         }
     }
     g_retained_scratch_off = 0;
@@ -149,14 +154,10 @@ void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
 
 void ggml_sycl_cpu_retained_cleanup() {
     if (g_retained_scratch && g_retained_gpu_q) {
-        if (g_retained_device >= 0) {
-            ggml_sycl::unified_cache_sub_runtime_bytes(
-                g_retained_device, g_retained_scratch_cap,
-                ggml_sycl::runtime_category::HOST_COMPUTE);
-        }
-        sycl::free(g_retained_scratch, *g_retained_gpu_q);
+        (void) ggml_sycl::unified_free(g_retained_scratch_alloc);
         g_retained_scratch     = nullptr;
         g_retained_scratch_cap = 0;
+        g_retained_scratch_alloc = {};
     }
     g_retained_map.clear();
     g_retained_active = false;
@@ -301,8 +302,9 @@ static constexpr int STAGING_SLOTS_PER_BANK = 3;
 static constexpr int STAGING_BANKS          = 2;
 
 static struct {
-    void * ptr = nullptr;
-    size_t cap = 0;
+    void *                  ptr = nullptr;
+    size_t                  cap = 0;
+    ggml_sycl::alloc_handle handle{};
 } g_cpu_staging[STAGING_BANKS][STAGING_SLOTS_PER_BANK];
 
 static sycl::queue * g_cpu_staging_gpu_q = nullptr;
@@ -333,10 +335,23 @@ static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gp
     // Free old buffer using the same queue context it was allocated with.
     if (entry.ptr && g_cpu_staging_gpu_q) {
         GGML_ASSERT(gpu_q == g_cpu_staging_gpu_q && "staging queue changed between calls");
-        sycl::free(entry.ptr, *g_cpu_staging_gpu_q);
+        (void) ggml_sycl::unified_free(entry.handle);
     }
     g_cpu_staging_gpu_q = gpu_q;
-    entry.ptr = sycl::malloc_host(nbytes, *gpu_q);
+    ggml_sycl::alloc_request req;
+    req.queue                               = gpu_q;
+    req.device                              = ggml_sycl_get_device_id_from_queue(*gpu_q);
+    req.size                                = nbytes;
+    req.intent.role                         = ggml_sycl::alloc_role::STAGING;
+    req.intent.category                     = ggml_sycl::runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned = true;
+    entry.handle                            = {};
+    if (!ggml_sycl::unified_alloc(req, &entry.handle)) {
+        entry.ptr = nullptr;
+        entry.cap = 0;
+        return nullptr;
+    }
+    entry.ptr = entry.handle.ptr;
     entry.cap = nbytes;
     return entry.ptr;
 }

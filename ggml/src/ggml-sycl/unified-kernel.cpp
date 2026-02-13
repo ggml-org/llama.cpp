@@ -5856,15 +5856,29 @@ void UnifiedKernel::add_temp_device_alloc(void * ptr, size_t bytes) {
     }
 }
 
+void UnifiedKernel::add_temp_device_alloc_handle(const ggml_sycl::alloc_handle & handle) {
+    if (!current_plan_ || handle.ptr == nullptr) {
+        return;
+    }
+    current_plan_->temp_device_allocs.push_back({handle.ptr, handle.size});
+    current_plan_->temp_device_alloc_handles[handle.ptr] = handle;
+}
+
 void UnifiedKernel::cancel_persistent() {
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
-            sycl::free(ptr, queue_);
+            auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
+            if (hit != current_plan_->temp_device_alloc_handles.end()) {
+                (void) ggml_sycl::unified_free(hit->second);
+            } else {
+                sycl::free(ptr, queue_);
+            }
         }
         current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_handles.clear();
         current_plan_->temp_device_alloc_bytes = 0;
     }
     current_plan_.reset();
@@ -5913,8 +5927,14 @@ void UnifiedKernel::begin_plan_update() {
             ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
         }
         for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
-            sycl::free(ptr, queue_);
+            auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
+            if (hit != current_plan_->temp_device_alloc_handles.end()) {
+                (void) ggml_sycl::unified_free(hit->second);
+            } else {
+                sycl::free(ptr, queue_);
+            }
         }
+        current_plan_->temp_device_alloc_handles.clear();
         current_plan_.reset();
     }
 
@@ -6008,11 +6028,15 @@ void UnifiedKernel::invalidate_plan_cache() {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, cached_temp_device_alloc_bytes_, ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : cached_temp_device_allocs_) {
-        if (ptr) {
+        auto hit = cached_temp_device_alloc_handles_.find(ptr);
+        if (hit != cached_temp_device_alloc_handles_.end()) {
+            (void) ggml_sycl::unified_free(hit->second);
+        } else if (ptr) {
             sycl::free(ptr, queue_);
         }
     }
     cached_temp_device_allocs_.clear();
+    cached_temp_device_alloc_handles_.clear();
     cached_temp_device_alloc_bytes_ = 0;
 }
 
@@ -6054,8 +6078,10 @@ void UnifiedKernel::execute_persistent() {
         copy_plan_shape(*current_plan_, cached_plan_template_);
         cached_ops_ = current_plan_->operations;
         cached_temp_device_allocs_ = current_plan_->temp_device_allocs;
+        cached_temp_device_alloc_handles_ = current_plan_->temp_device_alloc_handles;
         cached_temp_device_alloc_bytes_ = current_plan_->temp_device_alloc_bytes;
         current_plan_->temp_device_allocs.clear();
+        current_plan_->temp_device_alloc_handles.clear();
         current_plan_->temp_device_alloc_bytes = 0;
         // Budget stays reserved — ownership transfers to cached allocs
         plan_cache_valid_ = true;
@@ -6067,9 +6093,15 @@ void UnifiedKernel::execute_persistent() {
         ggml_sycl::unified_cache_sub_runtime_bytes(device_id_, current_plan_->temp_device_alloc_bytes, ggml_sycl::runtime_category::GRAPH);
     }
     for (auto & [ptr, sz] : current_plan_->temp_device_allocs) {
-        sycl::free(ptr, queue_);
+        auto hit = current_plan_->temp_device_alloc_handles.find(ptr);
+        if (hit != current_plan_->temp_device_alloc_handles.end()) {
+            (void) ggml_sycl::unified_free(hit->second);
+        } else {
+            sycl::free(ptr, queue_);
+        }
     }
     current_plan_->temp_device_allocs.clear();
+    current_plan_->temp_device_alloc_handles.clear();
     current_plan_->temp_device_alloc_bytes = 0;
 
     // Clear the plan after execution (cached copy remains)

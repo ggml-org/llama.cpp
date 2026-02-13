@@ -1778,6 +1778,8 @@ if(GGML_SYCL)
         target_link_options(test-sycl-compute-buffer-manager PRIVATE "-fsycl")
         install(TARGETS test-sycl-compute-buffer-manager RUNTIME)
         add_test(NAME test-sycl-compute-buffer-manager COMMAND $<TARGET_FILE:test-sycl-compute-buffer-manager>)
+        set_property(TEST test-sycl-compute-buffer-manager PROPERTY
+            ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}:$ENV{LD_LIBRARY_PATH}")
     endif()
 
     # test-sycl-unified-cache: Integration tests for unified cache system
@@ -1795,6 +1797,13 @@ if(GGML_SYCL)
     target_link_options(test-sycl-unified-cache PRIVATE "-fsycl")
     install(TARGETS test-sycl-unified-cache RUNTIME)
     add_test(NAME test-sycl-unified-cache COMMAND $<TARGET_FILE:test-sycl-unified-cache>)
+
+    if (NOT WIN32)
+        add_test(
+            NAME test-sycl-alloc-policy
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-alloc-policy.sh
+        )
+    endif()
 
     # test-tiered-dispatch: Tests for tiered memory dispatch integration
     # Validates that tensor inventory and tiered mode affect kernel dispatch decisions
