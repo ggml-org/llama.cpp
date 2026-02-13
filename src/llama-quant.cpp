@@ -867,10 +867,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (params->dry_run) {
                 will_require_imatrix = true; // set flag for warning later, but continue with dry run
             } else {
-                LLAMA_LOG_ERROR("\n\n============================================================================\n"
-                                    " ERROR: this quantization requires an importance matrix!\n"
-                                    "        offending tensor: %s (target type: %s)\n"
-                                    "============================================================================\n\n",
+                LLAMA_LOG_ERROR("\n============================================================================\n"
+                                  " ERROR: this quantization requires an importance matrix!\n"
+                                  "        - offending tensor: %s\n"
+                                  "        - target type: %s\n"
+                                  "============================================================================\n\n",
                     name.c_str(), ggml_type_name(target_type));
                 throw new std::runtime_error("this quantization requires an imatrix!");
             }
