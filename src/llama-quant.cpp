@@ -971,7 +971,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         //
 
         if (params->dry_run) {
-            // the --dry-run option calculates the final quantization size without quantizting
+            // the --dry-run option calculates the final quantization size without quantizing
             if (do_quantize) {
                 new_size = ggml_nrows(tensor) * ggml_row_size(new_type, tensor->ne[0]);
                 LLAMA_LOG_INFO("size = %8.3f MiB -> %8.3f MiB (%s)\n",
