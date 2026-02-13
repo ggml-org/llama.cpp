@@ -687,7 +687,8 @@ int main(int argc, char ** argv) {
 
             if (!embd.empty()) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
-                if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, session_do_save, is_last_batch)) {
+                const bool save_now = session_do_save && is_last_batch;
+                if (!common_prompt_batch_decode(ctx, embd, n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.begin());

@@ -790,8 +790,7 @@ bool common_prompt_batch_decode(
                                int & n_past,
                                int   n_batch,
             const std::string_view & state_path,
-                              bool   save_state,
-                              bool   is_last_batch = true);
+                              bool   save_state);
 
 // replays the last token after loading state to regenerate logits
 // used after loading session state to ensure the sampling context has valid logits

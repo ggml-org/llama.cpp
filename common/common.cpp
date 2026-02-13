@@ -1805,14 +1805,13 @@ bool common_prompt_batch_decode(
                                int & n_past,
                                int   n_batch,
             const std::string_view & state_path,
-                              bool   save_state,
-                              bool   is_last_batch) {
+                              bool   save_state) {
     const int n_eval = tokens.size();
     if (n_eval == 0) {
         return true;
     }
 
-    if (save_state && is_last_batch && n_eval > 1) {
+    if (save_state && n_eval > 1) {
         const int n_tokens_before_last = n_eval - 1;
 
         GGML_ASSERT(n_eval <= n_batch);
