@@ -569,13 +569,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             cmake_policy(SET CMP0135 NEW)
         endif()
 
+        # TODO: Use FetchContent_MakeAvailable with EXCLUDE_FROM_ALL after bumping minimum CMake version to 3.28+
+        # Using FetchContent_Populate instead to avoid EXCLUDE_FROM_ALL which requires CMake 3.28
         FetchContent_Declare(KleidiAI_Download
             URL ${KLEIDIAI_DOWNLOAD_URL}
             DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5}
-            EXCLUDE_FROM_ALL)
+            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
 
-        FetchContent_MakeAvailable(KleidiAI_Download)
+        FetchContent_Populate(KleidiAI_Download)
         FetchContent_GetProperties(KleidiAI_Download
             SOURCE_DIR  KLEIDIAI_SRC
             POPULATED   KLEIDIAI_POPULATED)
