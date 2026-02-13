@@ -4009,6 +4009,201 @@ static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl256(int n, float * GGML_RESTRICT
 }
 #endif
 
+static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_iq4_xs * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const vint8m4_t values = __riscv_vle8_v_i8m4(kvalues_iq4nl, 16);
+    float sumf = 0;
+
+    // Indices for re-ordering IQ4 data.
+    const uint16_t index[32] = {
+        0, 1, 16, 17,
+        2, 3, 18, 19,
+        4, 5,20, 21,
+        6, 7, 22, 23,
+        8, 9, 24, 25,
+        10, 11, 26, 27,
+        12, 13,28, 29,
+        14, 15, 30, 31,
+    };
+    const vuint16m1_t i_vec = __riscv_vle16_v_u16m1(index, 32);
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const int8_t  * q8 = y[ibl].qs;
+        const uint8_t * iq4 = x[ibl].qs;
+        uint16_t h = x[ibl].scales_h;
+
+        int sumi = 0;
+
+        #pragma GCC unroll 1
+        // Process the entire super-block together.
+        for (int ib = 0; ib < QK_K / 256; ++ib) {
+            // Weights and activations.
+            const vuint8m2_t iq4_packed = __riscv_vle8_v_u8m2(iq4, 128);
+            iq4 += 128;
+
+            // Unpack the weight blocks.
+            const vuint8m2_t iq4bits_lo = __riscv_vand_vx_u8m2(iq4_packed, 0xf, 128);
+            const vuint8m2_t iq4bits_hi = __riscv_vsrl_vx_u8m2(iq4_packed, 4, 128);
+            const vuint8m4_t iq4bits = __riscv_vcreate_v_u8m2_u8m4(iq4bits_lo, iq4bits_hi);
+            const vuint8m4_t iq4bits_reorder = __riscv_vreinterpret_v_u64m4_u8m4(__riscv_vrgatherei16_vv_u64m4(__riscv_vreinterpret_v_u8m4_u64m4(iq4bits), i_vec, 32));
+            const vint8m4_t iq4b = __riscv_vrgather_vv_i8m4(values, iq4bits_reorder, 256);
+
+            __asm__ __volatile__("" ::: "memory");
+
+            // Multiply with activations.
+            const vint8m4_t q8b = __riscv_vle8_v_i8m4(q8, 256);
+            const vint16m8_t prod = __riscv_vwmul_vv_i16m8(iq4b, q8b, 256);
+            q8 += 256;
+
+            // Reduce separately.
+            const int acc0 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 0), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 1), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc2 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 2), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc3 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 3), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc4 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 4), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc5 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 5), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc6 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 6), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc7 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(prod, 7), __riscv_vmv_v_x_i32m1(0, 1), 32));
+
+
+            const int ls0 = ((x[ibl].scales_l[0] & 0xf)  | ((h << 4) & 0x30)) - 32;
+            const int ls1 = ((x[ibl].scales_l[0] >>  4)  | ((h << 2) & 0x30)) - 32;
+            const int ls2 = ((x[ibl].scales_l[1] &  0xf) | ((h << 0) & 0x30)) - 32;
+            const int ls3 = ((x[ibl].scales_l[1] >>  4)  | ((h >> 2) & 0x30)) - 32;
+            h >>= 8;
+            const int ls4 = ((x[ibl].scales_l[2] & 0xf)  | ((h << 4) & 0x30)) - 32;
+            const int ls5 = ((x[ibl].scales_l[2] >>  4)  | ((h << 2) & 0x30)) - 32;
+            const int ls6 = ((x[ibl].scales_l[3] &  0xf) | ((h << 0) & 0x30)) - 32;
+            const int ls7 = ((x[ibl].scales_l[3] >>  4)  | ((h >> 2) & 0x30)) - 32;
+
+            sumi += acc0 * ls0;
+            sumi += acc1 * ls1;
+            sumi += acc2 * ls2;
+            sumi += acc3 * ls3;
+            sumi += acc4 * ls4;
+            sumi += acc5 * ls5;
+            sumi += acc6 * ls6;
+            sumi += acc7 * ls7;
+
+            __asm__ __volatile__("" ::: "memory");
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * (sumi);
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_iq4_xs_q8_K_vl1024(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_K == 0);
+
+    const block_iq4_xs * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    const vint8m2_t values = __riscv_vle8_v_i8m2(kvalues_iq4nl, 16);
+    float sumf = 0;
+
+    // Indices for re-ordering IQ4 data.
+    const uint16_t index[32] = {
+        0, 1, 16, 17,
+        2, 3, 18, 19,
+        4, 5,20, 21,
+        6, 7, 22, 23,
+        8, 9, 24, 25,
+        10, 11, 26, 27,
+        12, 13,28, 29,
+        14, 15, 30, 31,
+    };
+    const vuint16mf2_t i_vec = __riscv_vle16_v_u16mf2(index, 32);
+
+    for (int ibl = 0; ibl < nb; ++ibl) {
+        const int8_t  * q8 = y[ibl].qs;
+        const uint8_t * iq4 = x[ibl].qs;
+        uint16_t h = x[ibl].scales_h;
+
+        int sumi = 0;
+
+        #pragma GCC unroll 1
+        // Process the entire super-block together.
+        for (int ib = 0; ib < QK_K / 256; ++ib) {
+            // Weights and activations.
+            const vuint8m1_t iq4_packed = __riscv_vle8_v_u8m1(iq4, 128);
+            iq4 += 128;
+
+            // Unpack the weight blocks.
+            const vuint8m1_t iq4bits_lo = __riscv_vand_vx_u8m1(iq4_packed, 0xf, 128);
+            const vuint8m1_t iq4bits_hi = __riscv_vsrl_vx_u8m1(iq4_packed, 4, 128);
+            const vuint8m2_t iq4bits = __riscv_vcreate_v_u8m1_u8m2(iq4bits_lo, iq4bits_hi);
+            const vuint8m2_t iq4bits_reorder = __riscv_vreinterpret_v_u64m2_u8m2(__riscv_vrgatherei16_vv_u64m2(__riscv_vreinterpret_v_u8m2_u64m2(iq4bits), i_vec, 32));
+            const vint8m2_t iq4b = __riscv_vrgather_vv_i8m2(values, iq4bits_reorder, 256);
+
+            __asm__ __volatile__("" ::: "memory");
+
+            // Multiply with activations.
+            const vint8m2_t q8b = __riscv_vle8_v_i8m2(q8, 256);
+            const vint16m4_t prod = __riscv_vwmul_vv_i16m4(iq4b, q8b, 256);
+            q8 += 256;
+
+            // Mask for processing 32 elements per prod register.
+            const vuint16m1_t p_index = __riscv_vid_v_u16m1(64);
+            const vbool16_t p_mask = __riscv_vmsgtu_vx_u16m1_b16(p_index, 31, 64);
+
+            // Reduce separately.
+            const int acc0 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(        __riscv_vget_v_i16m4_i16m1(prod, 0), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(p_mask, __riscv_vget_v_i16m4_i16m1(prod, 0), __riscv_vmv_v_x_i32m1(0, 1), 64));
+            const int acc2 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(        __riscv_vget_v_i16m4_i16m1(prod, 1), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc3 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(p_mask, __riscv_vget_v_i16m4_i16m1(prod, 1), __riscv_vmv_v_x_i32m1(0, 1), 64));
+            const int acc4 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(        __riscv_vget_v_i16m4_i16m1(prod, 2), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc5 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(p_mask, __riscv_vget_v_i16m4_i16m1(prod, 2), __riscv_vmv_v_x_i32m1(0, 1), 64));
+            const int acc6 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(        __riscv_vget_v_i16m4_i16m1(prod, 3), __riscv_vmv_v_x_i32m1(0, 1), 32));
+            const int acc7 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(p_mask, __riscv_vget_v_i16m4_i16m1(prod, 3), __riscv_vmv_v_x_i32m1(0, 1), 64));
+
+            const int ls0 = ((x[ibl].scales_l[0] & 0xf)  | ((h << 4) & 0x30)) - 32;
+            const int ls1 = ((x[ibl].scales_l[0] >>  4)  | ((h << 2) & 0x30)) - 32;
+            const int ls2 = ((x[ibl].scales_l[1] &  0xf) | ((h << 0) & 0x30)) - 32;
+            const int ls3 = ((x[ibl].scales_l[1] >>  4)  | ((h >> 2) & 0x30)) - 32;
+            h >>= 8;
+            const int ls4 = ((x[ibl].scales_l[2] & 0xf)  | ((h << 4) & 0x30)) - 32;
+            const int ls5 = ((x[ibl].scales_l[2] >>  4)  | ((h << 2) & 0x30)) - 32;
+            const int ls6 = ((x[ibl].scales_l[3] &  0xf) | ((h << 0) & 0x30)) - 32;
+            const int ls7 = ((x[ibl].scales_l[3] >>  4)  | ((h >> 2) & 0x30)) - 32;
+
+            sumi += acc0 * ls0;
+            sumi += acc1 * ls1;
+            sumi += acc2 * ls2;
+            sumi += acc3 * ls3;
+            sumi += acc4 * ls4;
+            sumi += acc5 * ls5;
+            sumi += acc6 * ls6;
+            sumi += acc7 * ls7;
+
+            __asm__ __volatile__("" ::: "memory");
+        }
+
+        sumf += GGML_CPU_FP16_TO_FP32(x[ibl].d) * y[ibl].d * (sumi);
+    }
+
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
     switch (__riscv_vlenb() * 8) {
@@ -4017,6 +4212,12 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
             break;
         case 256:
             ggml_vec_dot_iq4_xs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 512:
+            ggml_vec_dot_iq4_xs_q8_K_vl512(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 1024:
+            ggml_vec_dot_iq4_xs_q8_K_vl1024(n, s, bs, vx, bx, vy, by, nrc);
             break;
         default:
             ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
