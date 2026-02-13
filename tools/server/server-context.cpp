@@ -740,6 +740,11 @@ private:
 
         slots.clear();
 
+        const bool can_spec = common_speculative_is_compat(ctx);
+        if (!can_spec) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;
@@ -752,7 +757,7 @@ private:
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             // try speculative decoding
-            {
+            if (can_spec) {
                 slot.spec = common_speculative_init(params_base.speculative, slot.ctx);
                 if (slot.spec) {
                     if (mctx) {
@@ -2502,7 +2507,8 @@ private:
                         slot.n_prompt_tokens_processed++;
 
                         // process the last few tokens of the prompt separately in order to allow for a checkpoint to be created.
-                        if (do_checkpoint && slot.task->n_tokens() - slot.prompt.n_tokens() == 64) {
+                        const int n_last = std::min(n_batch, 512);
+                        if (do_checkpoint && slot.task->n_tokens() == slot.prompt.n_tokens() + n_last) {
                             break;
                         }
                     }
@@ -3578,6 +3584,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
@@ -3594,6 +3602,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,
@@ -3610,6 +3620,8 @@ void server_routes::init_routes() {
         auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_anthropic_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Anthropic -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
             body,
             meta->chat_params,

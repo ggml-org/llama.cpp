@@ -15,6 +15,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -76,6 +77,10 @@ class ChatStore {
 	private isStreamingActive = $state(false);
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
+	pendingEditMessageId = $state<string | null>(null);
+	// Draft preservation for navigation (e.g., when adding system prompt from welcome page)
+	private _pendingDraftMessage = $state<string>('');
+	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -113,6 +118,16 @@ class ChatStore {
 		this.isLoading = this.isChatLoading(convId);
 		const streamingState = this.getChatStreaming(convId);
 		this.currentResponse = streamingState?.response || '';
+		this.isStreamingActive = streamingState !== undefined;
+		this.setActiveProcessingConversation(convId);
+
+		// Sync streaming content to activeMessages so UI displays current content
+		if (streamingState?.response && streamingState?.messageId) {
+			const idx = conversationsStore.findMessageIndex(streamingState.messageId);
+			if (idx !== -1) {
+				conversationsStore.updateMessageAtIndex(idx, { content: streamingState.response });
+			}
+		}
 	}
 
 	/**
@@ -452,6 +467,166 @@ class ChatStore {
 		} catch (error) {
 			console.error('Failed to add message:', error);
 			return null;
+		}
+	}
+
+	/**
+	 * Adds a system message at the top of a conversation and triggers edit mode.
+	 * The system message is inserted between root and the first message of the active branch.
+	 * Creates a new conversation if one doesn't exist.
+	 */
+	async addSystemPrompt(): Promise<void> {
+		let activeConv = conversationsStore.activeConversation;
+
+		// Create conversation if needed
+		if (!activeConv) {
+			await conversationsStore.createConversation();
+			activeConv = conversationsStore.activeConversation;
+		}
+		if (!activeConv) return;
+
+		try {
+			// Get all messages to find the root
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			let rootId: string;
+
+			// Create root message if it doesn't exist
+			if (!rootMessage) {
+				rootId = await DatabaseService.createRootMessage(activeConv.id);
+			} else {
+				rootId = rootMessage.id;
+			}
+
+			// Check if there's already a system message as root's child
+			const existingSystemMessage = allMessages.find(
+				(m) => m.role === 'system' && m.parent === rootId
+			);
+
+			if (existingSystemMessage) {
+				// If system message exists, just trigger edit mode on it
+				this.pendingEditMessageId = existingSystemMessage.id;
+
+				// Make sure it's in active messages at the beginning
+				if (!conversationsStore.activeMessages.some((m) => m.id === existingSystemMessage.id)) {
+					conversationsStore.activeMessages.unshift(existingSystemMessage);
+				}
+				return;
+			}
+
+			// Find the first message of the active branch (child of root that's in activeMessages)
+			const activeMessages = conversationsStore.activeMessages;
+			const firstActiveMessage = activeMessages.find((m) => m.parent === rootId);
+
+			// Create new system message with placeholder content (will be edited by user)
+			const systemMessage = await DatabaseService.createSystemMessage(
+				activeConv.id,
+				SYSTEM_MESSAGE_PLACEHOLDER,
+				rootId
+			);
+
+			// If there's a first message in the active branch, re-parent it to the system message
+			if (firstActiveMessage) {
+				// Update the first message's parent to be the system message
+				await DatabaseService.updateMessage(firstActiveMessage.id, {
+					parent: systemMessage.id
+				});
+
+				// Update the system message's children to include the first message
+				await DatabaseService.updateMessage(systemMessage.id, {
+					children: [firstActiveMessage.id]
+				});
+
+				// Remove first message from root's children
+				const updatedRootChildren = rootMessage
+					? rootMessage.children.filter((id: string) => id !== firstActiveMessage.id)
+					: [];
+				// Note: system message was already added to root's children by createSystemMessage
+				await DatabaseService.updateMessage(rootId, {
+					children: [
+						...updatedRootChildren.filter((id: string) => id !== systemMessage.id),
+						systemMessage.id
+					]
+				});
+
+				// Update local state
+				const firstMsgIndex = conversationsStore.findMessageIndex(firstActiveMessage.id);
+				if (firstMsgIndex !== -1) {
+					conversationsStore.updateMessageAtIndex(firstMsgIndex, { parent: systemMessage.id });
+				}
+			}
+
+			// Add system message to active messages at the beginning
+			conversationsStore.activeMessages.unshift(systemMessage);
+
+			// Set pending edit message ID to trigger edit mode
+			this.pendingEditMessageId = systemMessage.id;
+
+			conversationsStore.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to add system prompt:', error);
+		}
+	}
+
+	/**
+	 * Removes a system message placeholder without deleting its children.
+	 * Re-parents children back to the root message.
+	 * If this is a new empty conversation (only root + system placeholder), deletes the entire conversation.
+	 * @returns true if the entire conversation was deleted, false otherwise
+	 */
+	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return false;
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const systemMessage = allMessages.find((m) => m.id === messageId);
+			if (!systemMessage || systemMessage.role !== 'system') return false;
+
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			if (!rootMessage) return false;
+
+			// Check if this is a new empty conversation (only root + system placeholder)
+			const isEmptyConversation = allMessages.length === 2 && systemMessage.children.length === 0;
+
+			if (isEmptyConversation) {
+				// Delete the entire conversation
+				await conversationsStore.deleteConversation(activeConv.id);
+				return true;
+			}
+
+			// Re-parent system message's children to root
+			for (const childId of systemMessage.children) {
+				await DatabaseService.updateMessage(childId, { parent: rootMessage.id });
+
+				// Update local state
+				const childIndex = conversationsStore.findMessageIndex(childId);
+				if (childIndex !== -1) {
+					conversationsStore.updateMessageAtIndex(childIndex, { parent: rootMessage.id });
+				}
+			}
+
+			// Update root's children: remove system message, add system's children
+			const newRootChildren = [
+				...rootMessage.children.filter((id: string) => id !== messageId),
+				...systemMessage.children
+			];
+			await DatabaseService.updateMessage(rootMessage.id, { children: newRootChildren });
+
+			// Delete the system message (without cascade)
+			await DatabaseService.deleteMessage(messageId);
+
+			// Remove from active messages
+			const systemIndex = conversationsStore.findMessageIndex(messageId);
+			if (systemIndex !== -1) {
+				conversationsStore.activeMessages.splice(systemIndex, 1);
+			}
+
+			conversationsStore.updateConversationTimestamp();
+			return false;
+		} catch (error) {
+			console.error('Failed to remove system prompt placeholder:', error);
+			return false;
 		}
 	}
 
@@ -916,6 +1091,28 @@ class ChatStore {
 		if (!activeConv)
 			return { totalCount: 0, userMessages: 0, assistantMessages: 0, messageTypes: [] };
 		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+		const messageToDelete = allMessages.find((m) => m.id === messageId);
+
+		// For system messages, don't count descendants as they will be preserved (reparented to root)
+		if (messageToDelete?.role === 'system') {
+			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
+			let userMessages = 0,
+				assistantMessages = 0;
+			const messageTypes: string[] = [];
+
+			for (const msg of messagesToDelete) {
+				if (msg.role === 'user') {
+					userMessages++;
+					if (!messageTypes.includes('user message')) messageTypes.push('user message');
+				} else if (msg.role === 'assistant') {
+					assistantMessages++;
+					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
+				}
+			}
+
+			return { totalCount: 1, userMessages, assistantMessages, messageTypes };
+		}
+
 		const descendants = findDescendantMessages(allMessages, messageId);
 		const allToDelete = [messageId, ...descendants];
 		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
@@ -1381,6 +1578,31 @@ class ChatStore {
 		return this.addFilesHandler;
 	}
 
+	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
+		this._pendingDraftMessage = message;
+		this._pendingDraftFiles = [...files];
+	}
+
+	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
+		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) {
+			return null;
+		}
+
+		const draft = {
+			message: this._pendingDraftMessage,
+			files: [...this._pendingDraftFiles]
+		};
+
+		this._pendingDraftMessage = '';
+		this._pendingDraftFiles = [];
+
+		return draft;
+	}
+
+	hasPendingDraft(): boolean {
+		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
+	}
+
 	public getAllLoadingChats(): string[] {
 		return Array.from(this.chatLoadingStates.keys());
 	}
@@ -1427,7 +1649,7 @@ class ChatStore {
 
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
@@ -1485,3 +1707,7 @@ export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const setEditModeActive = (handler: (files: File[]) => void) =>
 	chatStore.setEditModeActive(handler);
+export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
+export const clearPendingEditMessageId = () => (chatStore.pendingEditMessageId = null);
+export const removeSystemPromptPlaceholder = (messageId: string) =>
+	chatStore.removeSystemPromptPlaceholder(messageId);

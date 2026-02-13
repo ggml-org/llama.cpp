@@ -160,7 +160,7 @@ void main() {
             mask_cache[idx] = f16vec4(0);
         }
 
-        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
+        if (MASK_ENABLE) {
 
             if (USE_MASK_OPT && mask_opt_idx != j / 16) {
                 mask_opt_idx = j / 16;
@@ -303,7 +303,7 @@ void main() {
         coopMatStore(SfMat, sfsh, coord, sfshstride, gl_CooperativeMatrixLayoutRowMajor);
         barrier();
 
-        if (p.logit_softcap != 0.0f) {
+        if (LOGIT_SOFTCAP) {
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) / (Br / 4);
                 uint32_t r = (idx + tid) % (Br / 4);
@@ -314,7 +314,7 @@ void main() {
             barrier();
         }
 
-        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
+        if (MASK_ENABLE) {
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) / (Br / 4);
                 uint32_t r = (idx + tid) % (Br / 4);

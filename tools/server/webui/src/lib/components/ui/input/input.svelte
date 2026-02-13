@@ -44,6 +44,7 @@
 			'aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40',
 			className
 		)}
+		style="backdrop-filter: blur(0.5rem);"
 		{type}
 		bind:value
 		{...restProps}

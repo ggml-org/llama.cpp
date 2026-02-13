@@ -127,7 +127,7 @@ void main() {
             continue;
         }
         // Only load if the block is not all zeros
-        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0 && mask_opt_bits != MASK_OPT_ALL_ZERO) {
+        if (MASK_ENABLE && mask_opt_bits != MASK_OPT_ALL_ZERO) {
             bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
@@ -181,7 +181,7 @@ void main() {
             }
         }
 
-        if (p.logit_softcap != 0.0f) {
+        if (LOGIT_SOFTCAP) {
             [[unroll]] for (uint32_t r = 0; r < Br; ++r) {
                 [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
                     Sf[r][c] = p.logit_softcap * tanh(Sf[r][c]);
@@ -189,7 +189,7 @@ void main() {
             }
         }
 
-        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0 && mask_opt_bits != MASK_OPT_ALL_ZERO) {
+        if (MASK_ENABLE && mask_opt_bits != MASK_OPT_ALL_ZERO) {
             [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
                 [[unroll]] for (uint32_t r = 0; r < Br; ++r) {
                     float mvf = masksh[c * cols_per_iter + col_tid][r];
