@@ -21,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <stdexcept>
 
 #if defined(_MSC_VER)
@@ -140,6 +141,87 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     llama_model_free(model);
     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
     return ret;
+}
+
+static std::vector<ggml_backend_dev_t> select_min_gpu_subset(
+        const std::vector<ggml_backend_dev_t> & available_gpus,
+        const char * path_model) {
+    // estimated runtime memory / file size (GGUF + dequant/overhead)
+    constexpr double MEMORY_ESTIMATE_RATIO = 1.5;
+    constexpr int64_t MiB = 1024*1024;
+
+    if (available_gpus.empty()) {
+        return available_gpus;
+    }
+
+    std::vector<ggml_backend_dev_t> gpu_devices;
+    for (auto dev : available_gpus) {
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            gpu_devices.push_back(dev);
+        }
+    }
+    if (gpu_devices.empty()) {
+        LLAMA_LOG_INFO("%s: no GPU devices found, using all devices\n", __func__);
+        return available_gpus;
+    }
+
+    std::vector<ggml_backend_dev_t> sorted_gpus = gpu_devices;
+    std::sort(sorted_gpus.begin(), sorted_gpus.end(), [](ggml_backend_dev_t a, ggml_backend_dev_t b) {
+        size_t free_a, total_a, free_b, total_b;
+        ggml_backend_dev_memory(a, &free_a, &total_a);
+        ggml_backend_dev_memory(b, &free_b, &total_b);
+        (void)total_a;
+        (void)total_b;
+        return free_a > free_b;
+    });
+
+    size_t file_size = 0;
+    try {
+        file_size = static_cast<size_t>(std::filesystem::file_size(path_model));
+    } catch (const std::exception & e) {
+        LLAMA_LOG_ERROR("%s: failed to get file size for '%s': %s\n", __func__, path_model, e.what());
+        LLAMA_LOG_INFO("%s: using all available devices as fallback\n", __func__);
+        return available_gpus;
+    } catch (...) {
+        LLAMA_LOG_ERROR("%s: failed to get file size for '%s': unknown error\n", __func__, path_model);
+        LLAMA_LOG_INFO("%s: using all available devices as fallback\n", __func__);
+        return available_gpus;
+    }
+    if (file_size == 0) {
+        LLAMA_LOG_ERROR("%s: model file '%s' appears to be empty\n", __func__, path_model);
+        LLAMA_LOG_INFO("%s: using all available devices as fallback\n", __func__);
+        return available_gpus;
+    }
+
+    size_t estimated_model_mem = static_cast<size_t>(file_size * MEMORY_ESTIMATE_RATIO);
+    LLAMA_LOG_DEBUG("%s: model file size: %zu MiB\n", __func__, file_size / MiB);
+    LLAMA_LOG_DEBUG("%s: estimated memory required: %zu MiB\n", __func__, estimated_model_mem / MiB);
+
+    std::vector<ggml_backend_dev_t> selected_gpus;
+    size_t cumulative_free = 0;
+
+    for (auto dev : sorted_gpus) {
+        size_t free, total;
+        ggml_backend_dev_memory(dev, &free, &total);
+        (void)total;
+        selected_gpus.push_back(dev);
+        cumulative_free += free;
+        if (cumulative_free >= estimated_model_mem) {
+            LLAMA_LOG_DEBUG("%s: selected %zu device(s) for estimated %zu MiB model memory\n",
+                __func__, selected_gpus.size(), estimated_model_mem / MiB);
+            return selected_gpus;
+        }
+    }
+
+    LLAMA_LOG_DEBUG("%s: selected all %zu device(s) for estimated %zu MiB model memory\n",
+        __func__, selected_gpus.size(), estimated_model_mem / MiB);
+    if (cumulative_free < estimated_model_mem) {
+        LLAMA_LOG_WARN("%s: combined free memory (%zu MiB) is less than estimated model memory (%zu MiB)\n",
+            __func__, cumulative_free / MiB, estimated_model_mem / MiB);
+        LLAMA_LOG_WARN("%s: model load may fail or run out of memory\n", __func__);
+    }
+
+    return selected_gpus;
 }
 
 // enum to identify part of a layer for distributing its tensors:
@@ -976,6 +1058,11 @@ static struct llama_model * llama_model_load_from_file_impl(
         if (model->devices.empty()) {
             model->devices.insert(model->devices.end(), igpus.begin(), igpus.end());
         }
+    }
+
+    // if using group mode, select minimum GPU subset based on free memory
+    if (params.split_mode == LLAMA_SPLIT_MODE_GROUP) {
+        model->devices = select_min_gpu_subset(model->devices, path_model.c_str());
     }
 
     // if using single GPU mode, remove all except the main GPU
