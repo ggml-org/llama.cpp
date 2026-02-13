@@ -2842,6 +2842,22 @@ static ggml_sycl_device_info ggml_sycl_init() {
         device_map.swap(filtered);
     }
 
+    // Backend compute devices are GPU-only. CPU is managed via a dedicated
+    // offload queue and must not participate in normal SYCL tensor splitting.
+    std::vector<int> gpu_device_map;
+    gpu_device_map.reserve(device_map.size());
+    for (int id : device_map) {
+        try {
+            sycl::device dev = dpct::dev_mgr::instance().get_device(id);
+            if (dev.is_gpu()) {
+                gpu_device_map.push_back(id);
+            }
+        } catch (...) {
+            // Keep behavior robust to runtime query failures by skipping invalid entries.
+        }
+    }
+    device_map.swap(gpu_device_map);
+
     info.device_count = static_cast<int>(device_map.size());
     ggml_sycl_set_device_map(device_map.data(), info.device_count);
     if (g_ggml_sycl_debug && !device_map.empty()) {
@@ -2941,10 +2957,22 @@ static ggml_sycl_device_info ggml_sycl_init() {
     GGML_LOG_INFO("[SYCL] Host malloc per-allocation limit: %.1f GB (Level Zero constraint)\n",
                   info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
 
-    // Create CPU SYCL device for data-local compute
+    // Create CPU SYCL device for data-local compute.
+    auto make_cpu_queue = []() -> sycl::queue * {
+        // Select from currently visible devices (honors ONEAPI_DEVICE_SELECTOR).
+        for (const auto & platform : sycl::platform::get_platforms()) {
+            for (const auto & dev : platform.get_devices()) {
+                if (dev.is_cpu()) {
+                    return new sycl::queue{dev};
+                }
+            }
+        }
+        throw std::runtime_error("No device of requested type 'info::device_type::cpu' available");
+    };
+
     if (ggml_sycl_cpu_offload_enabled()) {
         try {
-            auto cpu_q = new sycl::queue{sycl::cpu_selector_v};
+            auto cpu_q = make_cpu_queue();
             info.has_cpu_device = true;
             info.cpu_queue      = cpu_q;
             auto cpu_dev = cpu_q->get_device();
@@ -24786,6 +24814,119 @@ constexpr int8_t FLAG_GPU        = 0;
 constexpr int8_t FLAG_CPU        = 1;
 constexpr int8_t FLAG_GPU_ISLAND = 2;
 
+static bool ggml_sycl_offload_locality_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_OFFLOAD_LOCALITY");
+        enabled = (env && std::atoi(env) == 0) ? 0 : 1;  // default on
+    }
+    return enabled != 0;
+}
+
+static int ggml_sycl_offload_cross_cost() {
+    static int value = -1;
+    if (value < 0) {
+        const char * env = std::getenv("GGML_SYCL_OFFLOAD_CROSS_COST");
+        value = env ? std::max(1, std::atoi(env)) : 1;
+    }
+    return value;
+}
+
+static int ggml_sycl_offload_hysteresis() {
+    static int value = -1;
+    if (value < 0) {
+        const char * env = std::getenv("GGML_SYCL_OFFLOAD_HYSTERESIS");
+        value = env ? std::max(1, std::atoi(env)) : 2;
+    }
+    return value;
+}
+
+static bool ggml_sycl_offload_plan_dump_enabled() {
+    static int enabled = -1;
+    if (enabled < 0) {
+        const char * env = std::getenv("GGML_SYCL_OFFLOAD_PLAN_DUMP");
+        enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    }
+    return enabled != 0;
+}
+
+static inline int8_t offload_plan_domain(int8_t flag) {
+    return flag == FLAG_CPU ? FLAG_CPU : FLAG_GPU;
+}
+
+static void mark_gpu_islands(std::vector<int8_t> & node_cpu_flags) {
+    for (int i = 1; i < static_cast<int>(node_cpu_flags.size()) - 1; i++) {
+        if (offload_plan_domain(node_cpu_flags[i]) != FLAG_GPU) continue;
+
+        bool prev_cpu = false;
+        for (int j = i - 1; j >= 0; j--) {
+            if (offload_plan_domain(node_cpu_flags[j]) == FLAG_CPU) { prev_cpu = true; break; }
+            if (offload_plan_domain(node_cpu_flags[j]) == FLAG_GPU) break;
+        }
+        if (!prev_cpu) continue;
+
+        bool next_cpu = false;
+        for (int j = i + 1; j < static_cast<int>(node_cpu_flags.size()); j++) {
+            if (offload_plan_domain(node_cpu_flags[j]) == FLAG_CPU) { next_cpu = true; break; }
+            if (offload_plan_domain(node_cpu_flags[j]) == FLAG_GPU) break;
+        }
+        if (!next_cpu) continue;
+        node_cpu_flags[i] = FLAG_GPU_ISLAND;
+    }
+}
+
+static void apply_offload_locality_hysteresis(std::vector<int8_t> & node_cpu_flags) {
+    if (!ggml_sycl_offload_locality_enabled() || node_cpu_flags.empty()) {
+        return;
+    }
+
+    const int hysteresis = ggml_sycl_offload_hysteresis();
+    const int cross_cost = ggml_sycl_offload_cross_cost();
+    if (hysteresis <= 1 && cross_cost <= 1) {
+        return;
+    }
+
+    // Normalize islands back to GPU before smoothing.
+    for (int8_t & f : node_cpu_flags) {
+        if (f == FLAG_GPU_ISLAND) {
+            f = FLAG_GPU;
+        }
+    }
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        int i = 0;
+        while (i < static_cast<int>(node_cpu_flags.size())) {
+            const int8_t dom = offload_plan_domain(node_cpu_flags[i]);
+            int j = i + 1;
+            while (j < static_cast<int>(node_cpu_flags.size()) &&
+                   offload_plan_domain(node_cpu_flags[j]) == dom) {
+                ++j;
+            }
+            const int len = j - i;
+            const bool has_prev = i > 0;
+            const bool has_next = j < static_cast<int>(node_cpu_flags.size());
+            const int8_t prev_dom = has_prev ? offload_plan_domain(node_cpu_flags[i - 1]) : dom;
+            const int8_t next_dom = has_next ? offload_plan_domain(node_cpu_flags[j]) : dom;
+
+            int min_keep = hysteresis;
+            if (dom == FLAG_CPU) {
+                min_keep = std::max(min_keep, cross_cost);
+            }
+            if (len < min_keep && has_prev && has_next && prev_dom == next_dom && prev_dom != dom) {
+                for (int k = i; k < j; ++k) {
+                    node_cpu_flags[k] = prev_dom;
+                }
+                changed = true;
+            }
+            i = j;
+        }
+    }
+
+    mark_gpu_islands(node_cpu_flags);
+}
+
 static void classify_cpu_layer_blocks(
     ggml_backend_sycl_context & ctx,
     const ggml_cgraph * cgraph,
@@ -24899,38 +25040,85 @@ static void classify_cpu_layer_blocks(
         }
     }
 
-    // Phase 5: Mark GPU "islands" within CPU layer blocks.
-    // A GPU island is a short run of GPU ops (typically FLASH_ATTN_EXT + SET_ROWS)
-    // sandwiched between CPU ops in the same layer.  Instead of full boundary
-    // transitions, these get lightweight inline handling (staging drain only).
-    //
-    // node_cpu_flags encoding: -1=unknown, 0=GPU, 1=CPU, 2=GPU_ISLAND
-    for (int i = 1; i < cgraph->n_nodes - 1; i++) {
-        if (node_cpu_flags[i] != FLAG_GPU) continue;  // only check GPU nodes
+    // Phase 5: Mark GPU "islands" within CPU blocks.
+    mark_gpu_islands(node_cpu_flags);
 
-        // Look backward for CPU predecessor
-        bool prev_cpu = false;
-        for (int j = i - 1; j >= 0; j--) {
-            if (node_cpu_flags[j] == FLAG_CPU) { prev_cpu = true; break; }
-            if (node_cpu_flags[j] == FLAG_GPU) break;  // hit a real GPU node
-            // Skip past islands - we want the nearest non-island neighbor
-            // to determine sandwiching.
-        }
-        if (!prev_cpu) continue;
+    // Phase 6: locality smoothing to reduce CPU<->GPU ping-pong.
+    // Uses GGML_SYCL_OFFLOAD_LOCALITY / _CROSS_COST / _HYSTERESIS.
+    apply_offload_locality_hysteresis(node_cpu_flags);
+}
 
-        // Look forward for CPU successor
-        bool next_cpu = false;
-        for (int j = i + 1; j < cgraph->n_nodes; j++) {
-            if (node_cpu_flags[j] == FLAG_CPU) { next_cpu = true; break; }
-            if (node_cpu_flags[j] == FLAG_GPU) break;
-            // Skip past islands - we want the nearest non-island neighbor
-            // to determine sandwiching.
-        }
-        if (!next_cpu) continue;
+struct offload_plan_stats {
+    int    segments = 0;
+    int    boundaries = 0;
+    size_t boundary_bytes = 0;
+};
 
-        // This GPU op is an island within a CPU block
-        node_cpu_flags[i] = FLAG_GPU_ISLAND;
+static offload_plan_stats summarize_offload_plan(const ggml_cgraph * cgraph, const std::vector<int8_t> & node_cpu_flags,
+                                                 bool dump_plan) {
+    offload_plan_stats stats{};
+    if (!cgraph || node_cpu_flags.empty()) {
+        return stats;
     }
+
+    // Segment count.
+    int8_t last = FLAG_UNKNOWN;
+    int segment_start = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        if (!cgraph->nodes[i]) {
+            continue;
+        }
+        const int8_t dom = offload_plan_domain(node_cpu_flags[i]);
+        if (last == FLAG_UNKNOWN || dom != last) {
+            if (dump_plan && last != FLAG_UNKNOWN) {
+                GGML_LOG_INFO("[SYCL-OFFLOAD-PLAN] segment=%d domain=%s start=%d end=%d\n",
+                              stats.segments - 1, last == FLAG_CPU ? "cpu" : "gpu", segment_start, i - 1);
+            }
+            last = dom;
+            segment_start = i;
+            stats.segments++;
+        }
+    }
+    if (dump_plan && last != FLAG_UNKNOWN) {
+        GGML_LOG_INFO("[SYCL-OFFLOAD-PLAN] segment=%d domain=%s start=%d end=%d\n",
+                      stats.segments - 1, last == FLAG_CPU ? "cpu" : "gpu", segment_start, cgraph->n_nodes - 1);
+    }
+
+    // Cross-domain boundaries by dependency edges.
+    std::unordered_map<const ggml_tensor *, int> node_index;
+    node_index.reserve(cgraph->n_nodes);
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        if (cgraph->nodes[i]) {
+            node_index.emplace(cgraph->nodes[i], i);
+        }
+    }
+
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * dst = cgraph->nodes[i];
+        if (!dst) continue;
+        const int8_t dst_dom = offload_plan_domain(node_cpu_flags[i]);
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = dst->src[s];
+            if (!src) break;
+            auto it = node_index.find(src);
+            if (it == node_index.end()) continue;
+            const int8_t src_dom = offload_plan_domain(node_cpu_flags[it->second]);
+            if (src_dom != dst_dom) {
+                const size_t bytes = ggml_nbytes(src);
+                stats.boundaries++;
+                stats.boundary_bytes += bytes;
+                if (dump_plan) {
+                    GGML_LOG_INFO("[SYCL-OFFLOAD-PLAN] boundary src=%s dst=%s bytes=%zu src_domain=%s dst_domain=%s\n",
+                                  src->name ? src->name : "(null)",
+                                  dst->name ? dst->name : "(null)",
+                                  bytes,
+                                  src_dom == FLAG_CPU ? "cpu" : "gpu",
+                                  dst_dom == FLAG_CPU ? "cpu" : "gpu");
+                }
+            }
+        }
+    }
+    return stats;
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
@@ -24947,7 +25135,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     // Invalidate per-graph pointer resolution cache.
     ggml_sycl_data_ptr_cache_new_graph();
-
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
     if (g_sycl_tg_dump_rms) {
         g_sycl_rms_seen_per_layer.clear();
@@ -25038,6 +25225,20 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     std::vector<int8_t> node_cpu_flags;
     if (cpu_offload_active) {
         classify_cpu_layer_blocks(*sycl_ctx, cgraph, node_cpu_flags);
+    }
+    offload_plan_stats plan_stats{};
+    if (cpu_offload_active) {
+        const bool dump_plan = ggml_sycl_offload_plan_dump_enabled();
+        plan_stats = summarize_offload_plan(cgraph, node_cpu_flags, dump_plan);
+        if (dump_plan) {
+            GGML_LOG_INFO("[SYCL-OFFLOAD-PLAN] segments=%d boundaries=%d boundary_bytes=%zu hysteresis=%d cross_cost=%d locality=%d\n",
+                          plan_stats.segments,
+                          plan_stats.boundaries,
+                          plan_stats.boundary_bytes,
+                          ggml_sycl_offload_hysteresis(),
+                          ggml_sycl_offload_cross_cost(),
+                          ggml_sycl_offload_locality_enabled() ? 1 : 0);
+        }
     }
     static int retained_mode_env = -1;
     if (retained_mode_env < 0) {
@@ -25449,17 +25650,38 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     // tensors) are either static or CPU-written — safe to skip.
                     // If NO inputs have tracked events despite GPU ops having run,
                     // fall back to a barrier for correctness (unusual graph shape).
-                    bool any_input_from_gpu = false;
+                    size_t boundary_bytes = 0;
                     for (int si = 0; si < GGML_MAX_SRC; si++) {
                         if (!node->src[si]) break;
                         auto it = gpu_tensor_events.find(node->src[si]);
                         if (it != gpu_tensor_events.end()) {
-                            it->second.wait();
-                            any_input_from_gpu = true;
+                            boundary_bytes += ggml_nbytes(node->src[si]);
                         }
                     }
-                    if (!any_input_from_gpu && !gpu_tensor_events.empty()) {
-                        sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
+
+                    if (!gpu_tensor_events.empty()) {
+                        if (ggml_sycl_cpu_offload_async_enabled()) {
+                            // Async mode: one wait per GPU→CPU segment boundary.
+                            sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
+                            ggml_sycl::offload_stats_note_wait();
+                        } else {
+                            // Legacy mode: preserve per-input waits.
+                            for (int si = 0; si < GGML_MAX_SRC; si++) {
+                                if (!node->src[si]) break;
+                                auto it = gpu_tensor_events.find(node->src[si]);
+                                if (it != gpu_tensor_events.end()) {
+                                    it->second.wait();
+                                    ggml_sycl::offload_stats_note_wait();
+                                }
+                            }
+                            if (boundary_bytes == 0) {
+                                sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
+                                ggml_sycl::offload_stats_note_wait();
+                            }
+                        }
+                        ggml_sycl::offload_stats_note_cross_domain_transfer(boundary_bytes);
+                        // Events prior to this transition are complete and no longer needed.
+                        gpu_tensor_events.clear();
                     }
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU per-tensor sync at node %d (%s)\n",
                                     i, node->name ? node->name : "(null)");
@@ -25476,6 +25698,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
+                    ggml_sycl::offload_stats_note_cross_domain_transfer(0);
 
                     // Look-ahead: collect ALL consecutive GPU/island nodes before
                     // next CPU node. flush_selective needs them all so it can flush
@@ -25898,6 +26121,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
     }
 
+    // End-of-graph CPU-offload fence.
+    // Ensures async CPU staging/compute completion is visible before the next
+    // graph invocation can recycle temporary buffers.
+    if (cpu_offload_active) {
+        ggml_sycl_cpu_staging_drain();
+    }
+
     // End of graph compute — flush and deactivate any active retention mode
     // Note: g_preclassified_* cleanup handled by preclassify_guard_ RAII above
     if (retained_mode_active) {
@@ -25909,7 +26139,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         ggml_sycl_cpu_retained_deactivate();
         GGML_SYCL_DEBUG("[RETAINED] Flushed + deactivated at end of graph\n");
     }
-
     // DEBUG: Check L31 weight at END of graph compute (disabled - TP working correctly)
     static int end_pass_dbg = 0;
     if (end_pass_dbg++ < 0 && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
@@ -30805,6 +31034,20 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     auto *                      sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] sycl_ctx=%p device=%d\n", (void *) sycl_ctx,
                     sycl_ctx ? sycl_ctx->device : -1);
+    const bool offload_stats_active = ggml_sycl::offload_stats_enabled();
+    if (offload_stats_active) {
+        ggml_sycl::offload_stats_reset();
+    }
+    struct offload_stats_guard_t {
+        bool active;
+        int  device;
+        ~offload_stats_guard_t() {
+            if (active) {
+                ggml_sycl::offload_stats_log_summary("graph_compute", device);
+            }
+        }
+    } offload_stats_guard{offload_stats_active, sycl_ctx ? sycl_ctx->device : -1};
+
     ggml_sycl_set_main_device(sycl_ctx->device);
     std::lock_guard<std::mutex> graph_lock(sycl_ctx->graph_mutex);
     if (g_sycl_graph_inflight.load(std::memory_order_relaxed) > 1) {

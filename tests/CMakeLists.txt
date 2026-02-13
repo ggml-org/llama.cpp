@@ -1803,6 +1803,11 @@ if(GGML_SYCL)
             NAME test-sycl-alloc-policy
             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-alloc-policy.sh
         )
+        add_test(
+            NAME sycl-offload-regression
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test-sycl-offload-regression.sh --self-check
+        )
+        set_property(TEST sycl-offload-regression PROPERTY LABELS "sycl;offload;regression")
     endif()
 
     # test-tiered-dispatch: Tests for tiered memory dispatch integration
