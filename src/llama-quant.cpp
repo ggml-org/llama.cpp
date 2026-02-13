@@ -559,7 +559,7 @@ static ggml_type get_tensor_target_type(
                     const ggml_tensor * tensor,
                             ggml_type   default_type
 ) {
-    ggml_type new_type;
+    ggml_type new_type = default_type;
     // get more optimal quantization type based on the tensor shape, layer, etc.
     if (!params->pure && ggml_is_quantized(default_type)) {
 
@@ -803,7 +803,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     // keep_split requires that the weights are sorted by split index
     if (params->keep_split) {
-        std::sort(tensors.begin(), tensors.end(), [](const llama_model_loader::llama_tensor_weight * a, const llama_model_loader::llama_tensor_weight * b) {
+        std::sort(weights.begin(), weights.end(), [](const llama_model_loader::llama_tensor_weight * a, const llama_model_loader::llama_tensor_weight * b) {
             if (a->idx == b->idx) {
                 return a->offs < b->offs;
             }
@@ -871,7 +871,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                     " ERROR: this quantization requires an importance matrix!\n"
                                     "        offending tensor: %s (target type: %s)\n"
                                     "============================================================================\n\n",
-                    name, ggml_type_name(target_type));
+                    name.c_str(), ggml_type_name(target_type));
                 throw new std::runtime_error("this quantization requires an imatrix!");
             }
         }
