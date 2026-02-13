@@ -1188,9 +1188,6 @@ struct ggml_cuda_graph {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
         return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env || disable_due_to_too_many_updates);
     }
-    std::vector<cudaGraphNode_t> graph_nodes;
-    std::vector<cudaGraphNode_t> graph_dependencies;
-    bool allow_pdl = true;
 #endif
 };
 

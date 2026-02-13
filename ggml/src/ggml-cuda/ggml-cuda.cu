@@ -1176,14 +1176,6 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
 //    return buffer->buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
 //}
 
-static void ggml_backend_cuda_graph_disable_pdl(ggml_backend_cuda_context & ctx, const void * graph_key) {
-
-    if (graph_key) {
-        ggml_cuda_graph * graph = ctx.cuda_graph(graph_key);
-        graph->allow_pdl = false;
-    }
-}
-
 /// kernels
 
 typedef void (*ggml_cuda_op_mul_mat_t)(
@@ -2188,7 +2180,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
-static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const void * graph_key) {
+static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
@@ -2261,7 +2253,6 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
         && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
-        ggml_backend_cuda_graph_disable_pdl(ctx, graph_key);
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec_f) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
@@ -2270,12 +2261,11 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (use_mul_mat_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
     } else {
-        ggml_backend_cuda_graph_disable_pdl(ctx, graph_key);
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
     }
 }
 
-static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const void * graph_key) {
+static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
@@ -2416,7 +2406,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
         dst_slice.data   = dst_data_cur;
 
-        ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice, graph_key);
+        ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
         CUDA_CHECK(cudaGetLastError());
 
         src1_data_cur += src1_slice.nb[2];
@@ -2429,7 +2419,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         nb1, nb2, nb3, stream);
 }
 
-static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst, const void * graph_key) {
+static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct ggml_tensor * dst) {
     // why is this here instead of mul_mat?
     if (dst->src[0] != nullptr && ggml_backend_buft_is_cuda_split(dst->src[0]->buffer->buft)) {
         ggml_cuda_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -2624,10 +2614,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_rms_norm_back(ctx, dst);
             break;
         case GGML_OP_MUL_MAT:
-            ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst, graph_key);
+            ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst);
             break;
         case GGML_OP_MUL_MAT_ID:
-            ggml_cuda_mul_mat_id(ctx, dst, graph_key);
+            ggml_cuda_mul_mat_id(ctx, dst);
             break;
         case GGML_OP_OUT_PROD:
             ggml_cuda_out_prod(ctx, dst);
@@ -3402,72 +3392,6 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
     return false;
 }
 
-static void ggml_cuda_graph_instantiate_pdl(ggml_cuda_graph * graph) {
-
-
-#if CUDA_VERSION >= 12000
-        // Set programmatic dependent launch (PDL) properties for all edges
-        // This will only have an effect on Hopper and later GPUs, but is harmless on older GPUs.
-        // Only allow PDL if it hasn't been disabled due to presence of library kernels in CUDA graph
-        // since we can't add corresponding CUDA API sync calls to these.
-        // TO DO identify graph nodes that contain such library kernels and refrain from setting PDL
-        // launch properties only on those nodes (non-trivial).
-    if (graph->allow_pdl) {
-
-        size_t num_nodes = 0;
-        // First call with null arg gives number of nodes
-        CUDA_CHECK(cudaGraphGetNodes(graph->graph, nullptr, &num_nodes));
-
-        if (num_nodes > graph->graph_nodes.size()) {
-            graph->graph_nodes.resize(num_nodes);
-        }
-        if (num_nodes > 0) {
-            // This call gives actual nodes
-            CUDA_CHECK(cudaGraphGetNodes(graph->graph, graph->graph_nodes.data(), &num_nodes));
-        }
-
-        size_t max_dependencies = 0;
-        for (size_t i = 0; i < num_nodes; i++) {
-            size_t num_dependencies = 0;
-            // First call with null arg gives number of dependencies
-            CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
-            if (num_dependencies > max_dependencies)
-                max_dependencies = num_dependencies;
-        }
-        if (max_dependencies > graph->graph_dependencies.size()) {
-            graph->graph_dependencies.resize(max_dependencies);
-        }
-
-        if (num_nodes > 0) {
-            cudaGraphNodeType prev_node_type = cudaGraphNodeTypeKernel;
-            for (size_t i = 0; i < num_nodes; i++) {
-                cudaGraphNodeType node_type;
-                CUDA_CHECK(cudaGraphNodeGetType(graph->graph_nodes[i], &node_type));
-                if (node_type == cudaGraphNodeTypeKernel && prev_node_type == cudaGraphNodeTypeKernel) {
-                    size_t num_dependencies = 0;
-                    // First call with null arg gives number of dependencies
-                    CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], nullptr, nullptr, &num_dependencies));
-                    if (num_dependencies > 0) {
-                        // This call gives actual dependencies
-                        CUDA_CHECK(cudaGraphNodeGetDependencies(graph->graph_nodes[i], graph->graph_dependencies.data(), nullptr, &num_dependencies));
-                        for (size_t j = 0; j < num_dependencies; j++) {
-                            cudaGraphEdgeData edge_data = {};
-                            edge_data.type = cudaGraphDependencyTypeProgrammatic;
-                            edge_data.from_port = cudaGraphKernelNodePortProgrammatic;
-                            edge_data.to_port = 0;
-                            // Remove existing dependency and add it back with PDL edge properties
-                            CUDA_CHECK(cudaGraphRemoveDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], nullptr, 1));
-                            CUDA_CHECK(cudaGraphAddDependencies(graph->graph, &graph->graph_dependencies[j], &graph->graph_nodes[i], &edge_data, 1));
-                        }
-                    }
-                }
-                prev_node_type = node_type;
-            }
-        }
-    }
-#endif // CUDA_VERSION >=12000
-}
-
 static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, const bool use_cuda_graph, const bool cuda_graph_update_required, const void * graph_key) {
     bool graph_evaluated_or_captured = false;
 
@@ -3949,13 +3873,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 GGML_UNUSED(integrated);
 #endif  // NDEBUG
 
-#ifdef USE_CUDA_GRAPH
-                const void * graph_key = ggml_cuda_graph_get_key(cgraph);
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, graph_key);
-#else
-                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node, nullptr);
-#endif  // USE_CUDA_GRAPH
-
+                bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
@@ -3976,7 +3894,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             }
 
             CUDA_CHECK(cudaStreamEndCapture(cuda_ctx->stream(), &graph->graph));
-            ggml_cuda_graph_instantiate_pdl(graph);
             graph_evaluated_or_captured = true; // CUDA graph has been captured
 
             std::lock_guard<std::mutex> lock(ggml_cuda_lock);
