@@ -28,7 +28,7 @@ for url, filename in vendor.items():
     print(f"downloading {url} to {filename}") # noqa: NP100
     urllib.request.urlretrieve(url, filename)
 
-print("Splitting httplib.h...")
+print("Splitting httplib.h...") # noqa: NP100
 try:
     subprocess.check_call([
         sys.executable, "split.py",
@@ -38,5 +38,5 @@ try:
     os.remove("split.py")
     os.remove("httplib.h")
 except Exception as e:
-    print(f"Error: {e}")
+    print(f"Error: {e}") # noqa: NP100
     sys.exit(1)
