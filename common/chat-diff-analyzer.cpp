@@ -1,9 +1,7 @@
 #include "chat-diff-analyzer.h"
 
 #include "chat-auto-parser-helpers.h"
-#include "chat-auto-parser.h"
 #include "chat.h"
-#include "llama.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 
@@ -17,10 +15,12 @@
 
 using json = nlohmann::ordered_json;
 
-static std::vector<std::function<void(const common_chat_template & tmpl, diff_analysis_result &)>> workarounds(
+namespace autoparser {
+
+static std::vector<std::function<void(const common_chat_template & tmpl, analyze_template &)>> workarounds(
     { // Old reasoning Qwen templates - they don't really display reasoning content, but we still want to
       // support reasoning on them
-      [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
+      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
           if (tmpl.src.find("content.split('</think>')") != std::string::npos &&
               analysis.reasoning.mode == reasoning_mode::NONE) {
               analysis.reasoning.mode  = reasoning_mode::FORCED_OPEN;
@@ -32,7 +32,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, diff_an
           }
       },
       // Granite 3.3, with separate reasoning and content markers
-      [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
+      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
           if (tmpl.src.find("Write your thoughts between <think></think> and write your response between "
                             "<response></response>") != std::string::npos) {
               analysis.reasoning.mode  = reasoning_mode::TAG_BASED;
@@ -49,7 +49,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, diff_an
           }
       },
       // Cohere Command R+ - content wrapped in <|CHATBOT_TOKEN|>...<|END_OF_TURN_TOKEN|>
-      [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
+      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
           if (tmpl.src.find("<|CHATBOT_TOKEN|>") != std::string::npos &&
               tmpl.src.find("<|END_OF_TURN_TOKEN|>") != std::string::npos && analysis.content.start.empty()) {
               analysis.content.mode  = content_mode::ALWAYS_WRAPPED;
@@ -61,7 +61,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, diff_an
           }
       },
       // Functionary - no tool call section delimiter
-      [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
+      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
           if (tmpl.src.find("set has_code_interpreter = tools | selectattr(\"type\", \"equalto\", "
                             "\"code_interpreter\") | list | length > 0") != std::string::npos) {
               analysis.content.mode                = content_mode::PLAIN;
@@ -82,7 +82,7 @@ static std::vector<std::function<void(const common_chat_template & tmpl, diff_an
           }
       },
       // DeepSeek-R1-Distill-Qwen
-      [](const common_chat_template & tmpl, diff_analysis_result & analysis) -> void {
+      [](const common_chat_template & tmpl, analyze_template & analysis) -> void {
           if (tmpl.src.find(
                   "{{'<｜Assistant｜><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>' + tool['type'] + '<｜tool▁sep｜>'") !=
               std::string::npos) {
@@ -138,94 +138,76 @@ static json second_tool_call =
 static json first_tool_call_alt_id =
     build_tool_call("foofoo", json{{ "first",  "XXXX" }, { "second", "YYYY" }}, "call99999");
 
-std::string differential_analyzer::apply_template(const common_chat_template & tmpl, const template_params & params) {
-    templates_params tmpl_params;
-    tmpl_params.messages              = params.messages;
-    tmpl_params.tools                 = params.tools;
-    tmpl_params.add_generation_prompt = params.add_generation_prompt;
-    tmpl_params.enable_thinking       = params.enable_thinking;
+// ============================================================================
+// analyze_template
+// ============================================================================
 
-    if (params.extra_context) {
-        tmpl_params.extra_context = *params.extra_context;
-    }
-    tmpl_params.extra_context["enable_thinking"] = params.enable_thinking;
-
-    try {
-        return common_chat_template_direct_apply(tmpl, tmpl_params);
-    } catch (const std::exception & e) {
-        LOG_DBG("Template application failed: %s\n", e.what());
-        return "";
-    }
-}
-
-std::optional<compare_variants_result> differential_analyzer::compare_variants(
-    const common_chat_template &                   tmpl,
-    const template_params &                        params_A,
-    const std::function<void(template_params &)> & params_modifier) {
-    // Create variant B by copying A
-    template_params params_B = params_A;
-
-    // Apply modifier to create variant B
-    if (params_modifier) {
-        params_modifier(params_B);
-    }
-
-    // Apply template to both variants
-    std::string output_A = apply_template(tmpl, params_A);
-    std::string output_B = apply_template(tmpl, params_B);
-
-    // Check for template application failures
-    if (output_A.empty() || output_B.empty()) {
-        return std::nullopt;
-    }
-
-    // Calculate diff and return result with both outputs
-    compare_variants_result result;
-    result.diff     = calculate_diff_split(output_A, output_B);
-    result.output_A = output_A;
-    result.output_B = output_B;
-
-    return result;
-}
-
-diff_analysis_result differential_analyzer::analyze(const common_chat_template & tmpl) {
-    diff_analysis_result result;
-
+analyze_template::analyze_template(const common_chat_template & tmpl)
+    : jinja_caps(tmpl.original_caps())
+    , reasoning(tmpl, jinja_caps.supports_tool_calls)
+    , content(tmpl, reasoning)
+    , tools(jinja_caps.supports_tool_calls ? analyze_tools(tmpl, jinja_caps, reasoning) : analyze_tools())
+{
     LOG_DBG(ANSI_PURPLE "=== Starting differential analysis ===\n" ANSI_RESET);
 
-    result.jinja_caps = tmpl.original_caps();
-
-    result.reasoning = analyze_reasoning(tmpl, result.jinja_caps.supports_tool_calls);
-    result.content = analyze_content(tmpl, result.reasoning);
-    if (result.jinja_caps.supports_tool_calls) {
-        result.tools = analyze_tools(tmpl, result.jinja_caps, result.reasoning);
-    }
-    collect_preserved_tokens(result);
+    collect_preserved_tokens();
 
     for (auto & workaround : workarounds) {
-        workaround(tmpl, result);
+        workaround(tmpl, *this);
     }
 
     LOG_DBG(ANSI_PURPLE "=== Differential analysis complete ===\n" ANSI_RESET);
-
-    return result;
 }
 
-reasoning_analysis differential_analyzer::analyze_reasoning(const common_chat_template & tmpl, bool supports_tools) {
+void analyze_template::collect_preserved_tokens() {
+    auto add_token = [this](const std::string & org_token) {
+        std::string token = trim_whitespace(org_token);
+        if (!token.empty()) {
+            // Avoid duplicates
+            if (std::find(preserved_tokens.begin(), preserved_tokens.end(), token) == preserved_tokens.end()) {
+                preserved_tokens.push_back(token);
+            }
+        }
+    };
+
+    add_token(reasoning.start);
+    add_token(reasoning.end);
+    add_token(content.start);
+    add_token(content.end);
+    add_token(tools.format.section_start);
+    add_token(tools.format.section_end);
+    add_token(tools.format.per_call_start);
+    add_token(tools.format.per_call_end);
+    add_token(tools.function.name_prefix);
+    add_token(tools.function.name_suffix);
+    add_token(tools.function.close);
+    add_token(tools.arguments.start);
+    add_token(tools.arguments.end);
+    add_token(tools.arguments.name_prefix);
+    add_token(tools.arguments.name_suffix);
+    add_token(tools.arguments.separator);
+    add_token(tools.arguments.value_prefix);
+    add_token(tools.arguments.value_suffix);
+    add_token(tools.call_id.prefix);
+    add_token(tools.call_id.suffix);
+}
+
+// ============================================================================
+// analyze_reasoning
+// ============================================================================
+
+analyze_reasoning::analyze_reasoning(const common_chat_template & tmpl, bool supports_tools)
+    : analyze_base(tmpl) {
     LOG_DBG(ANSI_ORANGE "Phase 1: Reasoning analysis\n" ANSI_RESET);
 
-    reasoning_analysis result;
-
-    compare_reasoning_presence(tmpl, result);
-    compare_thinking_enabled(tmpl, result);
+    compare_reasoning_presence();
+    compare_thinking_enabled();
     if (supports_tools) {
-        compare_reasoning_scope(tmpl, result);
+        compare_reasoning_scope();
     }
-
-    return result;
 }
 
-void differential_analyzer::compare_reasoning_presence(const common_chat_template & tmpl, reasoning_analysis & reasoning) {
+void analyze_reasoning::compare_reasoning_presence() {
     json user_msg = json{
         { "role",    "user"  },
         { "content", "Hello" }
@@ -248,7 +230,7 @@ void differential_analyzer::compare_reasoning_presence(const common_chat_templat
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_reasoning }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_reasoning }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed, skipping reasoning detection\n" ANSI_RESET, __func__);
@@ -263,22 +245,22 @@ void differential_analyzer::compare_reasoning_presence(const common_chat_templat
         auto seg = prune_whitespace_segments(segmentize_markers(diff.right));
         if (seg.size() >= 3 && trim_whitespace(seg[1].value) == reasoning_content) {
             // easy one: opening marker - reasoning - closing marker (possibly with trailing whitespace)
-            reasoning.mode  = reasoning_mode::TAG_BASED;
-            reasoning.start = trim_whitespace(seg[0].value);
-            reasoning.end   = trim_leading_whitespace(seg[2].value);
+            mode  = reasoning_mode::TAG_BASED;
+            start = trim_whitespace(seg[0].value);
+            end   = trim_leading_whitespace(seg[2].value);
             for (size_t i = 3; i < seg.size(); i++) {
-                reasoning.end += seg[i].value;
+                end += seg[i].value;
             }
             // we always truncate because this doesn't really influence correctness but model might not always generate newline
-            reasoning.end = trim_whitespace(reasoning.end);
+            end = trim_whitespace(end);
         } else if (seg.size() >= 2 && trim_whitespace(seg[0].value) == reasoning_content) {
             // delimited
-            reasoning.mode = reasoning_mode::DELIMITER;
-            reasoning.end  = trim_leading_whitespace(seg[1].value);
+            mode = reasoning_mode::DELIMITER;
+            end  = trim_leading_whitespace(seg[1].value);
             for (size_t i = 2; i < seg.size(); i++) {
-                reasoning.end += seg[i].value;
+                end += seg[i].value;
             }
-            reasoning.end = trim_whitespace(reasoning.end);
+            end = trim_whitespace(end);
         } else if (seg.size() == 1 && trim_whitespace(seg[0].value) == reasoning_content) {
             // the marker might be in the prefix actually, let's check for case of
             // left: empty
@@ -296,16 +278,16 @@ void differential_analyzer::compare_reasoning_presence(const common_chat_templat
                     if (marker_seg.type == segment_type::TEXT) {
                         marker_seg = pre_seg[pre_seg.size() - 2];
                     }
-                    reasoning.mode  = reasoning_mode::FORCED_CLOSED;
-                    reasoning.start = trim_whitespace(marker_seg.value);
-                    reasoning.end   = trim_whitespace(suf_seg[0].value);
+                    mode  = reasoning_mode::FORCED_CLOSED;
+                    start = trim_whitespace(marker_seg.value);
+                    end   = trim_whitespace(suf_seg[0].value);
                 }
             }
         }
     }
 }
 
-void differential_analyzer::compare_thinking_enabled(const common_chat_template & tmpl, reasoning_analysis & reasoning) {
+void analyze_reasoning::compare_thinking_enabled() {
     json user_msg = json{
         { "role",    "user"  },
         { "content", "Hello" }
@@ -316,7 +298,7 @@ void differential_analyzer::compare_thinking_enabled(const common_chat_template 
     params.add_generation_prompt = true;
     params.enable_thinking       = false;
 
-    auto comparison = compare_variants(tmpl, params, [&](template_params & p) { p.enable_thinking = true; });
+    auto comparison = compare_variants(*tmpl, params, [&](template_params & p) { p.enable_thinking = true; });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET , __func__);
@@ -333,15 +315,15 @@ void differential_analyzer::compare_thinking_enabled(const common_chat_template 
         trim_whitespace(right_trimmed);
 
         if (!right_trimmed.empty() && string_ends_with(comparison->output_B, right_trimmed)) {
-            if (reasoning.start.empty()) {
-                reasoning.start = right_trimmed;
-                reasoning.mode  = reasoning_mode::FORCED_OPEN;
+            if (start.empty()) {
+                start = right_trimmed;
+                mode  = reasoning_mode::FORCED_OPEN;
             }
         }
     }
 
-    if (reasoning.start.empty() && !reasoning.end.empty()) {
-        reasoning.mode = reasoning_mode::DELIMITER;
+    if (start.empty() && !end.empty()) {
+        mode = reasoning_mode::DELIMITER;
     }
 
     // Check for FORCED_CLOSED: when enable_thinking=false produces both start and end markers,
@@ -353,49 +335,49 @@ void differential_analyzer::compare_thinking_enabled(const common_chat_template 
         // Both should end with the assistant role marker
         // Check if output_A has both reasoning_start and reasoning_end markers
         // while output_B has only reasoning_start
-        if (!reasoning.start.empty()) {
+        if (!start.empty()) {
             // Check if output_A contains both start and end markers
-            bool A_has_start = output_A.find(reasoning.start) != std::string::npos;
-            bool A_has_end   = !reasoning.end.empty() && output_A.find(reasoning.end) != std::string::npos;
+            bool A_has_start = output_A.find(start) != std::string::npos;
+            bool A_has_end   = !end.empty() && output_A.find(end) != std::string::npos;
 
             // Check if output_B contains only the start marker (and not the end marker)
-            bool B_has_start = output_B.find(reasoning.start) != std::string::npos;
-            bool B_has_end   = !reasoning.end.empty() && output_B.find(reasoning.end) != std::string::npos;
+            bool B_has_start = output_B.find(start) != std::string::npos;
+            bool B_has_end   = !end.empty() && output_B.find(end) != std::string::npos;
 
             // For FORCED_CLOSED: A should have both, B should have only start
             if (A_has_start && A_has_end && B_has_start && !B_has_end) {
-                reasoning.mode = reasoning_mode::FORCED_CLOSED;
+                mode = reasoning_mode::FORCED_CLOSED;
             }
-        } else if (!reasoning.end.empty()) {
+        } else if (!end.empty()) {
             // We might not have detected the reasoning open marker until now,
             // but this is another chance to do so
             auto diff    = comparison->diff;
             auto diff_rt = trim_whitespace(diff.right);
             auto diff_lt = trim_whitespace(diff.left);
-            if (diff_rt.empty() && diff_lt == reasoning.end) {
+            if (diff_rt.empty() && diff_lt == end) {
                 auto seg = segmentize_markers(trim_whitespace(diff.prefix));
                 if (!seg.empty() && seg[seg.size() - 1].type == MARKER) {  // this is FORCED_CLOSED
-                    reasoning.start = seg[seg.size() - 1].value;
-                    reasoning.mode  = reasoning_mode::FORCED_CLOSED;
+                    start = seg[seg.size() - 1].value;
+                    mode  = reasoning_mode::FORCED_CLOSED;
                 }
             }
         }
     }
 
-    if (reasoning.start.empty() && reasoning.end.empty()) {
+    if (start.empty() && end.empty()) {
         if (!diff.left.empty() && !diff.right.empty()) {
             auto seg_A = segmentize_markers(trim_trailing_whitespace(diff.left));
             auto seg_B = segmentize_markers(trim_trailing_whitespace(diff.right));
             if (seg_A.size() == 1 && seg_B.size() == 1) {
-                reasoning.mode = reasoning_mode::FORCED_CLOSED;
-                reasoning.start = seg_B[0].value;
-                reasoning.end = seg_A[0].value;
+                mode = reasoning_mode::FORCED_CLOSED;
+                start = seg_B[0].value;
+                end = seg_A[0].value;
             }
         }
     }
 }
 
-void differential_analyzer::compare_reasoning_scope(const common_chat_template & tmpl, reasoning_analysis & reasoning) {
+void analyze_reasoning::compare_reasoning_scope() {
     json assistant_reasoning_content = json{
         { "role",              "assistant"            },
         { "content",           "Here is my response." },
@@ -417,7 +399,7 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_reasoning_tools }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_reasoning_tools }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
@@ -431,7 +413,7 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
     bool reasoning_in_B = comparison->output_B.find(reasoning_content) != std::string::npos;
 
     if (!reasoning_in_A && reasoning_in_B) {
-        reasoning.mode = reasoning_mode::TOOLS_ONLY;
+        mode = reasoning_mode::TOOLS_ONLY;
         LOG_DBG("R3: Detected TOOLS_ONLY reasoning mode\n");
 
         // Extract reasoning markers from output_B
@@ -446,7 +428,7 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
 
             for (auto & segment : segments_before) {
                 if (segment.type == segment_type::MARKER) {
-                    reasoning.start = segment.value;
+                    start = segment.value;
                     break;
                 }
             }
@@ -458,11 +440,11 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
 
             if (!after_reasoning.empty()) {
                 // Try to find matching end marker
-                if (!reasoning.start.empty()) {
+                if (!start.empty()) {
                     auto segments = segmentize_markers(after_reasoning);
                     for (auto & segment : segments) {
                         if (segment.type == segment_type::MARKER) {
-                            reasoning.end = segment.value;
+                            end = segment.value;
                             break;
                         }
                     }
@@ -472,10 +454,13 @@ void differential_analyzer::compare_reasoning_scope(const common_chat_template &
     }
 }
 
-content_analysis differential_analyzer::analyze_content(const common_chat_template & tmpl, const reasoning_analysis & reasoning) {
-    LOG_DBG(ANSI_ORANGE "Phase 2: Content analysis\n" ANSI_RESET);
+// ============================================================================
+// analyze_content
+// ============================================================================
 
-    content_analysis result;
+analyze_content::analyze_content(const common_chat_template & tmpl, const analyze_reasoning & reasoning)
+    : analyze_base(tmpl) {
+    LOG_DBG(ANSI_ORANGE "Phase 2: Content analysis\n" ANSI_RESET);
 
     json assistant_content_only = json{
         { "role",    "assistant"     },
@@ -523,7 +508,7 @@ content_analysis differential_analyzer::analyze_content(const common_chat_templa
         if (trim_whitespace(diff_reasoning.left) == response ||
             (segments.size() == 2 && trim_whitespace(segments[0].value) == response)) {
             // We only have the content text in the diff (possibly with a stray EOG marker), so no markers
-            result.mode      = content_mode::PLAIN;
+            mode      = content_mode::PLAIN;
             found_plain_content = true;
         } else if (reasoning.mode != reasoning_mode::NONE && !reasoning.end.empty() &&
                    diff_reasoning.left.find(reasoning.end) != std::string::npos) {
@@ -531,7 +516,7 @@ content_analysis differential_analyzer::analyze_content(const common_chat_templa
                 diff_reasoning.left.find(reasoning.end) + reasoning.end.length());
             if (trim_whitespace(post_closed_reasoning) == "Response text") {
                 LOG_DBG("C1: No content markers after stripping reasoning close marker\n");
-                result.mode      = content_mode::PLAIN;
+                mode      = content_mode::PLAIN;
                 found_plain_content = true;
             }
         }
@@ -546,48 +531,51 @@ content_analysis differential_analyzer::analyze_content(const common_chat_templa
         size_t      pos          = pure_content.find("Response text");
         if (pos == std::string::npos) {
             LOG_DBG(ANSI_ORANGE "%s: Error: response text not found - improper template application?\n" ANSI_RESET, __func__);
-            return result;
+            return;
         }
-        result.start = trim_leading_whitespace(pure_content.substr(0, pos));
-        result.end = trim_leading_whitespace(pure_content.substr(pos + 13));  // 13 - len of "Response text"
+        start = trim_leading_whitespace(pure_content.substr(0, pos));
+        end = trim_leading_whitespace(pure_content.substr(pos + 13));  // 13 - len of "Response text"
         // TODO: WRAPPED_WITH_REASONING
     }
 
     // Determine content mode
-    if (!result.start.empty() || !result.end.empty()) {
-        result.mode = content_mode::ALWAYS_WRAPPED;
+    if (!start.empty() || !end.empty()) {
+        mode = content_mode::ALWAYS_WRAPPED;
         // TODO: END_DELIMITED content mode - delimited at end but not at start?
     }
-
-    return result;
 }
 
-tool_analysis differential_analyzer::analyze_tools(const common_chat_template & tmpl,
-                                                   const jinja::caps &          caps,
-                                                   const reasoning_analysis &   reasoning) {
-    tool_analysis result;
+bool analyze_content::is_always_wrapped() const {
+    return mode == content_mode::ALWAYS_WRAPPED && !start.empty() && !end.empty();
+}
+
+// ============================================================================
+// analyze_tools
+// ============================================================================
+
+analyze_tools::analyze_tools(const common_chat_template & tmpl,
+                             const jinja::caps &          caps,
+                             const analyze_reasoning &    reasoning)
+    : analyze_base(tmpl) {
     LOG_DBG(ANSI_ORANGE "Phase 3: Tool call analysis\n" ANSI_RESET);
 
-    result.format = analyze_tool_calls(tmpl, reasoning);
+    analyze_tool_calls(reasoning);
 
-    if (result.format.mode != tool_format::NONE && result.format.mode != tool_format::JSON_NATIVE) {
+    if (format.mode != tool_format::NONE && format.mode != tool_format::JSON_NATIVE) {
         if (caps.supports_parallel_tool_calls) {
-            check_per_call_markers(tmpl, result.format);
+            check_per_call_markers();
         }
-        result.function = extract_function_markers(tmpl, result.format);
-        if (result.format.mode == tool_format::TAG_WITH_TAGGED) {
-            result.arguments = analyze_arguments(tmpl, result);
+        extract_function_markers();
+        if (format.mode == tool_format::TAG_WITH_TAGGED) {
+            analyze_arguments();
         }
-        extract_argument_separator(tmpl, result.arguments);
-        extract_args_markers(tmpl, result, result.arguments);
-        result.call_id = extract_call_id_markers(tmpl, result.format);
+        extract_argument_separator();
+        extract_args_markers();
+        extract_call_id_markers();
     }
-
-    return result;
 }
 
-tool_format_analysis differential_analyzer::analyze_tool_calls(const common_chat_template & tmpl,
-                                                               const reasoning_analysis &   reasoning) {
+void analyze_tools::analyze_tool_calls(const analyze_reasoning & reasoning) {
     json assistant_no_tools = json{
         { "role",    "assistant" },
         { "content", "Response." }
@@ -606,11 +594,11 @@ tool_format_analysis differential_analyzer::analyze_tool_calls(const common_chat
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_tools }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_tools }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
-        return tool_format_analysis();
+        return;
     }
 
     const auto & diff = comparison->diff;
@@ -618,20 +606,18 @@ tool_format_analysis differential_analyzer::analyze_tool_calls(const common_chat
     std::string tool_section = diff.right;
 
     if (tool_section.empty()) {
-        return tool_format_analysis();
+        return;
     }
 
-    return analyze_tool_call_format(tool_section, "foofoo", "first", reasoning);
+    analyze_tool_call_format(tool_section, "foofoo", "first", reasoning);
 }
 
-tool_format_analysis differential_analyzer::analyze_tool_call_format(const std::string &        haystack,
-                                                                     const std::string &        fun_name_needle,
-                                                                     const std::string &        arg_name_needle,
-                                                                     const reasoning_analysis & reasoning) {
-    tool_format_analysis result;
-
+void analyze_tools::analyze_tool_call_format(const std::string &       haystack,
+                                             const std::string &       fun_name_needle,
+                                             const std::string &       arg_name_needle,
+                                             const analyze_reasoning & reasoning) {
     if (fun_name_needle.empty() || arg_name_needle.empty() || haystack.empty()) {
-        return result;
+        return;
     }
 
     auto in_json_haystack = [&haystack](const std::string & needle) -> bool {
@@ -656,11 +642,11 @@ tool_format_analysis differential_analyzer::analyze_tool_call_format(const std::
 
     if (in_json_haystack(fun_name_needle)) {
         // no need to check further, we're in JSON land
-        result.mode = tool_format::JSON_NATIVE;
+        format.mode = tool_format::JSON_NATIVE;
     } else if (in_json_haystack(arg_name_needle)) {
-        result.mode = tool_format::TAG_WITH_JSON;
+        format.mode = tool_format::TAG_WITH_JSON;
     } else {
-        result.mode = tool_format::TAG_WITH_TAGGED;
+        format.mode = tool_format::TAG_WITH_TAGGED;
     }
 
     // first, remove any reasoning markers
@@ -678,22 +664,19 @@ tool_format_analysis differential_analyzer::analyze_tool_call_format(const std::
         }
     }
 
-    if (result.mode == tool_format::JSON_NATIVE) {
-        analyze_tool_call_format_json_native(clean_haystack, fun_name_needle, arg_name_needle, result);
+    if (format.mode == tool_format::JSON_NATIVE) {
+        analyze_tool_call_format_json_native(clean_haystack, fun_name_needle, arg_name_needle);
     } else {
-        analyze_tool_call_format_non_json(clean_haystack, fun_name_needle, result);
+        analyze_tool_call_format_non_json(clean_haystack, fun_name_needle);
     }
     // always relax whitespace requirements on ending markers since they don't influence content
-    result.section_end  = trim_whitespace(result.section_end);
-    result.per_call_end = trim_whitespace(result.per_call_end);
-
-    return result;
+    format.section_end  = trim_whitespace(format.section_end);
+    format.per_call_end = trim_whitespace(format.per_call_end);
 }
 
-void differential_analyzer::analyze_tool_call_format_json_native(const std::string &    clean_haystack,
-                                                                 const std::string &    fun_name_needle,
-                                                                 const std::string &    arg_name_needle,
-                                                                 tool_format_analysis & format) {
+void analyze_tools::analyze_tool_call_format_json_native(const std::string & clean_haystack,
+                                                         const std::string & fun_name_needle,
+                                                         const std::string & arg_name_needle) {
     // we might not have the typical OpenAI tool calling structure
     int  json_start     = clean_haystack.find_first_of('{');
     int  json_end       = clean_haystack.find_last_of('}');
@@ -781,9 +764,8 @@ void differential_analyzer::analyze_tool_call_format_json_native(const std::stri
     }
 }
 
-void differential_analyzer::analyze_tool_call_format_non_json(const std::string &    clean_haystack,
-                                                              const std::string &    fun_name_needle,
-                                                              tool_format_analysis & format) {
+void analyze_tools::analyze_tool_call_format_non_json(const std::string & clean_haystack,
+                                                      const std::string & fun_name_needle) {
     // we need to split by markers...
     auto haystack_split = segmentize_markers(trim_leading_whitespace(clean_haystack));
     int  where_is_nemo  = 0;
@@ -871,7 +853,7 @@ void differential_analyzer::analyze_tool_call_format_non_json(const std::string 
     }
 }
 
-void differential_analyzer::check_per_call_markers(const common_chat_template & tmpl, tool_format_analysis & result) {
+void analyze_tools::check_per_call_markers() {
     json assistant_one_tool = json{
         { "role",       "assistant" },
         { "content",    ""          },
@@ -891,7 +873,7 @@ void differential_analyzer::check_per_call_markers(const common_chat_template & 
     params.enable_thinking       = true;
 
     auto one_vs_two = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_tools }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_tools }); });
 
     if (!one_vs_two) {
         LOG_DBG(ANSI_ORANGE "%s: Generating double tool call comparison failed\n" ANSI_RESET, __func__);
@@ -901,18 +883,16 @@ void differential_analyzer::check_per_call_markers(const common_chat_template & 
     diff_split filter_common_call_part = calculate_diff_split(one_vs_two->diff.suffix, one_vs_two->diff.right);
 
     std::string second_tool_content = trim_leading_whitespace(filter_common_call_part.right);
-    if (!result.section_start.empty() &&
-        second_tool_content.find(result.section_start) == 0) {
-        result.per_call_start = result.section_start;
-        result.per_call_end   = result.section_end;
-        result.section_start.clear();
-        result.section_end.clear();
+    if (!format.section_start.empty() &&
+        second_tool_content.find(format.section_start) == 0) {
+        format.per_call_start = format.section_start;
+        format.per_call_end   = format.section_end;
+        format.section_start.clear();
+        format.section_end.clear();
     }
 }
 
-tool_function_analysis differential_analyzer::extract_function_markers(const common_chat_template & tmpl, const tool_format_analysis & analysis) {
-    tool_function_analysis result;
-
+void analyze_tools::extract_function_markers() {
     json assistant_nocall = json{
         { "role",    "assistant" },
         { "content", "BBBB"      },
@@ -937,37 +917,37 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_barbar }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_barbar }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
-        return result;
+        return;
     }
 
     const auto & diff = comparison->diff;
 
     if (diff.left.find("foofoo") != std::string::npos && diff.right.find("barbar") != std::string::npos) {
         std::string prefix_marker;
-        if (!analysis.per_call_start.empty()) {
-            prefix_marker = analysis.per_call_start;
+        if (!format.per_call_start.empty()) {
+            prefix_marker = format.per_call_start;
         } else {
-            prefix_marker = analysis.section_start;
+            prefix_marker = format.section_start;
         }
         if (!prefix_marker.empty() && diff.prefix.rfind(prefix_marker) != std::string::npos) {
-            result.name_prefix =
+            function.name_prefix =
                 diff.prefix.substr(diff.prefix.rfind(prefix_marker) + prefix_marker.size());
         }
 
         auto seg = segmentize_markers(diff.left);
         for (const auto & s : seg) {
             if (s.value.find("foofoo") == std::string::npos) {
-                result.name_prefix += s.value;
+                function.name_prefix += s.value;
             } else {
                 size_t      pos  = s.value.find("foofoo");
                 std::string pre  = s.value.substr(0, pos);
                 std::string post = s.value.substr(pos + 6);  // 6 = len("foofoo")
-                result.name_prefix += pre;
-                result.name_suffix += post;
+                function.name_prefix += pre;
+                function.name_suffix += post;
                 break;
             }
         }
@@ -977,7 +957,7 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
         size_t stop_internal_pos = 0;
         for (const auto & ss : seg_suf) {
             bool has_needle = false;
-            if (analysis.mode == tool_format::TAG_WITH_JSON) {
+            if (format.mode == tool_format::TAG_WITH_JSON) {
                 has_needle = (ss.type == segment_type::TEXT && ss.value.find_first_of("{[") != std::string::npos);
                 if (has_needle) {
                     stop_internal_pos = ss.value.find_first_of("{[");
@@ -993,7 +973,7 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
             stop++;
         }
         if (stop < seg_suf.size() - 1) {
-            if (analysis.mode == tool_format::TAG_WITH_TAGGED) {
+            if (format.mode == tool_format::TAG_WITH_TAGGED) {
                 size_t how_far = 0;
                 if (stop > 0) {
                     if (seg_suf[stop].type == segment_type::MARKER) {
@@ -1002,30 +982,30 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
                         how_far = stop - 1;
                     }
                     for (size_t i = 0; i < how_far; i++) {
-                        result.name_suffix += seg_suf[i].value;
+                        function.name_suffix += seg_suf[i].value;
                     }
                 }
             } else {
                 for (size_t i = 0; i < stop; i++) {
-                    result.name_suffix += seg_suf[i].value;
+                    function.name_suffix += seg_suf[i].value;
                 }
                 const std::string & stopper = seg_suf[stop].value;
-                result.name_suffix += stopper.substr(0, stop_internal_pos);
+                function.name_suffix += stopper.substr(0, stop_internal_pos);
             }
         }
 
         // now just to find the closer
         std::string suffix_marker;
-        if (!analysis.per_call_end.empty()) {
-            suffix_marker = analysis.per_call_end;
+        if (!format.per_call_end.empty()) {
+            suffix_marker = format.per_call_end;
         } else {
-            suffix_marker = analysis.section_end;
+            suffix_marker = format.section_end;
         }
         std::string closer_suffix;
         if (suffix_marker.empty()) {
             // we'll have to rely on an extra diff with no-calls version
             auto notool_comp = compare_variants(
-                tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_nocall }); });
+                *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_nocall }); });
             auto nt_diff  = notool_comp->diff;
             closer_suffix = nt_diff.left.substr(nt_diff.left.find("YYYY") + 4);
         } else {
@@ -1033,18 +1013,18 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
         }
         if (!closer_suffix.empty()) {
             auto   closer_seg             = segmentize_markers(closer_suffix);
-            bool   need_to_eat_arg_marker = (analysis.mode == tool_format::TAG_WITH_TAGGED);
+            bool   need_to_eat_arg_marker = (format.mode == tool_format::TAG_WITH_TAGGED);
             size_t last_arg_seg           = closer_seg.size() - 1;
             for (int i = (int) closer_seg.size() - 1; i >= 0; i--) {
                 if (closer_seg[i].value.find("YYYY") != std::string::npos) {
                     last_arg_seg = i;
                 }
             }
-            if (analysis.mode == tool_format::TAG_WITH_JSON) {
+            if (format.mode == tool_format::TAG_WITH_JSON) {
                 const auto & entire_seg = closer_seg[last_arg_seg].value;
                 size_t       pos        = entire_seg.find_last_of("}]");
                 if (pos != std::string::npos && pos < entire_seg.size() - 1) {
-                    result.close = trim_leading_whitespace(entire_seg.substr(pos + 1));
+                    function.close = trim_leading_whitespace(entire_seg.substr(pos + 1));
                 }
             }
             for (size_t i = last_arg_seg + 1; i < closer_seg.size(); i++) {
@@ -1052,31 +1032,25 @@ tool_function_analysis differential_analyzer::extract_function_markers(const com
                     if (need_to_eat_arg_marker) {
                         need_to_eat_arg_marker = false;
                     } else {
-                        result.close += closer_seg[i].value;
+                        function.close += closer_seg[i].value;
                     }
                 } else if (!need_to_eat_arg_marker) {
-                    result.close += closer_seg[i].value;
+                    function.close += closer_seg[i].value;
                 }
             }
         }
-        result.close = trim_leading_whitespace(result.close);
+        function.close = trim_leading_whitespace(function.close);
     }
-    return result;
 }
 
-tool_arguments_analysis differential_analyzer::analyze_arguments(const common_chat_template & tmpl, const tool_analysis & tool_analysis) {
+void analyze_tools::analyze_arguments() {
     LOG_DBG(ANSI_ORANGE "Phase 4: Argument analysis\n" ANSI_RESET);
 
-    tool_arguments_analysis result;
-
-    extract_argument_name_markers(tmpl, result);
-    extract_argument_value_markers(tmpl, tool_analysis, result);
-
-    return result;
+    extract_argument_name_markers();
+    extract_argument_value_markers();
 }
 
-void differential_analyzer::extract_argument_name_markers(const common_chat_template & tmpl,
-                                                          tool_arguments_analysis &    args_analysis) {
+void analyze_tools::extract_argument_name_markers() {
     json assistant_first_arg = json{
         { "role",       "assistant" },
         { "content",    ""          },
@@ -1096,7 +1070,7 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_second_arg }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_second_arg }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
@@ -1125,11 +1099,11 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
                 std::string right_name = right_remainder.substr(0, 6);  // 6 = len("second")
 
                 if (left_name == "first" && right_name == "second") {
-                    args_analysis.name_prefix = trim_whitespace(common_prefix);
+                    arguments.name_prefix = trim_whitespace(common_prefix);
                     std::string suffix_left        = left_remainder.substr(5, left_close - 5);
                     std::string suffix_right       = right_remainder.substr(6, right_close - 6);
                     if (suffix_left == suffix_right) {
-                        args_analysis.name_suffix = trim_leading_whitespace(suffix_left);
+                        arguments.name_suffix = trim_leading_whitespace(suffix_left);
                     }
                 }
             }
@@ -1137,22 +1111,22 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
             // we most likely have actual markers for argument names
             auto pre_seg = segmentize_markers(diff.prefix);
             for (int i = pre_seg.size() - 1; i >= 0; i--) {
-                args_analysis.name_prefix = args_analysis.name_prefix + pre_seg[i].value;
+                arguments.name_prefix = arguments.name_prefix + pre_seg[i].value;
                 if (pre_seg[i].type == segment_type::MARKER) {
                     break;
                 }
             }
             auto left_seg = segmentize_markers(diff.left);
             if (left_seg.size() == 1) {  // only the name + maybe extra whitespace / normal chars in differing part
-                args_analysis.name_suffix = diff.left.substr(5);
+                arguments.name_suffix = diff.left.substr(5);
                 auto suf_seg= segmentize_markers(diff.suffix);
                 for (size_t i = 0; i < suf_seg.size(); i++) {
-                    args_analysis.name_suffix += suf_seg[i].value;
+                    arguments.name_suffix += suf_seg[i].value;
                     if (suf_seg[i].type == segment_type::MARKER) {
                         if (i < suf_seg.size() - 2 && suf_seg[i + 1].type == segment_type::TEXT &&
                             trim_whitespace(suf_seg[i + 1].value).empty()) {
                             // we need to include post-marker whitespace/newlines as well
-                            args_analysis.name_suffix += suf_seg[i + 1].value;
+                            arguments.name_suffix += suf_seg[i + 1].value;
                         }
                         break;
                     }
@@ -1165,12 +1139,12 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
                     } else {
                         to_add = left_seg[i].value;
                     }
-                    args_analysis.name_suffix += to_add;
+                    arguments.name_suffix += to_add;
                     if (left_seg[i].type == segment_type::MARKER) {
                         if (i < left_seg.size() - 2 && left_seg[i + 1].type == segment_type::TEXT &&
                             trim_whitespace(left_seg[i + 1].value).empty()) {
                             // we need to include post-marker whitespace/newlines as well
-                            args_analysis.name_suffix += left_seg[i + 1].value;
+                            arguments.name_suffix += left_seg[i + 1].value;
                         }
                         break;
                     }
@@ -1180,9 +1154,7 @@ void differential_analyzer::extract_argument_name_markers(const common_chat_temp
     }
 }
 
-void differential_analyzer::extract_argument_value_markers(const common_chat_template & tmpl,
-                                                           const tool_analysis &        analysis,
-                                                           tool_arguments_analysis &    args_analysis) {
+void analyze_tools::extract_argument_value_markers() {
     json assistant_val_X = json{
         { "role",       "assistant"                              },
         { "content",    ""                                       },
@@ -1202,7 +1174,7 @@ void differential_analyzer::extract_argument_value_markers(const common_chat_tem
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_val_Y }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_val_Y }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
@@ -1212,7 +1184,7 @@ void differential_analyzer::extract_argument_value_markers(const common_chat_tem
     const auto & diff = comparison->diff;
 
     if (diff.left == "XXXX" && diff.right == "YYYY") {
-        std::string arg_name_ending = "first" + args_analysis.name_suffix;
+        std::string arg_name_ending = "first" + arguments.name_suffix;
         std::string prefix          = diff.prefix;
         if (prefix.rfind(arg_name_ending) != std::string::npos) {
             prefix = prefix.substr(prefix.rfind(arg_name_ending) + arg_name_ending.size());
@@ -1220,7 +1192,7 @@ void differential_analyzer::extract_argument_value_markers(const common_chat_tem
         if (!prefix.empty()) {
             auto seg_pre = segmentize_markers(prefix);
             for (int i = seg_pre.size() - 1; i >= 0; i--) {
-                args_analysis.value_prefix = seg_pre[i].value + args_analysis.value_prefix;
+                arguments.value_prefix = seg_pre[i].value + arguments.value_prefix;
                 if (seg_pre[i].type == segment_type::MARKER) {
                     break;
                 }
@@ -1228,14 +1200,14 @@ void differential_analyzer::extract_argument_value_markers(const common_chat_tem
         }
 
         std::string value_suffix = diff.suffix;
-        if (!analysis.function.close.empty()) {
-            size_t func_close_pos = value_suffix.find(analysis.function.close);
+        if (!function.close.empty()) {
+            size_t func_close_pos = value_suffix.find(function.close);
             if (func_close_pos != std::string::npos) {
                 value_suffix = value_suffix.substr(0, func_close_pos);
             }
-        } else if (!analysis.format.per_call_end.empty() || !analysis.format.section_end.empty()) {
+        } else if (!format.per_call_end.empty() || !format.section_end.empty()) {
             std::string end_marker =
-                !analysis.format.per_call_end.empty() ? analysis.format.per_call_end : analysis.format.section_end;
+                !format.per_call_end.empty() ? format.per_call_end : format.section_end;
             size_t end_marker_pos = value_suffix.find(end_marker);
             if (end_marker_pos != std::string::npos) {
                 value_suffix = value_suffix.substr(0, end_marker_pos);
@@ -1243,13 +1215,12 @@ void differential_analyzer::extract_argument_value_markers(const common_chat_tem
         }
         value_suffix = trim_leading_whitespace(value_suffix);
         if (!value_suffix.empty()) {
-            args_analysis.value_suffix = value_suffix;
+            arguments.value_suffix = value_suffix;
         }
     }
 }
 
-void differential_analyzer::extract_argument_separator(const common_chat_template & tmpl,
-                                                       tool_arguments_analysis &    args_analysis) {
+void analyze_tools::extract_argument_separator() {
     json assistant_one_arg = json{
         { "role",       "assistant" },
         { "content",    ""          },
@@ -1269,7 +1240,7 @@ void differential_analyzer::extract_argument_separator(const common_chat_templat
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_args }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_two_args }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
@@ -1280,13 +1251,11 @@ void differential_analyzer::extract_argument_separator(const common_chat_templat
 
     if (!diff.right.empty()) {
         std::string separator        = until_common_prefix(diff.right, "first", "second");
-        args_analysis.separator = separator;
+        arguments.separator = separator;
     }
 }
 
-void differential_analyzer::extract_args_markers(const common_chat_template & tmpl,
-                                                 const tool_analysis &        analysis,
-                                                 tool_arguments_analysis &    args_analysis) {
+void analyze_tools::extract_args_markers() {
     json assistant_no_args = json{
         { "role",       "assistant"},
         { "content",    ""         },
@@ -1306,7 +1275,7 @@ void differential_analyzer::extract_args_markers(const common_chat_template & tm
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_args }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_with_args }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed\n" ANSI_RESET, __func__);
@@ -1315,9 +1284,9 @@ void differential_analyzer::extract_args_markers(const common_chat_template & tm
 
     const auto & diff = comparison->diff;
 
-    if (analysis.format.mode != tool_format::JSON_NATIVE) {
-        std::string prefix_marker = !analysis.format.section_start.empty() ? analysis.format.section_start : analysis.format.per_call_start;
-        std::string suffix_marker = !analysis.format.section_end.empty() ? analysis.format.section_end : analysis.format.per_call_end;
+    if (format.mode != tool_format::JSON_NATIVE) {
+        std::string prefix_marker = !format.section_start.empty() ? format.section_start : format.per_call_start;
+        std::string suffix_marker = !format.section_end.empty() ? format.section_end : format.per_call_end;
         // these might happen earlier in the tools section as an example or somewhere else, so we need to find the closest ones
         size_t prefix_pos = prefix_marker.empty() ? 0 : diff.prefix.rfind(prefix_marker);
         size_t suffix_pos = suffix_marker.empty() ? diff.suffix.size() : diff.suffix.find(suffix_marker);
@@ -1333,15 +1302,13 @@ void differential_analyzer::extract_args_markers(const common_chat_template & tm
         std::string args_end   = after_common_suffix(suffix_cut, "{}", "\"XXXX\"}");
 
         if (!args_start.empty() || !args_end.empty()) {
-            args_analysis.start = args_start;
-            args_analysis.end   = args_end;
+            arguments.start = args_start;
+            arguments.end   = args_end;
         }
     }
 }
 
-tool_id_analysis differential_analyzer::extract_call_id_markers(const common_chat_template & tmpl, tool_format_analysis & analysis) {
-    tool_id_analysis result;
-
+void analyze_tools::extract_call_id_markers() {
     json assistant_id1 = json{
         { "role",       "assistant" },
         { "content",    ""                               },
@@ -1361,17 +1328,17 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
     params.enable_thinking       = true;
 
     auto comparison = compare_variants(
-        tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_id2 }); });
+        *tmpl, params, [&](template_params & p) { p.messages = json::array({ user_msg, assistant_id2 }); });
 
     if (!comparison) {
         LOG_DBG(ANSI_ORANGE "%s: Template application failed for call_id detection\n" ANSI_RESET, __func__);
-        return result;
+        return;
     }
 
     const auto & diff = comparison->diff;
 
     if (diff.left.empty() && diff.right.empty()) {
-        return result;
+        return;
     }
 
     std::string id_value_1 = "call00001";
@@ -1402,7 +1369,7 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
         if (args_in_suffix != std::string::npos &&
             (args_in_prefix == std::string::npos || args_in_prefix > diff.prefix.length())) {
             // Args are in suffix, so call_id is BETWEEN_FUNC_AND_ARGS
-            result.pos = call_id_position::BETWEEN_FUNC_AND_ARGS;
+            call_id.pos = call_id_position::BETWEEN_FUNC_AND_ARGS;
 
             // The prefix ends with: ...<func_name><func_name_suffix><call_id_prefix><common_id_part>
             // Segmentize to find the call_id_prefix marker
@@ -1427,12 +1394,12 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
             }
 
             if (!marker_before_id.empty()) {
-                result.prefix = marker_before_id;
+                call_id.prefix = marker_before_id;
             } else {
                 // Fallback: look for the last marker in after_func
                 for (int i = (int) segments.size() - 1; i >= 0; i--) {
                     if (segments[i].type == segment_type::MARKER) {
-                        result.prefix = segments[i].value;
+                        call_id.prefix = segments[i].value;
                         break;
                     }
                 }
@@ -1442,7 +1409,7 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
             auto suffix_segments = segmentize_markers(diff.suffix);
             for (size_t i = 0; i < suffix_segments.size(); i++) {
                 if (suffix_segments[i].type == segment_type::MARKER) {
-                    result.suffix = suffix_segments[i].value;
+                    call_id.suffix = suffix_segments[i].value;
                     break;
                 }
                 // Stop if we hit the args
@@ -1452,7 +1419,7 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
             }
         } else if (args_in_prefix != std::string::npos) {
             // Args are in prefix, so call_id is POST_ARGS
-            result.pos = call_id_position::POST_ARGS;
+            call_id.pos = call_id_position::POST_ARGS;
 
             // Extract markers from between args and the ID
             std::string after_args    = diff.prefix.substr(args_in_prefix);
@@ -1462,7 +1429,7 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
                 auto        segments            = segmentize_markers(between_args_and_id);
                 for (int i = (int) segments.size() - 1; i >= 0; i--) {
                     if (segments[i].type == segment_type::MARKER) {
-                        result.prefix = segments[i].value;
+                        call_id.prefix = segments[i].value;
                         break;
                     }
                 }
@@ -1472,20 +1439,20 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
             auto suffix_segments = segmentize_markers(diff.suffix);
             for (const auto & seg : suffix_segments) {
                 if (seg.type == segment_type::MARKER) {
-                    result.suffix = seg.value;
+                    call_id.suffix = seg.value;
                     break;
                 }
             }
         }
     } else if (func_name_in_suffix != std::string::npos && func_name_in_prefix == std::string::npos) {
         // Function name is only in suffix - call_id is PRE_FUNC_NAME
-        result.pos = call_id_position::PRE_FUNC_NAME;
+        call_id.pos = call_id_position::PRE_FUNC_NAME;
 
         // Extract call_id_prefix from prefix (last marker before the common_id_part)
         auto prefix_segments = segmentize_markers(diff.prefix);
         for (int i = (int) prefix_segments.size() - 1; i >= 0; i--) {
             if (prefix_segments[i].type == segment_type::MARKER) {
-                result.prefix = prefix_segments[i].value;
+                call_id.prefix = prefix_segments[i].value;
                 break;
             }
         }
@@ -1495,7 +1462,7 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
         auto        suffix_segments = segmentize_markers(before_func);
         for (const auto & seg : suffix_segments) {
             if (seg.type == segment_type::MARKER) {
-                result.suffix = seg.value;
+                call_id.suffix = seg.value;
                 break;
             }
         }
@@ -1503,45 +1470,10 @@ tool_id_analysis differential_analyzer::extract_call_id_markers(const common_cha
 
     // When call_id is detected, per_call_end may have been incorrectly set to include
     // the call_id_suffix and sample args. Clear it if it starts with call_id_suffix.
-    if (result.pos != call_id_position::NONE && !result.suffix.empty() &&
-        analysis.per_call_end.find(result.suffix) == 0) {
-        analysis.per_call_end.clear();
+    if (call_id.pos != call_id_position::NONE && !call_id.suffix.empty() &&
+        format.per_call_end.find(call_id.suffix) == 0) {
+        format.per_call_end.clear();
     }
-
-    return result;
 }
 
-void differential_analyzer::collect_preserved_tokens(diff_analysis_result & result) {
-    auto & tokens = result.preserved_tokens;
-
-    auto add_token = [&tokens](const std::string & org_token) {
-        std::string token = trim_whitespace(org_token);
-        if (!token.empty()) {
-            // Avoid duplicates
-            if (std::find(tokens.begin(), tokens.end(), token) == tokens.end()) {
-                tokens.push_back(token);
-            }
-        }
-    };
-
-    add_token(result.reasoning.start);
-    add_token(result.reasoning.end);
-    add_token(result.content.start);
-    add_token(result.content.end);
-    add_token(result.tools.format.section_start);
-    add_token(result.tools.format.section_end);
-    add_token(result.tools.format.per_call_start);
-    add_token(result.tools.format.per_call_end);
-    add_token(result.tools.function.name_prefix);
-    add_token(result.tools.function.name_suffix);
-    add_token(result.tools.function.close);
-    add_token(result.tools.arguments.start);
-    add_token(result.tools.arguments.end);
-    add_token(result.tools.arguments.name_prefix);
-    add_token(result.tools.arguments.name_suffix);
-    add_token(result.tools.arguments.separator);
-    add_token(result.tools.arguments.value_prefix);
-    add_token(result.tools.arguments.value_suffix);
-    add_token(result.tools.call_id.prefix);
-    add_token(result.tools.call_id.suffix);
-}
+}  // namespace autoparser

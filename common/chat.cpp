@@ -239,8 +239,8 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     const auto & tmpl = chat_templates->template_tool_use
         ? *chat_templates->template_tool_use
         : *chat_templates->template_default;
-    diff_analysis_result result = differential_analyzer::analyze(tmpl);
-    detect |= result.reasoning.mode != reasoning_mode::NONE;
+    autoparser::analyze_template result(tmpl);
+    detect |= result.reasoning.mode != autoparser::reasoning_mode::NONE;
     return detect;
 }
 
@@ -752,7 +752,7 @@ static void foreach_parameter(const json &                                      
 
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
-    const struct templates_params & inputs,
+    const autoparser::templates_params & inputs,
     const std::optional<json> & messages_override,
     const std::optional<json> & tools_override,
     const std::optional<json> & additional_context) {
@@ -803,7 +803,7 @@ std::string common_chat_template_direct_apply(
 }
 
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
-                                                              const struct templates_params & inputs) {
+                                                              const autoparser::templates_params & inputs) {
     common_chat_params data;
 
     // Build up messages to follow the format: https://huggingface.co/mistralai/Ministral-3-14B-Reasoning-2512/blob/main/chat_template.jinja
@@ -917,7 +917,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
 }
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template &    tmpl,
-                                                          const struct templates_params & inputs) {
+                                                          const autoparser::templates_params & inputs) {
     common_chat_params data;
 
     // Copy reasoning to the "thinking" field as expected by the gpt-oss template
@@ -1063,7 +1063,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
 // Functionary v3.2 - uses recipient-based format: >>>recipient\n{content}
 static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template &    tmpl,
-                                                                   const struct templates_params & inputs) {
+                                                                   const autoparser::templates_params & inputs) {
     common_chat_params data;
 
     data.prompt           = common_chat_template_direct_apply(tmpl, inputs);
@@ -1116,16 +1116,14 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
             if (inputs.parallel_tool_calls) {
                 return p.choice({ content_and_tools, tools_only }) + p.end();
-            } else {
-                return p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
             }
-        } else {
-            if (inputs.parallel_tool_calls) {
-                return p.choice({ content_and_tools, content_only, tools_only }) + p.end();
-            }
-            auto content_and_tool = content_until_tool + tool_choice;
-            return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
+            return p.choice({ content_until_tool + tool_choice, tools_only }) + p.end();
         }
+        if (inputs.parallel_tool_calls) {
+            return p.choice({ content_and_tools, content_only, tools_only }) + p.end();
+        }
+        auto content_and_tool = content_until_tool + tool_choice;
+        return p.choice({ content_and_tool, content_only, tool_choice }) + p.end();
     });
 
     data.parser = parser.save();
@@ -1204,7 +1202,7 @@ static void func_args_not_string(json & messages) {
 
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
-    templates_params params;
+    autoparser::templates_params params;
     params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
     const auto & tmpl = params.tools.is_array() && tmpls->template_tool_use
         ? *tmpls->template_tool_use
@@ -1282,7 +1280,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
     try {
         LOG_DBG("Using differential autoparser\n");
-        auto auto_params = universal_peg_generator::generate_parser(tmpl, params);
+        auto auto_params = autoparser::universal_peg_generator::generate_parser(tmpl, params);
         return auto_params;
     } catch (const std::exception & e) {
         LOG_WRN("Automatic parser generation failed: %s\n", e.what());

@@ -1,6 +1,9 @@
 #include "chat-auto-parser-helpers.h"
 
+#include "chat-auto-parser.h"
 #include "chat-diff-analyzer.h"
+#include "chat.h"
+#include "log.h"
 #include "nlohmann/json.hpp"
 
 #include <cctype>
@@ -288,4 +291,58 @@ std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segm
     }
     return result;
 }
+
+namespace autoparser {
+
+std::string apply_template(const common_chat_template & tmpl, const template_params & params) {
+    templates_params tmpl_params;
+    tmpl_params.messages              = params.messages;
+    tmpl_params.tools                 = params.tools;
+    tmpl_params.add_generation_prompt = params.add_generation_prompt;
+    tmpl_params.enable_thinking       = params.enable_thinking;
+
+    if (params.extra_context) {
+        tmpl_params.extra_context = *params.extra_context;
+    }
+    tmpl_params.extra_context["enable_thinking"] = params.enable_thinking;
+
+    try {
+        return common_chat_template_direct_apply(tmpl, tmpl_params);
+    } catch (const std::exception & e) {
+        LOG_DBG("Template application failed: %s\n", e.what());
+        return "";
+    }
+}
+
+std::optional<compare_variants_result> compare_variants(
+    const common_chat_template &                   tmpl,
+    const template_params &                        params_A,
+    const std::function<void(template_params &)> & params_modifier) {
+    // Create variant B by copying A
+    template_params params_B = params_A;
+
+    // Apply modifier to create variant B
+    if (params_modifier) {
+        params_modifier(params_B);
+    }
+
+    // Apply template to both variants
+    std::string output_A = apply_template(tmpl, params_A);
+    std::string output_B = apply_template(tmpl, params_B);
+
+    // Check for template application failures
+    if (output_A.empty() || output_B.empty()) {
+        return std::nullopt;
+    }
+
+    // Calculate diff and return result with both outputs
+    compare_variants_result result;
+    result.diff     = calculate_diff_split(output_A, output_B);
+    result.output_A = output_A;
+    result.output_B = output_B;
+
+    return result;
+}
+
+}  // namespace autoparser
 

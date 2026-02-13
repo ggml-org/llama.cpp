@@ -400,12 +400,12 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_no_tools;
+            autoparser::templates_params params_no_tools;
             params_no_tools.messages = json::array({ user_msg });
             params_no_tools.add_generation_prompt = false;
             params_no_tools.tools = json::array();
 
-            templates_params params_with_tools = params_no_tools;
+            autoparser::templates_params params_with_tools = params_no_tools;
             params_with_tools.tools = tools;
 
             std::string output_no_tools = common_chat_template_direct_apply(chat_template, params_no_tools);
@@ -419,12 +419,12 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_no_prompt;
+            autoparser::templates_params params_no_prompt;
             params_no_prompt.messages = json::array({ user_msg });
             params_no_prompt.add_generation_prompt = false;
             params_no_prompt.tools = json::array();
 
-            templates_params params_with_prompt = params_no_prompt;
+            autoparser::templates_params params_with_prompt = params_no_prompt;
             params_with_prompt.add_generation_prompt = true;
 
             std::string output_no_prompt = common_chat_template_direct_apply(chat_template, params_no_prompt);
@@ -438,12 +438,12 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_no_reasoning;
+            autoparser::templates_params params_no_reasoning;
             params_no_reasoning.messages = json::array({ user_msg, make_assistant_no_reasoning() });
             params_no_reasoning.add_generation_prompt = false;
             params_no_reasoning.enable_thinking = true;
 
-            templates_params params_with_reasoning = params_no_reasoning;
+            autoparser::templates_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_with_reasoning() });
 
             std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);
@@ -458,12 +458,12 @@ static void analyze_template(const std::string & template_path) {
             json user_msg = make_user_msg();
             json user_msg2 = make_user_msg2();
 
-            templates_params params_no_reasoning;
+            autoparser::templates_params params_no_reasoning;
             params_no_reasoning.messages = json::array({ user_msg, make_assistant_no_reasoning(), user_msg2 });
             params_no_reasoning.add_generation_prompt = false;
             params_no_reasoning.enable_thinking = true;
 
-            templates_params params_with_reasoning = params_no_reasoning;
+            autoparser::templates_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_with_reasoning(), user_msg2 });
 
             std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);
@@ -477,12 +477,12 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_no_tool;
+            autoparser::templates_params params_no_tool;
             params_no_tool.messages = json::array({ user_msg, make_assistant_no_tool() });
             params_no_tool.add_generation_prompt = false;
             params_no_tool.tools = tools;
 
-            templates_params params_with_tool = params_no_tool;
+            autoparser::templates_params params_with_tool = params_no_tool;
             params_with_tool.messages = json::array({ user_msg, make_assistant_one_tool() });
 
             std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool);
@@ -497,12 +497,12 @@ static void analyze_template(const std::string & template_path) {
             json user_msg = make_user_msg();
             json user_msg2 = make_user_msg2_continue();
 
-            templates_params params_no_tool;
+            autoparser::templates_params params_no_tool;
             params_no_tool.messages = json::array({ user_msg, make_assistant_no_tool(), user_msg2 });
             params_no_tool.add_generation_prompt = false;
             params_no_tool.tools = tools;
 
-            templates_params params_with_tool = params_no_tool;
+            autoparser::templates_params params_with_tool = params_no_tool;
             params_with_tool.messages = json::array({ user_msg, make_assistant_one_tool(), user_msg2 });
 
             std::string output_no_tool = common_chat_template_direct_apply(chat_template, params_no_tool);
@@ -516,12 +516,12 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_one_tool;
+            autoparser::templates_params params_one_tool;
             params_one_tool.messages = json::array({ user_msg, make_assistant_one_tool() });
             params_one_tool.add_generation_prompt = false;
             params_one_tool.tools = tools;
 
-            templates_params params_two_tools = params_one_tool;
+            autoparser::templates_params params_two_tools = params_one_tool;
             params_two_tools.messages = json::array({ user_msg, make_assistant_two_tools() });
 
             std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool);
@@ -536,12 +536,12 @@ static void analyze_template(const std::string & template_path) {
             json user_msg = make_user_msg();
             json user_msg2 = make_user_msg2_continue();
 
-            templates_params params_one_tool;
+            autoparser::templates_params params_one_tool;
             params_one_tool.messages = json::array({ user_msg, make_assistant_one_tool(), user_msg2 });
             params_one_tool.add_generation_prompt = false;
             params_one_tool.tools = tools;
 
-            templates_params params_two_tools = params_one_tool;
+            autoparser::templates_params params_two_tools = params_one_tool;
             params_two_tools.messages = json::array({ user_msg, make_assistant_two_tools(), user_msg2 });
 
             std::string output_one_tool = common_chat_template_direct_apply(chat_template, params_one_tool);
@@ -555,13 +555,13 @@ static void analyze_template(const std::string & template_path) {
         {
             json user_msg = make_user_msg();
 
-            templates_params params_no_reasoning;
+            autoparser::templates_params params_no_reasoning;
             params_no_reasoning.messages = json::array({ user_msg, make_assistant_one_tool() });
             params_no_reasoning.add_generation_prompt = false;
             params_no_reasoning.tools = tools;
             params_no_reasoning.enable_thinking = true;
 
-            templates_params params_with_reasoning = params_no_reasoning;
+            autoparser::templates_params params_with_reasoning = params_no_reasoning;
             params_with_reasoning.messages = json::array({ user_msg, make_assistant_one_tool_with_reasoning() });
 
             std::string output_no_reasoning = common_chat_template_direct_apply(chat_template, params_no_reasoning);

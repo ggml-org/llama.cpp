@@ -23,6 +23,10 @@ using json = nlohmann::ordered_json;
 
 struct common_chat_templates;
 
+namespace autoparser {
+struct templates_params;
+}  // namespace autoparser
+
 struct common_chat_tool_call {
     std::string name;
     std::string arguments;
@@ -294,7 +298,7 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
 
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
-    const struct templates_params & inputs,
+    const autoparser::templates_params & inputs,
     const std::optional<json> & messages_override = std::nullopt,
     const std::optional<json> & tools_override = std::nullopt,
     const std::optional<json> & additional_context = std::nullopt);

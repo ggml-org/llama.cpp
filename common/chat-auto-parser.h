@@ -10,6 +10,8 @@
 
 using json = nlohmann::ordered_json;
 
+namespace autoparser {
+
 struct templates_params {
     json                                  messages;
     json                                  tools;
@@ -37,34 +39,7 @@ class universal_peg_generator {
 
     static common_chat_params generate_parser(const common_chat_template &    tmpl,
                                               const struct templates_params & inputs,
-                                              const diff_analysis_result &    analysis);
-
-  private:
-    // Build unified parser (single code path for all formats)
-    static common_peg_arena build_parser(const diff_analysis_result &    analysis,
-                                         const struct templates_params & inputs,
-                                         bool                            thinking_forced_open,
-                                         bool                            thinking_forced_closed = false);
-
-    // Build tool calling parser based on detected format
-    static common_peg_parser build_tool_parser(common_chat_peg_unified_builder & p,
-                                               const diff_analysis_result &      analysis,
-                                               const templates_params &           inputs,
-                                               const common_peg_parser &          reasoning);
-
-    // Per-format tool parser builders
-    static common_peg_parser build_tool_parser_json_native(common_chat_peg_unified_builder & p,
-                                                            const diff_analysis_result &      analysis,
-                                                            const templates_params &           inputs,
-                                                            const common_peg_parser &          reasoning);
-
-    static common_peg_parser build_tool_parser_tag_json(common_chat_peg_unified_builder & p,
-                                                         const diff_analysis_result &      analysis,
-                                                         const templates_params &           inputs,
-                                                         const common_peg_parser &          reasoning);
-
-    static common_peg_parser build_tool_parser_tag_tagged(common_chat_peg_unified_builder & p,
-                                                           const diff_analysis_result &      analysis,
-                                                           const templates_params &           inputs,
-                                                           const common_peg_parser &          reasoning);
+                                              const analyze_template &        analysis);
 };
+
+}  // namespace autoparser

@@ -279,7 +279,7 @@ static void render_scenario(const common_chat_template & tmpl,
     LOG_ERR("Messages:\n%s\n", final_messages.dump(2).c_str());
 
     try {
-        templates_params inputs;
+        autoparser::templates_params inputs;
         inputs.messages                         = final_messages;
         inputs.add_generation_prompt            = add_generation_prompt;
         inputs.extra_context["enable_thinking"] = enable_thinking;
@@ -395,10 +395,10 @@ int main(int argc, char ** argv) {
             LOG_ERR("                           TEMPLATE ANALYSIS\n");
             LOG_ERR("================================================================================\n");
 
-            diff_analysis_result analysis = differential_analyzer::analyze(chat_template);
+            autoparser::analyze_template analysis(chat_template);
 
             // Generate Parser
-            templates_params params;
+            autoparser::templates_params params;
             params.messages = json::array();
             params.reasoning_format =
                 opts.enable_reasoning ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
@@ -414,7 +414,7 @@ int main(int argc, char ** argv) {
             }
             params.parallel_tool_calls = false;
 
-            auto parser_data = universal_peg_generator::generate_parser(chat_template, params, analysis);
+            auto parser_data = autoparser::universal_peg_generator::generate_parser(chat_template, params, analysis);
 
             LOG_ERR("\n=== Differential Analysis Results ===\n");
 

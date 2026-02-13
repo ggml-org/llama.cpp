@@ -1,6 +1,8 @@
 #pragma once
 
 #include "chat-diff-analyzer.h"
+#include <functional>
+#include <optional>
 #include <string>
 
 std::string trim_whitespace(const std::string & str);
@@ -54,3 +56,18 @@ std::vector<segment> segmentize_markers(const std::string & text);
 // prune_whitespace_segments(X) -> [ (MARKER, "<tool_call>"), (MARKER, "<function=foo>"), (MARKER, "<arg=bar>"), (MARKER, "</arg>"),
 //                                   (MARKER, "</function>"), (MARKER, "</tool_call>") ]
 std::vector<segment> prune_whitespace_segments(const std::vector<segment> & segments);
+
+namespace autoparser {
+
+// Apply a template with the given parameters, returning the rendered string (empty on failure)
+std::string apply_template(const common_chat_template & tmpl, const template_params & params);
+
+// Factorized differential comparison function
+// Takes base params and a single modifier lambda to create variant B
+// Returns compare_variants_result containing diff and both outputs, or std::nullopt on failure
+std::optional<compare_variants_result> compare_variants(
+    const common_chat_template &                   tmpl,
+    const template_params &                        params_A,
+    const std::function<void(template_params &)> & params_modifier);
+
+}  // namespace autoparser
