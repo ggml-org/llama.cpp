@@ -1,7 +1,6 @@
 #include "httplib.h"
 namespace httplib {
 
-
 /*
  * Implementation that will be part of the .cc file if split into .h + .cc.
  */
@@ -1219,7 +1218,7 @@ int close_socket(socket_t sock) {
 #endif
 }
 
-template <typename T> inline ssize_t handle_EINTR(T fn) {
+template <typename T> ssize_t handle_EINTR(T fn) {
   ssize_t res = 0;
   while (true) {
     res = fn();
