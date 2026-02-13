@@ -1,5 +1,4 @@
-# TESTING NEEDED: this version has some bugs that seems to be affecting output correctness. Its an experimental build, use at your risk until will be fixed! 
-
+### UPDATE: correctness seems better now
 
 # llama.cpp-gfx906-2602
 
