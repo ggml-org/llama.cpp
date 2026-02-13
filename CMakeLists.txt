@@ -2,6 +2,17 @@ cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-mrtm" C_RTM_SUPPORTED)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-mrtm" CXX_RTM_SUPPORTED)
+    if(C_RTM_SUPPORTED AND CXX_RTM_SUPPORTED)
+        message(STATUS "RTM support detected, adding -mrtm flag")
+        add_compile_options("-mrtm")
+    endif()
+endif()
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
