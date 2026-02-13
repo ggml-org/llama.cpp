@@ -763,7 +763,7 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_host_buffer_t
     return ggml_backend_openvino_host_buffer_type(ctx->device);
 }
 
-static bool has_view_input(const ggml_tensor * op) {
+static bool has_view_op_input(const ggml_tensor * op) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (op->src[i] == nullptr) {
             break;
@@ -773,6 +773,18 @@ static bool has_view_input(const ggml_tensor * op) {
         }
     }
     return false;
+}
+
+static bool is_supported_flash_attn_pattern(const ggml_tensor * op) {
+    // pattern of q,k,v should be q->op==PERMUTE, q->src[0]->op==VIEW, q->src[0]->src[0]->view_src==nullptr
+    for (int i = 0; i < 3; i++) {
+        const ggml_tensor * src = op->src[i];
+        if (src->op != GGML_OP_PERMUTE || src->src[0] == nullptr || src->src[0]->op != GGML_OP_VIEW ||
+            src->src[0]->src[0] == nullptr || src->src[0]->src[0]->view_src != nullptr) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool is_op_unsupported_case(const ggml_tensor * op) {
@@ -814,6 +826,9 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
             // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
             return true;
         }
+        if (!is_supported_flash_attn_pattern(op)) {
+            return true;
+        }
         float scale = 1.0f;
         float max_bias = 0.0f;
         float logit_softcap = 0.0f;
@@ -850,6 +865,20 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16) {
             // Has accuracy issue, try enabling this and see `test-backend-ops -o "MUL_MAT"`
             // GGML_LOG_WARN("OpenVINO backend does not support MUL_MAT with two F16 tensors\n");
+            return true;
+        }
+        if (op->src[0]->ne[3] != op->src[1]->ne[3] && op->src[0]->ne[3] != 1 && op->src[1]->ne[3] != 1) {
+            return true;
+        }
+        if (op->src[0]->op == GGML_OP_PERMUTE || op->src[1]->op == GGML_OP_PERMUTE) {
+            return true;
+        }
+        if (ggml_is_quantized(op->src[0]->type) && op->src[0]->ne[1] == 1) {
+            // MUL_MAT(type_a=q4_0,type_b=f32,m=1,n=2048,k=8192,bs=[1,1],nr=[1,1],per=[0,1,2,3],k_v=0,o=1)
+            // triggers a bug in ov matmul_shape_inference.hpp
+            return true;
+        }
+        if (op->src[0]->op == GGML_OP_VIEW && op->src[1]->op == GGML_OP_VIEW) {
             return true;
         }
         break;
@@ -924,7 +953,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             // GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n", ggml_unary_op_name(ggml_get_unary_op(op)));
             return false;
         }
-        if (has_view_input(op)) {
+        if (has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
             //               ggml_unary_op_name(ggml_get_unary_op(op)));
             return false;
@@ -937,7 +966,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             // GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
-        if (has_view_input(op)) {
+        if (has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
             //               ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
@@ -954,7 +983,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             GGML_OP_GET_ROWS,
             GGML_OP_RMS_NORM,
         };
-        if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_input(op)) {
+        if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_op_input(op)) {
             // GGML_LOG_WARN("OpenVINO backend does not support op %s with view input\n", ggml_op_name(op->op));
             return false;
         }

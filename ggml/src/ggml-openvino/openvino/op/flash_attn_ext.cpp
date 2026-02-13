@@ -55,13 +55,13 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
 
     auto tile_kv = [&](int64_t num_heads, int64_t num_heads_kv, int64_t head_size, ov::Output<Node> kv) {
         int64_t factor = num_heads / num_heads_kv;
-        if (factor > 1) {
+        if (factor > 1 && num_heads_kv > 1) {
             ov::Output<ov::Node> kv_broadcast_shape, kv_unsqueezed, new_kv_shape;
             auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
             kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 
             kv_broadcast_shape = ov::op::v0::Constant::create(
-                ov::element::i64, {5}, {(int64_t) 1, num_heads_kv, factor, (int64_t) 1, head_size});
+                ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, factor, (int64_t) 1, (int64_t) 1});
             new_kv_shape =
                 ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 0, num_heads, (int64_t) -1, head_size});
 

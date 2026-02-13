@@ -54,13 +54,13 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
 
         return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
     } catch (const ov::Exception & e) {
-        // GGML_LOG_ERROR("GGML OpenVINO backend ov::Exception: %s\n", e.what());
+        GGML_LOG_ERROR("GGML OpenVINO backend ov::Exception: %s\n", e.what());
         return GGML_STATUS_FAILED;
     } catch (const std::exception & e) {
-        // GGML_LOG_ERROR("GGML OpenVINO backend std::exception: %s\n", e.what());
+        GGML_LOG_ERROR("GGML OpenVINO backend std::exception: %s\n", e.what());
         return GGML_STATUS_FAILED;
     } catch (...) {
-        // GGML_LOG_ERROR("GGML OpenVINO backend unknown exception\n");
+        GGML_LOG_ERROR("GGML OpenVINO backend unknown exception\n");
         return GGML_STATUS_FAILED;
     }
 }

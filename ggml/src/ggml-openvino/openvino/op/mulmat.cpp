@@ -47,30 +47,31 @@ OutputVector translate_mulmat(const NodeContext & context) {
 
     auto B_shape = context.get_input_shape(0).to_shape();
     auto A_shape = context.get_input_shape(1).to_shape();
-    int64_t A_batch = A_shape[0];
-    int64_t B_batch = B_shape[0];
+    int64_t A_batch = A_shape[1];
+    int64_t B_batch = B_shape[1];
+
     auto A_batch_larger = A_batch > B_batch;
+    auto batch_large = A_batch_larger ? A_batch : B_batch;
+    auto batch_small = A_batch_larger ? B_batch : A_batch;
+
     Output<Node> Z = A_batch_larger ? B : A;
-    int64_t factor = A_batch_larger ? A_batch / B_batch : B_batch / A_batch;
-    if (factor > 1) {
-        // TODO code is outdated
-        auto A_batch_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{A_batch});
-        auto B_batch_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{B_batch});
+    int64_t factor = batch_large / batch_small;
+    if (factor > 1 && batch_small > 1) {
+        auto batch_large_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{batch_large});
+        auto batch_small_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{batch_small});
         auto factor_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{factor});
 
-        auto Z_last_two_dims = get_dimensions(Z.get_node_shared_ptr(), {1, 2});
-
-        auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {1});
+        auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
         auto Z_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(Z, unsqueeze_axes);
 
-        Output<Node> batch_small = A_batch_larger ? B_batch_node : A_batch_node;
-        Output<Node> batch_large = A_batch_larger ? A_batch_node : B_batch_node;
-        auto broadcast_shape =
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_small, factor_node, Z_last_two_dims}, 0);
-        auto Z_broadcasted = std::make_shared<ov::op::v3::Broadcast>(Z_unsqueezed, broadcast_shape);
+        auto broadcast_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {5}, {(int64_t) 1, (int64_t) 1, factor, (int64_t) 1, (int64_t) 1});
+        auto new_Z_shape = ov::op::v0::Constant::create(ov::element::i64, {4},
+                                                        {(int64_t) 0, batch_large, (int64_t) -1, (int64_t) A_shape[3]});
 
-        auto new_Z_shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{batch_large, Z_last_two_dims}, 0);
-        Z = std::make_shared<ov::op::v1::Reshape>(Z_broadcasted, new_Z_shape, false);
+        auto Z_broadcasted = std::make_shared<ov::op::v3::Broadcast>(Z_unsqueezed, broadcast_shape,
+                                                                     ov::op::BroadcastType::BIDIRECTIONAL);
+        Z = std::make_shared<ov::op::v1::Reshape>(Z_broadcasted, new_Z_shape, true);
     }
     if (A_batch_larger) {
         B = Z;
