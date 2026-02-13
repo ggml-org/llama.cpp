@@ -1135,9 +1135,9 @@ bool ggml_backend_cuda_allreduce_tensor(ggml_backend_t * backends, struct ggml_t
         GGML_LOG_WARN("%s: NVIDIA Collective Communications Library (NCCL) is unavailable, multi GPU performance will be suboptimal\n", __func__);
         warning_printed = true;
     }
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     GGML_UNUSED_VARS(backends, tensors, n_backends);
     return false;
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #endif // GGML_USE_NCCL
 }
 
