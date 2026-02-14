@@ -235,6 +235,10 @@ public:
         return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]);
     }
 
+    inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_ROPE && tensor == op->src[2];
+    }
+
     inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_SET_ROWS && op->src[2] == tensor;
     }
