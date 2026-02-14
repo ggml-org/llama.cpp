@@ -175,7 +175,7 @@ static void llama_tensor_dequantize_impl(
     workers.clear();
 }
 
-static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, bool update_stats) {
+static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, bool update_stats) {
     const std::string name = ggml_get_name(tensor);
 
     // TODO: avoid hardcoded tensor names - use the TN_* constants
@@ -437,6 +437,95 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     return new_type;
 }
 
+// determine the ggml_type that this tensor should be quantized to
+static ggml_type llama_tensor_get_type(
+                  quantize_state_impl & qs,
+    const llama_model_quantize_params * params,
+                    const ggml_tensor * tensor,
+                            ggml_type   default_type,
+                                 bool   update_stats // we only update qs if this flag is true
+) {
+    ggml_type new_type = default_type;
+    // get more optimal quantization type based on the tensor shape, layer, etc.
+    if (!params->pure && ggml_is_quantized(default_type)) {
+
+        // if the user provided tensor types - use those
+        bool manual = false;
+        if (params->tensor_types) {
+            const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
+            const std::string tensor_name(tensor->name);
+            for (const auto & [tname, qtype] : tensor_types) {
+                if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
+                    if  (qtype != new_type) {
+                        LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
+                        new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
+                        manual = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
+        if (!manual) {
+            new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, update_stats);
+        }
+
+        // incompatible tensor shapes are handled here - fallback to a compatible type
+        {
+            bool convert_incompatible_tensor = false;
+
+            const int64_t nx = tensor->ne[0];
+            const int64_t ny = tensor->ne[1];
+            const int64_t qk_k = ggml_blck_size(new_type);
+
+            if (nx % qk_k != 0) {
+                LLAMA_LOG_WARN("\n\n%s : tensor cols %" PRId64 " x %" PRId64 " are not divisible by %" PRId64 ", required for %s", __func__, nx, ny, qk_k, ggml_type_name(new_type));
+                convert_incompatible_tensor = true;
+            } else {
+                if (update_stats) {
+                    ++qs.n_k_quantized;
+                }
+            }
+
+            if (convert_incompatible_tensor) {
+                switch (new_type) {
+                    case GGML_TYPE_TQ1_0:
+                    case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead
+                    case GGML_TYPE_IQ2_XXS:
+                    case GGML_TYPE_IQ2_XS:
+                    case GGML_TYPE_IQ2_S:
+                    case GGML_TYPE_IQ3_XXS:
+                    case GGML_TYPE_IQ3_S:
+                    case GGML_TYPE_IQ1_S:
+                    case GGML_TYPE_IQ1_M:
+                    case GGML_TYPE_Q2_K:
+                    case GGML_TYPE_Q3_K:
+                    case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
+                    case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
+                    case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q5_1;   break;
+                    case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
+                    default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
+                }
+                if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
+                    new_type = GGML_TYPE_F16;
+                }
+                if (update_stats) {
+                    LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
+                    ++qs.n_fallback;
+                }
+            }
+        }
+    }
+    if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
+        new_type = params->token_embedding_type;
+    }
+    if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
+        new_type = params->output_tensor_type;
+    }
+    return new_type;
+}
+
 static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
     if (nthread < 2) {
         // single-thread
@@ -508,149 +597,61 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     const std::string name = tensor->name;
 
     // This used to be a regex, but <regex> has an extreme cost to compile times.
-    bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
+    bool allowed = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
 
     // quantize only 2D and 3D tensors (experts)
-    quantize &= (ggml_n_dims(tensor) >= 2);
+    allowed &= (ggml_n_dims(tensor) >= 2);
 
     // do not quantize norm tensors
-    quantize &= name.find("_norm.weight") == std::string::npos;
+    allowed &= name.find("_norm.weight") == std::string::npos;
 
-    quantize &= params->quantize_output_tensor || name != "output.weight";
-    quantize &= !params->only_copy;
+    allowed &= params->quantize_output_tensor || name != "output.weight";
+    allowed &= !params->only_copy;
 
     // do not quantize expert gating tensors
     // NOTE: can't use LLM_TN here because the layer number is not known
-    quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+    allowed &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
     // these are very small (e.g. 4x4)
-    quantize &= name.find("altup")  == std::string::npos;
-    quantize &= name.find("laurel") == std::string::npos;
+    allowed &= name.find("altup")  == std::string::npos;
+    allowed &= name.find("laurel") == std::string::npos;
 
     // these are not too big so keep them as it is
-    quantize &= name.find("per_layer_model_proj") == std::string::npos;
+    allowed &= name.find("per_layer_model_proj") == std::string::npos;
 
     // do not quantize positional embeddings and token types (BERT)
-    quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
-    quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
+    allowed &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
+    allowed &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
 
     // do not quantize Mamba /Kimi's small conv1d weights
     // NOTE: can't use LLM_TN here because the layer number is not known
-    quantize &= name.find("ssm_conv1d") == std::string::npos;
-    quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+    allowed &= name.find("ssm_conv1d") == std::string::npos;
+    allowed &= name.find("shortconv.conv.weight") == std::string::npos;
 
     // do not quantize RWKV's small yet 2D weights
-    quantize &= name.find("time_mix_first.weight") == std::string::npos;
-    quantize &= name.find("time_mix_w0.weight") == std::string::npos;
-    quantize &= name.find("time_mix_w1.weight") == std::string::npos;
-    quantize &= name.find("time_mix_w2.weight") == std::string::npos;
-    quantize &= name.find("time_mix_v0.weight") == std::string::npos;
-    quantize &= name.find("time_mix_v1.weight") == std::string::npos;
-    quantize &= name.find("time_mix_v2.weight") == std::string::npos;
-    quantize &= name.find("time_mix_a0.weight") == std::string::npos;
-    quantize &= name.find("time_mix_a1.weight") == std::string::npos;
-    quantize &= name.find("time_mix_a2.weight") == std::string::npos;
-    quantize &= name.find("time_mix_g1.weight") == std::string::npos;
-    quantize &= name.find("time_mix_g2.weight") == std::string::npos;
-    quantize &= name.find("time_mix_decay_w1.weight") == std::string::npos;
-    quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
-    quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
+    allowed &= name.find("time_mix_first.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_w2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_v2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a0.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_a2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_g1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_g2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_decay_w1.weight") == std::string::npos;
+    allowed &= name.find("time_mix_decay_w2.weight") == std::string::npos;
+    allowed &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
 
     // do not quantize relative position bias (T5)
-    quantize &= name.find("attn_rel_b.weight") == std::string::npos;
+    allowed &= name.find("attn_rel_b.weight") == std::string::npos;
 
     // do not quantize specific multimodal tensors
-    quantize &= name.find(".position_embd.") == std::string::npos;
+    allowed &= name.find(".position_embd.") == std::string::npos;
 
-    return quantize;
-}
-
-static ggml_type tensor_get_target_type(
-                  quantize_state_impl & qs,
-    const llama_model_quantize_params * params,
-                    const ggml_tensor * tensor,
-                            ggml_type   default_type,
-                                 bool   update_stats // should we update qs or no?
-) {
-    ggml_type new_type = default_type;
-    // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (!params->pure && ggml_is_quantized(default_type)) {
-
-        // if the user provided tensor types - use those
-        bool manual = false;
-        if (params->tensor_types) {
-            const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
-            const std::string tensor_name(tensor->name);
-            for (const auto & [tname, qtype] : tensor_types) {
-                if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
-                    if  (qtype != new_type) {
-                        LLAMA_LOG_WARN("(manual override: %s -> %s) ", ggml_type_name(new_type), ggml_type_name(qtype));
-                        new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
-                        manual = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual) {
-            new_type = llama_tensor_get_type(qs, new_type, tensor, params->ftype, update_stats);
-        }
-
-        // incompatible tensor shapes are handled here - fallback to a compatible type
-        {
-            bool convert_incompatible_tensor = false;
-
-            const int64_t nx = tensor->ne[0];
-            const int64_t ny = tensor->ne[1];
-            const int64_t qk_k = ggml_blck_size(new_type);
-
-            if (nx % qk_k != 0) {
-                LLAMA_LOG_WARN("\n\n%s : tensor cols %" PRId64 " x %" PRId64 " are not divisible by %" PRId64 ", required for %s", __func__, nx, ny, qk_k, ggml_type_name(new_type));
-                convert_incompatible_tensor = true;
-            } else {
-                if (update_stats) {
-                    ++qs.n_k_quantized;
-                }
-            }
-
-            if (convert_incompatible_tensor) {
-                switch (new_type) {
-                    case GGML_TYPE_TQ1_0:
-                    case GGML_TYPE_TQ2_0:  new_type = GGML_TYPE_Q4_0; break;  // TODO: use a symmetric type instead
-                    case GGML_TYPE_IQ2_XXS:
-                    case GGML_TYPE_IQ2_XS:
-                    case GGML_TYPE_IQ2_S:
-                    case GGML_TYPE_IQ3_XXS:
-                    case GGML_TYPE_IQ3_S:
-                    case GGML_TYPE_IQ1_S:
-                    case GGML_TYPE_IQ1_M:
-                    case GGML_TYPE_Q2_K:
-                    case GGML_TYPE_Q3_K:
-                    case GGML_TYPE_IQ4_XS: new_type = GGML_TYPE_IQ4_NL; break;
-                    case GGML_TYPE_Q4_K:   new_type = GGML_TYPE_Q5_0;   break;
-                    case GGML_TYPE_Q5_K:   new_type = GGML_TYPE_Q5_1;   break;
-                    case GGML_TYPE_Q6_K:   new_type = GGML_TYPE_Q8_0;   break;
-                    default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
-                }
-                if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
-                    new_type = GGML_TYPE_F16;
-                }
-                if (update_stats) {
-                    LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
-                    ++qs.n_fallback;
-                }
-            }
-        }
-    }
-    if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
-        new_type = params->token_embedding_type;
-    }
-    if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
-        new_type = params->output_tensor_type;
-    }
-    return new_type;
+    return allowed;
 }
 
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
@@ -866,9 +867,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
         gguf_add_tensor(ctx_outs[i_split].get(), tensor);
 
-        // TODO: we could save this per-tensor and correlate it with the vector of tensors so we
-        //       don't have to call this function again later (currently twice per tensor)
-        ggml_type target_type = tensor_get_target_type(qs, params, tensor, default_type, false);
+        ggml_type target_type = llama_tensor_get_type(qs, params, tensor, default_type, false);
 
         if (!params->imatrix &&
             tensor_allows_quantization(params, model.arch, tensor) &&
