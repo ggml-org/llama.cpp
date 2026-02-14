@@ -7,7 +7,6 @@
 #include "common.h"
 #include "simd-mappings.h"
 
-
 // TODO: add support for sizeless vector types
 #if defined(GGML_SIMD) && !defined(__ARM_FEATURE_SVE) && !defined(__riscv_v_intrinsic)
 
@@ -22,6 +21,11 @@
 #else
     static constexpr int GEMM_RM = 2;
     static constexpr int GEMM_RN = 2;
+#endif
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Waggressive-loop-optimizations"
 #endif
 
 template <int RM, int RN>
@@ -108,6 +112,10 @@ static void simd_gemm(
         }
     }
 }
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 #else // scalar path
 
