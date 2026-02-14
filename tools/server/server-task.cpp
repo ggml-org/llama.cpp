@@ -659,6 +659,15 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
     return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
 }
 
+json server_task_result_cmpl_final::usage_json_oaicompat() {
+    return json {
+        {"completion_tokens", n_decoded},
+        {"prompt_tokens",     n_prompt_tokens},
+        {"total_tokens",      n_decoded + n_prompt_tokens},
+        {"prompt_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+    };
+}
+
 json server_task_result_cmpl_final::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
@@ -684,11 +693,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"model",              oaicompat_model},
         {"system_fingerprint", build_info},
         {"object",             "text_completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -736,11 +741,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"model",              oaicompat_model},
         {"system_fingerprint", build_info},
         {"object",             "chat.completion"},
-        {"usage", json {
-            {"completion_tokens", n_decoded},
-            {"prompt_tokens",     n_prompt_tokens},
-            {"total_tokens",      n_decoded + n_prompt_tokens}
-        }},
+        {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id}
     };
 
@@ -805,11 +806,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
             {"model",              oaicompat_model},
             {"system_fingerprint", build_info},
             {"object",             "chat.completion.chunk"},
-            {"usage", json {
-                {"completion_tokens", n_decoded},
-                {"prompt_tokens",     n_prompt_tokens},
-                {"total_tokens",      n_decoded + n_prompt_tokens},
-            }},
+            {"usage",              usage_json_oaicompat()},
         });
     }
 
@@ -888,6 +885,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
             {"total_tokens",  n_decoded + n_prompt_tokens},
+            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
         }},
     };
 
@@ -996,7 +994,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
                 {"usage",      json {
                     {"input_tokens",  n_prompt_tokens},
                     {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens}
+                    {"total_tokens",  n_decoded + n_prompt_tokens},
+                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
                 }}
             }},
         }}
@@ -1062,7 +1061,8 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"stop_reason", stop_reason},
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
         {"usage", {
-            {"input_tokens", n_prompt_tokens},
+            {"cache_read_input_tokens", n_prompt_tokens_cache},
+            {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
             {"output_tokens", n_decoded}
         }}
     };
@@ -1572,7 +1572,8 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                     {"stop_reason", nullptr},
                     {"stop_sequence", nullptr},
                     {"usage", {
-                        {"input_tokens", n_prompt_tokens},
+                        {"cache_read_input_tokens", n_prompt_tokens_cache},
+                        {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},
                         {"output_tokens", 0}
                     }}
                 }}
