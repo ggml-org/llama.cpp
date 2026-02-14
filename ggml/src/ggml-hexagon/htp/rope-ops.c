@@ -10,6 +10,7 @@
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
+#include "hex-fastdiv.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -42,7 +43,7 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-struct rope_th_ctx {
+struct htp_rope_context {
     int32_t n_dims;
     int32_t mode;
     int32_t n_ctx_orig;
@@ -56,6 +57,11 @@ struct rope_th_ctx {
     float beta_slow;
     float theta_scale;
     float corr_dims[2];
+
+    uint32_t src0_nrows_per_thread;
+    struct fastdiv_values fastdiv_ne01;
+    struct fastdiv_values fastdiv_ne02;
+    size_t spad_stride;
 
     struct htp_ops_context * octx;
 };
@@ -117,31 +123,39 @@ static void rope_corr_dims(int     n_dims,
     dims[1]     = MIN(n_dims - 1, end);
 }
 
-static void init_rope_ctx(struct rope_th_ctx * rope_ctx, struct htp_ops_context * octx) {
-    memset(rope_ctx, 0, sizeof(struct rope_th_ctx));
+static void init_rope_ctx(struct htp_rope_context * rctx, struct htp_ops_context * octx) {
+    memset(rctx, 0, sizeof(struct htp_rope_context));
 
     const int32_t * op_params = &octx->op_params[0];
 
-    rope_ctx->n_dims     = ((const int32_t *) op_params)[1];
-    rope_ctx->mode       = ((const int32_t *) op_params)[2];
-    rope_ctx->n_ctx_orig = ((const int32_t *) op_params)[4];
+    rctx->n_dims     = ((const int32_t *) op_params)[1];
+    rctx->mode       = ((const int32_t *) op_params)[2];
+    rctx->n_ctx_orig = ((const int32_t *) op_params)[4];
 
-    memcpy(&rope_ctx->freq_base, (int32_t *) op_params + 5, sizeof(float));
-    memcpy(&rope_ctx->freq_scale, (int32_t *) op_params + 6, sizeof(float));
-    memcpy(&rope_ctx->ext_factor, (int32_t *) op_params + 7, sizeof(float));
-    memcpy(&rope_ctx->attn_factor, (int32_t *) op_params + 8, sizeof(float));
-    memcpy(&rope_ctx->beta_fast, (int32_t *) op_params + 9, sizeof(float));
-    memcpy(&rope_ctx->beta_slow, (int32_t *) op_params + 10, sizeof(float));
-    memcpy(&rope_ctx->sections, (int32_t *) op_params + 11, sizeof(int) * 4);
+    memcpy(&rctx->freq_base, (int32_t *) op_params + 5, sizeof(float));
+    memcpy(&rctx->freq_scale, (int32_t *) op_params + 6, sizeof(float));
+    memcpy(&rctx->ext_factor, (int32_t *) op_params + 7, sizeof(float));
+    memcpy(&rctx->attn_factor, (int32_t *) op_params + 8, sizeof(float));
+    memcpy(&rctx->beta_fast, (int32_t *) op_params + 9, sizeof(float));
+    memcpy(&rctx->beta_slow, (int32_t *) op_params + 10, sizeof(float));
+    memcpy(&rctx->sections, (int32_t *) op_params + 11, sizeof(int) * 4);
 
-    rope_ctx->theta_scale = powf(rope_ctx->freq_base, -2.0f / rope_ctx->n_dims);
+    rctx->theta_scale = powf(rctx->freq_base, -2.0f / rctx->n_dims);
 
-    rope_corr_dims(rope_ctx->n_dims, rope_ctx->n_ctx_orig, rope_ctx->freq_base, rope_ctx->beta_fast,
-                   rope_ctx->beta_slow, rope_ctx->corr_dims);
+    rope_corr_dims(rctx->n_dims, rctx->n_ctx_orig, rctx->freq_base, rctx->beta_fast,
+                   rctx->beta_slow, rctx->corr_dims);
 
-    rope_ctx->octx = octx;
-    FARF(HIGH, "rope-f32 n_dims:%d, ext_factor:%.6f, theta_scale:%.6f, attn_factor:%.6f\n", rope_ctx->n_dims,
-         rope_ctx->ext_factor, rope_ctx->theta_scale, rope_ctx->attn_factor);
+    rctx->octx = octx;
+
+    // Initialize fastdiv values
+    const uint32_t ne01 = octx->src0.ne[1];
+    const uint32_t ne02 = octx->src0.ne[2];
+
+    if (ne01 > 0) rctx->fastdiv_ne01 = init_fastdiv_values(ne01);
+    if (ne02 > 0) rctx->fastdiv_ne02 = init_fastdiv_values(ne02);
+
+    FARF(HIGH, "rope-f32 n_dims:%d, ext_factor:%.6f, theta_scale:%.6f, attn_factor:%.6f\n", rctx->n_dims,
+         rctx->ext_factor, rctx->theta_scale, rctx->attn_factor);
 }
 
 static void hvx_calc_rope_neox_f32(const float * restrict src0,
@@ -248,107 +262,19 @@ static void hvx_calc_rope_f32(const float * restrict src0,
     }
 }
 
-static void rope_hex_f32(struct rope_th_ctx * rope_ctx,
-                         const uint32_t       ir0,
-                         const uint32_t       ir1,
-                         int                  nth,
-                         int                  ith,
-                         const int            opt_path) {
-    struct htp_ops_context * octx = rope_ctx->octx;
+static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
+    struct htp_rope_context * rctx = (struct htp_rope_context *) data;
+    struct htp_ops_context * octx = rctx->octx;
 
     const struct htp_tensor * src0 = &octx->src0;
     const struct htp_tensor * src1 = &octx->src1;
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    const int32_t mode    = rope_ctx->mode;
-    const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
-
     htp_rope_preamble;
 
-    const int32_t * pos = (const int32_t *) src1->data;
-
-    float * wp0 = (float *) (octx->src0_spad.data + (ith * nb01));
-
-    const float * freq_factors = NULL;
-    if (src2 != NULL) {
-        freq_factors = (const float *) src2->data;
-    }
-
-    const uint32_t i1_end       = MIN(ir1, ne1);
-    const int32_t  half_dims    = rope_ctx->n_dims / 2;
-    const size_t   remain_bytes = (ne0 - rope_ctx->n_dims) * sizeof(float);
-    for (uint32_t i3 = 0; i3 < ne3; i3++) {      // batch
-        for (uint32_t i2 = 0; i2 < ne2; i2++) {  // seq-len
-            const int32_t p = pos[i2];
-
-            rope_cache_init(p, rope_ctx->freq_scale, freq_factors, rope_ctx->corr_dims, ne0, rope_ctx->ext_factor,
-                            rope_ctx->attn_factor, wp0, rope_ctx->theta_scale);
-
-            for (uint32_t i1 = ir0; i1 < i1_end; i1++) {  // attn-heads
-                const float * src      = (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01);
-                float *       dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1);
-
-                const float * src_loc      = src;
-                float *       dst_data_loc = dst_data;
-
-                if (1 == opt_path) {
-                    if (is_neox) {
-                        hvx_calc_rope_neox_f32(src_loc, dst_data_loc, rope_ctx->n_dims, wp0);
-                    } else {
-                        hvx_calc_rope_f32(src_loc, dst_data_loc, rope_ctx->n_dims, wp0);
-                    }
-
-                    src_loc += rope_ctx->n_dims;
-                    dst_data_loc += rope_ctx->n_dims;
-                } else {
-                    for (uint32_t i0 = 0; i0 < rope_ctx->n_dims; i0 += 2) {
-                        const float cos_theta = wp0[i0 + 0];
-                        const float sin_theta = wp0[i0 + 1];
-
-                        if (is_neox) {
-                            const float x0 = src_loc[0];
-                            const float x1 = src_loc[half_dims];
-
-                            dst_data_loc[0]         = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[half_dims] = x0 * sin_theta + x1 * cos_theta;
-
-                            src_loc += 1;
-                            dst_data_loc += 1;
-                        } else {
-                            const float x0 = src_loc[0];
-                            const float x1 = src_loc[1];
-
-                            dst_data_loc[0] = x0 * cos_theta - x1 * sin_theta;
-                            dst_data_loc[1] = x0 * sin_theta + x1 * cos_theta;
-
-                            src_loc += 2;
-                            dst_data_loc += 2;
-                        }
-                    }
-
-                    src_loc += (is_neox ? half_dims : 0);
-                    dst_data_loc += (is_neox ? half_dims : 0);
-                }
-
-                // TODO: use simd to speed up the remaining elements copy
-                memcpy(dst_data_loc, src_loc, remain_bytes);
-            }
-        }
-    }
-}
-
-static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int ith) {
-    struct htp_ops_context * octx = rope_ctx->octx;
-
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
-
-    htp_rope_preamble;
-
-    const uint32_t src0_nrows            = ne01 * ne02 * ne03;  // src0 rows
-    const uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
+    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
+    const uint32_t src0_nrows_per_thread = rctx->src0_nrows_per_thread;
 
     const uint32_t src0_start_row = src0_nrows_per_thread * ith;
     const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
@@ -361,6 +287,11 @@ static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
+    const int32_t mode    = rctx->mode;
+    const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
+    const int32_t half_dims = rctx->n_dims / 2;
+    const size_t  remain_bytes = (ne0 - rctx->n_dims) * sizeof(float);
+
     int is_aligned = 1;
     int opt_path   = 0;
     if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
@@ -372,18 +303,92 @@ static void rope_job_f32_per_thread(struct rope_th_ctx * rope_ctx, int nth, int 
         opt_path = 1;
     }
 
-    rope_hex_f32(rope_ctx, src0_start_row, src0_end_row, nth, ith, opt_path);
+    float * wp0 = (float *) (octx->src0_spad.data + (ith * rctx->spad_stride));
+
+    const int32_t * pos = (const int32_t *) src1->data;
+
+    const float * freq_factors = NULL;
+    if (src2 != NULL) {
+        freq_factors = (const float *) src2->data;
+    }
+
+    uint32_t prev_i2 = (uint32_t)-1;
+
+    for (uint32_t r = src0_start_row; r < src0_end_row; ++r) {
+        // Calculate indices from flat row index r
+        // idx = i3 * (ne02 * ne01) + i2 * ne01 + i1
+        // i1 = idx % ne01
+        // i2 = (idx / ne01) % ne02
+        // i3 = (idx / ne01) / ne02
+
+        uint32_t i1 = fastmodulo(r, ne01, &rctx->fastdiv_ne01);
+        uint32_t r_div_ne01 = fastdiv(r, &rctx->fastdiv_ne01);
+        uint32_t i2 = fastmodulo(r_div_ne01, ne02, &rctx->fastdiv_ne02);
+        uint32_t i3 = fastdiv(r_div_ne01, &rctx->fastdiv_ne02);
+
+        if (i2 != prev_i2) {
+            const int32_t p = pos[i2];
+
+            rope_cache_init(p, rctx->freq_scale, freq_factors, rctx->corr_dims, ne0, rctx->ext_factor,
+                            rctx->attn_factor, wp0, rctx->theta_scale);
+            prev_i2 = i2;
+        }
+
+        const float * src      = (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01);
+        float *       dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1);
+
+        const float * src_loc      = src;
+        float *       dst_data_loc = dst_data;
+
+        if (1 == opt_path) {
+            if (is_neox) {
+                hvx_calc_rope_neox_f32(src_loc, dst_data_loc, rctx->n_dims, wp0);
+            } else {
+                hvx_calc_rope_f32(src_loc, dst_data_loc, rctx->n_dims, wp0);
+            }
+
+            src_loc += rctx->n_dims;
+            dst_data_loc += rctx->n_dims;
+        } else {
+            for (uint32_t i0 = 0; i0 < rctx->n_dims; i0 += 2) {
+                const float cos_theta = wp0[i0 + 0];
+                const float sin_theta = wp0[i0 + 1];
+
+                if (is_neox) {
+                    const float x0 = src_loc[0];
+                    const float x1 = src_loc[half_dims];
+
+                    dst_data_loc[0]         = x0 * cos_theta - x1 * sin_theta;
+                    dst_data_loc[half_dims] = x0 * sin_theta + x1 * cos_theta;
+
+                    src_loc += 1;
+                    dst_data_loc += 1;
+                } else {
+                    const float x0 = src_loc[0];
+                    const float x1 = src_loc[1];
+
+                    dst_data_loc[0] = x0 * cos_theta - x1 * sin_theta;
+                    dst_data_loc[1] = x0 * sin_theta + x1 * cos_theta;
+
+                    src_loc += 2;
+                    dst_data_loc += 2;
+                }
+            }
+
+            src_loc += (is_neox ? half_dims : 0);
+            dst_data_loc += (is_neox ? half_dims : 0);
+        }
+
+        // TODO: use simd to speed up the remaining elements copy
+        if (remain_bytes > 0) {
+            memcpy(dst_data_loc, src_loc, remain_bytes);
+        }
+    }
 
     t2 = HAP_perf_get_qtimer_count();
 
     FARF(HIGH, "rope-f32: %d/%d/%d: (%u:%u) usec %u\n", ith, nth, opt_path, src0_start_row, src0_end_row,
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-static void rope_job_dispatcher_f32(unsigned int n, unsigned int i, void * data) {
-    struct rope_th_ctx * rope_ctx = (struct rope_th_ctx *) data;
-
-    rope_job_f32_per_thread(rope_ctx, n, i);
 }
 
 static int execute_op_rope_f32(struct htp_ops_context * octx) {
@@ -394,17 +399,12 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    worker_callback_t op_func;
-    const char *      op_type = NULL;
-
-    struct rope_th_ctx rope_ctx;
+    struct htp_rope_context rctx;
+    const char * op_type = "rope-f32";
 
     switch (octx->op) {
         case HTP_OP_ROPE:
-            op_func = rope_job_dispatcher_f32;
-            op_type = "rope-f32";
-
-            init_rope_ctx(&rope_ctx, octx);
+            init_rope_ctx(&rctx, octx);
             break;
 
         default:
@@ -423,6 +423,9 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
     octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
     octx->src1_spad.size = hex_round_up(src1_row_size, 128) * n_threads;
+
+    // Use stride for calculating offset
+    rctx.spad_stride = hex_round_up(src0_row_size, 128);
 
     size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
 
@@ -456,8 +459,8 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         uint32_t n_jobs             = MIN(n_threads, src0_nrows);
-        octx->src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
-        worker_pool_run_func(octx->ctx->worker_pool, op_func, &rope_ctx, n_jobs);
+        rctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
+        worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_jobs);
     }
 
     return err;
