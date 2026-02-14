@@ -1,6 +1,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <sstream>
+#include <regex>
 #include <iostream>
 #include <fstream>
 #include <filesystem>
@@ -11,15 +13,12 @@
 #include <cassert>
 
 #include "llama.h"
+#include "common.h"
 #include "chat.h"
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
 #include "jinja/lexer.h"
 #include "jinja/caps.h"
-
-#ifdef WIN32
-#include <regex>
-#endif
 
 using json = nlohmann::ordered_json;
 
