@@ -542,6 +542,7 @@ private:
     const llama_model & model;
 };
 
+// TODO: derive llm_build_delta_net_base instead
 struct llm_build_qwen35 : public llm_graph_context {
     llm_build_qwen35(const llama_model & model, const llm_graph_params & params);
 private:
@@ -602,6 +603,7 @@ private:
     const llama_model & model;
 };
 
+// TODO: derive llm_build_delta_net_base instead
 struct llm_build_qwen35moe : public llm_graph_context {
     llm_build_qwen35moe(const llama_model & model, const llm_graph_params & params);
 private:
