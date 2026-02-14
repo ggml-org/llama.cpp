@@ -61,6 +61,7 @@ extern "C" {
     struct llama_model;
     struct llama_context;
     struct llama_sampler;
+    struct llama_memory_breakdown_data;
 
     typedef struct llama_memory_i * llama_memory_t;
 
@@ -1525,6 +1526,7 @@ extern "C" {
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
 
+    LLAMA_API size_t llama_get_total_memory_usage(const struct llama_context * ctx);
     // print a breakdown of per-device memory use via LLAMA_LOG:
     LLAMA_API void llama_memory_breakdown_print(const struct llama_context * ctx);
 

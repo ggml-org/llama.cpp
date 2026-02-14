@@ -450,6 +450,28 @@ void server_models::load(const std::string & name) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
     unload_lru();
+    // TODO: move this into its own method and somehow use the results to unload models, if necessary.
+    for (const auto &m : mapping) {
+        if (m.second.meta.status != SERVER_MODEL_STATUS_LOADED) {
+            continue;
+        }
+        try {
+            std::unique_ptr<server_http_req> request = std::make_unique<server_http_req>(server_http_req{
+                {},
+                {},
+                "/vram",
+                "",
+                []() { return false; }
+            });
+            server_http_res_ptr res = proxy_request(*request, "GET", m.first, false);
+            std::string chunk;
+            while (res->next(chunk)) {
+                // TODO: accumulate the chunks and parse the JSON
+            }
+        } catch (std::exception &e) {
+            std::cerr << "EXCEPTION " << e.what() << std::endl;
+        }
+    }
 
     std::lock_guard<std::mutex> lk(mutex);
 

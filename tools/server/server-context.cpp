@@ -6,6 +6,7 @@
 
 #include "common.h"
 #include "llama.h"
+#include "../src/llama-context.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -29,6 +30,7 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -543,6 +545,10 @@ public:
             // we don't call it again here to avoid double free
             destroy();
         }
+    }
+
+    const llama_context * get_ctx() const {
+        return ctx;
     }
 
 private:
@@ -3691,6 +3697,24 @@ void server_routes::init_routes() {
         };
 
         res->ok(models);
+        return res;
+    };
+
+    this->get_vram = [this](const server_http_req & req) {
+        json vram_usage;
+        const llama_context * ctx = ctx_server.get_ctx();
+        if (ctx == nullptr) {
+            vram_usage = {
+                {"vram", 0},
+            };
+        } else {
+            size_t memory = llama_get_total_memory_usage(ctx_server.get_ctx());
+            vram_usage = {
+                {"vram", memory},
+            };
+        }
+        auto res = create_response(true);
+        res->ok(vram_usage);
         return res;
     };
 

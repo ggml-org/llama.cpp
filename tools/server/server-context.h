@@ -100,6 +100,7 @@ struct server_routes {
     server_http_context::handler_t post_anthropic_count_tokens;
     server_http_context::handler_t post_apply_template;
     server_http_context::handler_t get_models;
+    server_http_context::handler_t get_vram;
     server_http_context::handler_t post_tokenize;
     server_http_context::handler_t post_detokenize;
     server_http_context::handler_t post_embeddings;

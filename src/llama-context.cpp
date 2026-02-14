@@ -3532,6 +3532,15 @@ void llama_perf_context_reset(llama_context * ctx) {
     ctx->perf_reset();
 }
 
+size_t llama_get_total_memory_usage(const struct llama_context * ctx) {
+    const auto memory_breakdown = ctx->memory_breakdown();
+    size_t total = 0;
+    for (const auto &it : memory_breakdown) {
+        total += it.second.total();
+    }
+    return total;
+}
+
 void llama_memory_breakdown_print(const struct llama_context * ctx) {
     const std::vector<ggml_backend_dev_t> & devices = ctx->get_model().devices;
 
