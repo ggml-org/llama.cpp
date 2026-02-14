@@ -3,6 +3,9 @@
 #include "llama-model.h"
 #include "llama-graph.h"
 
+// note: almost all graphs require atleast sqrtf, so include cmath globally
+#include <cmath>
+
 //
 // base classes
 //
@@ -539,7 +542,7 @@ private:
     const llama_model & model;
 };
 
-struct llm_build_qwen35 : public llm_build_delta_net_base {
+struct llm_build_qwen35 : public llm_graph_context {
     llm_build_qwen35(const llama_model & model, const llm_graph_params & params);
 private:
     ggml_tensor * build_layer_attn(
@@ -552,11 +555,38 @@ private:
     ggml_tensor * build_layer_attn_linear(
          llm_graph_input_rs * inp,
                 ggml_tensor * cur,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
                         int   il);
+
 
     ggml_tensor * build_layer_ffn(
                 ggml_tensor * cur,
                         int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
+                        int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                int           il);
 
     ggml_tensor * build_norm_gated(
                 ggml_tensor * input,
@@ -572,7 +602,7 @@ private:
     const llama_model & model;
 };
 
-struct llm_build_qwen35moe : public llm_build_delta_net_base {
+struct llm_build_qwen35moe : public llm_graph_context {
     llm_build_qwen35moe(const llama_model & model, const llm_graph_params & params);
 private:
     ggml_tensor * build_layer_attn(
@@ -585,11 +615,37 @@ private:
     ggml_tensor * build_layer_attn_linear(
          llm_graph_input_rs * inp,
                 ggml_tensor * cur,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
                         int   il);
 
     ggml_tensor * build_layer_ffn(
                 ggml_tensor * cur,
                         int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
+                        int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                int           il);
 
     ggml_tensor * build_norm_gated(
                 ggml_tensor * input,
