@@ -2808,9 +2808,7 @@ static uint32_t fa_workgroup_size(const vk_device& device, FaCodePath path, uint
     case FA_COOPMAT1:
         return (Bc / 16) * subgroup_size; // enough subgroups for Bc/MatBc
     default:
-        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
-            return 128;
-        } else if (subgroup_size > 32 && Br < 4) {
+        if (subgroup_size > 32 && Br < 4) {
             return subgroup_size * 2;
         } else {
             return subgroup_size * 4;
@@ -3224,8 +3222,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         return {fa_rows_cols(path, hsk, hsv, clamp, type, rows, small_cache)[0], 1, 1};
     };
 
-    const bool disable_subgroups = device->vendor_id == VK_VENDOR_ID_INTEL;
-
     auto const &fa_spec_constants = [&](FaCodePath path, uint32_t hsk, uint32_t hsv, uint32_t clamp, ggml_type type, FaRows rows, bool small_cache, uint32_t flags) -> std::vector<uint32_t> {
         // For large number of rows, 128 invocations seems to work best.
         // For small number of rows (e.g. N==1), 256 works better. But matrix granularity for 256 is 32, so we
@@ -3261,7 +3257,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             bool aligned = fa.first.aligned; \
             bool f32acc = fa.first.f32acc; \
             uint32_t flags = fa.first.flags; \
-            bool fa_ds = path == FA_SCALAR && disable_subgroups; \
+            bool fa_ds = fa_disable_subgroups(device, path); \
             uint32_t fa_sgs = fa_subgroup_size(device, path); \
             if (path == FAPATH) { \
                 if (aligned) { \
