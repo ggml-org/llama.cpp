@@ -17,8 +17,12 @@
 	let { conversations, messageCountMap = new Map(), mode, onCancel, onConfirm }: Props = $props();
 
 	let searchQuery = $state('');
-	let selectedIds = $state.raw<SvelteSet<string>>(new SvelteSet(conversations.map((c) => c.id)));
+	let selectedIds = $state.raw<SvelteSet<string>>(getInitialSelectedIds());
 	let lastClickedId = $state<string | null>(null);
+
+	function getInitialSelectedIds(): SvelteSet<string> {
+		return new SvelteSet(conversations.map((c) => c.id));
+	}
 
 	let filteredConversations = $derived(
 		conversations.filter((conv) => {
@@ -92,7 +96,7 @@
 	}
 
 	function handleCancel() {
-		selectedIds = new SvelteSet(conversations.map((c) => c.id));
+		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
 		lastClickedId = null;
 
@@ -100,7 +104,7 @@
 	}
 
 	export function reset() {
-		selectedIds = new SvelteSet(conversations.map((c) => c.id));
+		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
 		lastClickedId = null;
 	}

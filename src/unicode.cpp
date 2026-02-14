@@ -1,16 +1,10 @@
-#if defined(_MSC_VER)
-#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-#endif
-
 #include "unicode.h"
 #include "unicode-data.h"
 
 #include <algorithm>
 #include <cassert>
-#include <codecvt>
 #include <cstddef>
 #include <cstdint>
-#include <locale>
 #include <map>
 #include <regex>
 #include <stdexcept>
@@ -197,27 +191,6 @@ static std::unordered_map<std::string, uint8_t> unicode_utf8_to_byte_map() {
         }
     }
     return map;
-}
-
-static inline std::wstring unicode_wstring_from_utf8(const std::string & s) {
-#if defined(__clang__)
-    // disable C++17 deprecation warning for std::codecvt_utf8
-#    pragma clang diagnostic push
-#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic push
-#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
-#endif
-
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> conv;
-
-#if defined(__clang__)
-#    pragma clang diagnostic pop
-#elif defined(__GNUC__)
-#    pragma GCC diagnostic pop
-#endif
-
-    return conv.from_bytes(s);
 }
 
 static std::vector<std::string> unicode_byte_encoding_process(const std::vector<std::string> & bpe_words) {
@@ -1033,10 +1006,10 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
                     break;
                 }
             }
+            const auto cpts_regex = unicode_cpts_from_utf8(regex_expr);
 
             if (use_collapsed) {
                 // sanity-check that the original regex does not contain any non-ASCII characters
-                const auto cpts_regex = unicode_cpts_from_utf8(regex_expr);
                 for (size_t i = 0; i < cpts_regex.size(); ++i) {
                     if (cpts_regex[i] >= 128) {
                         throw std::runtime_error("Regex includes both unicode categories and non-ASCII characters - not supported");
@@ -1092,7 +1065,7 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
                 bpe_offsets = unicode_regex_split_stl(text_collapsed, regex_expr_collapsed, bpe_offsets);
             } else {
                 // no unicode category used, we can use std::wregex directly
-                const std::wstring wregex_expr = unicode_wstring_from_utf8(regex_expr);
+                std::wstring wregex_expr(cpts_regex.begin(), cpts_regex.end());
 
                 // std::wregex \s does not mach non-ASCII whitespaces, using 0x0B as fallback
                 std::wstring wtext(cpts.begin(), cpts.end());

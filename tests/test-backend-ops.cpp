@@ -2786,9 +2786,10 @@ struct test_set : public test_case {
     const ggml_type type_dst;
     const std::array<int64_t, 4> ne;
     const int dim;
+    const bool inplace;
 
     std::string vars() override {
-        return VARS_TO_STR4(type_src, type_dst, ne, dim);
+        return VARS_TO_STR5(type_src, type_dst, ne, dim, inplace);
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -2796,8 +2797,8 @@ struct test_set : public test_case {
     }
 
     test_set(ggml_type type_src = GGML_TYPE_F32, ggml_type type_dst = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {6, 5, 4, 3}, int dim = 1)
-        : type_src(type_src), type_dst(type_dst), ne(ne), dim(dim) {}
+            std::array<int64_t, 4> ne = {6, 5, 4, 3}, int dim = 1, bool inplace = false)
+        : type_src(type_src), type_dst(type_dst), ne(ne), dim(dim), inplace(inplace) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
@@ -2808,7 +2809,7 @@ struct test_set : public test_case {
         for (int i = 0; i < dim; ++i) {
             ne_dst[i] *= 2;
         }
-        ggml_tensor* dst = ggml_new_tensor(ctx, type_dst, 4, ne_dst.data());
+        ggml_tensor * dst = ggml_new_tensor(ctx, type_dst, 4, ne_dst.data());
         ggml_set_param(dst);
         ggml_set_name(dst, "dst");
 
@@ -2816,9 +2817,16 @@ struct test_set : public test_case {
         for (int i = 0; i < dim; ++i) {
             offset += ((ne_dst[i] - ne[i])/2)*dst->nb[i];
         }
-        ggml_tensor * out = ggml_set(ctx, dst, src,
-            // The backward pass requires setting a contiguous region:
-            src->nb[1], src->nb[2], src->nb[3], offset);
+        ggml_tensor * out;
+        if (inplace) {
+            out = ggml_set_inplace(ctx, dst, src,
+                    // The backward pass requires setting a contiguous region:
+                    src->nb[1], src->nb[2], src->nb[3], offset);
+        } else {
+            out = ggml_set(ctx, dst, src,
+                    // The backward pass requires setting a contiguous region:
+                    src->nb[1], src->nb[2], src->nb[3], offset);
+        }
         ggml_set_name(out, "out");
 
         return out;
@@ -5839,26 +5847,46 @@ struct test_acc : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
+    const int64_t stride_dim;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne_a, ne_b);
+        return VARS_TO_STR4(type, ne_a, ne_b, stride_dim);
     }
 
     test_acc(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne_a = {256, 17, 1, 1},
-            std::array<int64_t, 4> ne_b = {256, 16, 1, 1})
-        : type(type), ne_a(ne_a), ne_b(ne_b) {}
+            std::array<int64_t, 4> ne_a = {256, 17, 2, 3},
+            std::array<int64_t, 4> ne_b = {256, 16, 2, 3},
+            uint64_t stride_dim = -1)
+        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne_b.data());
-        ggml_set_param(b);
+        ggml_tensor * b;
+        if (stride_dim == 1 || stride_dim == 2 || stride_dim == 3) {
+            // Create a larger tensor and take a view at a non-zero offset.
+            // This tests that the backend correctly handles b's data offset
+            std::array<int64_t, 4> ne_b_pad = {ne_b[0], ne_b[1], ne_b[2], ne_b[3]};
+            ne_b_pad[stride_dim] += 1;
+            ggml_tensor * b_pad = ggml_new_tensor(ctx, type, 4, ne_b_pad.data());
+            ggml_set_param(b_pad);
+            ggml_set_name(b_pad, "b_pad");
+            // View that skips the first row, so b has a non-zero byte offset
+            b = ggml_view_4d(ctx, b_pad,
+                ne_b[0], ne_b[1], ne_b[2], ne_b[3],
+                b_pad->nb[1], b_pad->nb[2], b_pad->nb[3],
+                b_pad->nb[1]);
+        } else {
+            b = ggml_new_tensor(ctx, type, 4, ne_b.data());
+            ggml_set_param(b);
+        }
         ggml_set_name(b, "b");
 
-        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], b->nb[1]);
+        // When ne_b[0] < ne_a[0], a->nb[1] != b->nb[1], so the stride
+        // parameters to ggml_acc don't match b's natural stride.
+        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], 0);
         ggml_set_name(out, "out");
 
         return out;
@@ -7428,11 +7456,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_dup(GGML_TYPE_I16, {10,  8, 3, 1}, {1, 2, 0, 3}));
 
     for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
-        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim));
+        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim, false));
+        test_cases.emplace_back(new test_set(GGML_TYPE_F32, GGML_TYPE_F32, {6, 5, 4, 3}, dim, true));
     }
 
     for (int dim = 1; dim < GGML_MAX_DIMS; ++dim) {
-        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim));
+        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim, false));
+        test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim, true));
     }
 
     // same-type copy
@@ -8132,29 +8162,40 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_sum());
-    test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 2, 1, 3}));  // row-contiguous but non-contiguous
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 3, 2, 1}));
     test_cases.emplace_back(new test_sum(GGML_TYPE_F32, {11, 5, 6, 3}, {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_mean());
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 256, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32768, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
+    test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, false));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, false, true));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 11, 5, 6, 3 }, true, true));
-    test_cases.emplace_back(new test_mean());
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, true, false));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, false, true));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 16, 5, 6, 3 }, true, true));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }, { 1, 0, 2, 3 })); // sum dst not-contiguous
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
-    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm_mul_add(GGML_TYPE_F32, {9, 9, 1280, 1}));
-    test_cases.emplace_back(new test_acc());
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 1, 1}, {256, 16, 1, 1}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
@@ -8588,6 +8629,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4,   3328, 1, 1}, {4, 3328, 1, 1})); // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 512, 1)); // prefill
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 1,   1)); // generate
+
+    // acc
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 1, 1}, {256, 16, 1, 1}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, -1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
 
     return test_cases;
 }
