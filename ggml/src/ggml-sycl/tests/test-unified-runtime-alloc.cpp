@@ -76,7 +76,7 @@ static bool reserve_allocate_success_registers_pointer(sycl::queue & q) {
 
 static bool allocate_failure_rolls_back_budget(sycl::queue & q) {
     TEST_BEGIN("allocate_failure_rolls_back_budget");
-    const int device = 0;
+    const int    device = 0;
     const size_t before = unified_cache_get_runtime_bytes(device);
 
     alloc_request req;
@@ -87,7 +87,7 @@ static bool allocate_failure_rolls_back_budget(sycl::queue & q) {
     req.intent.constraints.must_device = true;
 
     alloc_handle h{};
-    const bool ok = unified_alloc(req, &h);
+    const bool   ok = unified_alloc(req, &h);
     if (ok && h.ptr != nullptr) {
         // Unexpectedly succeeded, clean up and treat as pass.
         unified_free(h);
@@ -174,7 +174,7 @@ static bool cohort_prefers_weight_tier_for_compute(sycl::queue & q) {
     req.intent.category                               = runtime_category::COMPUTE;
     req.intent.cohort_id                              = "test:cohort";
     req.intent.constraints.prefer_same_tier_as_cohort = true;
-    const alloc_tier tier = unified_select_tier(req);
+    const alloc_tier tier                             = unified_select_tier(req);
     TEST_ASSERT(tier == alloc_tier::HOST_PINNED, "cohort policy did not preserve host tier");
 
     unified_free(seed_h);
@@ -192,7 +192,7 @@ static bool hard_constraint_overrides_cohort(sycl::queue & q) {
     req.intent.cohort_id                              = "test:cohort";
     req.intent.constraints.prefer_same_tier_as_cohort = true;
     req.intent.constraints.must_device                = true;
-    const alloc_tier tier = unified_select_tier(req);
+    const alloc_tier tier                             = unified_select_tier(req);
     TEST_ASSERT(tier == alloc_tier::DEVICE_VRAM, "must_device did not override cohort");
     TEST_PASS();
     return true;
@@ -201,10 +201,10 @@ static bool hard_constraint_overrides_cohort(sycl::queue & q) {
 static bool policy_never_selects_shared_usm(sycl::queue & q) {
     TEST_BEGIN("policy_never_selects_shared_usm");
     alloc_request req;
-    req.queue          = &q;
-    req.size           = 1024;
-    req.intent.role    = alloc_role::OTHER;
-    req.intent.category = runtime_category::OTHER;
+    req.queue             = &q;
+    req.size              = 1024;
+    req.intent.role       = alloc_role::OTHER;
+    req.intent.category   = runtime_category::OTHER;
     const alloc_tier tier = unified_select_tier(req);
     TEST_ASSERT(tier == alloc_tier::DEVICE_VRAM || tier == alloc_tier::HOST_PINNED, "unexpected tier selected");
     TEST_PASS();
@@ -278,15 +278,15 @@ static bool offload_pool_reuse_tracks_hit_miss(sycl::queue & q) {
     offload_stats_reset();
 
     offload_buffer_request req{};
-    req.queue    = &q;
-    req.device   = -1;
-    req.size     = 4096;
-    req.role     = offload_buffer_role::STAGING_SRC0;
-    req.intent.role = alloc_role::STAGING;
-    req.intent.category = runtime_category::STAGING;
-    req.intent.constraints.must_host_pinned = true;
+    req.queue                                         = &q;
+    req.device                                        = -1;
+    req.size                                          = 4096;
+    req.role                                          = offload_buffer_role::STAGING_SRC0;
+    req.intent.role                                   = alloc_role::STAGING;
+    req.intent.category                               = runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned           = true;
     req.intent.constraints.prefer_same_tier_as_cohort = true;
-    req.intent.cohort_id = "test:offload_pool";
+    req.intent.cohort_id                              = "test:offload_pool";
 
     offload_buffer_lease a{};
     TEST_ASSERT(acquire_offload_buffer(req, &a), "first acquire failed");
@@ -308,12 +308,12 @@ static bool offload_pool_reuse_tracks_hit_miss(sycl::queue & q) {
 static bool offload_pool_stale_lease_fails(sycl::queue & q) {
     TEST_BEGIN("offload_pool_stale_lease_fails");
     offload_buffer_request req{};
-    req.queue    = &q;
-    req.device   = -1;
-    req.size     = 2048;
-    req.role     = offload_buffer_role::STAGING_DST;
-    req.intent.role = alloc_role::STAGING;
-    req.intent.category = runtime_category::STAGING;
+    req.queue                               = &q;
+    req.device                              = -1;
+    req.size                                = 2048;
+    req.role                                = offload_buffer_role::STAGING_DST;
+    req.intent.role                         = alloc_role::STAGING;
+    req.intent.category                     = runtime_category::STAGING;
     req.intent.constraints.must_host_pinned = true;
 
     offload_buffer_lease lease{};
@@ -330,12 +330,12 @@ static bool offload_pool_trim_clears_released_entries(sycl::queue & q) {
     offload_stats_reset();
 
     offload_buffer_request req{};
-    req.queue    = &q;
-    req.device   = -1;
-    req.size     = 1024;
-    req.role     = offload_buffer_role::STAGING_SRC1;
-    req.intent.role = alloc_role::STAGING;
-    req.intent.category = runtime_category::STAGING;
+    req.queue                               = &q;
+    req.device                              = -1;
+    req.size                                = 1024;
+    req.role                                = offload_buffer_role::STAGING_SRC1;
+    req.intent.role                         = alloc_role::STAGING;
+    req.intent.category                     = runtime_category::STAGING;
     req.intent.constraints.must_host_pinned = true;
 
     offload_buffer_lease lease{};
@@ -349,6 +349,42 @@ static bool offload_pool_trim_clears_released_entries(sycl::queue & q) {
 
     const offload_stats_snapshot stats = offload_stats_get();
     TEST_ASSERT(stats.pool_miss_count >= 2, "expected miss after trim");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_pool_set_tensor_roles_reuse(sycl::queue & q) {
+    TEST_BEGIN("offload_pool_set_tensor_roles_reuse");
+    offload_buffer_pool_trim(-1);
+    offload_stats_reset();
+
+    offload_buffer_request stage_req{};
+    stage_req.queue                               = &q;
+    stage_req.device                              = -1;
+    stage_req.size                                = 4096;
+    stage_req.role                                = offload_buffer_role::SET_TENSOR_STAGE;
+    stage_req.intent.role                         = alloc_role::STAGING;
+    stage_req.intent.category                     = runtime_category::STAGING;
+    stage_req.intent.constraints.must_host_pinned = true;
+
+    offload_buffer_lease stage_a{};
+    TEST_ASSERT(acquire_offload_buffer(stage_req, &stage_a), "stage acquire A failed");
+    TEST_ASSERT(release_offload_buffer(stage_a), "stage release A failed");
+    offload_buffer_lease stage_b{};
+    TEST_ASSERT(acquire_offload_buffer(stage_req, &stage_b), "stage acquire B failed");
+    TEST_ASSERT(release_offload_buffer(stage_b), "stage release B failed");
+
+    offload_buffer_request reorder_req = stage_req;
+    reorder_req.role                   = offload_buffer_role::SET_TENSOR_REORDER;
+    reorder_req.size                   = 8192;
+
+    offload_buffer_lease reorder_a{};
+    TEST_ASSERT(acquire_offload_buffer(reorder_req, &reorder_a), "reorder acquire A failed");
+    TEST_ASSERT(release_offload_buffer(reorder_a), "reorder release A failed");
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.pool_hit_count >= 1, "expected pooled role reuse hit");
+    TEST_ASSERT(stats.pool_miss_count >= 2, "expected misses for role bootstrap");
     TEST_PASS();
     return true;
 }
@@ -421,8 +457,8 @@ static bool offload_dispatch_counts_split_by_phase() {
     offload_stats_note_dispatch(false, true);   // GPU island
 
     offload_stats_set_phase(offload_phase::TG);
-    offload_stats_note_dispatch(true, false);   // CPU
-    offload_stats_note_dispatch(false, true);   // GPU island
+    offload_stats_note_dispatch(true, false);  // CPU
+    offload_stats_note_dispatch(false, true);  // GPU island
 
     const offload_stats_snapshot stats = offload_stats_get();
     TEST_ASSERT(stats.dispatch_count_cpu == 2, "unexpected total CPU dispatch count");
@@ -533,6 +569,7 @@ int main() {
     ok &= offload_pool_reuse_tracks_hit_miss(q);
     ok &= offload_pool_stale_lease_fails(q);
     ok &= offload_pool_trim_clears_released_entries(q);
+    ok &= offload_pool_set_tensor_roles_reuse(q);
     ok &= offload_wait_stats_split_tracks_forced_and_fallback();
     ok &= offload_cross_domain_stats_split_by_phase();
     ok &= offload_transfer_bytes_split_by_phase();

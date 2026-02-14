@@ -806,14 +806,16 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_CPU_OFFLOAD_VECDOT_TASKS_PER_THREAD | 2 (default) | Target number of TBB vec_dot tasks per CPU thread in the offload path. |
 | GGML_SYCL_OFFLOAD_STATS | 0 (default) or 1 | Emit per-graph offload summary counters (`wait_count`, alloc counts, pool hit/miss, transfer counts/bytes, CPU/GPU dispatch counts, transition wait/elide counts). |
 | GGML_SYCL_OFFLOAD_LOCALITY | 1 (default) or 0 | Enable locality smoothing for CPU/GPU offload planning to reduce ping-pong segments. |
-| GGML_SYCL_OFFLOAD_HYSTERESIS | 2 (default) | Minimum segment length before flipping domain in locality smoothing. |
-| GGML_SYCL_OFFLOAD_CROSS_COST | 1 (default) | Additional penalty for short CPU segments when locality smoothing is enabled. |
+| GGML_SYCL_OFFLOAD_HYSTERESIS | phase-aware default (PP=3, TG=2) | Minimum segment length before flipping domain in locality smoothing. |
+| GGML_SYCL_OFFLOAD_CROSS_COST | phase-aware default (PP=2, TG=1) | Additional penalty for short CPU segments when locality smoothing is enabled. |
+| GGML_SYCL_OFFLOAD_BOUNDARY_WAIT_BYTES | 1048576 (default) | In async offload mode, only force GPU→CPU boundary queue wait when tracked boundary bytes are at least this threshold. |
 | GGML_SYCL_OFFLOAD_PLAN_DUMP | 0 (default) or 1 | Dump CPU/GPU segment plan, boundary count, and estimated boundary bytes for each graph. |
 | GGML_SYCL_DMA_SLICE_MB | 1024 (default) | Unified-cache DMA streaming slice size in MB (aligned to row size). |
 | GGML_SYCL_DMA_BUFFERS | 2 (default) | Unified-cache DMA streaming buffer count (staging buffers). Alias: `GGML_SYCL_DMA_SLICES`. |
 | GGML_SYCL_DMA_RESERVE_MB | (auto) | VRAM headroom reserved for DMA staging buffers; overrides slice/buffer-derived default. |
 | GGML_SYCL_SET_TENSOR_STREAM_FENCE | 0 (default) or 1 | In `set_tensor`, wait only on the current stream before host copy (safer than no fence, cheaper than global drain). |
 | GGML_SYCL_SET_TENSOR_GLOBAL_DRAIN | 0 (default) or 1 | In `set_tensor`, force legacy global queue drain before host copy. Mainly for debugging/bisecting. |
+| GGML_SYCL_COPY_TO_DEVICE_SYNC | 0 (default) or 1 | Force legacy synchronous `copy_to_device_async` behavior for bringup/debug. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
 
@@ -823,7 +825,8 @@ Use the helper script to run PP/TG separately with unified-cache CPU offload and
 
 ```bash
 ./scripts/sycl-cpu-offload-bench-vtune.sh \
-  --model /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf
+  --model /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
+  --profile nonstream-cpuoffload
 ```
 
 Defaults used by the script:
@@ -833,7 +836,12 @@ Defaults used by the script:
 - `GGML_SYCL_CPU_OFFLOAD_ASYNC=1`
 - `GGML_SYCL_CPU_BATCH_THRESHOLD_PP=4`
 - `GGML_SYCL_CPU_BATCH_THRESHOLD_TG=16`
-- `GGML_SYCL_VRAM_BUDGET_PCT=45`
+- `GGML_SYCL_VRAM_BUDGET_PCT=25`
+
+The harness reports PP/TG separately and can enforce metric gates:
+- `zeMemAllocHost` call count
+- `zeEventHostSynchronize` call count
+- `ggml_backend_sycl_buffer_set_tensor` CPU time
 
 
 

@@ -7,10 +7,10 @@
 #ifndef GGML_SYCL_UNIFIED_CACHE_HPP
 #define GGML_SYCL_UNIFIED_CACHE_HPP
 
-#include "dpct/helper.hpp"
-#include "pinned-pool.hpp"
 #include "device-pool.hpp"
+#include "dpct/helper.hpp"
 #include "ggml-sycl.h"
+#include "pinned-pool.hpp"
 
 #include <atomic>
 #include <cmath>
@@ -66,9 +66,7 @@ static inline bool cache_id_equal(const ggml_sycl_cache_id & a, const ggml_sycl_
 }
 
 struct cache_id_equal_fn {
-    bool operator()(const ggml_sycl_cache_id & a, const ggml_sycl_cache_id & b) const {
-        return cache_id_equal(a, b);
-    }
+    bool operator()(const ggml_sycl_cache_id & a, const ggml_sycl_cache_id & b) const { return cache_id_equal(a, b); }
 };
 
 struct cache_id_hash {
@@ -112,13 +110,12 @@ inline size_t cache_guard_page_size() {
 #endif
 }
 
-template <typename T>
-struct cache_guard_allocator {
+template <typename T> struct cache_guard_allocator {
     using value_type = T;
 
     cache_guard_allocator() noexcept = default;
-    template <typename U>
-    cache_guard_allocator(const cache_guard_allocator<U> &) noexcept {}
+
+    template <typename U> cache_guard_allocator(const cache_guard_allocator<U> &) noexcept {}
 
     T * allocate(std::size_t n) {
         if (!cache_guard_pages_enabled()) {
@@ -131,11 +128,10 @@ struct cache_guard_allocator {
         }
 
 #if !defined(_WIN32) && !defined(__SYCL_DEVICE_ONLY__)
-        const size_t page_size = cache_guard_page_size();
-        const size_t usable =
-            ((sizeof(cache_guard_header) + size_bytes + page_size - 1) / page_size) * page_size;
+        const size_t page_size    = cache_guard_page_size();
+        const size_t usable       = ((sizeof(cache_guard_header) + size_bytes + page_size - 1) / page_size) * page_size;
         const size_t mapping_size = usable + page_size;
-        void * mapping = mmap(nullptr, mapping_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        void *       mapping = mmap(nullptr, mapping_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (mapping == MAP_FAILED || !mapping) {
             throw std::bad_alloc();
         }
@@ -144,9 +140,9 @@ struct cache_guard_allocator {
             throw std::bad_alloc();
         }
 
-        uint8_t * data_end = static_cast<uint8_t *>(mapping) + usable;
-        uint8_t * data     = data_end - size_bytes;
-        auto * header      = reinterpret_cast<cache_guard_header *>(data - sizeof(cache_guard_header));
+        uint8_t * data_end   = static_cast<uint8_t *>(mapping) + usable;
+        uint8_t * data       = data_end - size_bytes;
+        auto *    header     = reinterpret_cast<cache_guard_header *>(data - sizeof(cache_guard_header));
         header->magic        = k_cache_guard_magic;
         header->size         = size_bytes;
         header->mapping_size = mapping_size;
@@ -167,7 +163,8 @@ struct cache_guard_allocator {
             return;
         }
 
-        auto * header = reinterpret_cast<cache_guard_header *>(reinterpret_cast<uint8_t *>(ptr) - sizeof(cache_guard_header));
+        auto * header =
+            reinterpret_cast<cache_guard_header *>(reinterpret_cast<uint8_t *>(ptr) - sizeof(cache_guard_header));
         if (!header || header->magic != k_cache_guard_magic || header->mapping_size == 0) {
             std::allocator<T>{}.deallocate(ptr, n);
             return;
@@ -182,8 +179,7 @@ struct cache_guard_allocator {
 #endif
     }
 
-    template <typename U>
-    struct rebind {
+    template <typename U> struct rebind {
         using other = cache_guard_allocator<U>;
     };
 };
@@ -192,6 +188,7 @@ template <typename T, typename U>
 inline bool operator==(const cache_guard_allocator<T> &, const cache_guard_allocator<U> &) noexcept {
     return true;
 }
+
 template <typename T, typename U>
 inline bool operator!=(const cache_guard_allocator<T> &, const cache_guard_allocator<U> &) noexcept {
     return false;
@@ -227,15 +224,15 @@ struct cache_layout_xmx_info {
 };
 
 struct cache_ptr_view {
-    void *                ptr      = nullptr;
-    size_t                size     = 0;
-    ggml_layout_mode      layout   = GGML_LAYOUT_AOS;
+    void *                ptr           = nullptr;
+    size_t                size          = 0;
+    ggml_layout_mode      layout        = GGML_LAYOUT_AOS;
     int64_t               onednn_pack_m = 0;
-    cache_location        location = cache_location::DEVICE;
-    cache_entry_type      type     = cache_entry_type::DENSE_WEIGHT;
-    int                   layer_id = -1;
-    int                   expert_id = -1;
-    cache_layout_xmx_info xmx_info = {};
+    cache_location        location      = cache_location::DEVICE;
+    cache_entry_type      type          = cache_entry_type::DENSE_WEIGHT;
+    int                   layer_id      = -1;
+    int                   expert_id     = -1;
+    cache_layout_xmx_info xmx_info      = {};
 };
 
 // Result status for layout-aware cache API
@@ -273,11 +270,11 @@ struct cache_layout_request {
 };
 
 struct cache_layout_result {
-    void *                device_ptr = nullptr;
-    size_t                size       = 0;
-    ggml_layout_mode      layout     = GGML_LAYOUT_AOS;
+    void *                device_ptr    = nullptr;
+    size_t                size          = 0;
+    ggml_layout_mode      layout        = GGML_LAYOUT_AOS;
     int64_t               onednn_pack_m = 0;
-    cache_layout_xmx_info xmx_info   = {};
+    cache_layout_xmx_info xmx_info      = {};
     sycl::event           event;
     cache_layout_status   status        = cache_layout_status::FAILED;
     bool                  host_resident = false;  // true if pointer is in host memory (fallback when VRAM full)
@@ -286,10 +283,10 @@ struct cache_layout_result {
 
 // Key for identifying a cached entry
 struct unified_cache_key {
-    cache_entry_type     type;
-    ggml_sycl_cache_id   id;        // Identity for weights/MoE (no layout)
-    int                 layer_id;   // Layer ID (for expert identification)
-    int                 expert_id;  // Expert ID (-1 for dense weights)
+    cache_entry_type   type;
+    ggml_sycl_cache_id id;         // Identity for weights/MoE (no layout)
+    int                layer_id;   // Layer ID (for expert identification)
+    int                expert_id;  // Expert ID (-1 for dense weights)
 
     bool operator==(const unified_cache_key & other) const {
         return type == other.type && detail::cache_id_equal(id, other.id) && layer_id == other.layer_id &&
@@ -367,7 +364,7 @@ class host_cache {
     host_cache(host_cache &&)                  = delete;
     host_cache & operator=(host_cache &&)      = delete;
 
-    void * ensure_cached_alloc(const ggml_sycl_cache_id &     key,
+    void * ensure_cached_alloc(const ggml_sycl_cache_id &    key,
                                const void *                  src_ptr,
                                size_t                        src_size,
                                size_t                        dst_size,
@@ -381,22 +378,43 @@ class host_cache {
                                cache_location *              location_out,
                                const cache_layout_xmx_info * xmx_info);
 
-    bool   is_cached(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-                     ggml_layout_mode layout) const;
-    void * get(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-               ggml_layout_mode layout);
-    cache_location get_location(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-                                ggml_layout_mode layout) const;
-    bool   check_guard(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-                       ggml_layout_mode layout) const;
-    bool   check_all_guards(const char * where);
-    void   remove(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-                  ggml_layout_mode layout);
+    bool           is_cached(const ggml_sycl_cache_id & key,
+                             cache_entry_type           type,
+                             int                        layer_id,
+                             int                        expert_id,
+                             ggml_layout_mode           layout) const;
+    void *         get(const ggml_sycl_cache_id & key,
+                       cache_entry_type           type,
+                       int                        layer_id,
+                       int                        expert_id,
+                       ggml_layout_mode           layout);
+    cache_location get_location(const ggml_sycl_cache_id & key,
+                                cache_entry_type           type,
+                                int                        layer_id,
+                                int                        expert_id,
+                                ggml_layout_mode           layout) const;
+    bool           check_guard(const ggml_sycl_cache_id & key,
+                               cache_entry_type           type,
+                               int                        layer_id,
+                               int                        expert_id,
+                               ggml_layout_mode           layout) const;
+    bool           check_all_guards(const char * where);
+    void           remove(const ggml_sycl_cache_id & key,
+                          cache_entry_type           type,
+                          int                        layer_id,
+                          int                        expert_id,
+                          ggml_layout_mode           layout);
 
-    void pin(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-             ggml_layout_mode layout);
-    void unpin(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-               ggml_layout_mode layout);
+    void pin(const ggml_sycl_cache_id & key,
+             cache_entry_type           type,
+             int                        layer_id,
+             int                        expert_id,
+             ggml_layout_mode           layout);
+    void unpin(const ggml_sycl_cache_id & key,
+               cache_entry_type           type,
+               int                        layer_id,
+               int                        expert_id,
+               ggml_layout_mode           layout);
     void unpin_all();
 
     size_t used() const { return used_.load(); }
@@ -423,8 +441,8 @@ class host_cache {
             const size_t next = (prev >= bytes) ? (prev - bytes) : 0;
             if (used_.compare_exchange_weak(prev, next, std::memory_order_relaxed)) {
                 if (prev < bytes) {
-                    fprintf(stderr, "[HOST-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n",
-                            prev, bytes);
+                    fprintf(stderr, "[HOST-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n", prev,
+                            bytes);
                 }
                 return;
             }
@@ -432,9 +450,9 @@ class host_cache {
     }
 
     sycl::queue &        queue_;
-    size_t               budget_ = 0;
-    size_t               base_budget_ = 0;
-    size_t               reserved_ = 0;
+    size_t               budget_          = 0;
+    size_t               base_budget_     = 0;
+    size_t               reserved_        = 0;
     bool                 budget_exceeded_ = false;
     std::atomic<size_t>  used_{ 0 };
     std::atomic<int64_t> time_{ 0 };
@@ -459,22 +477,18 @@ class host_cache {
 // Supports standard dense transformer architecture with attention + FFN blocks.
 // For MoE models, use pin/unpin directly with expert_id.
 struct layer_weight_set {
-    ggml_sycl_cache_id attn_norm;                                    // Attention layer norm
-    ggml_sycl_cache_id q_proj, k_proj, v_proj, o_proj;               // Attention projections
-    ggml_sycl_cache_id ffn_norm;                                     // FFN layer norm
-    ggml_sycl_cache_id gate_proj, up_proj, down_proj;                // FFN projections (SwiGLU)
+    ggml_sycl_cache_id attn_norm;                       // Attention layer norm
+    ggml_sycl_cache_id q_proj, k_proj, v_proj, o_proj;  // Attention projections
+    ggml_sycl_cache_id ffn_norm;                        // FFN layer norm
+    ggml_sycl_cache_id gate_proj, up_proj, down_proj;   // FFN projections (SwiGLU)
     // Optional: Some architectures have additional weights
-    ggml_sycl_cache_id attn_qkv_proj;                                // Fused QKV for some models
-    ggml_sycl_cache_id ffn_gate_up_proj;                             // Fused gate+up for some models
+    ggml_sycl_cache_id attn_qkv_proj;     // Fused QKV for some models
+    ggml_sycl_cache_id ffn_gate_up_proj;  // Fused gate+up for some models
 };
 
 // Prefetch priority for async layer prefetch queue.
 // Defined locally to avoid circular dependency with unified-kernel.hpp.
-enum class prefetch_priority {
-    LOW,
-    NORMAL,
-    HIGH
-};
+enum class prefetch_priority { LOW, NORMAL, HIGH };
 
 // Result of await_layer - contains device pointers to all layer weights.
 // Populated by looking up each weight in the cache after prefetch completes.
@@ -511,9 +525,9 @@ class unified_cache {
     // budget_bytes: total GPU memory for caching (dense + MoE combined)
     // staging_size: pinned host staging buffer size (default 64MB)
     unified_cache(sycl::queue & queue,
-                  size_t       budget_bytes,
-                  size_t       staging_size       = 64 * 1024 * 1024,
-                  size_t       dma_reserved_bytes = 0);
+                  size_t        budget_bytes,
+                  size_t        staging_size       = 64 * 1024 * 1024,
+                  size_t        dma_reserved_bytes = 0);
     ~unified_cache();
 
     // Non-copyable, non-movable
@@ -536,25 +550,25 @@ class unified_cache {
     // For dense weights: layer_id=-1, expert_id=-1
     // For MoE experts: layer_id=N, expert_id=M
     void * ensure_cached(const ggml_sycl_cache_id & key,
-                         const void *     src_ptr,
-                         size_t           size,
-                         cache_entry_type type,
-                         int              layer_id         = -1,
-                         int              expert_id        = -1,
-                         ggml_layout_mode layout           = GGML_LAYOUT_AOS,
-                         bool             validate_content = false);
+                         const void *               src_ptr,
+                         size_t                     size,
+                         cache_entry_type           type,
+                         int                        layer_id         = -1,
+                         int                        expert_id        = -1,
+                         ggml_layout_mode           layout           = GGML_LAYOUT_AOS,
+                         bool                       validate_content = false);
     // Allocate cache entry without copying data (caller will fill device_ptr).
     // Uses src_ptr/src_size only for content hash and change detection.
     void * ensure_cached_alloc(const ggml_sycl_cache_id & key,
-                               const void *     src_ptr,
-                               size_t           src_size,
-                               size_t           alloc_size,
-                               cache_entry_type type,
-                               int              layer_id,
-                               int              expert_id,
-                               ggml_layout_mode layout,
-                               bool             validate_content,
-                               bool *           needs_fill);
+                               const void *               src_ptr,
+                               size_t                     src_size,
+                               size_t                     alloc_size,
+                               cache_entry_type           type,
+                               int                        layer_id,
+                               int                        expert_id,
+                               ggml_layout_mode           layout,
+                               bool                       validate_content,
+                               bool *                     needs_fill);
 
     // Ensure a weight is cached in a specific layout with graph-safe async fill.
     cache_layout_result ensure_cached_layout(const cache_layout_request &     request,
@@ -565,7 +579,7 @@ class unified_cache {
     bool is_cached_any(const ggml_sycl_cache_id & key) const;
 
     // Get device pointer for cached entry (returns nullptr if not cached)
-    void * get(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
+    void *         get(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
     cache_ptr_view get_view(const ggml_sycl_cache_id & key, ggml_layout_mode layout);
 
     // Get device pointer, waiting for IN_PROGRESS entries to complete.
@@ -584,8 +598,11 @@ class unified_cache {
     void * get_by_data_ptr(void * data_ptr, size_t nbytes, ggml_layout_mode layout);
 
     // Remove a cache entry (free device memory).
-    void remove(const ggml_sycl_cache_id & key, cache_entry_type type, int layer_id, int expert_id,
-                ggml_layout_mode layout);
+    void remove(const ggml_sycl_cache_id & key,
+                cache_entry_type           type,
+                int                        layer_id,
+                int                        expert_id,
+                ggml_layout_mode           layout);
 
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not in cache
 
@@ -691,11 +708,11 @@ class unified_cache {
 
     // Hot set control (MoE experts)
     void set_hot(const ggml_sycl_cache_id & key,
-                 cache_entry_type          type,
-                 int                       layer_id,
-                 int                       expert_id,
-                 ggml_layout_mode          layout,
-                 bool                      hot);
+                 cache_entry_type           type,
+                 int                        layer_id,
+                 int                        expert_id,
+                 ggml_layout_mode           layout,
+                 bool                       hot);
     void clear_hot_experts(int layer_id);
 
     // Track cache entries pinned for in-flight kernels.
@@ -707,7 +724,7 @@ class unified_cache {
                                                 size_t                           offset_bytes,
                                                 const void *                     ctx,
                                                 const std::vector<sycl::event> & deps);
-    using dma_stream_copy_fn = sycl::event (*)(sycl::queue &                    queue,
+    using dma_stream_copy_fn  = sycl::event (*)(sycl::queue &                    queue,
                                                void *                           device_slice,
                                                size_t                           slice_bytes,
                                                size_t                           offset_bytes,
@@ -727,22 +744,22 @@ class unified_cache {
 
     struct dma_stream_result {
         sycl::event event;
-        bool        ok              = false;
-        bool        used_mmap_direct = false;
+        bool        ok                 = false;
+        bool        used_mmap_direct   = false;
         bool        mmap_direct_failed = false;
-        size_t      slices          = 0;
-        size_t      slice_bytes     = 0;
-        size_t      buffer_count    = 0;
+        size_t      slices             = 0;
+        size_t      slice_bytes        = 0;
+        size_t      buffer_count       = 0;
     };
 
-    dma_stream_result stream_dma(const cache_ptr_view &            src,
-                                 size_t                            total_bytes,
-                                 size_t                            slice_bytes,
-                                 size_t                            buffer_count,
-                                 dma_stream_slice_fn               slice_fn,
-                                 const void *                      ctx,
-                                 const std::vector<sycl::event> &   deps,
-                                 dma_stream_copy_fn                copy_fn = nullptr);
+    dma_stream_result stream_dma(const cache_ptr_view &           src,
+                                 size_t                           total_bytes,
+                                 size_t                           slice_bytes,
+                                 size_t                           buffer_count,
+                                 dma_stream_slice_fn              slice_fn,
+                                 const void *                     ctx,
+                                 const std::vector<sycl::event> & deps,
+                                 dma_stream_copy_fn               copy_fn = nullptr);
 
     // Defer freeing host allocations until the associated event completes.
     void defer_host_free(void * ptr, size_t size, const sycl::event & event);
@@ -752,8 +769,8 @@ class unified_cache {
     // These avoid per-op allocations that cause OOM with large KV caches.
 
     struct onednn_scratch_buffers {
-        void * weights     = nullptr;  // Dequantized weights (N*K*2 bytes)
-        void * activations = nullptr;  // Converted activations (M*K*2 bytes)
+        void * weights          = nullptr;  // Dequantized weights (N*K*2 bytes)
+        void * activations      = nullptr;  // Converted activations (M*K*2 bytes)
         size_t weights_size     = 0;
         size_t activations_size = 0;
     };
@@ -766,8 +783,7 @@ class unified_cache {
 
     // Get scratch buffers. Returns false if not reserved or sizes exceed reserved.
     // Caller must hold onednn_scratch_mutex_ via lock_onednn_scratch().
-    bool get_onednn_scratch(size_t weights_needed, size_t activations_needed,
-                            onednn_scratch_buffers & out);
+    bool get_onednn_scratch(size_t weights_needed, size_t activations_needed, onednn_scratch_buffers & out);
 
     // Lock/unlock for scratch buffer access (RAII recommended)
     std::unique_lock<std::mutex> lock_onednn_scratch() { return std::unique_lock<std::mutex>(onednn_scratch_mutex_); }
@@ -777,6 +793,7 @@ class unified_cache {
 
     // Get reserved sizes
     size_t onednn_weights_scratch_size() const { return onednn_weights_scratch_size_; }
+
     size_t onednn_activations_scratch_size() const { return onednn_activations_scratch_size_; }
 
     // === Persistent Scratch Buffers ===
@@ -822,6 +839,14 @@ class unified_cache {
         sycl::event event;
     };
 
+    struct copy_stage_slot {
+        void *      ptr       = nullptr;
+        int         device    = -1;
+        size_t      capacity  = 0;
+        bool        in_flight = false;
+        sycl::event done_event;
+    };
+
     // Compute eviction score: higher = more valuable (keep longer)
     // score = access_count * exp(-decay * age)
     float compute_score(const unified_cache_entry & entry) const;
@@ -844,8 +869,8 @@ class unified_cache {
             const size_t next = (prev >= bytes) ? (prev - bytes) : 0;
             if (used_.compare_exchange_weak(prev, next, std::memory_order_relaxed)) {
                 if (prev < bytes) {
-                    fprintf(stderr, "[UNIFIED-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n",
-                            prev, bytes);
+                    fprintf(stderr, "[UNIFIED-CACHE] used_ underflow prevented: prev=%zu sub=%zu clamped to 0\n", prev,
+                            bytes);
                 }
                 return;
             }
@@ -853,12 +878,12 @@ class unified_cache {
     }
 
     sycl::queue &        queue_;
-    size_t               budget_;       // Total GPU memory budget (after reservations)
-    size_t               base_budget_;  // Raw cache budget before reservations
-    size_t               reserved_;     // Runtime reservation applied to budget_
+    size_t               budget_;                   // Total GPU memory budget (after reservations)
+    size_t               base_budget_;              // Raw cache budget before reservations
+    size_t               reserved_;                 // Runtime reservation applied to budget_
     bool                 budget_exceeded_ = false;  // Set when used > budget after eviction
-    std::atomic<size_t>  used_{ 0 };    // Current usage
-    std::atomic<int64_t> time_{ 0 };    // Monotonic counter
+    std::atomic<size_t>  used_{ 0 };                // Current usage
+    std::atomic<int64_t> time_{ 0 };                // Monotonic counter
 
     // Cache storage: (identity, type, layer/expert) -> entry
     std::unordered_map<unified_cache_key,
@@ -867,10 +892,7 @@ class unified_cache {
                        std::equal_to<unified_cache_key>,
                        detail::cache_guard_allocator<std::pair<const unified_cache_key, unified_cache_entry>>>
         entries_;
-    std::unordered_map<ggml_sycl_cache_id,
-                       unified_cache_key,
-                       detail::cache_id_hash,
-                       detail::cache_id_equal_fn>
+    std::unordered_map<ggml_sycl_cache_id, unified_cache_key, detail::cache_id_hash, detail::cache_id_equal_fn>
         id_to_key_;
 
     // Layout pool: consolidates many individual layout allocations into
@@ -886,8 +908,8 @@ class unified_cache {
 
     // Device-resident DMA staging buffers (for streaming).
     std::vector<void *> dma_staging_buffers_;
-    size_t              dma_slice_bytes_   = 0;
-    size_t              dma_buffer_count_  = 0;
+    size_t              dma_slice_bytes_    = 0;
+    size_t              dma_buffer_count_   = 0;
     size_t              dma_reserved_bytes_ = 0;
     std::mutex          dma_staging_mutex_;
 
@@ -895,8 +917,8 @@ class unified_cache {
     // Pre-allocated to avoid per-op allocations that cause OOM with large contexts.
     // weights_scratch_: holds dequantized weights (max N*K*2 bytes)
     // activations_scratch_: holds converted activations (max M*K*2 bytes)
-    void *     onednn_weights_scratch_     = nullptr;
-    void *     onednn_activations_scratch_ = nullptr;
+    void *     onednn_weights_scratch_          = nullptr;
+    void *     onednn_activations_scratch_      = nullptr;
     size_t     onednn_weights_scratch_size_     = 0;
     size_t     onednn_activations_scratch_size_ = 0;
     std::mutex onednn_scratch_mutex_;
@@ -908,18 +930,24 @@ class unified_cache {
         size_t size       = 0;
         bool   pinned     = true;
     };
+
     std::unordered_map<std::string, persistent_scratch_entry> persistent_scratches_;
     mutable std::mutex                                        persistent_scratch_mutex_;
 
     // Deferred frees to avoid releasing buffers while in flight.
-    std::vector<deferred_free_entry> deferred_frees_;
+    std::vector<deferred_free_entry>      deferred_frees_;
     std::vector<deferred_host_free_entry> deferred_host_frees_;
 
+    // Reusable host-pinned staging slots for async copy_to_device paths.
+    std::vector<copy_stage_slot> copy_stage_slots_;
+    size_t                       copy_stage_next_ = 0;
+    std::mutex                   copy_stage_mutex_;
+
     struct inflight_unpin_entry {
-        ggml_sycl_cache_id key     = {};
-        ggml_layout_mode layout    = GGML_LAYOUT_AOS;
-        bool             has_event = false;
-        sycl::event      event;
+        ggml_sycl_cache_id key       = {};
+        ggml_layout_mode   layout    = GGML_LAYOUT_AOS;
+        bool               has_event = false;
+        sycl::event        event;
     };
 
     // Entries pinned for in-flight kernels.
@@ -929,20 +957,20 @@ class unified_cache {
     // Background worker thread pins layer weights ahead of kernel execution.
 
     struct prefetch_request {
-        int              layer_id;
-        layer_weight_set weights;
-        ggml_layout_mode layout;
+        int               layer_id;
+        layer_weight_set  weights;
+        ggml_layout_mode  layout;
         prefetch_priority priority;
     };
 
     // Prefetch queue and worker thread
-    std::deque<prefetch_request>     prefetch_queue_;
-    std::mutex                       prefetch_mutex_;
-    std::condition_variable          prefetch_cv_;
-    std::thread                      prefetch_worker_;
-    std::atomic<bool>                prefetch_shutdown_{ false };
-    std::atomic<bool>                prefetch_started_{ false };
-    std::mutex                       prefetch_lifecycle_mutex_;  // Guards start/stop of prefetch_worker_
+    std::deque<prefetch_request> prefetch_queue_;
+    std::mutex                   prefetch_mutex_;
+    std::condition_variable      prefetch_cv_;
+    std::thread                  prefetch_worker_;
+    std::atomic<bool>            prefetch_shutdown_{ false };
+    std::atomic<bool>            prefetch_started_{ false };
+    std::mutex                   prefetch_lifecycle_mutex_;  // Guards start/stop of prefetch_worker_
 
     // Start the background prefetch worker thread (called lazily on first queue_layer_prefetch).
     void start_prefetch_worker();
@@ -952,11 +980,11 @@ class unified_cache {
 
     // Per-layer ready tracking
     // Guarded by layer_state_mutex_
-    std::unordered_map<int, bool>              layer_ready_;    // layer_id -> ready
-    std::unordered_map<int, layer_weight_set>  layer_weights_;  // for release_layer unpin
-    std::unordered_map<int, ggml_layout_mode>  layer_layouts_;  // layout used for pinning
-    mutable std::mutex                         layer_state_mutex_;
-    std::condition_variable                    layer_ready_cv_;
+    std::unordered_map<int, bool>             layer_ready_;    // layer_id -> ready
+    std::unordered_map<int, layer_weight_set> layer_weights_;  // for release_layer unpin
+    std::unordered_map<int, ggml_layout_mode> layer_layouts_;  // layout used for pinning
+    mutable std::mutex                        layer_state_mutex_;
+    std::condition_variable                   layer_ready_cv_;
 
     // The prefetch worker loop (runs on background thread)
     void prefetch_worker_loop();
@@ -964,7 +992,7 @@ class unified_cache {
     // Set to true when any weight has been evicted from device to host.
     // One-way flag (false → true, never reset). Used by graph replay / persistent TG
     // to know that baked pointers may reference freed device memory.
-    std::atomic<bool> has_evictions_{false};
+    std::atomic<bool> has_evictions_{ false };
 
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };
@@ -972,7 +1000,7 @@ class unified_cache {
 
     static constexpr float DECAY_ALPHA = 0.01f;
 
-    mutable std::shared_mutex       rw_mutex_;
+    mutable std::shared_mutex           rw_mutex_;
     mutable std::condition_variable_any entry_cv_;
 };
 
@@ -1038,8 +1066,8 @@ enum class runtime_category : uint8_t {
 // Managed runtime allocations must flow through this API so budget accounting,
 // placement policy, and pointer registry stay consistent.
 enum class alloc_tier : uint8_t {
-    DEVICE_VRAM = 0,
-    HOST_PINNED = 1,
+    DEVICE_VRAM  = 0,
+    HOST_PINNED  = 1,
     MMAP_TRACKED = 2,
 };
 
@@ -1054,18 +1082,20 @@ enum class alloc_role : uint8_t {
 };
 
 enum class offload_buffer_role : uint8_t {
-    STAGING_SRC0     = 0,
-    STAGING_SRC1     = 1,
-    STAGING_DST      = 2,
-    RETAINED_SCRATCH = 3,
-    OTHER            = 4,
+    STAGING_SRC0       = 0,
+    STAGING_SRC1       = 1,
+    STAGING_DST        = 2,
+    RETAINED_SCRATCH   = 3,
+    SET_TENSOR_STAGE   = 4,
+    SET_TENSOR_REORDER = 5,
+    OTHER              = 6,
 };
 
 struct alloc_constraints {
-    bool must_device               = false;
-    bool must_host_pinned          = false;
+    bool must_device                = false;
+    bool must_host_pinned           = false;
     bool prefer_same_tier_as_cohort = false;
-    bool use_pinned_pool           = false;
+    bool use_pinned_pool            = false;
 };
 
 struct alloc_intent {
@@ -1107,61 +1137,61 @@ struct offload_buffer_lease {
     bool         valid    = false;
 };
 
-bool      unified_alloc(const alloc_request & req, alloc_handle * out);
-bool      unified_free(const alloc_handle & handle);
-bool      unified_free_ptr(void * ptr, int expected_device = -1);
-bool      unified_lookup(void * ptr, alloc_handle * out);
+bool       unified_alloc(const alloc_request & req, alloc_handle * out);
+bool       unified_free(const alloc_handle & handle);
+bool       unified_free_ptr(void * ptr, int expected_device = -1);
+bool       unified_lookup(void * ptr, alloc_handle * out);
 alloc_tier unified_select_tier(const alloc_request & req);
-bool      unified_alloc_validate_registry(int device = -1, const char * where = nullptr);
-bool      unified_alloc_strict_mode();
+bool       unified_alloc_validate_registry(int device = -1, const char * where = nullptr);
+bool       unified_alloc_strict_mode();
 
-bool      acquire_offload_buffer(const offload_buffer_request & req, offload_buffer_lease * out);
-bool      release_offload_buffer(const offload_buffer_lease & lease);
-void      offload_buffer_pool_trim(int device = -1);
+bool acquire_offload_buffer(const offload_buffer_request & req, offload_buffer_lease * out);
+bool release_offload_buffer(const offload_buffer_lease & lease);
+void offload_buffer_pool_trim(int device = -1);
 
 struct offload_stats_snapshot {
-    uint64_t wait_count                 = 0;
-    uint64_t wait_count_forced          = 0;
-    uint64_t wait_count_fallback        = 0;
-    uint64_t alloc_count_host           = 0;
-    uint64_t alloc_count_device         = 0;
-    uint64_t alloc_count_shared         = 0;
-    uint64_t pool_hit_count             = 0;
-    uint64_t pool_miss_count            = 0;
-    uint64_t cross_domain_transfer_count = 0;
-    uint64_t cross_domain_transfer_count_pp = 0;
-    uint64_t cross_domain_transfer_count_tg = 0;
-    uint64_t transfer_bytes_h2d         = 0;
-    uint64_t transfer_bytes_d2h         = 0;
-    uint64_t transfer_bytes_h2d_pp      = 0;
-    uint64_t transfer_bytes_h2d_tg      = 0;
-    uint64_t transfer_bytes_d2h_pp      = 0;
-    uint64_t transfer_bytes_d2h_tg      = 0;
-    uint64_t dispatch_count_cpu         = 0;
-    uint64_t dispatch_count_gpu         = 0;
-    uint64_t dispatch_count_gpu_island  = 0;
-    uint64_t dispatch_count_cpu_pp      = 0;
-    uint64_t dispatch_count_cpu_tg      = 0;
-    uint64_t dispatch_count_gpu_pp      = 0;
-    uint64_t dispatch_count_gpu_tg      = 0;
-    uint64_t dispatch_count_gpu_island_pp = 0;
-    uint64_t dispatch_count_gpu_island_tg = 0;
-    uint64_t transition_wait_count      = 0;
-    uint64_t transition_wait_count_pp   = 0;
-    uint64_t transition_wait_count_tg   = 0;
-    uint64_t transition_wait_elided_count = 0;
-    uint64_t transition_wait_elided_count_pp = 0;
-    uint64_t transition_wait_elided_count_tg = 0;
-    uint64_t host_alloc_call_count = 0;
-    uint64_t host_alloc_bytes      = 0;
-    uint64_t host_alloc_calls_unified_alloc_host = 0;
-    uint64_t host_alloc_bytes_unified_alloc_host = 0;
+    uint64_t wait_count                                = 0;
+    uint64_t wait_count_forced                         = 0;
+    uint64_t wait_count_fallback                       = 0;
+    uint64_t alloc_count_host                          = 0;
+    uint64_t alloc_count_device                        = 0;
+    uint64_t alloc_count_shared                        = 0;
+    uint64_t pool_hit_count                            = 0;
+    uint64_t pool_miss_count                           = 0;
+    uint64_t cross_domain_transfer_count               = 0;
+    uint64_t cross_domain_transfer_count_pp            = 0;
+    uint64_t cross_domain_transfer_count_tg            = 0;
+    uint64_t transfer_bytes_h2d                        = 0;
+    uint64_t transfer_bytes_d2h                        = 0;
+    uint64_t transfer_bytes_h2d_pp                     = 0;
+    uint64_t transfer_bytes_h2d_tg                     = 0;
+    uint64_t transfer_bytes_d2h_pp                     = 0;
+    uint64_t transfer_bytes_d2h_tg                     = 0;
+    uint64_t dispatch_count_cpu                        = 0;
+    uint64_t dispatch_count_gpu                        = 0;
+    uint64_t dispatch_count_gpu_island                 = 0;
+    uint64_t dispatch_count_cpu_pp                     = 0;
+    uint64_t dispatch_count_cpu_tg                     = 0;
+    uint64_t dispatch_count_gpu_pp                     = 0;
+    uint64_t dispatch_count_gpu_tg                     = 0;
+    uint64_t dispatch_count_gpu_island_pp              = 0;
+    uint64_t dispatch_count_gpu_island_tg              = 0;
+    uint64_t transition_wait_count                     = 0;
+    uint64_t transition_wait_count_pp                  = 0;
+    uint64_t transition_wait_count_tg                  = 0;
+    uint64_t transition_wait_elided_count              = 0;
+    uint64_t transition_wait_elided_count_pp           = 0;
+    uint64_t transition_wait_elided_count_tg           = 0;
+    uint64_t host_alloc_call_count                     = 0;
+    uint64_t host_alloc_bytes                          = 0;
+    uint64_t host_alloc_calls_unified_alloc_host       = 0;
+    uint64_t host_alloc_bytes_unified_alloc_host       = 0;
     uint64_t host_alloc_calls_unified_cache_host_chunk = 0;
     uint64_t host_alloc_bytes_unified_cache_host_chunk = 0;
-    uint64_t host_alloc_calls_host_malloc = 0;
-    uint64_t host_alloc_bytes_host_malloc = 0;
-    uint64_t host_alloc_calls_other = 0;
-    uint64_t host_alloc_bytes_other = 0;
+    uint64_t host_alloc_calls_host_malloc              = 0;
+    uint64_t host_alloc_bytes_host_malloc              = 0;
+    uint64_t host_alloc_calls_other                    = 0;
+    uint64_t host_alloc_bytes_other                    = 0;
 };
 
 enum class offload_phase : uint8_t {
@@ -1170,32 +1200,35 @@ enum class offload_phase : uint8_t {
     TG      = 2,
 };
 
-bool                  offload_stats_enabled();
-void                  offload_stats_reset();
-void                  offload_stats_set_phase(offload_phase phase);
-offload_phase         offload_stats_phase();
-void                  offload_stats_note_wait(bool fallback = false);
-void                  offload_stats_note_alloc(alloc_tier tier);
-void                  offload_stats_note_pool_hit();
-void                  offload_stats_note_pool_miss();
-void                  offload_stats_note_transfer(bool h2d, size_t bytes);
-void                  offload_stats_note_cross_domain_transfer(size_t bytes);
-void                  offload_stats_note_dispatch(bool cpu, bool gpu_island = false);
-void                  offload_stats_note_transition_wait(bool waited);
-void                  offload_stats_note_host_alloc(const char * tag, size_t bytes);
+bool                   offload_stats_enabled();
+void                   offload_stats_reset();
+void                   offload_stats_set_phase(offload_phase phase);
+offload_phase          offload_stats_phase();
+void                   offload_stats_note_wait(bool fallback = false);
+void                   offload_stats_note_alloc(alloc_tier tier);
+void                   offload_stats_note_pool_hit();
+void                   offload_stats_note_pool_miss();
+void                   offload_stats_note_transfer(bool h2d, size_t bytes);
+void                   offload_stats_note_cross_domain_transfer(size_t bytes);
+void                   offload_stats_note_dispatch(bool cpu, bool gpu_island = false);
+void                   offload_stats_note_transition_wait(bool waited);
+void                   offload_stats_note_host_alloc(const char * tag, size_t bytes);
 offload_stats_snapshot offload_stats_get();
-void                  offload_stats_log_summary(const char * tag, int device);
+void                   offload_stats_log_summary(const char * tag, int device);
 
 class scoped_unified_alloc {
   public:
     scoped_unified_alloc() = default;
+
     explicit scoped_unified_alloc(const alloc_request & req) { allocate(req); }
+
     ~scoped_unified_alloc() { reset(); }
 
-    scoped_unified_alloc(const scoped_unified_alloc &) = delete;
+    scoped_unified_alloc(const scoped_unified_alloc &)             = delete;
     scoped_unified_alloc & operator=(const scoped_unified_alloc &) = delete;
 
     scoped_unified_alloc(scoped_unified_alloc && other) noexcept : handle_(other.release()) {}
+
     scoped_unified_alloc & operator=(scoped_unified_alloc && other) noexcept {
         if (this != &other) {
             reset();
@@ -1217,12 +1250,15 @@ class scoped_unified_alloc {
     }
 
     void * get() const { return handle_.ptr; }
+
     const alloc_handle & handle() const { return handle_; }
+
     alloc_handle release() {
         alloc_handle out = handle_;
         handle_          = {};
         return out;
     }
+
     explicit operator bool() const { return handle_.ptr != nullptr; }
 
   private:
@@ -1263,18 +1299,18 @@ bool unified_cache_has_evictions();
 // Budget information exported for external consumers (e.g., llama_params_fit)
 struct unified_budget_info {
     int    device_id;
-    size_t total_vram;            // Total device memory
-    size_t budget_bytes;          // Managed budget (total * pct - headroom)
-    size_t weight_bytes;          // Current weight cache usage
-    size_t runtime_bytes;         // KV + compute + staging + graph
-    size_t available_for_weights; // budget - runtime (what can hold weights)
-    int    budget_pct;            // GGML_SYCL_VRAM_BUDGET_PCT value used
-    bool   model_exceeds_vram;    // True if model > available_for_weights
+    size_t total_vram;             // Total device memory
+    size_t budget_bytes;           // Managed budget (total * pct - headroom)
+    size_t weight_bytes;           // Current weight cache usage
+    size_t runtime_bytes;          // KV + compute + staging + graph
+    size_t available_for_weights;  // budget - runtime (what can hold weights)
+    int    budget_pct;             // GGML_SYCL_VRAM_BUDGET_PCT value used
+    bool   model_exceeds_vram;     // True if model > available_for_weights
     // MoE expert breakdown (non-zero only for MoE models)
-    size_t expert_weight_bytes;   // Total bytes for ALL expert tensors
-    size_t active_expert_bytes;   // Estimated bytes for active experts only
-    int    n_expert_total;        // Total experts per layer (e.g., 8, 128)
-    int    n_expert_used;         // Experts per token (e.g., 2, 4)
+    size_t expert_weight_bytes;  // Total bytes for ALL expert tensors
+    size_t active_expert_bytes;  // Estimated bytes for active experts only
+    int    n_expert_total;       // Total experts per layer (e.g., 8, 128)
+    int    n_expert_used;        // Experts per token (e.g., 2, 4)
 };
 
 // Get budget info for a device (thread-safe snapshot)
@@ -1294,14 +1330,15 @@ bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes = 0);
 // For an 8-expert top-2 model, only ~37.5% (1.5x active ratio) of expert weights are needed.
 size_t compute_moe_effective_weight_bytes(size_t total_weight_bytes,
                                           size_t expert_total_bytes,
-                                          int n_expert, int n_expert_used);
+                                          int    n_expert,
+                                          int    n_expert_used);
 
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
 host_cache * get_host_cache_for_device(int device_id);
-int host_cache_guard_error_count();
-void host_cache_guard_reset();
-bool host_cache_guard_check_all(int device_id, const char * where);
+int          host_cache_guard_error_count();
+void         host_cache_guard_reset();
+bool         host_cache_guard_check_all(int device_id, const char * where);
 
 // === OneDNN FP16 Scratch Buffer API ===
 // Reserve pre-allocated scratch buffers for oneDNN FP16 prompt processing.
@@ -1322,6 +1359,7 @@ struct onednn_scratch_result {
     void * activations = nullptr;
     bool   ok          = false;
 };
+
 onednn_scratch_result unified_cache_get_onednn_scratch(int device_id, size_t weights_needed, size_t activations_needed);
 
 // Release scratch buffers (unlocks mutex for other threads)
@@ -1331,11 +1369,11 @@ void unified_cache_release_onednn_scratch(int device_id);
 bool unified_cache_has_onednn_scratch(int device_id);
 
 // Persistent scratch buffer public API
-bool unified_cache_reserve_persistent_scratch(int device_id, const char* buffer_name, size_t size_bytes, bool pin);
-void * unified_cache_get_persistent_scratch(int device_id, const char* buffer_name);
-void unified_cache_release_persistent_scratch(int device_id, const char* buffer_name);
-bool unified_cache_has_persistent_scratch(int device_id, const char* buffer_name);
-size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buffer_name);
+bool   unified_cache_reserve_persistent_scratch(int device_id, const char * buffer_name, size_t size_bytes, bool pin);
+void * unified_cache_get_persistent_scratch(int device_id, const char * buffer_name);
+void   unified_cache_release_persistent_scratch(int device_id, const char * buffer_name);
+bool   unified_cache_has_persistent_scratch(int device_id, const char * buffer_name);
+size_t unified_cache_get_persistent_scratch_size(int device_id, const char * buffer_name);
 
 // === Bulk Weight Pinning API ===
 // Pin/unpin all weights for a layer or entire model at once.
@@ -1343,17 +1381,17 @@ size_t unified_cache_get_persistent_scratch_size(int device_id, const char* buff
 
 // Pin all weights in a layer_weight_set. Returns count of successfully pinned entries.
 // weights: pointer to layer_weight_set (opaque in C API, cast to layer_weight_set* internally)
-int unified_cache_pin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout);
+int unified_cache_pin_layer_weights(int device_id, int layer_id, const layer_weight_set * weights, int layout);
 
 // Unpin all weights in a layer_weight_set.
-void unified_cache_unpin_layer_weights(int device_id, int layer_id, const layer_weight_set* weights, int layout);
+void unified_cache_unpin_layer_weights(int device_id, int layer_id, const layer_weight_set * weights, int layout);
 
 // Pin entire model weights. Returns total count of pinned entries.
 // layers: array of layer_weight_set, n_layers elements
-int unified_cache_pin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout);
+int unified_cache_pin_model_weights(int device_id, int n_layers, const layer_weight_set * layers, int layout);
 
 // Unpin entire model weights.
-void unified_cache_unpin_model_weights(int device_id, int n_layers, const layer_weight_set* layers, int layout);
+void unified_cache_unpin_model_weights(int device_id, int n_layers, const layer_weight_set * layers, int layout);
 
 // === MoE Cache Helpers ===
 // Unpin all experts
@@ -1364,10 +1402,10 @@ void unpin_all_experts();
 
 // Result of pre-staging operation
 struct prestage_result {
-    int  n_staged;   // Number of experts actually staged (not already cached)
-    int  n_pinned;   // Number of experts pinned (includes already-cached)
-    int  n_unique;   // Number of unique experts in input
-    bool success;    // True if all staging/pinning succeeded
+    int  n_staged;  // Number of experts actually staged (not already cached)
+    int  n_pinned;  // Number of experts pinned (includes already-cached)
+    int  n_unique;  // Number of unique experts in input
+    bool success;   // True if all staging/pinning succeeded
 };
 
 // Pre-stage only the experts identified by routing indices.

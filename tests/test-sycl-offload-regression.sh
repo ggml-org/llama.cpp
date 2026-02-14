@@ -11,6 +11,8 @@ required_fields=(
   "cross_domain_transfer_count="
   "transfer_bytes_h2d="
   "transfer_bytes_d2h="
+  "host_alloc_call_count="
+  "host_alloc_bytes="
 )
 
 require_fields() {
@@ -24,7 +26,7 @@ require_fields() {
 }
 
 if [[ "${1:-}" == "--self-check" ]]; then
-  sample="[SYCL-OFFLOAD-STATS] tag=graph_compute device=0 wait_count=1 alloc_count_host=2 alloc_count_device=0 alloc_count_shared=0 pool_hit_count=3 pool_miss_count=4 cross_domain_transfer_count=5 transfer_bytes_h2d=6 transfer_bytes_d2h=7"
+  sample="[SYCL-OFFLOAD-STATS] tag=graph_compute device=0 wait_count=1 alloc_count_host=2 alloc_count_device=0 alloc_count_shared=0 pool_hit_count=3 pool_miss_count=4 cross_domain_transfer_count=5 transfer_bytes_h2d=6 transfer_bytes_d2h=7 host_alloc_call_count=8 host_alloc_bytes=9"
   require_fields "$sample"
   echo "self-check passed"
   exit 0
