@@ -437,13 +437,15 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     return new_type;
 }
 
-// determine the ggml_type that this tensor should be quantized to
+// determine the ggml_type that this tensor should be quantized to.
+//
+// `qs` statistics will only be updated if the `update_stats` parameter is true.
 static ggml_type llama_tensor_get_type(
                   quantize_state_impl & qs,
     const llama_model_quantize_params * params,
                     const ggml_tensor * tensor,
                             ggml_type   default_type,
-                                 bool   update_stats // we only update qs if this flag is true
+                                 bool   update_stats
 ) {
     ggml_type new_type = default_type;
     // get more optimal quantization type based on the tensor shape, layer, etc.
@@ -973,7 +975,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         // if so, what will be the target type?
         if (do_quantize) {
-            new_type = tensor_get_target_type(qs, params, tensor, default_type, true);
+            new_type = llama_tensor_get_type(qs, params, tensor, default_type, true);
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
             do_quantize = tensor->type != new_type;
