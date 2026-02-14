@@ -4907,6 +4907,11 @@ class PhiMoeModel(Phi3MiniModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_used_count(self.find_hparam(["num_experts_per_tok", "num_experts_per_token"]))
+        self.gguf_writer.add_expert_count(self.find_hparam(["num_local_experts", "num_experts"]))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
         if name.find("block_sparse_moe.experts") != -1:
