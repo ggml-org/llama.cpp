@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import type { Component } from 'svelte';
+	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
 		open: boolean;
@@ -29,7 +30,7 @@
 	}: Props = $props();
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter') {
+		if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 			onConfirm();
 		}

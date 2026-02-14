@@ -18,19 +18,24 @@
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import {
+		SETTINGS_SECTION_TITLES,
+		type SettingsSectionTitle
+	} from '$lib/constants/settings-sections';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
 	interface Props {
 		onSave?: () => void;
+		initialSection?: SettingsSectionTitle;
 	}
 
-	let { onSave }: Props = $props();
+	let { onSave, initialSection }: Props = $props();
 
 	const settingSections: Array<{
 		fields: SettingsFieldConfig[];
 		icon: Component;
-		title: string;
+		title: SettingsSectionTitle;
 	}> = [
 		{
 			title: 'General',
@@ -285,7 +290,9 @@
 		// }
 	];
 
-	let activeSection = $state('General');
+	let activeSection = $derived<SettingsSectionTitle>(
+		initialSection ?? SETTINGS_SECTION_TITLES.GENERAL
+	);
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
@@ -294,6 +301,16 @@
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 	let scrollContainer: HTMLDivElement | undefined = $state();
+
+	$effect(() => {
+		if (!initialSection) {
+			return;
+		}
+
+		if (settingSections.some((section) => section.title === initialSection)) {
+			activeSection = initialSection;
+		}
+	});
 
 	function handleThemeChange(newTheme: string) {
 		localConfig.theme = newTheme;

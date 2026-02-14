@@ -1,22 +1,6 @@
 import { normalizeFloatingPoint } from '$lib/utils';
-import { SyncableParameterType, ParameterSource } from '$lib/enums/settings';
-
-type ParameterValue = string | number | boolean;
-type ParameterRecord = Record<string, ParameterValue>;
-
-interface ParameterInfo {
-	value: string | number | boolean;
-	source: ParameterSource;
-	serverDefault?: string | number | boolean;
-	userOverride?: string | number | boolean;
-}
-
-interface SyncableParameter {
-	key: string;
-	serverKey: string;
-	type: SyncableParameterType;
-	canSync: boolean;
-}
+import type { SyncableParameter, ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
+import { SyncableParameterType, ParameterSource } from '$lib/enums';
 
 /**
  * Mapping of webui setting keys to server parameter keys.

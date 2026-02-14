@@ -5,7 +5,7 @@
 
 import { getFileTypeCategory } from '$lib/utils';
 import { FileTypeCategory } from '$lib/enums';
-import type { ModalityCapabilities } from '$lib/types/models';
+import type { ModalityCapabilities } from '$lib/types';
 
 /**
  * Check if a file type is supported by the given modalities

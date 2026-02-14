@@ -1,12 +1,14 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import type { ChatMessageTimings } from './chat';
+import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
+import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type { DatabaseMessageExtra } from './database';
 
 export type SettingsConfigValue = string | number | boolean;
 
 export interface SettingsFieldConfig {
 	key: string;
 	label: string;
-	type: 'input' | 'textarea' | 'checkbox' | 'select';
+	type: SettingsFieldType;
 	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
@@ -51,6 +53,7 @@ export interface SettingsChatServiceOptions {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
+	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
@@ -65,3 +68,20 @@ export interface SettingsChatServiceOptions {
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 	[key: string]: SettingsConfigValue;
 };
+
+export type ParameterValue = string | number | boolean;
+export type ParameterRecord = Record<string, ParameterValue>;
+
+export interface ParameterInfo {
+	value: ParameterValue;
+	source: ParameterSource;
+	serverDefault?: ParameterValue;
+	userOverride?: ParameterValue;
+}
+
+export interface SyncableParameter {
+	key: string;
+	serverKey: string;
+	type: SyncableParameterType;
+	canSync: boolean;
+}

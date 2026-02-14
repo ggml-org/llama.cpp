@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Eye } from '@lucide/svelte';
-	import ActionIconCopyToClipboard from '$lib/components/app/actions/ActionIconCopyToClipboard.svelte';
+	import { ActionIconCopyToClipboard } from '$lib/components/app';
 	import { FileTypeText } from '$lib/enums';
 
 	interface Props {

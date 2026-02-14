@@ -15,6 +15,7 @@
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
+	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
 	import {
@@ -23,6 +24,7 @@
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING
 	} from '$lib/constants/markdown';
+	import { UrlPrefix } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files';
 	import {
 		highlightCode,
@@ -33,8 +35,7 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import ActionIconsCodeBlock from '$lib/components/app/actions/ActionIconsCodeBlock.svelte';
-	import DialogCodePreview from '$lib/components/app/misc/CodePreviewDialog.svelte';
+	import { ActionIconsCodeBlock, DialogCodePreview } from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
@@ -100,6 +101,7 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
@@ -500,7 +502,10 @@
 		if (!img || !img.src) return;
 
 		// Don't handle data URLs or already-handled images
-		if (img.src.startsWith('data:') || img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING)
+		if (
+			img.src.startsWith(UrlPrefix.DATA) ||
+			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
+		)
 			return;
 		img.dataset[DATA_ERROR_HANDLED_ATTR] = BOOL_TRUE_STRING;
 

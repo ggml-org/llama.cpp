@@ -1,4 +1,4 @@
-import { apiFetchWithParams } from '$lib/utils/api-fetch';
+import { apiFetchWithParams } from '$lib/utils';
 
 export class PropsService {
 	/**

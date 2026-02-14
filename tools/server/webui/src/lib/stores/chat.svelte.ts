@@ -137,6 +137,7 @@ class ChatStore {
 	clearUIState(): void {
 		this.isLoading = false;
 		this.currentResponse = '';
+		this.isStreamingActive = false;
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────

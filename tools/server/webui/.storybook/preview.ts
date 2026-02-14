@@ -13,7 +13,7 @@ const preview: Preview = {
 		},
 
 		backgrounds: {
-			disable: true
+			disabled: true
 		},
 
 		a11y: {

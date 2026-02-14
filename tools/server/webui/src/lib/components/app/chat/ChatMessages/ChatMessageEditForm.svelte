@@ -133,7 +133,7 @@
 
 	const { handleModelChange } = useModelChangeValidation({
 		getRequiredModalities,
-		onValidationFailure: async (previousModelId) => {
+		onValidationFailure: async (previousModelId: string | null) => {
 			if (previousModelId) {
 				await modelsStore.selectModelById(previousModelId);
 			}

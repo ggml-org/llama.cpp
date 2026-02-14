@@ -62,8 +62,8 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $state(message.content);
-	let editedExtras = $state<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
+	let editedContent = $derived(message.content);
+	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);

@@ -1,5 +1,5 @@
 import { ServerModelStatus } from '$lib/enums';
-import { apiFetch, apiPost } from '$lib/utils/api-fetch';
+import { apiFetch, apiPost } from '$lib/utils';
 
 export class ModelsService {
 	/**

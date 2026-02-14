@@ -4,7 +4,7 @@
  */
 
 import { DEFAULT_BINARY_DETECTION_OPTIONS } from '$lib/constants/binary-detection';
-import type { BinaryDetectionOptions } from '$lib/constants/binary-detection';
+import type { BinaryDetectionOptions } from '$lib/types';
 import { FileExtensionText } from '$lib/enums';
 
 /**
