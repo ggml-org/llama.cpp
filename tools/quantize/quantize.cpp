@@ -410,7 +410,7 @@ static int prepare_imatrix(const std::string & imatrix_file,
             for (auto st = statistics_data.begin(); st != statistics_data.end();) {
                 auto pos = st->first.find(name);
                 if (pos != std::string::npos) {
-                    st = activations_data.erase(st);
+                    st = statistics_data.erase(st);
                 } else {
                     ++st;
                 }
