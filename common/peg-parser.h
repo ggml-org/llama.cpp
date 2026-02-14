@@ -456,6 +456,9 @@ class common_peg_parser_builder {
     common_peg_parser python_dict_bool();
     common_peg_parser python_dict_null();
 
+    // A marker, i.e. text delimited by a pair of <> or []
+    common_peg_parser marker();
+
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
     common_peg_parser schema(const common_peg_parser & p, const std::string & name, const nlohmann::ordered_json & schema, bool raw = false);

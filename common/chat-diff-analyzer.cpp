@@ -1,9 +1,11 @@
 #include "chat-diff-analyzer.h"
 
 #include "chat-auto-parser-helpers.h"
+#include "chat-peg-parser.h"
 #include "chat.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "peg-parser.h"
 
 #include <algorithm>
 #include <cctype>
@@ -261,7 +263,7 @@ void analyze_reasoning::compare_reasoning_presence() {
             // prefix: ...<opening marker>
             auto suf_seg = prune_whitespace_segments(segmentize_markers(diff.suffix));
             if (trim_whitespace(diff.left).empty() && suf_seg.size() >= 2 && suf_seg[0].type == segment_type::MARKER &&
-                trim_whitespace(suf_seg[1].value).substr(0, 11) == "I can help.") {
+                trim_whitespace(suf_seg[1].value).find("I can help.") == 0) {
                 auto pre_seg = prune_whitespace_segments(segmentize_markers(diff.prefix));
                 if (pre_seg[pre_seg.size() - 1].type == segment_type::MARKER ||
                     (pre_seg.size() > 1 && trim_whitespace(pre_seg[pre_seg.size() - 1].value).empty() &&
@@ -492,19 +494,26 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
 
     bool found_plain_content = false;
     if (trim_whitespace(diff_tools.left) == response) {
-        auto segments = segmentize_markers(diff_reasoning.left);
+        auto parser = build_tagged_peg_parser([&](common_peg_parser_builder & p) {
+            return p.space() + diff_reasoning.left + p.space() + p.optional(p.marker()) + p.space() + p.end();
+        });
+        if (parser.parse_and_extract(diff_reasoning.left).result.success()) {
+            // We only have the content text in the diff (possibly with a stray EOG marker), so no markers
+            mode = content_mode::PLAIN;
+            found_plain_content = true;
+        }
+        /* auto segments = segmentize_markers(diff_reasoning.left);
         if (trim_whitespace(diff_reasoning.left) == response ||
             (segments.size() == 2 && trim_whitespace(segments[0].value) == response)) {
             // We only have the content text in the diff (possibly with a stray EOG marker), so no markers
-            mode      = content_mode::PLAIN;
+            mode = content_mode::PLAIN;
             found_plain_content = true;
-        } else if (reasoning.mode != reasoning_mode::NONE && !reasoning.end.empty() &&
+    }*/ else if (reasoning.mode != reasoning_mode::NONE && !reasoning.end.empty() &&
                    diff_reasoning.left.find(reasoning.end) != std::string::npos) {
             std::string post_closed_reasoning = diff_reasoning.left.substr(
                 diff_reasoning.left.find(reasoning.end) + reasoning.end.length());
             if (trim_whitespace(post_closed_reasoning) == "Response text") {
-                LOG_DBG("C1: No content markers after stripping reasoning close marker\n");
-                mode      = content_mode::PLAIN;
+                mode = content_mode::PLAIN;
                 found_plain_content = true;
             }
         }

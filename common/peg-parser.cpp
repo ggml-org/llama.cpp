@@ -1424,6 +1424,12 @@ common_peg_parser common_peg_parser_builder::python_dict() {
     });
 }
 
+common_peg_parser common_peg_parser_builder::marker() {
+    auto sharp_bracket_parser = literal("<") + until(">") + literal(">");
+    auto square_bracket_parser = literal("[") + until("]") + literal("]");
+    return choice({ sharp_bracket_parser, square_bracket_parser });
+}
+
 common_peg_parser common_peg_parser_builder::json_member(const std::string & key, const common_peg_parser & p) {
     auto ws = space();
     return sequence({
