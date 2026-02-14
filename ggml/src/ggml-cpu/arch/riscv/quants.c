@@ -1318,7 +1318,8 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 }
 
-void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_xtheadvector
+static NOINLINE void ggml_vec_dot_q4_K_q8_K_xtheadvector(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1336,8 +1337,6 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     static const uint32_t kmask3 = 0x03030303;
 
     uint32_t utmp[4];
-
-#if defined __riscv_xtheadvector
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
@@ -1452,277 +1451,315 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
+}
+#endif
 
-#elif defined __riscv_v
+static NOINLINE void ggml_vec_dot_q4_K_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    static const uint32_t kmask1 = 0x3f3f3f3f;
+    static const uint32_t kmask2 = 0x0f0f0f0f;
+    static const uint32_t kmask3 = 0x03030303;
+
+    uint32_t utmp[4];
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
 
     float sumf = 0;
-    const int vector_length = __riscv_vlenb() * 8;
+    for (int i = 0; i < nb; ++i) {
+        const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
 
-    switch (vector_length) {
-    case 256:
-        for (int i = 0; i < nb; ++i) {
+        float ftmp, ft2;
+        const uint8_t * restrict q40;
+        const uint8_t * restrict q41;
+        const uint8_t * restrict q42;
+        const uint8_t * restrict q43;
+        const int8_t  * restrict q80;
+        const int8_t  * restrict q81;
+        const int8_t  * restrict q82;
+        const int8_t  * restrict q83;
+        int s0, s1, s2, s3;
 
-            size_t vl = 8;
-
-            const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
-            const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
-
-            vint16mf2_t q8sums_0 = __riscv_vlse16_v_i16mf2(y[i].bsums, 4, vl);
-            vint16mf2_t q8sums_1 = __riscv_vlse16_v_i16mf2(y[i].bsums+1, 4, vl);
-            vint16mf2_t q8sums   = __riscv_vadd_vv_i16mf2(q8sums_0, q8sums_1, vl);
-
-            memcpy(utmp, x[i].scales, 12);
-            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
-            const uint32_t uaux = utmp[1] & kmask1;
-            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
-            utmp[2] = uaux;
-            utmp[0] &= kmask1;
-
-            vuint8mf4_t mins8  = __riscv_vle8_v_u8mf4(mins, vl);
-            vint16mf2_t v_mins = __riscv_vreinterpret_v_u16mf2_i16mf2(__riscv_vzext_vf2_u16mf2(mins8, vl));
-            vint32m1_t  prod   = __riscv_vwmul_vv_i32m1(q8sums, v_mins, vl);
-
-            vint32m1_t sumi = __riscv_vredsum_vs_i32m1_i32m1(prod, __riscv_vmv_v_x_i32m1(0, 1), vl);
-            sumf -= dmin * __riscv_vmv_x_s_i32m1_i32(sumi);
-
-            const uint8_t * GGML_RESTRICT q4 = x[i].qs;
-            const int8_t  * GGML_RESTRICT q8 = y[i].qs;
-
-            vl = 32;
-
-            int32_t sum_1 = 0;
-            int32_t sum_2 = 0;
-
-            vint16m1_t vzero = __riscv_vmv_v_x_i16m1(0, 1);
-
-            for (int j = 0; j < QK_K/64; ++j) {
-                // load Q4
-                vuint8m1_t q4_x = __riscv_vle8_v_u8m1(q4, vl);
-
-                // load Q8 and multiply it with lower Q4 nibble
-                vint8m1_t  q8_0 = __riscv_vle8_v_i8m1(q8, vl);
-                vint8m1_t  q4_0 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vand_vx_u8m1(q4_x, 0x0F, vl));
-                vint16m2_t qv_0 = __riscv_vwmul_vv_i16m2(q4_0, q8_0, vl);
-                vint16m1_t vs_0 = __riscv_vredsum_vs_i16m2_i16m1(qv_0, vzero, vl);
-
-                sum_1 += __riscv_vmv_x_s_i16m1_i16(vs_0) * scales[2*j+0];
-
-                // load Q8 and multiply it with upper Q4 nibble
-                vint8m1_t  q8_1 = __riscv_vle8_v_i8m1(q8+32, vl);
-                vint8m1_t  q4_1 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vsrl_vx_u8m1(q4_x, 0x04, vl));
-                vint16m2_t qv_1 = __riscv_vwmul_vv_i16m2(q4_1, q8_1, vl);
-                vint16m1_t vs_1 = __riscv_vredsum_vs_i16m2_i16m1(qv_1, vzero, vl);
-
-                sum_2 += __riscv_vmv_x_s_i16m1_i16(vs_1) * scales[2*j+1];
-
-                q4 += 32;    q8 += 64;
-
-            }
-
-            sumf += d*(sum_1 + sum_2);
-
-        }
-        break;
-    case 128:
-        for (int i = 0; i < nb; ++i) {
-            const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
-            const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
-
-            float ftmp, ft2;
-            const uint8_t * restrict q40;
-            const uint8_t * restrict q41;
-            const uint8_t * restrict q42;
-            const uint8_t * restrict q43;
-            const int8_t  * restrict q80;
-            const int8_t  * restrict q81;
-            const int8_t  * restrict q82;
-            const int8_t  * restrict q83;
-            int s0, s1, s2, s3;
-
-            __asm__ __volatile__(
-                "li %[s1], 8\n\t"
-                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
-                "vle32.v v1, (%[s6b])\n\t"
-                "vslide1down.vx v1, v1, zero\n\t"
-                "vmv.v.x v16, zero\n\t"
-                "vslidedown.vi v2, v1, 2\n\t"
-                "vmv1r.v v3, v2\n\t"
-                "vslideup.vi v2, v3, 1\n\t" // {aux[2], aux[2]}
-                "vsetivli zero, 2, e32, m1, ta, ma\n\t"
-                "vmv.v.i v4, 4\n\t"
-                "vand.vx v8, v1, %[kmask1]\n\t"
-                "vslide1up.vx v5, v4, zero\n\t" // {0, 4}
-                "vsrl.vi v6, v1, 6\n\t"
-                "vsrl.vv v7, v2, v5\n\t"
-                "vsse32.v v8, (%[utmp]), %[s1]\n\t"
-                "vand.vx v0, v6, %[kmask3]\n\t"
-                "vand.vx v2, v7, %[kmask2]\n\t"
-                "vsll.vi v6, v0, 4\n\t"
-                "addi %[s0], %[utmp], 4\n\t"
-                "vor.vv v1, v6, v2\n\t"
-                "vsse32.v v1, (%[s0]), %[s1]\n\t"
-                "vsetivli zero, 8, e16, m1, ta, ma\n\t"
-                "vle32.v v2, (%[bsums])\n\t"
-                "vnsrl.wi v0, v2, 0\n\t"
-                "vnsrl.wi v1, v2, 16\n\t"
-                "vadd.vv v2, v0, v1\n\t"
-                "vle8.v v3, (%[mins])\n\t"
-                "vzext.vf2 v4, v3\n\t"
-                "vwmul.vv v6, v4, v2\n\t"
-                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
-                "vredsum.vs v0, v6, v16\n\t"
-                "vredsum.vs v0, v7, v0\n\t"
-                "vfcvt.f.x.v v0, v0\n\t"
-                "vfmv.f.s %[ftmp], v0\n\t"
-                "vsetivli zero, 16, e8, m1, ta, ma\n\t"
-                "vle8.v v0, (%[xs])\n\t"
-                "fnmsub.s %[sumf], %[dmin], %[ftmp], %[sumf]\n\t"
-                "addi %[q40], %[xs], 64\n\t"
-                "addi %[q41], %[xs], 16\n\t"
-                "addi %[q42], %[xs], 32\n\t"
-                "addi %[q43], %[xs], 48\n\t"
-                "addi %[q80], %[ys], 64\n\t"
-                "vle8.v v1, (%[q41])\n\t"
-                "vle8.v v2, (%[q42])\n\t"
-                "addi %[q81], %[ys], 16\n\t"
-                "addi %[q41], %[q41], 64\n\t"
-                "addi %[q82], %[ys], 32\n\t"
-                "vle8.v v3, (%[q43])\n\t"
-                "vle8.v v8, (%[ys])\n\t"
-                "addi %[q42], %[q42], 64\n\t"
-                "addi %[q83], %[ys], 48\n\t"
-                "addi %[q43], %[q43], 64\n\t"
-                "vsrl.vi v4, v0, 4\n\t"
-                "vle8.v v9, (%[q81])\n\t"
-                "vle8.v v10, (%[q82])\n\t"
-                "vand.vi v0, v0, 0xF\n\t"
-                "addi %[q81], %[q81], 64\n\t"
-                "vsrl.vi v5, v1, 4\n\t"
-                "addi %[q82], %[q82], 64\n\t"
-                "vle8.v v11, (%[q83])\n\t"
-                "vle8.v v12, (%[q80])\n\t"
-                "vand.vi v1, v1, 0xF\n\t"
-                "addi %[q83], %[q83], 64\n\t"
-                "vsrl.vi v6, v2, 4\n\t"
-                "addi %[q80], %[q80], 64\n\t"
-                "vle8.v v13, (%[q81])\n\t"
-                "vle8.v v14, (%[q82])\n\t"
-                "vand.vi v2, v2, 0xF\n\t"
-                "addi %[q81], %[q81], 64\n\t"
-                "vsrl.vi v7, v3, 4\n\t"
-                "addi %[q82], %[q82], 64\n\t"
-                "vwmul.vv v16, v0, v8\n\t"
-                "vle8.v v15, (%[q83])\n\t"
-                "vle8.v v0, (%[q40])\n\t"
-                "vand.vi v3, v3, 0xF\n\t"
-                "addi %[q83], %[q83], 64\n\t"
-                "vwmul.vv v24, v2, v12\n\t"
-                "vwmul.vv v20, v4, v10\n\t"
-                "vwmul.vv v28, v6, v14\n\t"
-                "vwmacc.vv v16, v1, v9\n\t"
-                "vle8.v v1, (%[q41])\n\t"
-                "vle8.v v2, (%[q42])\n\t"
-                "vwmacc.vv v24, v3, v13\n\t"
-                "vwmacc.vv v20, v5, v11\n\t"
-                "vwmacc.vv v28, v7, v15\n\t"
-                "addi %[q40], %[q80], 64\n\t"
-                "addi %[q41], %[q81], 64\n\t"
-                "vle8.v v3, (%[q43])\n\t"
-                "vle8.v v8, (%[q80])\n\t"
-                "addi %[q42], %[q82], 64\n\t"
-                "addi %[q43], %[q83], 64\n\t"
-                "vsrl.vi v4, v0, 4\n\t"
-                "vle8.v v9, (%[q81])\n\t"
-                "vle8.v v10, (%[q82])\n\t"
-                "vand.vi v0, v0, 0xF\n\t"
-                "vsrl.vi v5, v1, 4\n\t"
-                "vsrl.vi v7, v3, 4\n\t"
-                "vand.vi v3, v3, 0xF\n\t"
-                "vle8.v v11, (%[q83])\n\t"
-                "vle8.v v12, (%[q40])\n\t"
-                "vand.vi v1, v1, 0xF\n\t"
-                "vsrl.vi v6, v2, 4\n\t"
-                "vand.vi v2, v2, 0xF\n\t"
-                "vwmul.vv v18, v0, v8\n\t"
-                "vle8.v v13, (%[q41])\n\t"
-                "vle8.v v14, (%[q42])\n\t"
-                "vwmul.vv v26, v2, v12\n\t"
-                "vwmul.vv v22, v4, v10\n\t"
-                "vwmul.vv v30, v6, v14\n\t"
-                "vwmacc.vv v18, v1, v9\n\t"
-                "vle8.v v15, (%[q43])\n\t"
-                "vwmacc.vv v26, v3, v13\n\t"
-                "vwmacc.vv v22, v5, v11\n\t"
-                "vwmacc.vv v30, v7, v15\n\t"
-                "vmv.v.x v0, zero\n\t"
-                "vsetivli zero, 16, e16, m2, ta, ma\n\t"
-                "vwredsum.vs v4, v16, v0\n\t"
-                "lbu %[s0], 0(%[scale])\n\t"
-                "vwredsum.vs v5, v20, v0\n\t"
-                "lbu %[s1], 1(%[scale])\n\t"
-                "vwredsum.vs v6, v24, v0\n\t"
-                "lbu %[s2], 2(%[scale])\n\t"
-                "vwredsum.vs v7, v28, v0\n\t"
-                "lbu %[s3], 3(%[scale])\n\t"
-                "vwredsum.vs v8, v18, v0\n\t"
-                "lbu %[q40], 4(%[scale])\n\t"
-                "vwredsum.vs v9, v22, v0\n\t"
-                "lbu %[q41], 5(%[scale])\n\t"
-                "vwredsum.vs v10, v26, v0\n\t"
-                "lbu %[q42], 6(%[scale])\n\t"
-                "vwredsum.vs v11, v30, v0\n\t"
-                "lbu %[q43], 7(%[scale])\n\t"
-                "vsetivli zero, 4, e32, m1, ta, ma\n\t"
-                "vmul.vx v0, v4, %[s0]\n\t"
-                "vmul.vx v1, v8, %[q40]\n\t"
-                "vmacc.vx v0, %[s1], v5\n\t"
-                "vmacc.vx v1, %[q41], v9\n\t"
-                "vmacc.vx v0, %[s2], v6\n\t"
-                "vmacc.vx v1, %[q42], v10\n\t"
-                "vmacc.vx v0, %[s3], v7\n\t"
-                "vmacc.vx v1, %[q43], v11\n\t"
-                "vfcvt.f.x.v v0, v0\n\t"
-                "vfcvt.f.x.v v1, v1\n\t"
-                "vfmv.f.s %[ft2], v0\n\t"
-                "vfmv.f.s %[ftmp], v1\n\t"
-                "fadd.s %[ft2], %[ft2], %[ftmp]\n\t"
-                "fmadd.s %[sumf], %[d], %[ft2], %[sumf]"
-                : [ftmp] "=&f" (ftmp), [sumf] "+&f" (sumf), [ft2] "=&f" (ft2)
-                , [s0] "=&r" (s0), [s1] "=&r" (s1), [s2] "=&r" (s2), [s3] "=&r" (s3)
-                , [q40] "=&r" (q40), [q41] "=&r" (q41), [q42] "=&r" (q42), [q43] "=&r" (q43)
-                , [q80] "=&r" (q80), [q81] "=&r" (q81), [q82] "=&r" (q82), [q83] "=&r" (q83)
-                : [d] "f" (d), [ys] "r" (y[i].qs), [xs] "r" (x[i].qs), [scale] "r" (scales)
-                , [bsums] "r" (y[i].bsums), [mins] "r" (mins), [utmp] "r" (utmp)
-                , [s6b] "r" (&x[i]), [kmask1] "r" (kmask1), [dmin] "f" (dmin)
-                , [kmask2] "r" (kmask2), [kmask3] "r" (kmask3)
-                : "memory"
-                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
-                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
-                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
-                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
-            );
-        }
-        break;
-    default:
-        assert(false && "Unsupported vector length");
-        break;
+        __asm__ __volatile__(
+            "li %[s1], 8\n\t"
+            "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+            "vle32.v v1, (%[s6b])\n\t"
+            "vslide1down.vx v1, v1, zero\n\t"
+            "vmv.v.x v16, zero\n\t"
+            "vslidedown.vi v2, v1, 2\n\t"
+            "vmv1r.v v3, v2\n\t"
+            "vslideup.vi v2, v3, 1\n\t" // {aux[2], aux[2]}
+            "vsetivli zero, 2, e32, m1, ta, ma\n\t"
+            "vmv.v.i v4, 4\n\t"
+            "vand.vx v8, v1, %[kmask1]\n\t"
+            "vslide1up.vx v5, v4, zero\n\t" // {0, 4}
+            "vsrl.vi v6, v1, 6\n\t"
+            "vsrl.vv v7, v2, v5\n\t"
+            "vsse32.v v8, (%[utmp]), %[s1]\n\t"
+            "vand.vx v0, v6, %[kmask3]\n\t"
+            "vand.vx v2, v7, %[kmask2]\n\t"
+            "vsll.vi v6, v0, 4\n\t"
+            "addi %[s0], %[utmp], 4\n\t"
+            "vor.vv v1, v6, v2\n\t"
+            "vsse32.v v1, (%[s0]), %[s1]\n\t"
+            "vsetivli zero, 8, e16, m1, ta, ma\n\t"
+            "vle32.v v2, (%[bsums])\n\t"
+            "vnsrl.wi v0, v2, 0\n\t"
+            "vnsrl.wi v1, v2, 16\n\t"
+            "vadd.vv v2, v0, v1\n\t"
+            "vle8.v v3, (%[mins])\n\t"
+            "vzext.vf2 v4, v3\n\t"
+            "vwmul.vv v6, v4, v2\n\t"
+            "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+            "vredsum.vs v0, v6, v16\n\t"
+            "vredsum.vs v0, v7, v0\n\t"
+            "vfcvt.f.x.v v0, v0\n\t"
+            "vfmv.f.s %[ftmp], v0\n\t"
+            "vsetivli zero, 16, e8, m1, ta, ma\n\t"
+            "vle8.v v0, (%[xs])\n\t"
+            "fnmsub.s %[sumf], %[dmin], %[ftmp], %[sumf]\n\t"
+            "addi %[q40], %[xs], 64\n\t"
+            "addi %[q41], %[xs], 16\n\t"
+            "addi %[q42], %[xs], 32\n\t"
+            "addi %[q43], %[xs], 48\n\t"
+            "addi %[q80], %[ys], 64\n\t"
+            "vle8.v v1, (%[q41])\n\t"
+            "vle8.v v2, (%[q42])\n\t"
+            "addi %[q81], %[ys], 16\n\t"
+            "addi %[q41], %[q41], 64\n\t"
+            "addi %[q82], %[ys], 32\n\t"
+            "vle8.v v3, (%[q43])\n\t"
+            "vle8.v v8, (%[ys])\n\t"
+            "addi %[q42], %[q42], 64\n\t"
+            "addi %[q83], %[ys], 48\n\t"
+            "addi %[q43], %[q43], 64\n\t"
+            "vsrl.vi v4, v0, 4\n\t"
+            "vle8.v v9, (%[q81])\n\t"
+            "vle8.v v10, (%[q82])\n\t"
+            "vand.vi v0, v0, 0xF\n\t"
+            "addi %[q81], %[q81], 64\n\t"
+            "vsrl.vi v5, v1, 4\n\t"
+            "addi %[q82], %[q82], 64\n\t"
+            "vle8.v v11, (%[q83])\n\t"
+            "vle8.v v12, (%[q80])\n\t"
+            "vand.vi v1, v1, 0xF\n\t"
+            "addi %[q83], %[q83], 64\n\t"
+            "vsrl.vi v6, v2, 4\n\t"
+            "addi %[q80], %[q80], 64\n\t"
+            "vle8.v v13, (%[q81])\n\t"
+            "vle8.v v14, (%[q82])\n\t"
+            "vand.vi v2, v2, 0xF\n\t"
+            "addi %[q81], %[q81], 64\n\t"
+            "vsrl.vi v7, v3, 4\n\t"
+            "addi %[q82], %[q82], 64\n\t"
+            "vwmul.vv v16, v0, v8\n\t"
+            "vle8.v v15, (%[q83])\n\t"
+            "vle8.v v0, (%[q40])\n\t"
+            "vand.vi v3, v3, 0xF\n\t"
+            "addi %[q83], %[q83], 64\n\t"
+            "vwmul.vv v24, v2, v12\n\t"
+            "vwmul.vv v20, v4, v10\n\t"
+            "vwmul.vv v28, v6, v14\n\t"
+            "vwmacc.vv v16, v1, v9\n\t"
+            "vle8.v v1, (%[q41])\n\t"
+            "vle8.v v2, (%[q42])\n\t"
+            "vwmacc.vv v24, v3, v13\n\t"
+            "vwmacc.vv v20, v5, v11\n\t"
+            "vwmacc.vv v28, v7, v15\n\t"
+            "addi %[q40], %[q80], 64\n\t"
+            "addi %[q41], %[q81], 64\n\t"
+            "vle8.v v3, (%[q43])\n\t"
+            "vle8.v v8, (%[q80])\n\t"
+            "addi %[q42], %[q82], 64\n\t"
+            "addi %[q43], %[q83], 64\n\t"
+            "vsrl.vi v4, v0, 4\n\t"
+            "vle8.v v9, (%[q81])\n\t"
+            "vle8.v v10, (%[q82])\n\t"
+            "vand.vi v0, v0, 0xF\n\t"
+            "vsrl.vi v5, v1, 4\n\t"
+            "vsrl.vi v7, v3, 4\n\t"
+            "vand.vi v3, v3, 0xF\n\t"
+            "vle8.v v11, (%[q83])\n\t"
+            "vle8.v v12, (%[q40])\n\t"
+            "vand.vi v1, v1, 0xF\n\t"
+            "vsrl.vi v6, v2, 4\n\t"
+            "vand.vi v2, v2, 0xF\n\t"
+            "vwmul.vv v18, v0, v8\n\t"
+            "vle8.v v13, (%[q41])\n\t"
+            "vle8.v v14, (%[q42])\n\t"
+            "vwmul.vv v26, v2, v12\n\t"
+            "vwmul.vv v22, v4, v10\n\t"
+            "vwmul.vv v30, v6, v14\n\t"
+            "vwmacc.vv v18, v1, v9\n\t"
+            "vle8.v v15, (%[q43])\n\t"
+            "vwmacc.vv v26, v3, v13\n\t"
+            "vwmacc.vv v22, v5, v11\n\t"
+            "vwmacc.vv v30, v7, v15\n\t"
+            "vmv.v.x v0, zero\n\t"
+            "vsetivli zero, 16, e16, m2, ta, ma\n\t"
+            "vwredsum.vs v4, v16, v0\n\t"
+            "lbu %[s0], 0(%[scale])\n\t"
+            "vwredsum.vs v5, v20, v0\n\t"
+            "lbu %[s1], 1(%[scale])\n\t"
+            "vwredsum.vs v6, v24, v0\n\t"
+            "lbu %[s2], 2(%[scale])\n\t"
+            "vwredsum.vs v7, v28, v0\n\t"
+            "lbu %[s3], 3(%[scale])\n\t"
+            "vwredsum.vs v8, v18, v0\n\t"
+            "lbu %[q40], 4(%[scale])\n\t"
+            "vwredsum.vs v9, v22, v0\n\t"
+            "lbu %[q41], 5(%[scale])\n\t"
+            "vwredsum.vs v10, v26, v0\n\t"
+            "lbu %[q42], 6(%[scale])\n\t"
+            "vwredsum.vs v11, v30, v0\n\t"
+            "lbu %[q43], 7(%[scale])\n\t"
+            "vsetivli zero, 4, e32, m1, ta, ma\n\t"
+            "vmul.vx v0, v4, %[s0]\n\t"
+            "vmul.vx v1, v8, %[q40]\n\t"
+            "vmacc.vx v0, %[s1], v5\n\t"
+            "vmacc.vx v1, %[q41], v9\n\t"
+            "vmacc.vx v0, %[s2], v6\n\t"
+            "vmacc.vx v1, %[q42], v10\n\t"
+            "vmacc.vx v0, %[s3], v7\n\t"
+            "vmacc.vx v1, %[q43], v11\n\t"
+            "vfcvt.f.x.v v0, v0\n\t"
+            "vfcvt.f.x.v v1, v1\n\t"
+            "vfmv.f.s %[ft2], v0\n\t"
+            "vfmv.f.s %[ftmp], v1\n\t"
+            "fadd.s %[ft2], %[ft2], %[ftmp]\n\t"
+            "fmadd.s %[sumf], %[d], %[ft2], %[sumf]"
+            : [ftmp] "=&f" (ftmp), [sumf] "+&f" (sumf), [ft2] "=&f" (ft2)
+            , [s0] "=&r" (s0), [s1] "=&r" (s1), [s2] "=&r" (s2), [s3] "=&r" (s3)
+            , [q40] "=&r" (q40), [q41] "=&r" (q41), [q42] "=&r" (q42), [q43] "=&r" (q43)
+            , [q80] "=&r" (q80), [q81] "=&r" (q81), [q82] "=&r" (q82), [q83] "=&r" (q83)
+            : [d] "f" (d), [ys] "r" (y[i].qs), [xs] "r" (x[i].qs), [scale] "r" (scales)
+            , [bsums] "r" (y[i].bsums), [mins] "r" (mins), [utmp] "r" (utmp)
+            , [s6b] "r" (&x[i]), [kmask1] "r" (kmask1), [dmin] "f" (dmin)
+            , [kmask2] "r" (kmask2), [kmask3] "r" (kmask3)
+            : "memory"
+            , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+            , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+            , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+            , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+        );
     }
 
     *s = sumf;
+}
 
+static NOINLINE void ggml_vec_dot_q4_K_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    static const uint32_t kmask1 = 0x3f3f3f3f;
+    static const uint32_t kmask2 = 0x0f0f0f0f;
+    static const uint32_t kmask3 = 0x03030303;
+
+    uint32_t utmp[4];
+
+    const uint8_t * scales = (const uint8_t*)&utmp[0];
+    const uint8_t * mins   = (const uint8_t*)&utmp[2];
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        size_t vl = 8;
+
+        const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float dmin = y[i].d * GGML_CPU_FP16_TO_FP32(x[i].dmin);
+
+        vint16mf2_t q8sums_0 = __riscv_vlse16_v_i16mf2(y[i].bsums, 4, vl);
+        vint16mf2_t q8sums_1 = __riscv_vlse16_v_i16mf2(y[i].bsums+1, 4, vl);
+        vint16mf2_t q8sums   = __riscv_vadd_vv_i16mf2(q8sums_0, q8sums_1, vl);
+
+        memcpy(utmp, x[i].scales, 12);
+        utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
+        const uint32_t uaux = utmp[1] & kmask1;
+        utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
+        utmp[2] = uaux;
+        utmp[0] &= kmask1;
+
+        vuint8mf4_t mins8  = __riscv_vle8_v_u8mf4(mins, vl);
+        vint16mf2_t v_mins = __riscv_vreinterpret_v_u16mf2_i16mf2(__riscv_vzext_vf2_u16mf2(mins8, vl));
+        vint32m1_t  prod   = __riscv_vwmul_vv_i32m1(q8sums, v_mins, vl);
+
+        vint32m1_t sumi = __riscv_vredsum_vs_i32m1_i32m1(prod, __riscv_vmv_v_x_i32m1(0, 1), vl);
+        sumf -= dmin * __riscv_vmv_x_s_i32m1_i32(sumi);
+
+        const uint8_t * GGML_RESTRICT q4 = x[i].qs;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        vl = 32;
+
+        int32_t sum_1 = 0;
+        int32_t sum_2 = 0;
+
+        vint16m1_t vzero = __riscv_vmv_v_x_i16m1(0, 1);
+
+        for (int j = 0; j < QK_K/64; ++j) {
+            // load Q4
+            vuint8m1_t q4_x = __riscv_vle8_v_u8m1(q4, vl);
+
+            // load Q8 and multiply it with lower Q4 nibble
+            vint8m1_t  q8_0 = __riscv_vle8_v_i8m1(q8, vl);
+            vint8m1_t  q4_0 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vand_vx_u8m1(q4_x, 0x0F, vl));
+            vint16m2_t qv_0 = __riscv_vwmul_vv_i16m2(q4_0, q8_0, vl);
+            vint16m1_t vs_0 = __riscv_vredsum_vs_i16m2_i16m1(qv_0, vzero, vl);
+
+            sum_1 += __riscv_vmv_x_s_i16m1_i16(vs_0) * scales[2*j+0];
+
+            // load Q8 and multiply it with upper Q4 nibble
+            vint8m1_t  q8_1 = __riscv_vle8_v_i8m1(q8+32, vl);
+            vint8m1_t  q4_1 = __riscv_vreinterpret_v_u8m1_i8m1(__riscv_vsrl_vx_u8m1(q4_x, 0x04, vl));
+            vint16m2_t qv_1 = __riscv_vwmul_vv_i16m2(q4_1, q8_1, vl);
+            vint16m1_t vs_1 = __riscv_vredsum_vs_i16m2_i16m1(qv_1, vzero, vl);
+
+            sum_2 += __riscv_vmv_x_s_i16m1_i16(vs_1) * scales[2*j+1];
+
+            q4 += 32;    q8 += 64;
+
+        }
+
+        sumf += d*(sum_1 + sum_2);
+
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_xtheadvector
+    ggml_vec_dot_q4_K_q8_K_xtheadvector(n, s, bs, vx, bx, vy, by, nrc);
+#elif defined __riscv_v_intrinsic
+    switch (__riscv_vlenb() * 8) {
+        case 128:
+            ggml_vec_dot_q4_K_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        default:
+            ggml_vec_dot_q4_K_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+    }
 #else
-
-    UNUSED(x);
-    UNUSED(y);
-    UNUSED(kmask1);
-    UNUSED(kmask2);
-    UNUSED(kmask3);
-    UNUSED(nb);
-    UNUSED(utmp);
-
     ggml_vec_dot_q4_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
@@ -1823,7 +1860,6 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             aux32 += __riscv_vmv_x_s_i32m1_i32(vacc2);
             q5 += 32;    q8 += 64;
-
         }
 
         sums += aux32 * d;
@@ -1846,7 +1882,8 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
-void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_xtheadvector
+static NOINLINE void ggml_vec_dot_q6_K_q8_K_xtheadvector(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1858,8 +1895,6 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q8_K * GGML_RESTRICT y = vy;
 
     const int nb = n / QK_K;
-
-#if defined __riscv_xtheadvector
 
     float sumf = 0;
 
@@ -1939,219 +1974,455 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
+}
+#endif
 
-#elif defined __riscv_v
+static NOINLINE void ggml_vec_dot_q6_K_q8_K_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
 
-    float sumf = 0;
-    const int vector_length = __riscv_vlenb() * 8;
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
 
-    switch (vector_length) {
-    case 256:
-        for (int i = 0; i < nb; ++i) {
+    const int nb = n / QK_K;
 
-            const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        __builtin_prefetch(&x[i + 1].d, 0, 1);
 
-            const uint8_t * GGML_RESTRICT q6 = x[i].ql;
-            const uint8_t * GGML_RESTRICT qh = x[i].qh;
-            const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
 
-            const int8_t * GGML_RESTRICT scale = x[i].scales;
+        const uint8_t * restrict q6 = x[i].ql;
+        const uint8_t * restrict qh = x[i].qh;
+        const  int8_t * restrict q8 = y[i].qs;
 
-            size_t vl;
+        const int8_t * restrict scale = x[i].scales;
 
-            vint32m1_t vzero = __riscv_vmv_v_x_i32m1(0, 1);
+        int q6h;
+        float ftmp;
 
-            int sum_t = 0;
-            int is = 0;
-
-            for (int j = 0; j < QK_K/128; ++j) {
-
-                vl = 32;
-
-                // load qh
-                vuint8m1_t qh_x = __riscv_vle8_v_u8m1(qh, vl);
-
-                // load Q6
-                vuint8m1_t q6_0 = __riscv_vle8_v_u8m1(q6, vl);
-                vuint8m1_t q6_1 = __riscv_vle8_v_u8m1(q6+32, vl);
-
-                vuint8m1_t q6a_0 = __riscv_vand_vx_u8m1(q6_0, 0x0F, vl);
-                vuint8m1_t q6a_1 = __riscv_vand_vx_u8m1(q6_1, 0x0F, vl);
-                vuint8m1_t q6s_0 = __riscv_vsrl_vx_u8m1(q6_0, 0x04, vl);
-                vuint8m1_t q6s_1 = __riscv_vsrl_vx_u8m1(q6_1, 0x04, vl);
-
-                vuint8m1_t qh_0 = __riscv_vand_vx_u8m1(qh_x, 0x03, vl);
-                vuint8m1_t qh_1 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x2, vl), 0x03 , vl);
-                vuint8m1_t qh_2 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x4, vl), 0x03 , vl);
-                vuint8m1_t qh_3 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x6, vl), 0x03 , vl);
-
-                vuint8m1_t qhi_0 = __riscv_vor_vv_u8m1(q6a_0, __riscv_vsll_vx_u8m1(qh_0, 0x04, vl), vl);
-                vuint8m1_t qhi_1 = __riscv_vor_vv_u8m1(q6a_1, __riscv_vsll_vx_u8m1(qh_1, 0x04, vl), vl);
-                vuint8m1_t qhi_2 = __riscv_vor_vv_u8m1(q6s_0, __riscv_vsll_vx_u8m1(qh_2, 0x04, vl), vl);
-                vuint8m1_t qhi_3 = __riscv_vor_vv_u8m1(q6s_1, __riscv_vsll_vx_u8m1(qh_3, 0x04, vl), vl);
-
-                vint8m1_t a_0 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_0), 32, vl);
-                vint8m1_t a_1 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_1), 32, vl);
-                vint8m1_t a_2 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_2), 32, vl);
-                vint8m1_t a_3 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_3), 32, vl);
-
-                // load Q8 and take product
-                vint16m2_t va_q_0 = __riscv_vwmul_vv_i16m2(a_0, __riscv_vle8_v_i8m1(q8, vl), vl);
-                vint16m2_t va_q_1 = __riscv_vwmul_vv_i16m2(a_1, __riscv_vle8_v_i8m1(q8+32, vl), vl);
-                vint16m2_t va_q_2 = __riscv_vwmul_vv_i16m2(a_2, __riscv_vle8_v_i8m1(q8+64, vl), vl);
-                vint16m2_t va_q_3 = __riscv_vwmul_vv_i16m2(a_3, __riscv_vle8_v_i8m1(q8+96, vl), vl);
-
-                vl = 16;
-
-                vint32m2_t vaux_0 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_0, 0), scale[is+0], vl);
-                vint32m2_t vaux_1 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_0, 1), scale[is+1], vl);
-                vint32m2_t vaux_2 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_1, 0), scale[is+2], vl);
-                vint32m2_t vaux_3 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_1, 1), scale[is+3], vl);
-                vint32m2_t vaux_4 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_2, 0), scale[is+4], vl);
-                vint32m2_t vaux_5 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_2, 1), scale[is+5], vl);
-                vint32m2_t vaux_6 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_3, 0), scale[is+6], vl);
-                vint32m2_t vaux_7 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_3, 1), scale[is+7], vl);
-
-                vint32m1_t isum0 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_0, vaux_1, vl), vzero, vl);
-                vint32m1_t isum1 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_2, vaux_3, vl), isum0, vl);
-                vint32m1_t isum2 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_4, vaux_5, vl), isum1, vl);
-                vint32m1_t isum3 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_6, vaux_7, vl), isum2, vl);
-
-                sum_t += __riscv_vmv_x_s_i32m1_i32(isum3);
-
-                q6 += 64;   qh += 32;   q8 += 128;   is=8;
-
-            }
-
-            sumf += d * sum_t;
-
+        for (int j = 0; j < QK_K/128; ++j) {
+            __asm__ __volatile__(
+                "addi %[q6h], %[q6], 32\n\t"
+                "ld t0, 0(%[scale])\n\t"
+                "addi %[scale], %[scale], 8\n\t"
+                "slli t6, t0, 1 * 8\n\t"
+                "lb zero, 0(%[q6])\n\t"
+                "slli t5, t0, 2 * 8\n\t"
+                "slli t4, t0, 3 * 8\n\t"
+                "lb zero, 0(%[q6h])\n\t"
+                "slli t3, t0, 4 * 8\n\t"
+                "slli t2, t0, 5 * 8\n\t"
+                "lb zero, 0(%[qh])\n\t"
+                "lb zero, 31(%[q6h])\n\t"
+                "slli t1, t0, 6 * 8\n\t"
+                "srai a7, t0, 56\n\t"
+                "vsetvli zero, %[vl32], e8, m2\n\t"
+                "vle8.v v8, (%[q6])\n\t"
+                "srai t6, t6, 56\n\t"
+                "srai t5, t5, 56\n\t"
+                "srai t4, t4, 56\n\t"
+                "srai t3, t3, 56\n\t"
+                "vle8.v v10, (%[q6h])\n\t"
+                "addi %[q6], %[q6], 64\n\t"
+                "slli t0, t0, 7 * 8\n\t"
+                "srai t2, t2, 56\n\t"
+                "srai t1, t1, 56\n\t"
+                "srai t0, t0, 56\n\t"
+                "vle8.v v4, (%[qh])\n\t"
+                "vsrl.vi v12, v8, 4\n\t"
+                "vsrl.vi v14, v10, 4\n\t"
+                "lb zero, 0(%[q8])\n\t"
+                "vand.vi v8, v8, 0xF\n\t"
+                "vand.vi v10, v10, 0xF\n\t"
+                "lb zero, 32(%[q8])\n\t"
+                "vsll.vi v0, v4, 4\n\t"
+                "vsll.vi v2, v4, 2\n\t"
+                "lb zero, 64(%[q8])\n\t"
+                "vsrl.vi v6, v4, 2\n\t"
+                "vand.vx v0, v0, %[mask]\n\t"
+                "lb zero, 96(%[q8])\n\t"
+                "vand.vx v2, v2, %[mask]\n\t"
+                "vand.vx v4, v4, %[mask]\n\t"
+                "vand.vx v6, v6, %[mask]\n\t"
+                "vor.vv v8, v8, v0\n\t"
+                "lb zero, 127(%[q8])\n\t"
+                "vor.vv v10, v10, v2\n\t"
+                "vor.vv v12, v12, v4\n\t"
+                "vor.vv v14, v14, v6\n\t"
+                "vsetvli zero, %[vl128], e8, m8\n\t"
+                "vle8.v v0, (%[q8])\n\t"
+                "vsub.vx v8, v8, %[vl32]\n\t"
+                "vsetvli zero, %[vl64], e8, m4\n\t"
+                "vwmul.vv v16, v0, v8\n\t"
+                "vwmul.vv v24, v4, v12\n\t"
+                "vsetivli zero, 16, e16, m2\n\t"
+                "vmv.v.x v0, zero\n\t"
+                "vwredsum.vs v10, v16, v0\n\t"
+                "vwredsum.vs v9, v18, v0\n\t"
+                "vwredsum.vs v8, v20, v0\n\t"
+                "vwredsum.vs v7, v22, v0\n\t"
+                "vwredsum.vs v11, v24, v0\n\t"
+                "vwredsum.vs v12, v26, v0\n\t"
+                "vwredsum.vs v13, v28, v0\n\t"
+                "vwredsum.vs v14, v30, v0\n\t"
+                "vsetivli zero, 4, e32, m1\n\t"
+                "vmul.vx v0, v10, t0\n\t"
+                "vmul.vx v1, v9, t1\n\t"
+                "vmacc.vx v0, t2, v8\n\t"
+                "vmacc.vx v1, t3, v7\n\t"
+                "vmacc.vx v0, t4, v11\n\t"
+                "vmacc.vx v1, t5, v12\n\t"
+                "vmacc.vx v0, t6, v13\n\t"
+                "vmacc.vx v1, a7, v14\n\t"
+                "vadd.vv v0, v0, v1\n\t"
+                "vfcvt.f.x.v v0, v0\n\t"
+                "vfmv.f.s %[ftmp], v0\n\t"
+                "fmadd.s %[sumf], %[d], %[ftmp], %[sumf]"
+                : [q6] "+&r" (q6), [q6h] "=&r" (q6h)
+                , [scale] "+&r" (scale)
+                , [sumf] "+&f" (sumf), [ftmp] "=&f" (ftmp)
+                : [qh] "r" (qh), [q8] "r" (q8)
+                , [vl32] "r" (32), [vl64] "r" (64), [vl128] "r" (128)
+                , [mask] "r" (0x30), [d] "f" (d)
+                : "memory"
+                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+                , "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a7"
+                , "a6", "a5", "a4", "a3"
+            );
+            qh += 32;   q8 += 128;
         }
-        break;
-    case 128:
-        for (int i = 0; i < nb; ++i) {
-
-            __builtin_prefetch(&x[i + 1].d, 0, 1);
-
-            const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
-
-            const uint8_t * restrict q6 = x[i].ql;
-            const uint8_t * restrict qh = x[i].qh;
-            const  int8_t * restrict q8 = y[i].qs;
-
-            const int8_t * restrict scale = x[i].scales;
-
-            int q6h;
-            float ftmp;
-
-            for (int j = 0; j < QK_K/128; ++j) {
-                __asm__ __volatile__(
-                    "addi %[q6h], %[q6], 32\n\t"
-                    "ld t0, 0(%[scale])\n\t"
-                    "addi %[scale], %[scale], 8\n\t"
-                    "slli t6, t0, 1 * 8\n\t"
-                    "lb zero, 0(%[q6])\n\t"
-                    "slli t5, t0, 2 * 8\n\t"
-                    "slli t4, t0, 3 * 8\n\t"
-                    "lb zero, 0(%[q6h])\n\t"
-                    "slli t3, t0, 4 * 8\n\t"
-                    "slli t2, t0, 5 * 8\n\t"
-                    "lb zero, 0(%[qh])\n\t"
-                    "lb zero, 31(%[q6h])\n\t"
-                    "slli t1, t0, 6 * 8\n\t"
-                    "srai a7, t0, 56\n\t"
-                    "vsetvli zero, %[vl32], e8, m2\n\t"
-                    "vle8.v v8, (%[q6])\n\t"
-                    "srai t6, t6, 56\n\t"
-                    "srai t5, t5, 56\n\t"
-                    "srai t4, t4, 56\n\t"
-                    "srai t3, t3, 56\n\t"
-                    "vle8.v v10, (%[q6h])\n\t"
-                    "addi %[q6], %[q6], 64\n\t"
-                    "slli t0, t0, 7 * 8\n\t"
-                    "srai t2, t2, 56\n\t"
-                    "srai t1, t1, 56\n\t"
-                    "srai t0, t0, 56\n\t"
-                    "vle8.v v4, (%[qh])\n\t"
-                    "vsrl.vi v12, v8, 4\n\t"
-                    "vsrl.vi v14, v10, 4\n\t"
-                    "lb zero, 0(%[q8])\n\t"
-                    "vand.vi v8, v8, 0xF\n\t"
-                    "vand.vi v10, v10, 0xF\n\t"
-                    "lb zero, 32(%[q8])\n\t"
-                    "vsll.vi v0, v4, 4\n\t"
-                    "vsll.vi v2, v4, 2\n\t"
-                    "lb zero, 64(%[q8])\n\t"
-                    "vsrl.vi v6, v4, 2\n\t"
-                    "vand.vx v0, v0, %[mask]\n\t"
-                    "lb zero, 96(%[q8])\n\t"
-                    "vand.vx v2, v2, %[mask]\n\t"
-                    "vand.vx v4, v4, %[mask]\n\t"
-                    "vand.vx v6, v6, %[mask]\n\t"
-                    "vor.vv v8, v8, v0\n\t"
-                    "lb zero, 127(%[q8])\n\t"
-                    "vor.vv v10, v10, v2\n\t"
-                    "vor.vv v12, v12, v4\n\t"
-                    "vor.vv v14, v14, v6\n\t"
-                    "vsetvli zero, %[vl128], e8, m8\n\t"
-                    "vle8.v v0, (%[q8])\n\t"
-                    "vsub.vx v8, v8, %[vl32]\n\t"
-                    "vsetvli zero, %[vl64], e8, m4\n\t"
-                    "vwmul.vv v16, v0, v8\n\t"
-                    "vwmul.vv v24, v4, v12\n\t"
-                    "vsetivli zero, 16, e16, m2\n\t"
-                    "vmv.v.x v0, zero\n\t"
-                    "vwredsum.vs v10, v16, v0\n\t"
-                    "vwredsum.vs v9, v18, v0\n\t"
-                    "vwredsum.vs v8, v20, v0\n\t"
-                    "vwredsum.vs v7, v22, v0\n\t"
-                    "vwredsum.vs v11, v24, v0\n\t"
-                    "vwredsum.vs v12, v26, v0\n\t"
-                    "vwredsum.vs v13, v28, v0\n\t"
-                    "vwredsum.vs v14, v30, v0\n\t"
-                    "vsetivli zero, 4, e32, m1\n\t"
-                    "vmul.vx v0, v10, t0\n\t"
-                    "vmul.vx v1, v9, t1\n\t"
-                    "vmacc.vx v0, t2, v8\n\t"
-                    "vmacc.vx v1, t3, v7\n\t"
-                    "vmacc.vx v0, t4, v11\n\t"
-                    "vmacc.vx v1, t5, v12\n\t"
-                    "vmacc.vx v0, t6, v13\n\t"
-                    "vmacc.vx v1, a7, v14\n\t"
-                    "vadd.vv v0, v0, v1\n\t"
-                    "vfcvt.f.x.v v0, v0\n\t"
-                    "vfmv.f.s %[ftmp], v0\n\t"
-                    "fmadd.s %[sumf], %[d], %[ftmp], %[sumf]"
-                    : [q6] "+&r" (q6), [q6h] "=&r" (q6h)
-                    , [scale] "+&r" (scale)
-                    , [sumf] "+&f" (sumf), [ftmp] "=&f" (ftmp)
-                    : [qh] "r" (qh), [q8] "r" (q8)
-                    , [vl32] "r" (32), [vl64] "r" (64), [vl128] "r" (128)
-                    , [mask] "r" (0x30), [d] "f" (d)
-                    : "memory"
-                    , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
-                    , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
-                    , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
-                    , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
-                    , "t0", "t1", "t2", "t3", "t4", "t5", "t6", "a7"
-                    , "a6", "a5", "a4", "a3"
-                );
-                qh += 32;   q8 += 128;
-            }
-        }
-        break;
-    default:
-        assert(false && "Unsupported vector length");
-        break;
     }
 
     *s = sumf;
+}
 
+static NOINLINE void ggml_vec_dot_q6_K_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t * GGML_RESTRICT q6 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+
+        const int8_t * GGML_RESTRICT scale = x[i].scales;
+
+        size_t vl;
+
+        vint32m1_t vzero = __riscv_vmv_v_x_i32m1(0, 1);
+
+        int sum_t = 0;
+        int is = 0;
+
+        for (int j = 0; j < QK_K/128; ++j) {
+
+            vl = 32;
+
+            // load qh
+            vuint8m1_t qh_x = __riscv_vle8_v_u8m1(qh, vl);
+
+            // load Q6
+            vuint8m1_t q6_0 = __riscv_vle8_v_u8m1(q6, vl);
+            vuint8m1_t q6_1 = __riscv_vle8_v_u8m1(q6+32, vl);
+
+            vuint8m1_t q6a_0 = __riscv_vand_vx_u8m1(q6_0, 0x0F, vl);
+            vuint8m1_t q6a_1 = __riscv_vand_vx_u8m1(q6_1, 0x0F, vl);
+            vuint8m1_t q6s_0 = __riscv_vsrl_vx_u8m1(q6_0, 0x04, vl);
+            vuint8m1_t q6s_1 = __riscv_vsrl_vx_u8m1(q6_1, 0x04, vl);
+
+            vuint8m1_t qh_0 = __riscv_vand_vx_u8m1(qh_x, 0x03, vl);
+            vuint8m1_t qh_1 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x2, vl), 0x03 , vl);
+            vuint8m1_t qh_2 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x4, vl), 0x03 , vl);
+            vuint8m1_t qh_3 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(qh_x, 0x6, vl), 0x03 , vl);
+
+            vuint8m1_t qhi_0 = __riscv_vor_vv_u8m1(q6a_0, __riscv_vsll_vx_u8m1(qh_0, 0x04, vl), vl);
+            vuint8m1_t qhi_1 = __riscv_vor_vv_u8m1(q6a_1, __riscv_vsll_vx_u8m1(qh_1, 0x04, vl), vl);
+            vuint8m1_t qhi_2 = __riscv_vor_vv_u8m1(q6s_0, __riscv_vsll_vx_u8m1(qh_2, 0x04, vl), vl);
+            vuint8m1_t qhi_3 = __riscv_vor_vv_u8m1(q6s_1, __riscv_vsll_vx_u8m1(qh_3, 0x04, vl), vl);
+
+            vint8m1_t a_0 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_0), 32, vl);
+            vint8m1_t a_1 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_1), 32, vl);
+            vint8m1_t a_2 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_2), 32, vl);
+            vint8m1_t a_3 = __riscv_vsub_vx_i8m1(__riscv_vreinterpret_v_u8m1_i8m1(qhi_3), 32, vl);
+
+            // load Q8 and take product
+            vint16m2_t va_q_0 = __riscv_vwmul_vv_i16m2(a_0, __riscv_vle8_v_i8m1(q8, vl), vl);
+            vint16m2_t va_q_1 = __riscv_vwmul_vv_i16m2(a_1, __riscv_vle8_v_i8m1(q8+32, vl), vl);
+            vint16m2_t va_q_2 = __riscv_vwmul_vv_i16m2(a_2, __riscv_vle8_v_i8m1(q8+64, vl), vl);
+            vint16m2_t va_q_3 = __riscv_vwmul_vv_i16m2(a_3, __riscv_vle8_v_i8m1(q8+96, vl), vl);
+
+            vl = 16;
+
+            vint32m2_t vaux_0 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_0, 0), scale[is+0], vl);
+            vint32m2_t vaux_1 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_0, 1), scale[is+1], vl);
+            vint32m2_t vaux_2 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_1, 0), scale[is+2], vl);
+            vint32m2_t vaux_3 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_1, 1), scale[is+3], vl);
+            vint32m2_t vaux_4 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_2, 0), scale[is+4], vl);
+            vint32m2_t vaux_5 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_2, 1), scale[is+5], vl);
+            vint32m2_t vaux_6 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_3, 0), scale[is+6], vl);
+            vint32m2_t vaux_7 = __riscv_vwmul_vx_i32m2(__riscv_vget_v_i16m2_i16m1(va_q_3, 1), scale[is+7], vl);
+
+            vint32m1_t isum0 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_0, vaux_1, vl), vzero, vl);
+            vint32m1_t isum1 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_2, vaux_3, vl), isum0, vl);
+            vint32m1_t isum2 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_4, vaux_5, vl), isum1, vl);
+            vint32m1_t isum3 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_6, vaux_7, vl), isum2, vl);
+
+            sum_t += __riscv_vmv_x_s_i32m1_i32(isum3);
+
+            q6 += 64;   qh += 32;   q8 += 128;   is=8;
+
+        }
+
+        sumf += d * sum_t;
+
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_q6_K_q8_K_vl512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    // mask for processing 16 elements per prod register
+    const vuint16m1_t va_index = __riscv_vid_v_u16m1(32);
+    const vbool16_t va_mask = __riscv_vmsgtu_vx_u16m1_b16(va_index, 15, 32);
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t * GGML_RESTRICT q6 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+
+        const int8_t * GGML_RESTRICT scale = x[i].scales;
+
+        size_t vl = 32;
+
+        vint32m1_t vzero = __riscv_vmv_v_x_i32m1(0, 1);
+
+        int sum_t = 0;
+        int is = 0;
+
+        vint32m2_t vaux_0 = __riscv_vmv_v_x_i32m2(0, vl);
+        vint32m2_t vaux_1 = __riscv_vmv_v_x_i32m2(0, vl);
+        vint32m2_t vaux_2 = __riscv_vmv_v_x_i32m2(0, vl);
+        vint32m2_t vaux_3 = __riscv_vmv_v_x_i32m2(0, vl);
+
+        for (int j = 0; j < QK_K/128; ++j) {
+            // load qh
+            vuint8mf2_t qh_x = __riscv_vle8_v_u8mf2(qh, vl);
+
+            // load Q6
+            vuint8mf2_t q6_0 = __riscv_vle8_v_u8mf2(q6, vl);
+            vuint8mf2_t q6_1 = __riscv_vle8_v_u8mf2(q6+32, vl);
+
+            vuint8mf2_t q6a_0 = __riscv_vand_vx_u8mf2(q6_0, 0x0F, vl);
+            vuint8mf2_t q6a_1 = __riscv_vand_vx_u8mf2(q6_1, 0x0F, vl);
+            vuint8mf2_t q6s_0 = __riscv_vsrl_vx_u8mf2(q6_0, 0x04, vl);
+            vuint8mf2_t q6s_1 = __riscv_vsrl_vx_u8mf2(q6_1, 0x04, vl);
+
+            vuint8mf2_t qh_0 = __riscv_vand_vx_u8mf2(qh_x, 0x03, vl);
+            vuint8mf2_t qh_1 = __riscv_vand_vx_u8mf2(__riscv_vsrl_vx_u8mf2(qh_x, 0x2, vl), 0x03 , vl);
+            vuint8mf2_t qh_2 = __riscv_vand_vx_u8mf2(__riscv_vsrl_vx_u8mf2(qh_x, 0x4, vl), 0x03 , vl);
+            vuint8mf2_t qh_3 = __riscv_vand_vx_u8mf2(__riscv_vsrl_vx_u8mf2(qh_x, 0x6, vl), 0x03 , vl);
+
+            vuint8mf2_t qhi_0 = __riscv_vor_vv_u8mf2(q6a_0, __riscv_vsll_vx_u8mf2(qh_0, 0x04, vl), vl);
+            vuint8mf2_t qhi_1 = __riscv_vor_vv_u8mf2(q6a_1, __riscv_vsll_vx_u8mf2(qh_1, 0x04, vl), vl);
+            vuint8mf2_t qhi_2 = __riscv_vor_vv_u8mf2(q6s_0, __riscv_vsll_vx_u8mf2(qh_2, 0x04, vl), vl);
+            vuint8mf2_t qhi_3 = __riscv_vor_vv_u8mf2(q6s_1, __riscv_vsll_vx_u8mf2(qh_3, 0x04, vl), vl);
+
+            vint8mf2_t a_0 = __riscv_vsub_vx_i8mf2(__riscv_vreinterpret_v_u8mf2_i8mf2(qhi_0), 32, vl);
+            vint8mf2_t a_1 = __riscv_vsub_vx_i8mf2(__riscv_vreinterpret_v_u8mf2_i8mf2(qhi_1), 32, vl);
+            vint8mf2_t a_2 = __riscv_vsub_vx_i8mf2(__riscv_vreinterpret_v_u8mf2_i8mf2(qhi_2), 32, vl);
+            vint8mf2_t a_3 = __riscv_vsub_vx_i8mf2(__riscv_vreinterpret_v_u8mf2_i8mf2(qhi_3), 32, vl);
+
+            // load Q8 and take product
+            vint16m1_t va_q_0 = __riscv_vwmul_vv_i16m1(a_0, __riscv_vle8_v_i8mf2(q8, vl), vl);
+            vint16m1_t va_q_1 = __riscv_vwmul_vv_i16m1(a_1, __riscv_vle8_v_i8mf2(q8+32, vl), vl);
+            vint16m1_t va_q_2 = __riscv_vwmul_vv_i16m1(a_2, __riscv_vle8_v_i8mf2(q8+64, vl), vl);
+            vint16m1_t va_q_3 = __riscv_vwmul_vv_i16m1(a_3, __riscv_vle8_v_i8mf2(q8+96, vl), vl);
+
+            // accumulate
+            vaux_0 = __riscv_vwmacc_vx_i32m2(vaux_0, scale[is+0], va_q_0, 16);
+            vaux_1 = __riscv_vwmacc_vx_i32m2(vaux_1, scale[is+2], va_q_1, 16);
+            vaux_2 = __riscv_vwmacc_vx_i32m2(vaux_2, scale[is+4], va_q_2, 16);
+            vaux_3 = __riscv_vwmacc_vx_i32m2(vaux_3, scale[is+6], va_q_3, 16);
+            //
+            vaux_0 = __riscv_vwmacc_vx_i32m2_m(va_mask, vaux_0, scale[is+1], va_q_0, vl);
+            vaux_1 = __riscv_vwmacc_vx_i32m2_m(va_mask, vaux_1, scale[is+3], va_q_1, vl);
+            vaux_2 = __riscv_vwmacc_vx_i32m2_m(va_mask, vaux_2, scale[is+5], va_q_2, vl);
+            vaux_3 = __riscv_vwmacc_vx_i32m2_m(va_mask, vaux_3, scale[is+7], va_q_3, vl);
+
+            q6 += 64;   qh += 32;   q8 += 128;   is=8;
+        }
+
+        vint32m1_t isum0 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_0, vaux_1, vl), vzero, vl);
+        vint32m1_t isum1 = __riscv_vredsum_vs_i32m2_i32m1(__riscv_vadd_vv_i32m2(vaux_2, vaux_3, vl), isum0, vl);
+
+        sum_t += __riscv_vmv_x_s_i32m1_i32(isum1);
+
+        sumf += d * sum_t;
+
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_q6_K_q8_K_vl1024(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    // mask for processing 16 elements per prod register
+    const vuint16mf2_t va_index = __riscv_vid_v_u16mf2(32);
+    const vbool32_t va_mask = __riscv_vmsgtu_vx_u16mf2_b32(va_index, 15, 32);
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t * GGML_RESTRICT q6 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+
+        const int8_t * GGML_RESTRICT scale = x[i].scales;
+
+        size_t vl = 32;
+
+        vint32m1_t vzero = __riscv_vmv_v_x_i32m1(0, 1);
+
+        int sum_t = 0;
+        int is = 0;
+
+        vint32m1_t vaux_0 = __riscv_vmv_v_x_i32m1(0, vl);
+        vint32m1_t vaux_1 = __riscv_vmv_v_x_i32m1(0, vl);
+        vint32m1_t vaux_2 = __riscv_vmv_v_x_i32m1(0, vl);
+        vint32m1_t vaux_3 = __riscv_vmv_v_x_i32m1(0, vl);
+
+        for (int j = 0; j < QK_K/128; ++j) {
+            // load qh
+            vuint8mf4_t qh_x = __riscv_vle8_v_u8mf4(qh, vl);
+
+            // load Q6
+            vuint8mf4_t q6_0 = __riscv_vle8_v_u8mf4(q6, vl);
+            vuint8mf4_t q6_1 = __riscv_vle8_v_u8mf4(q6+32, vl);
+
+            vuint8mf4_t q6a_0 = __riscv_vand_vx_u8mf4(q6_0, 0x0F, vl);
+            vuint8mf4_t q6a_1 = __riscv_vand_vx_u8mf4(q6_1, 0x0F, vl);
+            vuint8mf4_t q6s_0 = __riscv_vsrl_vx_u8mf4(q6_0, 0x04, vl);
+            vuint8mf4_t q6s_1 = __riscv_vsrl_vx_u8mf4(q6_1, 0x04, vl);
+
+            vuint8mf4_t qh_0 = __riscv_vand_vx_u8mf4(qh_x, 0x03, vl);
+            vuint8mf4_t qh_1 = __riscv_vand_vx_u8mf4(__riscv_vsrl_vx_u8mf4(qh_x, 0x2, vl), 0x03 , vl);
+            vuint8mf4_t qh_2 = __riscv_vand_vx_u8mf4(__riscv_vsrl_vx_u8mf4(qh_x, 0x4, vl), 0x03 , vl);
+            vuint8mf4_t qh_3 = __riscv_vand_vx_u8mf4(__riscv_vsrl_vx_u8mf4(qh_x, 0x6, vl), 0x03 , vl);
+
+            vuint8mf4_t qhi_0 = __riscv_vor_vv_u8mf4(q6a_0, __riscv_vsll_vx_u8mf4(qh_0, 0x04, vl), vl);
+            vuint8mf4_t qhi_1 = __riscv_vor_vv_u8mf4(q6a_1, __riscv_vsll_vx_u8mf4(qh_1, 0x04, vl), vl);
+            vuint8mf4_t qhi_2 = __riscv_vor_vv_u8mf4(q6s_0, __riscv_vsll_vx_u8mf4(qh_2, 0x04, vl), vl);
+            vuint8mf4_t qhi_3 = __riscv_vor_vv_u8mf4(q6s_1, __riscv_vsll_vx_u8mf4(qh_3, 0x04, vl), vl);
+
+            vint8mf4_t a_0 = __riscv_vsub_vx_i8mf4(__riscv_vreinterpret_v_u8mf4_i8mf4(qhi_0), 32, vl);
+            vint8mf4_t a_1 = __riscv_vsub_vx_i8mf4(__riscv_vreinterpret_v_u8mf4_i8mf4(qhi_1), 32, vl);
+            vint8mf4_t a_2 = __riscv_vsub_vx_i8mf4(__riscv_vreinterpret_v_u8mf4_i8mf4(qhi_2), 32, vl);
+            vint8mf4_t a_3 = __riscv_vsub_vx_i8mf4(__riscv_vreinterpret_v_u8mf4_i8mf4(qhi_3), 32, vl);
+
+            // load Q8 and take product
+            vint16mf2_t va_q_0 = __riscv_vwmul_vv_i16mf2(a_0, __riscv_vle8_v_i8mf4(q8, vl), vl);
+            vint16mf2_t va_q_1 = __riscv_vwmul_vv_i16mf2(a_1, __riscv_vle8_v_i8mf4(q8+32, vl), vl);
+            vint16mf2_t va_q_2 = __riscv_vwmul_vv_i16mf2(a_2, __riscv_vle8_v_i8mf4(q8+64, vl), vl);
+            vint16mf2_t va_q_3 = __riscv_vwmul_vv_i16mf2(a_3, __riscv_vle8_v_i8mf4(q8+96, vl), vl);
+
+            // accumulate
+            vaux_0 = __riscv_vwmacc_vx_i32m1(vaux_0, scale[is+0], va_q_0, 16);
+            vaux_1 = __riscv_vwmacc_vx_i32m1(vaux_1, scale[is+2], va_q_1, 16);
+            vaux_2 = __riscv_vwmacc_vx_i32m1(vaux_2, scale[is+4], va_q_2, 16);
+            vaux_3 = __riscv_vwmacc_vx_i32m1(vaux_3, scale[is+6], va_q_3, 16);
+            //
+            vaux_0 = __riscv_vwmacc_vx_i32m1_m(va_mask, vaux_0, scale[is+1], va_q_0, vl);
+            vaux_1 = __riscv_vwmacc_vx_i32m1_m(va_mask, vaux_1, scale[is+3], va_q_1, vl);
+            vaux_2 = __riscv_vwmacc_vx_i32m1_m(va_mask, vaux_2, scale[is+5], va_q_2, vl);
+            vaux_3 = __riscv_vwmacc_vx_i32m1_m(va_mask, vaux_3, scale[is+7], va_q_3, vl);
+
+            q6 += 64;   qh += 32;   q8 += 128;   is=8;
+
+        }
+
+        vint32m1_t isum0 = __riscv_vredsum_vs_i32m1_i32m1(__riscv_vadd_vv_i32m1(vaux_0, vaux_1, vl), vzero, vl);
+        vint32m1_t isum1 = __riscv_vredsum_vs_i32m1_i32m1(__riscv_vadd_vv_i32m1(vaux_2, vaux_3, vl), isum0, vl);
+
+        sum_t += __riscv_vmv_x_s_i32m1_i32(isum1);
+
+        sumf += d * sum_t;
+
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#if defined __riscv_xtheadvector
+    ggml_vec_dot_q6_K_q8_K_xtheadvector(n, s, bs, vx, bx, vy, by, nrc);
+#elif defined __riscv_v_intrinsic
+    switch (__riscv_vlenb() * 8) {
+        case 128:
+            ggml_vec_dot_q6_K_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 256:
+            ggml_vec_dot_q6_K_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 512:
+            ggml_vec_dot_q6_K_q8_K_vl512(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 1024:
+            ggml_vec_dot_q6_K_q8_K_vl1024(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        default:
+            ggml_vec_dot_q6_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+    }
 #else
-
-    UNUSED(x);
-    UNUSED(y);
-    UNUSED(nb);
-
     ggml_vec_dot_q6_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
@@ -2366,6 +2637,186 @@ static NOINLINE void ggml_vec_dot_iq1_s_q8_K_vl256(int n, float * GGML_RESTRICT 
 }
 #endif
 
+static NOINLINE void ggml_vec_dot_iq1_s_q8_K_vl512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_s * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        // Load qh once for the entire superblock.
+        vuint16mf4_t qh = __riscv_vle16_v_u16mf4(x[i].qh, 8);
+
+        // Calculate ls.
+        vuint16mf4_t temp = __riscv_vsrl_vx_u16mf4(qh, 12, 8);
+        temp = __riscv_vand_vx_u16mf4(temp, 7, 8);
+        vint32mf2_t ls = __riscv_vreinterpret_v_u32mf2_i32mf2(__riscv_vwmulu_vx_u32mf2(temp, 2, 8));
+        ls = __riscv_vadd_vx_i32mf2(ls, 1, 8);
+
+        // Calculate delta.
+        vbool64_t mask = __riscv_vmseq_vx_u16mf4_b64(__riscv_vand_vx_u16mf4(qh, 0x8000, 8), 0, 8);
+        vint32mf2_t delta_neg = __riscv_vmv_v_x_i32mf2(-1, 8);
+        vint32mf2_t delta_pos = __riscv_vmv_v_x_i32mf2(1, 8);
+        vint32mf2_t delta = __riscv_vmerge_vvm_i32mf2(delta_neg, delta_pos, mask, 8);
+
+        // Load qs.
+        vuint8mf2_t qs = __riscv_vle8_v_u8mf2(x[i].qs, 32);
+
+        // Prepare the indices.
+        const uint64_t shift = 0x0009000600030000;
+        vuint16m1_t qh_shift = __riscv_vreinterpret_v_u64m1_u16m1(__riscv_vmv_v_x_u64m1(shift, 8));
+        vuint16m1_t qh_gather_index = __riscv_vreinterpret_v_i16m1_u16m1(
+            __riscv_vdiv_vx_i16m1(__riscv_vreinterpret_v_u16m1_i16m1(__riscv_vid_v_u16m1(32)), 4, 32));
+        vuint16m1_t qh_ext = __riscv_vlmul_ext_v_u16mf2_u16m1(__riscv_vlmul_ext_v_u16mf4_u16mf2(qh));
+        vuint16m1_t qh_index = __riscv_vrgather_vv_u16m1(qh_ext, qh_gather_index, 32);
+        qh_index = __riscv_vsrl_vv_u16m1(qh_index, qh_shift, 32);
+        qh_index = __riscv_vand_vx_u16m1(qh_index, 7, 32);
+        qh_index = __riscv_vsll_vx_u16m1(qh_index, 8, 32);
+        qh_index = __riscv_vor_vv_u16m1(qh_index, __riscv_vzext_vf2_u16m1(qs, 32), 32);
+        vuint16m1_t index = __riscv_vsll_vx_u16m1(qh_index, 3, 32);
+
+        // Final lsums.
+        int32_t lsums_s[8];
+        vint32m1_t one_scalar = __riscv_vmv_v_x_i32m1(0, 1);
+
+        // Sub-blocks 1-8
+        {
+            vint8m4_t grid0 = __riscv_vreinterpret_v_i64m4_i8m4(__riscv_vluxei16_v_i64m4((const int64_t*)iq1s_grid, index, 32));
+            vint8m4_t q80 = __riscv_vle8_v_i8m4(y[i].qs, 256);
+            vint16m8_t lsum0 = __riscv_vwmul_vv_i16m8(grid0, q80, 256);
+            lsums_s[0] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 0), one_scalar, 32));
+            lsums_s[1] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 1), one_scalar, 32));
+            lsums_s[2] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 2), one_scalar, 32));
+            lsums_s[3] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 3), one_scalar, 32));
+            lsums_s[4] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 4), one_scalar, 32));
+            lsums_s[5] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 5), one_scalar, 32));
+            lsums_s[6] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 6), one_scalar, 32));
+            lsums_s[7] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(__riscv_vget_v_i16m8_i16m1(lsum0, 7), one_scalar, 32));
+        }
+        __asm__ __volatile__("" ::: "memory");
+        vint32mf2_t lsums = __riscv_vle32_v_i32mf2(&lsums_s[0], 8);
+
+        // Calculate the bsums.
+        vint16mf2_t bsums_0 = __riscv_vle16_v_i16mf2(y[i].bsums, 16);
+        const vuint32mf2_t bsums_i32 = __riscv_vreinterpret_v_u16mf2_u32mf2(__riscv_vreinterpret_v_i16mf2_u16mf2(bsums_0));
+        const vint16mf4_t bsums_i32_0 = __riscv_vreinterpret_v_u16mf4_i16mf4(__riscv_vnsrl_wx_u16mf4(bsums_i32, 0, 8));
+        const vint16mf4_t bsums_i32_1 = __riscv_vreinterpret_v_u16mf4_i16mf4(__riscv_vnsrl_wx_u16mf4(bsums_i32, 16, 8));
+        const vint32mf2_t bsums = __riscv_vwadd_vv_i32mf2(bsums_i32_0, bsums_i32_1, 8);
+
+        // Accumulation.
+        vint32mf2_t sumi_v = __riscv_vmul_vv_i32mf2(ls, lsums, 8);
+        vint32mf2_t sumi1_v = __riscv_vmul_vv_i32mf2(__riscv_vmul_vv_i32mf2(ls, delta, 8), bsums, 8);
+
+        // Update sumf.
+        int sumi = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32mf2_i32m1(sumi_v, __riscv_vmv_v_x_i32m1(0.0f, 1), 8));
+        int sumi1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32mf2_i32m1(sumi1_v, __riscv_vmv_v_x_i32m1(0.0f, 1), 8));
+        sumf += GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d * (sumi + IQ1S_DELTA * sumi1);
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_iq1_s_q8_K_vl1024(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_s * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    // Mask for processing 32 elements per lsum register.
+    vuint16m1_t l_index = __riscv_vid_v_u16m1(64);
+    vbool16_t l_mask = __riscv_vmsgtu_vx_u16m1_b16(l_index, 31, 64);
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        // Load qh once for the entire superblock.
+        vuint16mf4_t qh = __riscv_vle16_v_u16mf4(x[i].qh, 8);
+
+        // Calculate ls.
+        vuint16mf4_t temp = __riscv_vsrl_vx_u16mf4(qh, 12, 8);
+        temp = __riscv_vand_vx_u16mf4(temp, 7, 8);
+        vint32mf2_t ls = __riscv_vreinterpret_v_u32mf2_i32mf2(__riscv_vwmulu_vx_u32mf2(temp, 2, 8));
+        ls = __riscv_vadd_vx_i32mf2(ls, 1, 8);
+
+        // Calculate delta.
+        vbool64_t mask = __riscv_vmseq_vx_u16mf4_b64(__riscv_vand_vx_u16mf4(qh, 0x8000, 8), 0, 8);
+        vint32mf2_t delta_neg = __riscv_vmv_v_x_i32mf2(-1, 8);
+        vint32mf2_t delta_pos = __riscv_vmv_v_x_i32mf2(1, 8);
+        vint32mf2_t delta = __riscv_vmerge_vvm_i32mf2(delta_neg, delta_pos, mask, 8);
+
+        // Load qs.
+        vuint8mf2_t qs = __riscv_vle8_v_u8mf2(x[i].qs, 32);
+
+        // Prepare the indices.
+        const uint64_t shift = 0x0009000600030000;
+        vuint16m1_t qh_shift = __riscv_vreinterpret_v_u64m1_u16m1(__riscv_vmv_v_x_u64m1(shift, 8));
+        vuint16m1_t qh_gather_index = __riscv_vreinterpret_v_i16m1_u16m1(
+            __riscv_vdiv_vx_i16m1(__riscv_vreinterpret_v_u16m1_i16m1(__riscv_vid_v_u16m1(32)), 4, 32));
+        vuint16m1_t qh_ext = __riscv_vlmul_ext_v_u16mf2_u16m1(__riscv_vlmul_ext_v_u16mf4_u16mf2(qh));
+        vuint16m1_t qh_index = __riscv_vrgather_vv_u16m1(qh_ext, qh_gather_index, 32);
+        qh_index = __riscv_vsrl_vv_u16m1(qh_index, qh_shift, 32);
+        qh_index = __riscv_vand_vx_u16m1(qh_index, 7, 32);
+        qh_index = __riscv_vsll_vx_u16m1(qh_index, 8, 32);
+        qh_index = __riscv_vor_vv_u16m1(qh_index, __riscv_vzext_vf2_u16m1(qs, 32), 32);
+        vuint16mf2_t index = __riscv_vlmul_trunc_v_u16m1_u16mf2(__riscv_vsll_vx_u16m1(qh_index, 3, 32));
+
+        // Final lsums.
+        int32_t lsums_s[8];
+        vint32m1_t one_scalar = __riscv_vmv_v_x_i32m1(0, 1);
+
+        // Sub-blocks 1-8
+        {
+            vint8m2_t grid0 = __riscv_vreinterpret_v_i64m2_i8m2(__riscv_vluxei16_v_i64m2((const int64_t*)iq1s_grid, index, 32));
+            vint8m2_t q80 = __riscv_vle8_v_i8m2(y[i].qs, 256);
+            vint16m4_t lsum0 = __riscv_vwmul_vv_i16m4(grid0, q80, 256);
+
+            // Reduce.
+            lsums_s[0] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(          __riscv_vget_v_i16m4_i16m1(lsum0, 0), one_scalar, 32));
+            lsums_s[1] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(l_mask, __riscv_vget_v_i16m4_i16m1(lsum0, 0), one_scalar, 64));
+            lsums_s[2] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(          __riscv_vget_v_i16m4_i16m1(lsum0, 1), one_scalar, 32));
+            lsums_s[3] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(l_mask, __riscv_vget_v_i16m4_i16m1(lsum0, 1), one_scalar, 64));
+            lsums_s[4] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(          __riscv_vget_v_i16m4_i16m1(lsum0, 2), one_scalar, 32));
+            lsums_s[5] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(l_mask, __riscv_vget_v_i16m4_i16m1(lsum0, 2), one_scalar, 64));
+            lsums_s[6] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(          __riscv_vget_v_i16m4_i16m1(lsum0, 3), one_scalar, 32));
+            lsums_s[7] = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1_m(l_mask, __riscv_vget_v_i16m4_i16m1(lsum0, 3), one_scalar, 64));
+        }
+        __asm__ __volatile__("" ::: "memory");
+        vint32mf2_t lsums = __riscv_vle32_v_i32mf2(&lsums_s[0], 8);
+
+        // Calculate the bsums.
+        vint16mf2_t bsums_0 = __riscv_vle16_v_i16mf2(y[i].bsums, 16);
+        const vuint32mf2_t bsums_i32 = __riscv_vreinterpret_v_u16mf2_u32mf2(__riscv_vreinterpret_v_i16mf2_u16mf2(bsums_0));
+        const vint16mf4_t bsums_i32_0 = __riscv_vreinterpret_v_u16mf4_i16mf4(__riscv_vnsrl_wx_u16mf4(bsums_i32, 0, 8));
+        const vint16mf4_t bsums_i32_1 = __riscv_vreinterpret_v_u16mf4_i16mf4(__riscv_vnsrl_wx_u16mf4(bsums_i32, 16, 8));
+        const vint32mf2_t bsums = __riscv_vwadd_vv_i32mf2(bsums_i32_0, bsums_i32_1, 8);
+
+        // Accumulation.
+        vint32mf2_t sumi_v = __riscv_vmul_vv_i32mf2(ls, lsums, 8);
+        vint32mf2_t sumi1_v = __riscv_vmul_vv_i32mf2(__riscv_vmul_vv_i32mf2(ls, delta, 8), bsums, 8);
+
+        // Update sumf.
+        int sumi = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32mf2_i32m1(sumi_v, __riscv_vmv_v_x_i32m1(0.0f, 1), 8));
+        int sumi1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32mf2_i32m1(sumi1_v, __riscv_vmv_v_x_i32m1(0.0f, 1), 8));
+        sumf += GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d * (sumi + IQ1S_DELTA * sumi1);
+    }
+
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
     switch (__riscv_vlenb() * 8) {
@@ -2374,6 +2825,12 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             break;
         case 256:
             ggml_vec_dot_iq1_s_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 512:
+            ggml_vec_dot_iq1_s_q8_K_vl512(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 1024:
+            ggml_vec_dot_iq1_s_q8_K_vl1024(n, s, bs, vx, bx, vy, by, nrc);
             break;
         default:
             ggml_vec_dot_iq1_s_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
@@ -2666,6 +3123,283 @@ static NOINLINE void ggml_vec_dot_iq1_m_q8_K_vl256(int n, float * GGML_RESTRICT 
 }
 #endif
 
+static NOINLINE void ggml_vec_dot_iq1_m_q8_K_vl512(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_m * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    iq1m_scale_t scale;
+
+    // Mask for processing 16 elements per lsum register.
+    const vuint16m1_t l_index = __riscv_vid_v_u16m1(32);
+    const vbool16_t l_mask = __riscv_vmsgtu_vx_u16m1_b16(l_index, 15, 32);
+
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const int8_t   * q8 = y[i].qs;
+        const uint8_t  * qs = x[i].qs;
+        const uint8_t  * qh = x[i].qh;
+        const uint16_t * sc = (const uint16_t *)x[i].scales;
+
+        scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+
+        // Accumulators.
+        vint32m2_t acc1 = __riscv_vmv_v_x_i32m2(0, 32);
+        vint32m2_t acc2 = __riscv_vmv_v_x_i32m2(0, 32);
+
+        // We process all the sub-blocks together.
+        #pragma GCC unroll 1
+        for (int ib = 0; ib < QK_K/256; ib++) {
+            // Load qh for all 16 sub-blocks.
+            const vuint8mf4_t qh_8 = __riscv_vle8_v_u8mf4(qh, 16);
+            const vuint16mf2_t qh_16_lo = __riscv_vzext_vf2_u16mf2(qh_8, 16);
+            const vuint16mf2_t qh_16_hi = __riscv_vsll_vx_u16mf2(qh_16_lo, 8, 16);
+            const vuint16m1_t qhb = __riscv_vzext_vf2_u16m1(
+                __riscv_vreinterpret_v_u16mf2_u8mf2(__riscv_vor_vv_u16mf2(qh_16_lo, qh_16_hi, 16)), 32);
+            __asm__ __volatile__("" ::: "memory");
+
+            // Prepare grid indices.
+            const vuint16m1_t qsb = __riscv_vzext_vf2_u16m1(__riscv_vle8_v_u8mf2(&qs[0], 32), 32);
+            const vuint16m1_t shift = __riscv_vreinterpret_v_u32m1_u16m1(__riscv_vmv_v_x_u32m1(0x00040008, 16));
+            vuint16m1_t index = __riscv_vor_vv_u16m1(qsb, __riscv_vand_vx_u16m1(__riscv_vsll_vv_u16m1(qhb, shift, 32), 0x700, 32), 32);
+            index = __riscv_vsll_vx_u16m1(index, 3, 32);
+            __asm__ __volatile__("" ::: "memory");
+
+            // Load the grid.
+            const vint8m4_t iq1b = __riscv_vreinterpret_v_i64m4_i8m4(__riscv_vreinterpret_v_u64m4_i64m4(
+                __riscv_vluxei16_v_u64m4(iq1s_grid, index, 32)));
+
+            // Prepare the deltas.
+            const vbool16_t mask = __riscv_vmsgtu_vx_u16m1_b16(
+                __riscv_vand_vv_u16m1(qhb, __riscv_vreinterpret_v_u32m1_u16m1(__riscv_vmv_v_x_u32m1(0x00800008, 16)), 32), 0, 32);
+            const vint64m4_t delta_pos = __riscv_vmv_v_x_i64m4(0x0101010101010101, 32);
+            const vint8m4_t delta = __riscv_vreinterpret_v_i64m4_i8m4(
+                __riscv_vmerge_vxm_i64m4(delta_pos, 0xffffffffffffffff, mask, 32));
+
+            // Load q8 for sub-blocks.
+            const vint8m4_t q8b = __riscv_vle8_v_i8m4(q8, 256);
+
+            // Calculate the lsums.
+            const vint16m8_t lsum1 = __riscv_vwmul_vv_i16m8(iq1b, q8b, 256);
+            const vint16m8_t lsum2 = __riscv_vwmul_vv_i16m8(delta, q8b, 256);
+
+            // Prepare the scales.
+            const int16_t ls_0 = 2*((sc[0] >> 0) & 0x7) + 1;
+            const int16_t ls_1 = 2*((sc[0] >> 3) & 0x7) + 1;
+            const int16_t ls_2 = 2*((sc[0] >> 6) & 0x7) + 1;
+            const int16_t ls_3 = 2*((sc[0] >> 9) & 0x7) + 1;
+            const int16_t ls_4 = 2*((sc[1] >> 0) & 0x7) + 1;
+            const int16_t ls_5 = 2*((sc[1] >> 3) & 0x7) + 1;
+            const int16_t ls_6 = 2*((sc[1] >> 6) & 0x7) + 1;
+            const int16_t ls_7 = 2*((sc[1] >> 9) & 0x7) + 1;
+            const int16_t ls_8 = 2*((sc[2] >> 0) & 0x7) + 1;
+            const int16_t ls_9 = 2*((sc[2] >> 3) & 0x7) + 1;
+            const int16_t ls_10 = 2*((sc[2] >> 6) & 0x7) + 1;
+            const int16_t ls_11 = 2*((sc[2] >> 9) & 0x7) + 1;
+            const int16_t ls_12 = 2*((sc[3] >> 0) & 0x7) + 1;
+            const int16_t ls_13 = 2*((sc[3] >> 3) & 0x7) + 1;
+            const int16_t ls_14 = 2*((sc[3] >> 6) & 0x7) + 1;
+            const int16_t ls_15 = 2*((sc[3] >> 9) & 0x7) + 1;
+
+            // Accumulate in acc0 and acc1 for each sub-block.
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_0, __riscv_vget_v_i16m8_i16m1(lsum1, 0), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_1, __riscv_vget_v_i16m8_i16m1(lsum1, 0), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_0, __riscv_vget_v_i16m8_i16m1(lsum2, 0), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_1, __riscv_vget_v_i16m8_i16m1(lsum2, 0), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_2, __riscv_vget_v_i16m8_i16m1(lsum1, 1), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_3, __riscv_vget_v_i16m8_i16m1(lsum1, 1), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_2, __riscv_vget_v_i16m8_i16m1(lsum2, 1), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_3, __riscv_vget_v_i16m8_i16m1(lsum2, 1), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_4, __riscv_vget_v_i16m8_i16m1(lsum1, 2), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_5, __riscv_vget_v_i16m8_i16m1(lsum1, 2), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_4, __riscv_vget_v_i16m8_i16m1(lsum2, 2), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_5, __riscv_vget_v_i16m8_i16m1(lsum2, 2), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_6, __riscv_vget_v_i16m8_i16m1(lsum1, 3), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_7, __riscv_vget_v_i16m8_i16m1(lsum1, 3), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_6, __riscv_vget_v_i16m8_i16m1(lsum2, 3), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_7, __riscv_vget_v_i16m8_i16m1(lsum2, 3), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_8, __riscv_vget_v_i16m8_i16m1(lsum1, 4), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_9, __riscv_vget_v_i16m8_i16m1(lsum1, 4), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_8, __riscv_vget_v_i16m8_i16m1(lsum2, 4), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_9, __riscv_vget_v_i16m8_i16m1(lsum2, 4), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_10, __riscv_vget_v_i16m8_i16m1(lsum1, 5), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_11, __riscv_vget_v_i16m8_i16m1(lsum1, 5), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_10, __riscv_vget_v_i16m8_i16m1(lsum2, 5), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_11, __riscv_vget_v_i16m8_i16m1(lsum2, 5), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_12, __riscv_vget_v_i16m8_i16m1(lsum1, 6), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_13, __riscv_vget_v_i16m8_i16m1(lsum1, 6), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_12, __riscv_vget_v_i16m8_i16m1(lsum2, 6), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_13, __riscv_vget_v_i16m8_i16m1(lsum2, 6), 32);
+            //
+            acc1 = __riscv_vwmacc_vx_i32m2(          acc1, ls_14, __riscv_vget_v_i16m8_i16m1(lsum1, 7), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc1, ls_15, __riscv_vget_v_i16m8_i16m1(lsum1, 7), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2(          acc2, ls_14, __riscv_vget_v_i16m8_i16m1(lsum2, 7), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask, acc2, ls_15, __riscv_vget_v_i16m8_i16m1(lsum2, 7), 32);
+
+            __asm__ __volatile__("" ::: "memory");
+        }
+
+        // Reduce and accumulate in `sumf`.
+        vint32m1_t one = __riscv_vmv_v_x_i32m1(0, 1);
+        int sumi1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m2_i32m1(acc1, one, 32));
+        int sumi2 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m2_i32m1(acc2, one, 32));
+        sumf += y[i].d * GGML_CPU_FP16_TO_FP32(scale.f16) * (sumi1 + IQ1M_DELTA * sumi2);
+    }
+
+    *s = sumf;
+}
+
+static NOINLINE void ggml_vec_dot_iq1_m_q8_K_vl1024(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_m * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+    iq1m_scale_t scale;
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const int8_t   * q8 = y[i].qs;
+        const uint8_t  * qs = x[i].qs;
+        const uint8_t  * qh = x[i].qh;
+        const uint16_t * sc = (const uint16_t *)x[i].scales;
+
+        scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+
+        // Accumulators.
+        vint32m2_t acc1 = __riscv_vmv_v_x_i32m2(0, 64);
+        vint32m2_t acc2 = __riscv_vmv_v_x_i32m2(0, 64);
+
+        // We process all the sub-blocks together.
+        #pragma GCC unroll 1
+        for (int ib = 0; ib < QK_K/256; ib++) {
+            // Load qh for all 16 sub-blocks.
+            const vuint8mf8_t qh_8 = __riscv_vle8_v_u8mf8(qh, 16);
+            const vuint16mf4_t qh_16_lo = __riscv_vzext_vf2_u16mf4(qh_8, 16);
+            const vuint16mf4_t qh_16_hi = __riscv_vsll_vx_u16mf4(qh_16_lo, 8, 16);
+            const vuint16mf2_t qhb = __riscv_vzext_vf2_u16mf2(
+                __riscv_vreinterpret_v_u16mf4_u8mf4(__riscv_vor_vv_u16mf4(qh_16_lo, qh_16_hi, 16)), 32);
+            __asm__ __volatile__("" ::: "memory");
+
+            // Prepare grid indices.
+            const vuint16mf2_t qsb = __riscv_vzext_vf2_u16mf2(__riscv_vle8_v_u8mf4(&qs[0], 32), 32);
+            const vuint16mf2_t shift = __riscv_vreinterpret_v_u32mf2_u16mf2(__riscv_vmv_v_x_u32mf2(0x00040008, 16));
+            vuint16mf2_t index = __riscv_vor_vv_u16mf2(qsb, __riscv_vand_vx_u16mf2(__riscv_vsll_vv_u16mf2(qhb, shift, 32), 0x700, 32), 32);
+            index = __riscv_vsll_vx_u16mf2(index, 3, 32);
+            __asm__ __volatile__("" ::: "memory");
+
+            // Load the grid.
+            const vint8m2_t iq1b = __riscv_vreinterpret_v_i64m2_i8m2(__riscv_vreinterpret_v_u64m2_i64m2(
+                __riscv_vluxei16_v_u64m2(iq1s_grid, index, 32)));
+
+            // Prepare the deltas.
+            const vbool32_t mask = __riscv_vmsgtu_vx_u16mf2_b32(
+                __riscv_vand_vv_u16mf2(qhb, __riscv_vreinterpret_v_u32mf2_u16mf2(__riscv_vmv_v_x_u32mf2(0x00800008, 16)), 32), 0, 32);
+            const vint64m2_t delta_pos = __riscv_vmv_v_x_i64m2(0x0101010101010101, 32);
+            const vint8m2_t delta = __riscv_vreinterpret_v_i64m2_i8m2(
+                __riscv_vmerge_vxm_i64m2(delta_pos, 0xffffffffffffffff, mask, 32));
+
+            // Load q8 for sub-blocks.
+            const vint8m2_t q8b = __riscv_vle8_v_i8m2(q8, 256);
+
+            // Calculate the lsums.
+            const vint16m4_t lsum1 = __riscv_vwmul_vv_i16m4(iq1b, q8b, 256);
+            const vint16m4_t lsum2 = __riscv_vwmul_vv_i16m4(delta, q8b, 256);
+
+            // Prepare the scales.
+            const int16_t ls_0 = 2*((sc[0] >> 0) & 0x7) + 1;
+            const int16_t ls_1 = 2*((sc[0] >> 3) & 0x7) + 1;
+            const int16_t ls_2 = 2*((sc[0] >> 6) & 0x7) + 1;
+            const int16_t ls_3 = 2*((sc[0] >> 9) & 0x7) + 1;
+            const int16_t ls_4 = 2*((sc[1] >> 0) & 0x7) + 1;
+            const int16_t ls_5 = 2*((sc[1] >> 3) & 0x7) + 1;
+            const int16_t ls_6 = 2*((sc[1] >> 6) & 0x7) + 1;
+            const int16_t ls_7 = 2*((sc[1] >> 9) & 0x7) + 1;
+            const int16_t ls_8 = 2*((sc[2] >> 0) & 0x7) + 1;
+            const int16_t ls_9 = 2*((sc[2] >> 3) & 0x7) + 1;
+            const int16_t ls_10 = 2*((sc[2] >> 6) & 0x7) + 1;
+            const int16_t ls_11 = 2*((sc[2] >> 9) & 0x7) + 1;
+            const int16_t ls_12 = 2*((sc[3] >> 0) & 0x7) + 1;
+            const int16_t ls_13 = 2*((sc[3] >> 3) & 0x7) + 1;
+            const int16_t ls_14 = 2*((sc[3] >> 6) & 0x7) + 1;
+            const int16_t ls_15 = 2*((sc[3] >> 9) & 0x7) + 1;
+
+            // Mask for processing 16 elements per lsum register.
+            const vuint16m1_t l_index = __riscv_vid_v_u16m1(64);
+
+            // Accumulate in acc1 and acc2 for each sub-block.
+            acc1 = __riscv_vwmacc_vx_i32m2(acc1, ls_0,  __riscv_vget_v_i16m4_i16m1(lsum1, 0), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2(acc2, ls_0,  __riscv_vget_v_i16m4_i16m1(lsum2, 0), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2(acc1, ls_4,  __riscv_vget_v_i16m4_i16m1(lsum1, 1), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2(acc2, ls_4,  __riscv_vget_v_i16m4_i16m1(lsum2, 1), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2(acc1, ls_8,  __riscv_vget_v_i16m4_i16m1(lsum1, 2), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2(acc2, ls_8,  __riscv_vget_v_i16m4_i16m1(lsum2, 2), 16);
+            acc1 = __riscv_vwmacc_vx_i32m2(acc1, ls_12, __riscv_vget_v_i16m4_i16m1(lsum1, 3), 16);
+            acc2 = __riscv_vwmacc_vx_i32m2(acc2, ls_12, __riscv_vget_v_i16m4_i16m1(lsum2, 3), 16);
+            //
+            const vbool16_t l_mask_16_32 = __riscv_vmsgtu_vx_u16m1_b16(l_index, 15, 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc1, ls_1, __riscv_vget_v_i16m4_i16m1(lsum1, 0), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc2, ls_1, __riscv_vget_v_i16m4_i16m1(lsum2, 0), 32);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc1, ls_5, __riscv_vget_v_i16m4_i16m1(lsum1, 1), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc2, ls_5, __riscv_vget_v_i16m4_i16m1(lsum2, 1), 32);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc1, ls_9, __riscv_vget_v_i16m4_i16m1(lsum1, 2), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc2, ls_9, __riscv_vget_v_i16m4_i16m1(lsum2, 2), 32);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc1, ls_13, __riscv_vget_v_i16m4_i16m1(lsum1, 3), 32);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_16_32, acc2, ls_13, __riscv_vget_v_i16m4_i16m1(lsum2, 3), 32);
+            //
+            const vbool16_t l_mask_32_48 = __riscv_vmsgtu_vx_u16m1_b16(l_index, 31, 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc1, ls_2,  __riscv_vget_v_i16m4_i16m1(lsum1, 0), 48);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc2, ls_2,  __riscv_vget_v_i16m4_i16m1(lsum2, 0), 48);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc1, ls_6,  __riscv_vget_v_i16m4_i16m1(lsum1, 1), 48);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc2, ls_6,  __riscv_vget_v_i16m4_i16m1(lsum2, 1), 48);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc1, ls_10, __riscv_vget_v_i16m4_i16m1(lsum1, 2), 48);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc2, ls_10, __riscv_vget_v_i16m4_i16m1(lsum2, 2), 48);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc1, ls_14, __riscv_vget_v_i16m4_i16m1(lsum1, 3), 48);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_32_48, acc2, ls_14, __riscv_vget_v_i16m4_i16m1(lsum2, 3), 48);
+            //
+            const vbool16_t l_mask_48_64 = __riscv_vmsgtu_vx_u16m1_b16(l_index, 47, 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc1, ls_3,  __riscv_vget_v_i16m4_i16m1(lsum1, 0), 64);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc2, ls_3,  __riscv_vget_v_i16m4_i16m1(lsum2, 0), 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc1, ls_7,  __riscv_vget_v_i16m4_i16m1(lsum1, 1), 64);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc2, ls_7,  __riscv_vget_v_i16m4_i16m1(lsum2, 1), 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc1, ls_11, __riscv_vget_v_i16m4_i16m1(lsum1, 2), 64);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc2, ls_11, __riscv_vget_v_i16m4_i16m1(lsum2, 2), 64);
+            acc1 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc1, ls_15, __riscv_vget_v_i16m4_i16m1(lsum1, 3), 64);
+            acc2 = __riscv_vwmacc_vx_i32m2_m(l_mask_48_64, acc2, ls_15, __riscv_vget_v_i16m4_i16m1(lsum2, 3), 64);
+
+            __asm__ __volatile__("" ::: "memory");
+        }
+
+        // Reduce and accumulate in `sumf`.
+        vint32m1_t one = __riscv_vmv_v_x_i32m1(0, 1);
+        int sumi1 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m2_i32m1(acc1, one, 64));
+        int sumi2 = __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m2_i32m1(acc2, one, 64));
+        sumf += y[i].d * GGML_CPU_FP16_TO_FP32(scale.f16) * (sumi1 + IQ1M_DELTA * sumi2);
+    }
+
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
     switch (__riscv_vlenb() * 8) {
@@ -2674,6 +3408,12 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             break;
         case 256:
             ggml_vec_dot_iq1_m_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 512:
+            ggml_vec_dot_iq1_m_q8_K_vl512(n, s, bs, vx, bx, vy, by, nrc);
+            break;
+        case 1024:
+            ggml_vec_dot_iq1_m_q8_K_vl1024(n, s, bs, vx, bx, vy, by, nrc);
             break;
         default:
             ggml_vec_dot_iq1_m_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
@@ -3062,13 +3802,17 @@ static NOINLINE void ggml_vec_dot_iq2_xs_q8_K_vl256(int n, float * GGML_RESTRICT
             vint8m2_t q2u = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vq2_64));
             vint8m2_t q2s = __riscv_vreinterpret_v_u8m2_i8m2(__riscv_vreinterpret_v_u64m2_u8m2(vs2_64));
 
+            // Apply signs
             vint8m2_t q2_final = __riscv_vmul_vv_i8m2(q2u, q2s, 64);
 
+            // Load Q8 weights (64 elements)
             vint8m2_t q8v = __riscv_vle8_v_i8m2(q8, 64);
             q8 += 64;
 
+            // Multiply (Widening to int16, 64 elements -> LMUL=4)
             vint16m4_t prod = __riscv_vwmul_vv_i16m4(q2_final, q8v, 64);
 
+            // Reduction
             vint32m1_t zero_vec = __riscv_vmv_v_x_i32m1(0, 1);
 
             int32_t sum0 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(
@@ -3080,6 +3824,7 @@ static NOINLINE void ggml_vec_dot_iq2_xs_q8_K_vl256(int n, float * GGML_RESTRICT
             int32_t sum3 = __riscv_vmv_x_s_i32m1_i32(__riscv_vwredsum_vs_i16m1_i32m1(
                            __riscv_vget_v_i16m4_i16m1(prod, 3), zero_vec, 16));
 
+            // Apply Scales
             const uint8_t scale_byte_1 = scales[0];
             const uint8_t scale_byte_2 = scales[1];
             scales += 2;
