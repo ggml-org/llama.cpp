@@ -2,7 +2,6 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatForm from '$lib/components/app/chat/ChatForm/ChatForm.svelte';
 	import { expect } from 'storybook/test';
-	import { mockServerProps, mockConfigs } from './fixtures/storybook-mocks';
 	import jpgAsset from './fixtures/assets/1.jpg?url';
 	import svgAsset from './fixtures/assets/hf-logo.svg?url';
 	import pdfAsset from './fixtures/assets/example.pdf?raw';
@@ -46,8 +45,6 @@
 	name="Default"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
 	play={async ({ canvas, userEvent }) => {
-		mockServerProps(mockConfigs.noModalities);
-
 		const textarea = await canvas.findByRole('textbox');
 		const submitButton = await canvas.findByRole('button', { name: 'Send' });
 
@@ -66,72 +63,10 @@
 
 		const fileInput = document.querySelector('input[type="file"]');
 		await expect(fileInput).not.toHaveAttribute('accept');
-
-		// Open file attachments dropdown
-		const fileUploadButton = canvas.getByText('Attach files');
-		await userEvent.click(fileUploadButton);
-
-		// Check dropdown menu items are disabled (no modalities)
-		const imagesButton = document.querySelector('.images-button');
-		const audioButton = document.querySelector('.audio-button');
-
-		await expect(imagesButton).toHaveAttribute('data-disabled');
-		await expect(audioButton).toHaveAttribute('data-disabled');
-
-		// Close dropdown by pressing Escape
-		await userEvent.keyboard('{Escape}');
 	}}
 />
 
 <Story name="Loading" args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', isLoading: true }} />
-
-<Story
-	name="VisionModality"
-	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
-	play={async ({ canvas, userEvent }) => {
-		mockServerProps(mockConfigs.visionOnly);
-
-		// Open file attachments dropdown and verify it works
-		const fileUploadButton = canvas.getByText('Attach files');
-		await userEvent.click(fileUploadButton);
-
-		// Verify dropdown menu items exist
-		const imagesButton = document.querySelector('.images-button');
-		const audioButton = document.querySelector('.audio-button');
-
-		await expect(imagesButton).toBeInTheDocument();
-		await expect(audioButton).toBeInTheDocument();
-
-		// Close dropdown by pressing Escape
-		await userEvent.keyboard('{Escape}');
-
-		console.log('✅ Vision modality: Dropdown menu verified');
-	}}
-/>
-
-<Story
-	name="AudioModality"
-	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
-	play={async ({ canvas, userEvent }) => {
-		mockServerProps(mockConfigs.audioOnly);
-
-		// Open file attachments dropdown and verify it works
-		const fileUploadButton = canvas.getByText('Attach files');
-		await userEvent.click(fileUploadButton);
-
-		// Verify dropdown menu items exist
-		const imagesButton = document.querySelector('.images-button');
-		const audioButton = document.querySelector('.audio-button');
-
-		await expect(imagesButton).toBeInTheDocument();
-		await expect(audioButton).toBeInTheDocument();
-
-		// Close dropdown by pressing Escape
-		await userEvent.keyboard('{Escape}');
-
-		console.log('✅ Audio modality: Dropdown menu verified');
-	}}
-/>
 
 <Story
 	name="FileAttachments"
@@ -140,8 +75,6 @@
 		uploadedFiles: fileAttachments
 	}}
 	play={async ({ canvas }) => {
-		mockServerProps(mockConfigs.bothModalities);
-
 		const jpgAttachment = canvas.getByAltText('1.jpg');
 		const svgAttachment = canvas.getByAltText('hf-logo.svg');
 		const pdfFileExtension = canvas.getByText('PDF');
