@@ -162,7 +162,7 @@ vtune -collect gpu-hotspots -knob target-gpu=0:3:0.0 -knob collect-programming-a
 
 Build-time profiling flags are now controlled by CMake:
 ```bash
-# Enabled by default
+# Disabled by default for toolchain stability; enable explicitly when collecting VTune line info
 -DGGML_SYCL_PROFILING_DEBUG=ON
 ```
 

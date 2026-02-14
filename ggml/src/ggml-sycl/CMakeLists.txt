@@ -30,7 +30,7 @@ option(GGML_SYCL_XMX_GEMM "Enable experimental XMX GEMM for quantized matmul (kn
 option(GGML_SYCL_DEBUG_SOA_LAYOUT "Enable SoA layout verification debug checks" OFF)
 option(GGML_SYCL_QUANTIZER_DEBUG "Enable quantizer kernel debug output" OFF)
 option(GGML_SYCL_ASAN_PARTIAL "Enable ASan for ggml-sycl.cpp and unified-cache.cpp only" OFF)
-option(GGML_SYCL_PROFILING_DEBUG "Enable SYCL device debug info for VTune profiling" ON)
+option(GGML_SYCL_PROFILING_DEBUG "Enable SYCL device debug info for VTune profiling" OFF)
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
