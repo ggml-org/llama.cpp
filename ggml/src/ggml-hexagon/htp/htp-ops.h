@@ -64,12 +64,6 @@ struct htp_ops_context {
     struct fastdiv_values broadcast_rv2;
     struct fastdiv_values broadcast_rv3;
 
-    struct fastdiv_values set_rows_div_ne12; // fastdiv values for ne12
-    struct fastdiv_values set_rows_div_ne11; // fastdiv values for ne11
-
-    struct fastdiv_values get_rows_div_ne10;      // fastdiv values for ne10
-    struct fastdiv_values get_rows_div_ne10_ne11; // fastdiv values for ne10 * ne11
-
     uint32_t flags;
 };
 
