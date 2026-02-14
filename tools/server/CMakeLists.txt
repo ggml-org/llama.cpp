@@ -28,10 +28,6 @@ target_link_libraries(${TARGET} PUBLIC common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
 set(TARGET llama-server)
 
-if (NOT LLAMA_HTTPLIB)
-    message(FATAL_ERROR "LLAMA_HTTPLIB is OFF, cannot build llama-server. Hint: to skip building server, set -DLLAMA_BUILD_SERVER=OFF")
-endif()
-
 set(TARGET_SRCS
     server.cpp
     server-http.cpp

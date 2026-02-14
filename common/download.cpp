@@ -19,9 +19,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(LLAMA_USE_HTTPLIB)
 #include "http.h"
-#endif
 
 #ifndef __EMSCRIPTEN__
 #ifdef __linux__
@@ -141,8 +139,6 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     }
     return {hf_repo, tag};
 }
-
-#if defined(LLAMA_USE_HTTPLIB)
 
 class ProgressBar {
     static inline std::mutex mutex;
@@ -767,30 +763,6 @@ std::string common_docker_resolve_model(const std::string & docker) {
         throw;
     }
 }
-
-#else
-
-common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-bool common_download_model(const common_params_model &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-std::string common_docker_resolve_model(const std::string &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-int common_download_file_single(const std::string &,
-                                const std::string &,
-                                const std::string &,
-                                bool,
-                                const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-#endif // defined(LLAMA_USE_HTTPLIB)
 
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::vector<common_cached_model_info> models;
