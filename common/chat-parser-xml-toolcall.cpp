@@ -498,6 +498,48 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             }
             auto val_start = builder.pos();
 
+            // vLLM-style: only try to parse value when there is content; empty/whitespace or non-JSON start = incomplete (avoids "parse empty input" log)
+            {
+                const auto & inp = builder.input();
+                const size_t rem_len = (val_start < inp.size()) ? (inp.size() - val_start) : 0;
+                std::string_view rest_sv(inp.data() + val_start, rem_len);
+                if (rest_sv.empty() || all_space(rest_sv)) {
+                    gen_partial_args([&](auto & rest, auto & needle) { arguments[key] = (form.trim_raw_argval ? string_strip(rest) : rest) + needle; });
+                    throw common_chat_msg_partial_exception(
+                        "Expected " + gbnf_format_literal(form.val_end) +
+                        " after " + gbnf_format_literal(form.key_val_sep) +
+                        (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
+                    );
+                }
+                // Only call try_consume_json when remainder looks like start of a JSON value (avoids SAX error-at-position-0 → "empty input" log)
+                size_t pos = 0;
+                while (pos < rest_sv.size() && std::isspace(static_cast<unsigned char>(rest_sv[pos]))) { ++pos; }
+                if (pos >= rest_sv.size()) {
+                    gen_partial_args([&](auto & rest, auto & needle) { arguments[key] = (form.trim_raw_argval ? string_strip(rest) : rest) + needle; });
+                    throw common_chat_msg_partial_exception(
+                        "Expected " + gbnf_format_literal(form.val_end) +
+                        " after " + gbnf_format_literal(form.key_val_sep) +
+                        (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
+                    );
+                }
+                std::string_view rest_trim = rest_sv.substr(pos);
+                char c = rest_trim[0];
+                bool looks_like_json = (c == '"' || c == '{' || c == '[' || (c >= '0' && c <= '9') || c == '-');
+                if (!looks_like_json) {
+                    if (c == 't') looks_like_json = (rest_trim.size() <= 4 && std::string_view("true").substr(0, rest_trim.size()) == rest_trim);
+                    else if (c == 'f') looks_like_json = (rest_trim.size() <= 5 && std::string_view("false").substr(0, rest_trim.size()) == rest_trim);
+                    else if (c == 'n') looks_like_json = (rest_trim.size() <= 4 && std::string_view("null").substr(0, rest_trim.size()) == rest_trim);
+                }
+                if (!looks_like_json) {
+                    gen_partial_args([&](auto & rest, auto & needle) { arguments[key] = (form.trim_raw_argval ? string_strip(rest) : rest) + needle; });
+                    throw common_chat_msg_partial_exception(
+                        "Expected " + gbnf_format_literal(form.val_end) +
+                        " after " + gbnf_format_literal(form.key_val_sep) +
+                        (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
+                    );
+                }
+            }
+
             // Test if arg_val is a partial JSON
             std::optional<common_json> value_json = std::nullopt;
             if (!form.raw_argval || !*form.raw_argval) {
