@@ -1,5 +1,4 @@
-const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
-const DEFAULT_CACHE_MAX_ENTRIES = 100;
+import { DEFAULT_CACHE_TTL_MS, DEFAULT_CACHE_MAX_ENTRIES } from '$lib/constants/cache';
 
 /**
  * TTL Cache - Time-To-Live cache implementation for memory optimization
