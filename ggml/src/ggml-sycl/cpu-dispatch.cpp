@@ -30,8 +30,10 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -39,8 +41,19 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#if __has_include(<oneapi/tbb/blocked_range.h>) && __has_include(<oneapi/tbb/parallel_for.h>)
 #include <oneapi/tbb/blocked_range.h>
 #include <oneapi/tbb/parallel_for.h>
+#define GGML_SYCL_HAS_TBB 1
+namespace ggml_sycl_tbb = oneapi::tbb;
+#elif __has_include(<tbb/blocked_range.h>) && __has_include(<tbb/parallel_for.h>)
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+#define GGML_SYCL_HAS_TBB 1
+namespace ggml_sycl_tbb = tbb;
+#else
+#define GGML_SYCL_HAS_TBB 0
+#endif
 
 #if GGML_SYCL_DNNL
 #include "gemm.hpp"          // Provides dnnl.hpp → dnnl_sgemm()
@@ -57,20 +70,47 @@ static std::mutex                                      g_host_ptr_mutex;
 static std::unordered_map<std::string, const void *>   g_host_ptr_map;
 static bool                                            g_host_ptr_owns_memory = false;
 
-static inline void offload_wait_event(sycl::event & evt) {
-    evt.wait();
-    ggml_sycl::offload_stats_note_wait();
+enum class offload_wait_reason : uint8_t {
+    FORCED   = 0,
+    FALLBACK = 1,
+};
+
+static inline bool offload_event_waitable(const sycl::event & evt) {
+    try {
+        return ggml_sycl_should_add_dependency(evt);
+    } catch (...) {
+        return false;
+    }
 }
 
-static inline void offload_wait_queue(sycl::queue * q) {
+static inline void offload_wait_event(sycl::event & evt,
+                                      offload_wait_reason reason = offload_wait_reason::FORCED) {
+    if (!offload_event_waitable(evt)) {
+        return;
+    }
+    evt.wait();
+    ggml_sycl::offload_stats_note_wait(reason == offload_wait_reason::FALLBACK);
+}
+
+static inline void offload_wait_queue(sycl::queue * q,
+                                      offload_wait_reason reason = offload_wait_reason::FORCED) {
     q->wait();
-    ggml_sycl::offload_stats_note_wait();
+    ggml_sycl::offload_stats_note_wait(reason == offload_wait_reason::FALLBACK);
 }
 
 static void staging_track_cpu_event(const sycl::event & evt);
 
 static sycl::event g_cpu_chain_event{};
 static bool        g_cpu_chain_event_valid = false;
+static bool        g_cpu_chain_on_cpu_queue = false;
+
+static inline void wait_dependency_if_needed(const sycl::event & evt) {
+    if (!offload_event_waitable(evt)) {
+        return;
+    }
+    sycl::event evt_copy = evt;
+    offload_wait_event(evt_copy, offload_wait_reason::FORCED);
+}
 
 static inline void append_dependency(std::vector<sycl::event> & deps, const sycl::event & evt) {
     try {
@@ -82,7 +122,8 @@ static inline void append_dependency(std::vector<sycl::event> & deps, const sycl
 }
 
 static inline std::vector<sycl::event> cpu_collect_deps(const sycl::event * e0 = nullptr,
-                                                         const sycl::event * e1 = nullptr) {
+                                                         const sycl::event * e1 = nullptr,
+                                                         sycl::queue *       target_q = nullptr) {
     std::vector<sycl::event> deps;
     deps.reserve(3);
     if (e0) {
@@ -92,25 +133,45 @@ static inline std::vector<sycl::event> cpu_collect_deps(const sycl::event * e0 =
         append_dependency(deps, *e1);
     }
     if (g_cpu_chain_event_valid) {
-        append_dependency(deps, g_cpu_chain_event);
+        const bool target_is_cpu = (target_q != nullptr && target_q == ggml_sycl_get_cpu_queue());
+        if (target_is_cpu == g_cpu_chain_on_cpu_queue) {
+            append_dependency(deps, g_cpu_chain_event);
+        } else {
+            wait_dependency_if_needed(g_cpu_chain_event);
+            g_cpu_chain_event_valid = false;
+        }
     }
     return deps;
 }
 
 template <typename SubmitFn>
 static sycl::event cpu_submit_async(sycl::queue * cpu_q, const std::vector<sycl::event> & deps, SubmitFn && fn) {
+    const bool submit_on_cpu_queue = (cpu_q != nullptr && cpu_q == ggml_sycl_get_cpu_queue());
+    std::vector<sycl::event> submit_deps;
+    submit_deps.reserve(deps.size());
+    if (submit_on_cpu_queue) {
+        for (const auto & dep : deps) {
+            wait_dependency_if_needed(dep);
+        }
+    } else {
+        for (const auto & dep : deps) {
+            append_dependency(submit_deps, dep);
+        }
+    }
+
     sycl::event evt = cpu_q->submit([&](sycl::handler & cgh) {
-        if (!deps.empty()) {
-            cgh.depends_on(deps);
+        if (!submit_deps.empty()) {
+            cgh.depends_on(submit_deps);
         }
         fn(cgh);
     });
     if (ggml_sycl_cpu_offload_async_enabled()) {
         g_cpu_chain_event = evt;
         g_cpu_chain_event_valid = true;
+        g_cpu_chain_on_cpu_queue = submit_on_cpu_queue;
         staging_track_cpu_event(evt);
     } else {
-        offload_wait_event(evt);
+        offload_wait_event(evt, offload_wait_reason::FALLBACK);
         g_cpu_chain_event_valid = false;
     }
     return evt;
@@ -180,6 +241,17 @@ struct retained_entry {
 static std::unordered_map<const ggml_tensor *, retained_entry> g_retained_map;
 static bool                                            g_retained_active      = false;
 static sycl::queue *                                   g_retained_gpu_q       = nullptr;
+static sycl::event                                     g_retained_flush_evt{};
+static bool                                            g_retained_flush_pending = false;
+
+static inline void retained_wait_flush_event(
+        offload_wait_reason reason = offload_wait_reason::FORCED) {
+    if (!g_retained_flush_pending) {
+        return;
+    }
+    offload_wait_event(g_retained_flush_evt, reason);
+    g_retained_flush_pending = false;
+}
 
 // Allocate from scratch buffer (64-byte aligned for AVX-512)
 static void * scratch_alloc(size_t size) {
@@ -197,6 +269,8 @@ static void scratch_reset() {
 }
 
 void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
+    retained_wait_flush_event();
+    cpu_wait_chain_event();
     GGML_ASSERT(!g_retained_scratch || gpu_q == g_retained_gpu_q);
     if (!g_retained_scratch) {
         constexpr size_t DEFAULT_SCRATCH_SIZE = 32 * 1024 * 1024;  // 32MB
@@ -224,6 +298,7 @@ void ggml_sycl_cpu_retained_init(int device, sycl::queue * gpu_q) {
 }
 
 void ggml_sycl_cpu_retained_cleanup() {
+    retained_wait_flush_event();
     cpu_wait_chain_event();
     if (g_retained_scratch && g_retained_gpu_q) {
         (void) ggml_sycl::release_offload_buffer(g_retained_scratch_lease);
@@ -232,6 +307,7 @@ void ggml_sycl_cpu_retained_cleanup() {
         g_retained_scratch_lease = {};
     }
     g_retained_map.clear();
+    scratch_reset();
     g_retained_active = false;
     g_retained_gpu_q  = nullptr;
     g_retained_device = -1;
@@ -255,6 +331,7 @@ void * ggml_sycl_cpu_retained_alloc_output(const ggml_tensor * dst) {
 
 void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
     if (g_retained_map.empty()) return;
+    retained_wait_flush_event();
     cpu_wait_chain_event();
 
     std::vector<sycl::event> events;
@@ -277,6 +354,7 @@ void ggml_sycl_cpu_retained_flush_all(int device, sycl::queue * gpu_q) {
     if (!events.empty()) {
         offload_wait_queue(gpu_q);
     }
+    g_retained_flush_pending = false;
 
     g_retained_map.clear();
     scratch_reset();
@@ -286,7 +364,6 @@ void ggml_sycl_cpu_retained_flush_selective(
         int device, sycl::queue * gpu_q,
         const ggml_tensor * const * gpu_nodes, int n_gpu_nodes)
 {
-    cpu_wait_chain_event();
     if (g_retained_map.empty() || !gpu_nodes || n_gpu_nodes <= 0) {
         g_retained_map.clear();
         scratch_reset();
@@ -327,6 +404,25 @@ void ggml_sycl_cpu_retained_flush_selective(
         }
     }
 
+    if (to_flush.empty()) {
+        g_retained_map.clear();
+        scratch_reset();
+        return;
+    }
+
+    retained_wait_flush_event();
+    cpu_wait_chain_event();
+
+    struct copy_req {
+        const ggml_tensor * retained_key = nullptr;
+        char *              dst          = nullptr;
+        char *              src          = nullptr;
+        size_t              size         = 0;
+        size_t              src_off      = 0;
+    };
+    std::vector<copy_req> copies;
+    copies.reserve(to_flush.size());
+
     // Flush all collected tensors — their device addresses are guaranteed valid
     // (live DAG dependencies of upcoming GPU nodes can't be recycled).
     for (auto & [retained_key, view_tensor] : to_flush) {
@@ -340,12 +436,59 @@ void ggml_sycl_cpu_retained_flush_selective(
                 size_t off = (view_tensor == retained_key) ? 0
                     : (view_tensor->view_offs - retained_key->view_offs);
                 size_t nbytes = ggml_nbytes(view_tensor);
-                ggml_sycl::offload_stats_note_transfer(true, nbytes);
-                gpu_q->memcpy(device_ptr, host_base + off, nbytes);
+                if (nbytes > 0) {
+                    copies.push_back({ retained_key, static_cast<char *>(device_ptr), host_base + off, nbytes, off });
+                }
             }
         }
     }
-    offload_wait_queue(gpu_q);
+
+    if (!copies.empty()) {
+        std::sort(copies.begin(), copies.end(), [](const copy_req & a, const copy_req & b) {
+            if (a.retained_key != b.retained_key) {
+                return reinterpret_cast<uintptr_t>(a.retained_key) < reinterpret_cast<uintptr_t>(b.retained_key);
+            }
+            if (a.src_off != b.src_off) {
+                return a.src_off < b.src_off;
+            }
+            return reinterpret_cast<uintptr_t>(a.dst) < reinterpret_cast<uintptr_t>(b.dst);
+        });
+
+        std::vector<copy_req> merged;
+        merged.reserve(copies.size());
+        for (const copy_req & req : copies) {
+            if (merged.empty()) {
+                merged.push_back(req);
+                continue;
+            }
+            copy_req & last = merged.back();
+            const bool adjacent_src = last.src + last.size == req.src;
+            const bool adjacent_dst = last.dst + last.size == req.dst;
+            if (last.retained_key == req.retained_key && adjacent_src && adjacent_dst) {
+                last.size += req.size;
+            } else {
+                merged.push_back(req);
+            }
+        }
+
+        sycl::event last_evt{};
+        bool has_copy = false;
+        for (const copy_req & req : merged) {
+            ggml_sycl::offload_stats_note_transfer(true, req.size);
+            last_evt = gpu_q->memcpy(req.dst, req.src, req.size);
+            has_copy = true;
+        }
+
+        if (has_copy) {
+            if (ggml_sycl_cpu_offload_async_enabled()) {
+                g_retained_flush_evt     = last_evt;
+                g_retained_flush_pending = true;
+            } else {
+                offload_wait_queue(gpu_q, offload_wait_reason::FALLBACK);
+                g_retained_flush_pending = false;
+            }
+        }
+    }
 
     // Discard ALL retained data. Only the tensors above were flushed.
     // Other tensors' device addresses may have been recycled — must NOT write.
@@ -421,6 +564,28 @@ static ggml_sycl::offload_buffer_role staging_role_for_slot(int slot) {
     }
 }
 
+static size_t staging_growth_granularity_bytes() {
+    static size_t granularity = []() {
+        const char * env = std::getenv("GGML_SYCL_CPU_STAGING_GROW_GRANULARITY_KB");
+        const size_t kb = env ? static_cast<size_t>(std::max(1, std::atoi(env))) : 256;
+        return kb * 1024;
+    }();
+    return std::max<size_t>(64, granularity);
+}
+
+static size_t staging_target_capacity(size_t requested, size_t current_capacity) {
+    size_t target = requested;
+    if (current_capacity > 0) {
+        const size_t grown = current_capacity + current_capacity / 2;  // 1.5x growth to reduce realloc churn
+        if (grown > target) {
+            target = grown;
+        }
+    }
+    const size_t granularity = staging_growth_granularity_bytes();
+    const size_t rounded = ((target + granularity - 1) / granularity) * granularity;
+    return std::max(rounded, requested);
+}
+
 static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gpu_q) {
     if (bank < 0 || bank >= STAGING_BANKS || slot < 0 || slot >= STAGING_SLOTS_PER_BANK) {
         return nullptr;
@@ -434,10 +599,11 @@ static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gp
         (void) ggml_sycl::release_offload_buffer(entry.lease);
         entry.lease = {};
     }
+    const size_t target_capacity = staging_target_capacity(nbytes, entry.cap);
     ggml_sycl::offload_buffer_request req{};
     req.queue                               = gpu_q;
     req.device                              = ggml_sycl_get_device_id_from_queue(*gpu_q);
-    req.size                                = nbytes;
+    req.size                                = target_capacity;
     req.alignment                           = 64;
     req.role                                = staging_role_for_slot(slot);
     req.intent.role                         = ggml_sycl::alloc_role::STAGING;
@@ -451,7 +617,7 @@ static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gp
         return nullptr;
     }
     entry.ptr = entry.lease.handle.ptr;
-    entry.cap = nbytes;
+    entry.cap = target_capacity;
     return entry.ptr;
 }
 
@@ -479,11 +645,11 @@ static void staging_begin_op() {
         // Legacy mode: preserve eager drain behavior.
         for (int b = 0; b < STAGING_BANKS; ++b) {
             if (g_staging_flush_pending[b]) {
-                offload_wait_event(g_staging_flush_evt[b]);
+                offload_wait_event(g_staging_flush_evt[b], offload_wait_reason::FALLBACK);
                 g_staging_flush_pending[b] = false;
                 g_staging_compute_pending[b] = false;
             } else if (g_staging_compute_pending[b]) {
-                offload_wait_event(g_staging_compute_evt[b]);
+                offload_wait_event(g_staging_compute_evt[b], offload_wait_reason::FALLBACK);
                 g_staging_compute_pending[b] = false;
             }
         }
@@ -670,7 +836,7 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
         *out_event = evt;
     } else {
         // Fallback: if caller doesn't handle events, wait synchronously
-        offload_wait_event(evt);
+        offload_wait_event(evt, offload_wait_reason::FALLBACK);
     }
     // Cache for leaf tensors (stable data pointers between tokens).
     // Only cache non-weight tensors that aren't activations (no src[0]).
@@ -684,7 +850,11 @@ static void * get_host_ptr(const ggml_tensor * t, int device, int slot,
 // Copy output from host staging back to device memory (event-based).
 // No-op if tensor is already in host-accessible memory.
 // The flush event is tracked internally and awaited at the start of the next op.
-static void flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q, const sycl::event * dep_evt = nullptr) {
+static void flush_output(ggml_tensor *       t,
+                         int                 device,
+                         sycl::queue *       gpu_q,
+                         const sycl::event * dep_evt = nullptr,
+                         bool                dep_event_same_queue = false) {
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return;
     }
@@ -703,7 +873,11 @@ static void flush_output(ggml_tensor * t, int device, sycl::queue * gpu_q, const
     std::vector<sycl::event> deps;
     deps.reserve(2);
     if (dep_evt) {
-        append_dependency(deps, *dep_evt);
+        if (dep_event_same_queue) {
+            append_dependency(deps, *dep_evt);
+        } else {
+            wait_dependency_if_needed(*dep_evt);
+        }
     }
     if (g_staging_flush_pending[g_staging_bank]) {
         append_dependency(deps, g_staging_flush_evt[g_staging_bank]);
@@ -771,6 +945,37 @@ static int ggml_sycl_cpu_threads_hint() {
     return n_threads;
 }
 
+// Minimum output work (N*M) before enabling TBB in vec_dot path.
+// Keeps tiny TG workloads on the serial fast path to avoid scheduler overhead.
+static int ggml_sycl_cpu_vecdot_min_parallel_work() {
+    static int min_work = []() {
+        const char * env = getenv("GGML_SYCL_CPU_OFFLOAD_VECDOT_MIN_WORK");
+        const int value = env ? atoi(env) : 512;
+        return std::max(1, value);
+    }();
+    return min_work;
+}
+
+// Lower bound on rows-per-task for vec_dot TBB partitioning.
+static int ggml_sycl_cpu_vecdot_min_rows_per_task() {
+    static int rows = []() {
+        const char * env = getenv("GGML_SYCL_CPU_OFFLOAD_VECDOT_MIN_ROWS_PER_TASK");
+        const int value = env ? atoi(env) : 4;
+        return std::max(1, value);
+    }();
+    return rows;
+}
+
+// Target number of tasks per thread in vec_dot TBB partitioning.
+static int ggml_sycl_cpu_vecdot_tasks_per_thread() {
+    static int tasks = []() {
+        const char * env = getenv("GGML_SYCL_CPU_OFFLOAD_VECDOT_TASKS_PER_THREAD");
+        const int value = env ? atoi(env) : 2;
+        return std::max(1, value);
+    }();
+    return tasks;
+}
+
 // ---------------------------------------------------------------------------
 // MUL_MAT  (oneDNN on host, async host_task when enabled)
 // ---------------------------------------------------------------------------
@@ -826,7 +1031,8 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     // Stage tensors to host-accessible memory (event-based).
     sycl::event e0, e1;
-    const bool async_mode = ggml_sycl_cpu_offload_async_enabled();
+    const bool async_requested = ggml_sycl_cpu_offload_async_enabled();
+    const bool async_mode = async_requested && gpu_q;
 
     // Async path safety: prefer persistent registered host copy for weights.
     // Host cache/unified-cache views are not lease-pinned for async task lifetime.
@@ -919,10 +1125,16 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                     const int N_int = static_cast<int>(N);
                     const int n_threads_hint = ggml_sycl_cpu_threads_hint();
 
-                    if (N_int > 64 && n_threads_hint > 1) {
-                        const int grain = std::max(1, (N_int + n_threads_hint * 4 - 1) / (n_threads_hint * 4));
-                        oneapi::tbb::parallel_for(oneapi::tbb::blocked_range<int>(0, N_int, grain),
-                                                  [&](const oneapi::tbb::blocked_range<int> & r) {
+                    const int64_t total_work = static_cast<int64_t>(N_int) * M;
+                    if (N_int > 1 &&
+                        n_threads_hint > 1 &&
+                        total_work >= ggml_sycl_cpu_vecdot_min_parallel_work()) {
+#if GGML_SYCL_HAS_TBB
+                        const int target_tasks = std::max(1, n_threads_hint * ggml_sycl_cpu_vecdot_tasks_per_thread());
+                        const int grain_from_target = std::max(1, (N_int + target_tasks - 1) / target_tasks);
+                        const int grain = std::max(grain_from_target, ggml_sycl_cpu_vecdot_min_rows_per_task());
+                        ggml_sycl_tbb::parallel_for(ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
+                                                    [&](const ggml_sycl_tbb::blocked_range<int> & r) {
                             for (int n = r.begin(); n < r.end(); n++) {
                                 const void * weight_row = src0_batch + n * nb01;
                                 for (dnnl_dim_t m = 0; m < M; m++) {
@@ -936,6 +1148,20 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                 }
                             }
                         });
+#else
+                        for (int n = 0; n < N_int; n++) {
+                            const void * weight_row = src0_batch + static_cast<dnnl_dim_t>(n) * nb01;
+                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                float dot_result = 0.0f;
+                                cpu_traits->vec_dot(
+                                    static_cast<int>(K), &dot_result, sizeof(float),
+                                    weight_row, 0,
+                                    src1_q_buf.data() + m * q_row_size, 0,
+                                    1);
+                                dst_batch[m * ldc + static_cast<dnnl_dim_t>(n)] = dot_result;
+                            }
+                        }
+#endif
                     } else {
                         // Small N or single thread: use original serial path
                         for (dnnl_dim_t n = 0; n < N; n++) {
@@ -978,7 +1204,7 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     if (async_mode) {
         // Async path: submit host compute on the GPU queue so completion is
         // naturally visible to graph scheduling and downstream GPU kernels.
-        std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1);
+        std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1, gpu_q);
         sycl::event cpu_evt = cpu_submit_async(gpu_q, deps, [=](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 run_mul_mat();
@@ -986,15 +1212,15 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         });
 
         if (!retained_output) {
-            flush_output(dst, device, gpu_q, &cpu_evt);
+            flush_output(dst, device, gpu_q, &cpu_evt, true);
         }
         return true;
     }
 
     // Legacy sync path
     cpu_wait_chain_event();
-    offload_wait_event(e0);
-    offload_wait_event(e1);
+    offload_wait_event(e0, offload_wait_reason::FALLBACK);
+    offload_wait_event(e1, offload_wait_reason::FALLBACK);
     run_mul_mat();
     if (!retained_output) {
         flush_output(dst, device, gpu_q);
@@ -1044,7 +1270,7 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, nullptr, cpu_q);
 
     // One work-item per row — each computes RMS and normalizes.
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
@@ -1144,7 +1370,7 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
 
     // Total rows = ne01 * ne02 * ne03
     const int64_t total_rows = ne01 * ne02 * ne03;
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total_rows)), [=](sycl::id<1> row_id) {
@@ -1235,7 +1461,7 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 
     const int64_t n = ggml_nelements(dst);
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, nullptr, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(n)), [=](sycl::id<1> i) {
@@ -1311,7 +1537,7 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t gate_offset = (!src1 && swapped) ? nc : 0;
     const int64_t up_offset   = (!src1 && swapped) ? 0 : nc;
     const bool has_src1 = (src1 != nullptr);
-    std::vector<sycl::event> deps = src1 ? cpu_collect_deps(&e0, &e1) : cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = src1 ? cpu_collect_deps(&e0, &e1, cpu_q) : cpu_collect_deps(&e0, nullptr, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows * nc)), [=](sycl::id<1> idx) {
@@ -1423,7 +1649,7 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t mask_nb13 = src1 ? (int64_t)(src1->nb[3] / sizeof(float)) : 0;
     const int64_t mask_ne12 = src1 ? src1->ne[2] : 1;
     const int64_t mask_ne13 = src1 ? src1->ne[3] : 1;
-    std::vector<sycl::event> deps = src1 ? cpu_collect_deps(&e0, &e1) : cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = src1 ? cpu_collect_deps(&e0, &e1, cpu_q) : cpu_collect_deps(&e0, nullptr, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows)), [=](sycl::id<1> row_id) {
@@ -1518,7 +1744,7 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, nullptr, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(nrows)), [=](sycl::id<1> row_id) {
@@ -1596,7 +1822,7 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     }
 
     const int64_t n = ggml_nelements(dst);
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, nullptr, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(n)), [=](sycl::id<1> i) {
@@ -1757,7 +1983,7 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     // Capture locals for kernel
     const float cd0 = corr_dims[0];
     const float cd1 = corr_dims[1];
-    std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1);
+    std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1, cpu_q);
 
     sycl::event cpu_evt = cpu_submit_async(cpu_q, deps, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::range<1>(static_cast<size_t>(total_rows)), [=](sycl::id<1> work_id) {

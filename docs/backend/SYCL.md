@@ -793,11 +793,47 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because graph performance isn't yet better than non-graph performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
+| GGML_SYCL_CPU_OFFLOAD | 0 (default) or 1 | Enable CPU offload dispatch for host-resident layers when a SYCL CPU device is available. |
+| GGML_SYCL_CPU_OFFLOAD_ASYNC | 1 (default) or 0 | CPU offload staging sync policy: `1` waits at staging-bank reuse/boundaries, `0` uses eager per-op draining. |
+| GGML_SYCL_CPU_DEVICE_SELECTOR | e.g. `opencl:cpu` | Optional override for CPU offload queue selection when `ONEAPI_DEVICE_SELECTOR` does not expose a CPU device. |
+| GGML_SYCL_CPU_BATCH_THRESHOLD | integer | Legacy global CPU batch threshold (applies to both PP and TG when set). |
+| GGML_SYCL_CPU_BATCH_THRESHOLD_PP | 4 (default) | CPU offload batch threshold for prompt-processing phase. |
+| GGML_SYCL_CPU_BATCH_THRESHOLD_TG | 16 (default) | CPU offload batch threshold for decode/token-generation phase. |
+| GGML_SYCL_HOST_COMPUTE | 0 (default) or 1 | Use host-pinned compute buffers for CPU-offload activation tensors. Keep `0` for best/stable mixed L0+OpenCL offload throughput; `1` is opt-in for debugging/experiments. |
+| GGML_SYCL_CPU_STAGING_GROW_GRANULARITY_KB | 256 (default) | CPU offload staging growth granularity in KiB (larger value reduces realloc churn at the cost of extra headroom). |
+| GGML_SYCL_CPU_OFFLOAD_VECDOT_MIN_WORK | 512 (default) | Minimum vec_dot output work (`N*M`) required before enabling TBB parallelization in CPU offload `MUL_MAT`. |
+| GGML_SYCL_CPU_OFFLOAD_VECDOT_MIN_ROWS_PER_TASK | 4 (default) | Minimum rows-per-task grain for TBB partitioning in CPU offload vec_dot path. |
+| GGML_SYCL_CPU_OFFLOAD_VECDOT_TASKS_PER_THREAD | 2 (default) | Target number of TBB vec_dot tasks per CPU thread in the offload path. |
+| GGML_SYCL_OFFLOAD_STATS | 0 (default) or 1 | Emit per-graph offload summary counters (`wait_count`, alloc counts, pool hit/miss, transfer counts/bytes, CPU/GPU dispatch counts, transition wait/elide counts). |
+| GGML_SYCL_OFFLOAD_LOCALITY | 1 (default) or 0 | Enable locality smoothing for CPU/GPU offload planning to reduce ping-pong segments. |
+| GGML_SYCL_OFFLOAD_HYSTERESIS | 2 (default) | Minimum segment length before flipping domain in locality smoothing. |
+| GGML_SYCL_OFFLOAD_CROSS_COST | 1 (default) | Additional penalty for short CPU segments when locality smoothing is enabled. |
+| GGML_SYCL_OFFLOAD_PLAN_DUMP | 0 (default) or 1 | Dump CPU/GPU segment plan, boundary count, and estimated boundary bytes for each graph. |
 | GGML_SYCL_DMA_SLICE_MB | 1024 (default) | Unified-cache DMA streaming slice size in MB (aligned to row size). |
 | GGML_SYCL_DMA_BUFFERS | 2 (default) | Unified-cache DMA streaming buffer count (staging buffers). Alias: `GGML_SYCL_DMA_SLICES`. |
 | GGML_SYCL_DMA_RESERVE_MB | (auto) | VRAM headroom reserved for DMA staging buffers; overrides slice/buffer-derived default. |
+| GGML_SYCL_SET_TENSOR_STREAM_FENCE | 0 (default) or 1 | In `set_tensor`, wait only on the current stream before host copy (safer than no fence, cheaper than global drain). |
+| GGML_SYCL_SET_TENSOR_GLOBAL_DRAIN | 0 (default) or 1 | In `set_tensor`, force legacy global queue drain before host copy. Mainly for debugging/bisecting. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
+
+#### CPU Offload Bench + VTune Harness
+
+Use the helper script to run PP/TG separately with unified-cache CPU offload and optional VTune collection:
+
+```bash
+./scripts/sycl-cpu-offload-bench-vtune.sh \
+  --model /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf
+```
+
+Defaults used by the script:
+- `ONEAPI_DEVICE_SELECTOR='level_zero:0;opencl:cpu'`
+- `GGML_SYCL_UNIFIED_CACHE=1`
+- `GGML_SYCL_CPU_OFFLOAD=1`
+- `GGML_SYCL_CPU_OFFLOAD_ASYNC=1`
+- `GGML_SYCL_CPU_BATCH_THRESHOLD_PP=4`
+- `GGML_SYCL_CPU_BATCH_THRESHOLD_TG=16`
+- `GGML_SYCL_VRAM_BUDGET_PCT=45`
 
 
 

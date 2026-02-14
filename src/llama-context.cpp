@@ -382,6 +382,24 @@ llama_context::llama_context(
                                                "remain opt-in (set GGML_SYCL_HOST_COMPUTE=1 to force)\n", __func__);
                                 warned_host_compute_opt_in = true;
                             }
+                            static bool warned_cpu_offload_profile = false;
+                            if (!warned_cpu_offload_profile) {
+                                const char * selector = std::getenv("ONEAPI_DEVICE_SELECTOR");
+                                const char * cpu_selector = std::getenv("GGML_SYCL_CPU_DEVICE_SELECTOR");
+                                LLAMA_LOG_INFO("%s: recommended CPU-offload defaults: "
+                                               "GGML_SYCL_CPU_OFFLOAD_ASYNC=1 "
+                                               "GGML_SYCL_CPU_BATCH_THRESHOLD_PP=4 "
+                                               "GGML_SYCL_CPU_BATCH_THRESHOLD_TG=16\n", __func__);
+                                if ((!selector || std::strstr(selector, "cpu") == nullptr) &&
+                                    !cpu_selector) {
+                                    LLAMA_LOG_WARN("%s: selector may hide CPU SYCL device "
+                                                   "(ONEAPI_DEVICE_SELECTOR=%s). "
+                                                   "Use 'level_zero:0;opencl:cpu' or set "
+                                                   "GGML_SYCL_CPU_DEVICE_SELECTOR=opencl:cpu\n",
+                                                   __func__, selector ? selector : "(unset)");
+                                }
+                                warned_cpu_offload_profile = true;
+                            }
                         }
                     }
                 }

@@ -1492,14 +1492,18 @@ static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const i
             });
     });
 
-    // Free temp buffer after conversion completes using host_task
-    // host_task waits for convert_event then frees, without blocking the host thread
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.depends_on(convert_event);
-        cgh.host_task([temp, total_bytes, stream]() {
-            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
+        // Free temp buffer after conversion completes using host_task.
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(convert_event);
+            cgh.host_task([temp, total_bytes, stream]() {
+                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+            });
         });
-    });
+    } else {
+        convert_event.wait();
+        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    }
 }
 
 // Forward declarations for type-specific coalesced conversion functions
@@ -1845,13 +1849,17 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
             });
     });
 
-    // Free temp buffer after conversion completes using host_task
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.depends_on(convert_event);
-        cgh.host_task([temp, total_bytes, stream]() {
-            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(convert_event);
+            cgh.host_task([temp, total_bytes, stream]() {
+                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+            });
         });
-    });
+    } else {
+        convert_event.wait();
+        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    }
 }
 
 // Public API for Q8_0 coalesced conversion - call at model load time, after reorder
@@ -2074,12 +2082,17 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
             });
     });
 
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.depends_on(convert_event);
-        cgh.host_task([temp, total_bytes, stream]() {
-            ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(convert_event);
+            cgh.host_task([temp, total_bytes, stream]() {
+                ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+            });
         });
-    });
+    } else {
+        convert_event.wait();
+        ggml_sycl_free_device_tracked_bytes(temp, total_bytes, *stream);
+    }
 }
 
 // Q6_K Coalesced Conversion
@@ -2225,14 +2238,20 @@ static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const i
             });
     });
 
-    // Free temp after kernel completes
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.depends_on(convert_event);
-        cgh.host_task([temp, stream, runtime_device, total_quant_bytes]() {
-            ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
-            sycl::free(temp, *stream);
+    if (ggml_sycl_host_task_stable_for_queue(*stream)) {
+        // Free temp after kernel completes.
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.depends_on(convert_event);
+            cgh.host_task([temp, stream, runtime_device, total_quant_bytes]() {
+                ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
+                sycl::free(temp, *stream);
+            });
         });
-    });
+    } else {
+        convert_event.wait();
+        ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, total_quant_bytes);
+        sycl::free(temp, *stream);
+    }
 }
 
 // Public API for MXFP4 coalesced conversion

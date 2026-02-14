@@ -579,6 +579,36 @@ inline bool ggml_sycl_cpu_offload_enabled() {
     return enabled;
 }
 
+inline bool ggml_sycl_cpu_offload_async_enabled() {
+    static bool enabled = [] {
+        const char * env = std::getenv("GGML_SYCL_CPU_OFFLOAD_ASYNC");
+        if (!env) {
+            return true;
+        }
+        return std::atoi(env) != 0;
+    }();
+    return enabled;
+}
+
+inline bool ggml_sycl_host_task_stable_for_queue(const sycl::queue & q) {
+    const auto & info = ggml_sycl_info();
+    if (!info.cpu_queue) {
+        return true;
+    }
+    try {
+        const sycl::backend queue_backend = q.get_backend();
+        const sycl::backend cpu_backend   = info.cpu_queue->get_backend();
+        // Mixed L0 (GPU) + OpenCL (CPU) can crash in host_task scheduler cleanup.
+        if (queue_backend == sycl::backend::ext_oneapi_level_zero &&
+            cpu_backend == sycl::backend::opencl) {
+            return false;
+        }
+    } catch (...) {
+        return false;
+    }
+    return true;
+}
+
 // CPU offload: query whether CPU SYCL device is available for data-local compute
 bool          ggml_sycl_cpu_offload_available();
 sycl::queue * ggml_sycl_get_cpu_queue();

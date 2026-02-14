@@ -154,15 +154,23 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
         });
   }
 
-  // Async cleanup via host_task - NO .wait()! Cleanup after kernel completes
   if (src1_staging) {
-    q.submit([&](sycl::handler& cgh) {
-      cgh.depends_on(kernel_event);
-      cgh.host_task([src1_staging, host_staging, runtime_device, src1_bytes, &q]() {
-        ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
-        sycl::free(src1_staging, q);
-        ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
+    if (ggml_sycl_host_task_stable_for_queue(q)) {
+      // Async cleanup via host_task.
+      q.submit([&](sycl::handler& cgh) {
+        cgh.depends_on(kernel_event);
+        cgh.host_task([src1_staging, host_staging, runtime_device, src1_bytes, &q]() {
+          ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
+          sycl::free(src1_staging, q);
+          ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
+        });
       });
-    });
+    } else {
+      // Mixed backend fallback: avoid host_task runtime crashes.
+      kernel_event.wait();
+      ggml_sycl::unified_cache_sub_runtime_bytes(runtime_device, src1_bytes);
+      sycl::free(src1_staging, q);
+      ggml_sycl_free_host_tracked_bytes(host_staging, src1_bytes, q);
+    }
   }
 }

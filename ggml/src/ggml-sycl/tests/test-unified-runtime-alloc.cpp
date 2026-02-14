@@ -272,6 +272,208 @@ static bool scoped_unified_alloc_frees_on_scope_exit(sycl::queue & q) {
     return true;
 }
 
+static bool offload_pool_reuse_tracks_hit_miss(sycl::queue & q) {
+    TEST_BEGIN("offload_pool_reuse_tracks_hit_miss");
+    offload_buffer_pool_trim(-1);
+    offload_stats_reset();
+
+    offload_buffer_request req{};
+    req.queue    = &q;
+    req.device   = -1;
+    req.size     = 4096;
+    req.role     = offload_buffer_role::STAGING_SRC0;
+    req.intent.role = alloc_role::STAGING;
+    req.intent.category = runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned = true;
+    req.intent.constraints.prefer_same_tier_as_cohort = true;
+    req.intent.cohort_id = "test:offload_pool";
+
+    offload_buffer_lease a{};
+    TEST_ASSERT(acquire_offload_buffer(req, &a), "first acquire failed");
+    TEST_ASSERT(a.valid && a.handle.ptr != nullptr, "first lease invalid");
+    TEST_ASSERT(release_offload_buffer(a), "first release failed");
+
+    offload_buffer_lease b{};
+    TEST_ASSERT(acquire_offload_buffer(req, &b), "second acquire failed");
+    TEST_ASSERT(b.valid && b.handle.ptr != nullptr, "second lease invalid");
+    TEST_ASSERT(release_offload_buffer(b), "second release failed");
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.pool_miss_count >= 1, "expected at least one pool miss");
+    TEST_ASSERT(stats.pool_hit_count >= 1, "expected at least one pool hit");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_pool_stale_lease_fails(sycl::queue & q) {
+    TEST_BEGIN("offload_pool_stale_lease_fails");
+    offload_buffer_request req{};
+    req.queue    = &q;
+    req.device   = -1;
+    req.size     = 2048;
+    req.role     = offload_buffer_role::STAGING_DST;
+    req.intent.role = alloc_role::STAGING;
+    req.intent.category = runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned = true;
+
+    offload_buffer_lease lease{};
+    TEST_ASSERT(acquire_offload_buffer(req, &lease), "acquire failed");
+    TEST_ASSERT(release_offload_buffer(lease), "release failed");
+    TEST_ASSERT(!release_offload_buffer(lease), "stale lease release should fail");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_pool_trim_clears_released_entries(sycl::queue & q) {
+    TEST_BEGIN("offload_pool_trim_clears_released_entries");
+    offload_buffer_pool_trim(-1);
+    offload_stats_reset();
+
+    offload_buffer_request req{};
+    req.queue    = &q;
+    req.device   = -1;
+    req.size     = 1024;
+    req.role     = offload_buffer_role::STAGING_SRC1;
+    req.intent.role = alloc_role::STAGING;
+    req.intent.category = runtime_category::STAGING;
+    req.intent.constraints.must_host_pinned = true;
+
+    offload_buffer_lease lease{};
+    TEST_ASSERT(acquire_offload_buffer(req, &lease), "first acquire failed");
+    TEST_ASSERT(release_offload_buffer(lease), "release failed");
+    offload_buffer_pool_trim(-1);
+
+    offload_buffer_lease after_trim{};
+    TEST_ASSERT(acquire_offload_buffer(req, &after_trim), "acquire after trim failed");
+    TEST_ASSERT(release_offload_buffer(after_trim), "release after trim failed");
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.pool_miss_count >= 2, "expected miss after trim");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_wait_stats_split_tracks_forced_and_fallback() {
+    TEST_BEGIN("offload_wait_stats_split_tracks_forced_and_fallback");
+    offload_stats_reset();
+
+    offload_stats_note_wait(false);
+    offload_stats_note_wait(true);
+    offload_stats_note_wait(false);
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.wait_count == 3, "expected total wait_count to be 3");
+    TEST_ASSERT(stats.wait_count_forced == 2, "expected wait_count_forced to be 2");
+    TEST_ASSERT(stats.wait_count_fallback == 1, "expected wait_count_fallback to be 1");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_cross_domain_stats_split_by_phase() {
+    TEST_BEGIN("offload_cross_domain_stats_split_by_phase");
+    offload_stats_reset();
+
+    offload_stats_set_phase(offload_phase::PP);
+    offload_stats_note_cross_domain_transfer(0);
+    offload_stats_note_cross_domain_transfer(128);
+
+    offload_stats_set_phase(offload_phase::TG);
+    offload_stats_note_cross_domain_transfer(256);
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.cross_domain_transfer_count == 3, "expected three cross-domain boundaries");
+    TEST_ASSERT(stats.cross_domain_transfer_count_pp == 2, "expected two PP cross-domain transfers");
+    TEST_ASSERT(stats.cross_domain_transfer_count_tg == 1, "expected one TG cross-domain transfer");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_transfer_bytes_split_by_phase() {
+    TEST_BEGIN("offload_transfer_bytes_split_by_phase");
+    offload_stats_reset();
+
+    offload_stats_set_phase(offload_phase::PP);
+    offload_stats_note_transfer(true, 96);
+    offload_stats_note_transfer(false, 48);
+
+    offload_stats_set_phase(offload_phase::TG);
+    offload_stats_note_transfer(true, 24);
+    offload_stats_note_transfer(false, 12);
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.transfer_bytes_h2d == 120, "unexpected total H2D bytes");
+    TEST_ASSERT(stats.transfer_bytes_d2h == 60, "unexpected total D2H bytes");
+    TEST_ASSERT(stats.transfer_bytes_h2d_pp == 96, "unexpected PP H2D bytes");
+    TEST_ASSERT(stats.transfer_bytes_h2d_tg == 24, "unexpected TG H2D bytes");
+    TEST_ASSERT(stats.transfer_bytes_d2h_pp == 48, "unexpected PP D2H bytes");
+    TEST_ASSERT(stats.transfer_bytes_d2h_tg == 12, "unexpected TG D2H bytes");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_dispatch_counts_split_by_phase() {
+    TEST_BEGIN("offload_dispatch_counts_split_by_phase");
+    offload_stats_reset();
+
+    offload_stats_set_phase(offload_phase::PP);
+    offload_stats_note_dispatch(true, false);   // CPU
+    offload_stats_note_dispatch(false, false);  // GPU
+    offload_stats_note_dispatch(false, true);   // GPU island
+
+    offload_stats_set_phase(offload_phase::TG);
+    offload_stats_note_dispatch(true, false);   // CPU
+    offload_stats_note_dispatch(false, true);   // GPU island
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.dispatch_count_cpu == 2, "unexpected total CPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu == 3, "unexpected total GPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu_island == 2, "unexpected total GPU island dispatch count");
+    TEST_ASSERT(stats.dispatch_count_cpu_pp == 1, "unexpected PP CPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_cpu_tg == 1, "unexpected TG CPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu_pp == 2, "unexpected PP GPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu_tg == 1, "unexpected TG GPU dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu_island_pp == 1, "unexpected PP GPU-island dispatch count");
+    TEST_ASSERT(stats.dispatch_count_gpu_island_tg == 1, "unexpected TG GPU-island dispatch count");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_phase_roundtrip() {
+    TEST_BEGIN("offload_phase_roundtrip");
+    offload_stats_reset();
+    TEST_ASSERT(offload_stats_phase() == offload_phase::UNKNOWN, "expected UNKNOWN after reset");
+    offload_stats_set_phase(offload_phase::PP);
+    TEST_ASSERT(offload_stats_phase() == offload_phase::PP, "expected PP phase");
+    offload_stats_set_phase(offload_phase::TG);
+    TEST_ASSERT(offload_stats_phase() == offload_phase::TG, "expected TG phase");
+    TEST_PASS();
+    return true;
+}
+
+static bool offload_transition_wait_stats_split_by_phase() {
+    TEST_BEGIN("offload_transition_wait_stats_split_by_phase");
+    offload_stats_reset();
+
+    offload_stats_set_phase(offload_phase::PP);
+    offload_stats_note_transition_wait(true);
+    offload_stats_note_transition_wait(false);
+
+    offload_stats_set_phase(offload_phase::TG);
+    offload_stats_note_transition_wait(true);
+    offload_stats_note_transition_wait(false);
+    offload_stats_note_transition_wait(false);
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.transition_wait_count == 2, "unexpected transition wait count");
+    TEST_ASSERT(stats.transition_wait_count_pp == 1, "unexpected PP transition wait count");
+    TEST_ASSERT(stats.transition_wait_count_tg == 1, "unexpected TG transition wait count");
+    TEST_ASSERT(stats.transition_wait_elided_count == 3, "unexpected transition wait-elided count");
+    TEST_ASSERT(stats.transition_wait_elided_count_pp == 1, "unexpected PP transition wait-elided count");
+    TEST_ASSERT(stats.transition_wait_elided_count_tg == 2, "unexpected TG transition wait-elided count");
+    TEST_PASS();
+    return true;
+}
+
 int main() {
     fprintf(stderr, "===========================================\n");
     fprintf(stderr, "Unified Runtime Allocator Tests\n");
@@ -303,6 +505,15 @@ int main() {
     ok &= strict_stale_handle_fails(q);
     ok &= strict_device_mismatch_fails(q);
     ok &= scoped_unified_alloc_frees_on_scope_exit(q);
+    ok &= offload_pool_reuse_tracks_hit_miss(q);
+    ok &= offload_pool_stale_lease_fails(q);
+    ok &= offload_pool_trim_clears_released_entries(q);
+    ok &= offload_wait_stats_split_tracks_forced_and_fallback();
+    ok &= offload_cross_domain_stats_split_by_phase();
+    ok &= offload_transfer_bytes_split_by_phase();
+    ok &= offload_dispatch_counts_split_by_phase();
+    ok &= offload_phase_roundtrip();
+    ok &= offload_transition_wait_stats_split_by_phase();
 
     fprintf(stderr, "-------------------------------------------\n");
     fprintf(stderr, "Tests: %d run, %d passed\n", g_tests_run, g_tests_passed);

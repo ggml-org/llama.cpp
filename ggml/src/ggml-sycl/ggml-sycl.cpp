@@ -31,6 +31,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <string>
 #include <stdexcept>
@@ -2561,11 +2562,11 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
         if (base->data != nullptr && tensor->data != nullptr) {
             // The base tensor's data might be a device USM pointer even without extra.
             // Try to use it directly with the view offset.
-            sycl::context   view_ctx_storage;
+            std::optional<sycl::context> view_ctx_storage;
             sycl::context * view_ctx = nullptr;
             try {
-                view_ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
-                view_ctx         = &view_ctx_storage;
+                view_ctx_storage.emplace(ggml_sycl_get_device(device).default_queue().get_context());
+                view_ctx = &view_ctx_storage.value();
             } catch (...) {
                 view_ctx = nullptr;
             }
@@ -2587,15 +2588,15 @@ void * ggml_sycl_get_data_ptr_slow(const ggml_tensor * tensor, int device) {
 
     // Check if tensor->data is mmap'd memory (non-USM) that can't be accessed by GPU kernels.
     if (tensor->data != nullptr) {
-        sycl::context   ctx_storage;
+        std::optional<sycl::context> ctx_storage;
         sycl::context * ctx = nullptr;
         if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
             ctx = ggml_sycl_get_tp_context();
         }
         if (ctx == nullptr) {
             try {
-                ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
-                ctx         = &ctx_storage;
+                ctx_storage.emplace(ggml_sycl_get_device(device).default_queue().get_context());
+                ctx = &ctx_storage.value();
             } catch (...) {
                 ctx = nullptr;
             }
@@ -2959,6 +2960,19 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
     // Create CPU SYCL device for data-local compute.
     auto make_cpu_queue = []() -> sycl::queue * {
+        const char * override_selector = std::getenv("GGML_SYCL_CPU_DEVICE_SELECTOR");
+        if (override_selector && override_selector[0] != '\0') {
+            try {
+                sycl::device cpu_dev{ sycl::ext::oneapi::filter_selector{override_selector} };
+                if (!cpu_dev.is_cpu()) {
+                    throw std::runtime_error("selector resolved to non-CPU device");
+                }
+                return new sycl::queue{cpu_dev};
+            } catch (const std::exception & e) {
+                GGML_LOG_WARN("[SYCL-CPU] GGML_SYCL_CPU_DEVICE_SELECTOR='%s' failed: %s\n",
+                              override_selector, e.what());
+            }
+        }
         // Select from currently visible devices (honors ONEAPI_DEVICE_SELECTOR).
         for (const auto & platform : sycl::platform::get_platforms()) {
             for (const auto & dev : platform.get_devices()) {
@@ -2981,7 +2995,14 @@ static ggml_sycl_device_info ggml_sycl_init() {
                           cpu_dev.get_info<sycl::info::device::max_compute_units>(),
                           cpu_q->get_backend() == sycl::backend::opencl ? "OpenCL" : "other");
         } catch (sycl::exception & e) {
+            const char * selector = std::getenv("ONEAPI_DEVICE_SELECTOR");
+            const char * cpu_override = std::getenv("GGML_SYCL_CPU_DEVICE_SELECTOR");
             GGML_LOG_WARN("[SYCL-CPU] CPU offload requested but no CPU device available: %s\n", e.what());
+            GGML_LOG_WARN("[SYCL-CPU] ONEAPI_DEVICE_SELECTOR=%s GGML_SYCL_CPU_DEVICE_SELECTOR=%s\n",
+                          selector ? selector : "(unset)",
+                          cpu_override ? cpu_override : "(unset)");
+            GGML_LOG_WARN("[SYCL-CPU] Hint: expose CPU device via ONEAPI_DEVICE_SELECTOR='level_zero:0;opencl:cpu' "
+                          "or set GGML_SYCL_CPU_DEVICE_SELECTOR='opencl:cpu'\n");
             info.has_cpu_device = false;
             info.cpu_queue      = nullptr;
         }
@@ -5429,7 +5450,43 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // Use the buffer's stream for proper queue synchronization with compute operations
     auto stream = ctx->stream ? ctx->stream : &(ggml_sycl_get_device(ctx->device).default_queue());
     const bool is_weight_buffer = (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(ctx->device).queues_wait_and_throw()));
+    enum class set_tensor_sync_mode : uint8_t {
+        NONE   = 0,
+        STREAM = 1,
+        GLOBAL = 2,
+    };
+    static auto get_set_tensor_sync_mode = []() -> set_tensor_sync_mode {
+        static std::atomic<int> cached{ -1 };
+        int mode = cached.load(std::memory_order_acquire);
+        if (mode >= 0) {
+            return static_cast<set_tensor_sync_mode>(mode);
+        }
+        if (const char * env = std::getenv("GGML_SYCL_SET_TENSOR_GLOBAL_DRAIN")) {
+            if (std::atoi(env) != 0) {
+                cached.store(static_cast<int>(set_tensor_sync_mode::GLOBAL), std::memory_order_release);
+                return set_tensor_sync_mode::GLOBAL;
+            }
+        }
+        if (const char * env = std::getenv("GGML_SYCL_SET_TENSOR_STREAM_FENCE")) {
+            if (std::atoi(env) != 0) {
+                cached.store(static_cast<int>(set_tensor_sync_mode::STREAM), std::memory_order_release);
+                return set_tensor_sync_mode::STREAM;
+            }
+        }
+        cached.store(static_cast<int>(set_tensor_sync_mode::NONE), std::memory_order_release);
+        return set_tensor_sync_mode::NONE;
+    };
+    switch (get_set_tensor_sync_mode()) {
+        case set_tensor_sync_mode::GLOBAL:
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_get_device(ctx->device).queues_wait_and_throw()));
+            break;
+        case set_tensor_sync_mode::STREAM:
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->wait_and_throw()));
+            break;
+        case set_tensor_sync_mode::NONE:
+        default:
+            break;
+    }
     // Reset reorder flag when new data is written - data is now in AoS format
     // This is critical for correctness: if tensor was previously reordered to SoA,
     // the new AoS data would be misinterpreted as SoA without this reset
@@ -13997,15 +14054,9 @@ void ggml_sycl_tp_launch_async_ffn(ggml_backend_sycl_context & ctx,
     // Store the event so we can wait for it later
     sycl::event completion_event = stream->memcpy(result_buf, partial_out, output_size);
 
-    // Clean up device 1 buffers (submit async free after computation)
-    // Note: These frees depend on the computation completing
-
-    stream->submit([&](sycl::handler & h) {
-        h.depends_on(completion_event);
-        h.host_task([=]() {
-            // This runs after completion_event, safe to access pointers
-        });
-    });
+    // Clean up device 1 buffers on the same in-order queue after completion_event.
+    // Avoid host_task submission here - mixed backend runtimes can crash during
+    // host_task scheduler cleanup.
     // Schedule actual frees
     ggml_sycl::unified_cache_sub_runtime_bytes(device, total_bytes);
     sycl::free(input_q8_dev, *stream);
@@ -23355,6 +23406,43 @@ static thread_local const int8_t * g_preclassified_cpu_flags = nullptr;
 static thread_local int             g_preclassified_node_idx  = -1;
 static thread_local int             g_preclassified_size      = 0;
 
+struct cpu_batch_threshold_config {
+    int pp = 4;
+    int tg = 16;
+};
+
+static cpu_batch_threshold_config ggml_sycl_cpu_batch_thresholds() {
+    static cpu_batch_threshold_config cfg = []() {
+        cpu_batch_threshold_config out{};
+        if (const char * legacy = std::getenv("GGML_SYCL_CPU_BATCH_THRESHOLD")) {
+            const int value = std::max(1, std::atoi(legacy));
+            out.pp = value;
+            out.tg = value;
+        }
+        if (const char * env_pp = std::getenv("GGML_SYCL_CPU_BATCH_THRESHOLD_PP")) {
+            out.pp = std::max(1, std::atoi(env_pp));
+        }
+        if (const char * env_tg = std::getenv("GGML_SYCL_CPU_BATCH_THRESHOLD_TG")) {
+            out.tg = std::max(1, std::atoi(env_tg));
+        }
+        return out;
+    }();
+    return cfg;
+}
+
+static int ggml_sycl_cpu_batch_threshold_for_tensor(const ggml_tensor * dst) {
+    const cpu_batch_threshold_config cfg = ggml_sycl_cpu_batch_thresholds();
+    const ggml_sycl::offload_phase phase = ggml_sycl::offload_stats_phase();
+    if (phase == ggml_sycl::offload_phase::TG) {
+        return cfg.tg;
+    }
+    if (phase == ggml_sycl::offload_phase::PP) {
+        return cfg.pp;
+    }
+    // Unknown phase: use token-count heuristic.
+    return (dst && dst->ne[1] <= 1) ? cfg.tg : cfg.pp;
+}
+
 // Check if a tensor's operation should be dispatched to CPU based on
 // weight residency. For MUL_MAT, classifies the layer by querying the
 // unified cache for the weight tensor's location. For other ops (norm,
@@ -23484,11 +23572,7 @@ static bool should_dispatch_to_cpu(ggml_backend_sycl_context & ctx, const ggml_t
     // streaming overhead.  Only dispatch to CPU for small batches (token generation).
     // dst->ne[1] reflects the token count for MUL_MAT, RMS_NORM, ADD, etc.
     if (result) {
-        static int cpu_batch_threshold = -1;
-        if (cpu_batch_threshold < 0) {
-            const char * env = getenv("GGML_SYCL_CPU_BATCH_THRESHOLD");
-            cpu_batch_threshold = env ? std::max(1, atoi(env)) : 4;
-        }
+        const int cpu_batch_threshold = ggml_sycl_cpu_batch_threshold_for_tensor(dst);
         int64_t batch = dst->ne[1];
         if (batch > cpu_batch_threshold) {
             result = false;
@@ -24992,20 +25076,16 @@ static void classify_cpu_layer_blocks(
         }
     }
 
-    // Phase 3: batch threshold — large batches (PP) stay on GPU
-    static int cpu_batch_threshold = -1;
-    if (cpu_batch_threshold < 0) {
-        const char * env = getenv("GGML_SYCL_CPU_BATCH_THRESHOLD");
-        // Default 4: batches > 4 are prompt processing and stay on GPU
-        cpu_batch_threshold = env ? std::max(1, atoi(env)) : 4;
-    }
+    // Phase 3: batch threshold — large batches (PP) stay on GPU.
+    // Use PP/TG split thresholds with fallback compatibility to legacy env.
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (node_cpu_flags[i] == 1) {
             ggml_tensor * node = cgraph->nodes[i];
             // Only apply batch threshold to MUL_MAT — for that op, ne[1] is the
             // batch dimension.  For other ops (ROPE, SOFT_MAX, etc.) ne[1] has
             // different semantics (e.g. n_heads) and would incorrectly trigger.
-            if (node && node->op == GGML_OP_MUL_MAT && node->ne[1] > cpu_batch_threshold) {
+            if (node && node->op == GGML_OP_MUL_MAT &&
+                node->ne[1] > ggml_sycl_cpu_batch_threshold_for_tensor(node)) {
                 node_cpu_flags[i] = 0;
             }
         }
@@ -25225,6 +25305,16 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     std::vector<int8_t> node_cpu_flags;
     if (cpu_offload_active) {
         classify_cpu_layer_blocks(*sycl_ctx, cgraph, node_cpu_flags);
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            ggml_tensor * node = cgraph->nodes[i];
+            if (!node || ggml_sycl_is_noop(node)) {
+                continue;
+            }
+            const int8_t flag = (i < (int) node_cpu_flags.size()) ? node_cpu_flags[i] : FLAG_GPU;
+            const bool node_cpu    = flag == FLAG_CPU;
+            const bool node_island = flag == FLAG_GPU_ISLAND;
+            ggml_sycl::offload_stats_note_dispatch(node_cpu, node_island);
+        }
     }
     offload_plan_stats plan_stats{};
     if (cpu_offload_active) {
@@ -25630,6 +25720,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             bool node_on_cpu    = (flag == FLAG_CPU);
             bool node_is_island = (flag == FLAG_GPU_ISLAND);
 
+            const bool async_offload = ggml_sycl_cpu_offload_async_enabled();
+
             if (node_is_island) {
                 // GPU island: run on GPU without full boundary transition.
                 // Drain pending async staging copies so island inputs (Q from
@@ -25660,24 +25752,40 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     }
 
                     if (!gpu_tensor_events.empty()) {
-                        if (ggml_sycl_cpu_offload_async_enabled()) {
-                            // Async mode: one wait per GPU→CPU segment boundary.
-                            sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
-                            ggml_sycl::offload_stats_note_wait();
+                        if (async_offload) {
+                            // Async mode: wait once per GPU->CPU segment only when
+                            // the boundary CPU node has tracked GPU dependencies.
+                            // If boundary_bytes==0, this boundary has no direct
+                            // cross-domain input to stage, so we can elide the queue
+                            // wait and keep moving.
+                            if (boundary_bytes > 0) {
+                                // Avoid per-input barrier submission on mixed-selector
+                                // paths (L0 + OpenCL), which can deadlock in runtime
+                                // queue info queries.
+                                sycl_ctx->stream()->wait();
+                                ggml_sycl::offload_stats_note_wait(false);
+                                ggml_sycl::offload_stats_note_transition_wait(true);
+                            } else {
+                                ggml_sycl::offload_stats_note_transition_wait(false);
+                            }
                         } else {
                             // Legacy mode: preserve per-input waits.
+                            bool waited = false;
                             for (int si = 0; si < GGML_MAX_SRC; si++) {
                                 if (!node->src[si]) break;
                                 auto it = gpu_tensor_events.find(node->src[si]);
                                 if (it != gpu_tensor_events.end()) {
                                     it->second.wait();
-                                    ggml_sycl::offload_stats_note_wait();
+                                    ggml_sycl::offload_stats_note_wait(true);
+                                    waited = true;
                                 }
                             }
                             if (boundary_bytes == 0) {
-                                sycl_ctx->stream()->ext_oneapi_submit_barrier().wait();
-                                ggml_sycl::offload_stats_note_wait();
+                                sycl_ctx->stream()->wait();
+                                ggml_sycl::offload_stats_note_wait(true);
+                                waited = true;
                             }
+                            ggml_sycl::offload_stats_note_transition_wait(waited);
                         }
                         ggml_sycl::offload_stats_note_cross_domain_transfer(boundary_bytes);
                         // Events prior to this transition are complete and no longer needed.
@@ -25698,7 +25806,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 } else {
                     // CPU→GPU: drain pending async staging flushes before GPU reads
                     ggml_sycl_cpu_staging_drain();
-                    ggml_sycl::offload_stats_note_cross_domain_transfer(0);
 
                     // Look-ahead: collect ALL consecutive GPU/island nodes before
                     // next CPU node. flush_selective needs them all so it can flush
@@ -25786,8 +25893,14 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         // for dst so that GPU→CPU transitions can wait on specific tensors.
         // Skip for CPU-dispatched nodes (they are synchronous).
         if (cpu_offload_active && !prev_on_cpu && !g_ggml_sycl_graph_recording) {
-            gpu_tensor_events[node] =
-                sycl_ctx->stream()->ext_oneapi_submit_barrier();
+            if (ggml_sycl_cpu_offload_async_enabled()) {
+                // Marker only: async path does one queue drain per GPU->CPU segment.
+                // This avoids per-op barrier submission overhead and runtime hangs.
+                gpu_tensor_events[node] = sycl::event{};
+            } else {
+                gpu_tensor_events[node] =
+                    sycl_ctx->stream()->ext_oneapi_submit_barrier();
+            }
         }
         if (g_sycl_tg_trace_hash) {
             void * out_ptr = ggml_sycl_get_data_ptr_view(node, sycl_ctx->device);
@@ -26648,11 +26761,11 @@ static void graph_prestage_leaf_tensors(ggml_backend_sycl_context * ctx, const g
     }
 
     // Get context for pointer type checking
-    sycl::context ctx_storage;
+    std::optional<sycl::context> ctx_storage;
     sycl::context * sycl_ctx = nullptr;
     try {
-        ctx_storage = ggml_sycl_get_device(device).default_queue().get_context();
-        sycl_ctx = &ctx_storage;
+        ctx_storage.emplace(ggml_sycl_get_device(device).default_queue().get_context());
+        sycl_ctx = &ctx_storage.value();
     } catch (...) {
         GGML_LOG_ERROR("[GRAPH-PRESTAGE] Failed to get SYCL context for device %d\n", device);
         return;
@@ -31029,7 +31142,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         g_sycl_graph_multithreaded.store(true, std::memory_order_relaxed);
     }
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] ENTER: backend=%p cgraph=%p\n", (void *) backend, (void *) cgraph);
-    std::lock_guard<std::mutex> global_graph_lock(g_sycl_graph_compute_mutex);
+    std::unique_lock<std::mutex> global_graph_lock(g_sycl_graph_compute_mutex);
 
     auto *                      sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] sycl_ctx=%p device=%d\n", (void *) sycl_ctx,
@@ -31067,11 +31180,11 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ctx->last_graph_event.reset();
             return;
         }
-        // Skip barrier for graph replay: in-order queue guarantees ordering,
-        // and synchronize() does wait_and_throw() which covers all pending work.
-        // Only submit barrier for non-replay paths (recording, warmup) where
-        // downstream consumers may need event-based coordination.
-        if (sycl_ctx->exec_graph && !ggml_sycl_graph_recording_active()) {
+        // Skip completion barrier when queue ordering already guarantees completion
+        // visibility. This applies to graph replay and any other in-order queue path.
+        const bool queue_in_order =
+            sycl_ctx && sycl_ctx->stream()->has_property<sycl::property::queue::in_order>();
+        if (!ggml_sycl_graph_recording_active() && (sycl_ctx->exec_graph || queue_in_order)) {
             sycl_ctx->last_graph_event.reset();
             return;
         }
@@ -31089,6 +31202,12 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     };
     auto compute_impl = [&]() {
         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+    };
+    auto compute_impl_unlocked = [&]() {
+        if (global_graph_lock.owns_lock()) {
+            global_graph_lock.unlock();
+        }
+        compute_impl();
     };
     GGML_SYCL_DEBUG("[DEBUG-GRAPH-COMPUTE] Lambda created\n");
 
@@ -31115,6 +31234,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             break;
         }
     }
+    ggml_sycl::offload_stats_set_phase(cached_is_decode ? ggml_sycl::offload_phase::TG
+                                                         : ggml_sycl::offload_phase::PP);
 
     // Skip finalize_layouts when layouts are stable (no dirty weights, no epoch change).
     // This applies to ALL dispatch modes, not just persistent TG.
@@ -31312,7 +31433,7 @@ normal_dispatch:
                 // Too few GPU nodes to justify graph overhead — dispatch everything individually.
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: CPU offload active, GPU prefix too small (%d < %d)\n",
                                 first_cpu_node, MIN_GPU_PREFIX_NODES);
-                compute_impl();
+                compute_impl_unlocked();
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
             }
@@ -31329,7 +31450,7 @@ normal_dispatch:
     if ((exceeds || evictions) && gpu_prefix_end < 0) {
         GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
                         (int)exceeds, (int)evictions);
-        compute_impl();
+        compute_impl_unlocked();
         record_completion(false);
         return GGML_STATUS_SUCCESS;
     }
@@ -31424,6 +31545,7 @@ normal_dispatch:
     }
 
     if (use_sycl_graph) {
+        GGML_ASSERT(global_graph_lock.owns_lock());
         // Cache graph hash (saves ~41K FNV-1a hash mix ops per token)
         uint64_t graph_hash;
         if (sycl_ctx->cached_graph_sig_n_nodes == cgraph->n_nodes && sycl_ctx->exec_graph) {
@@ -31441,7 +31563,7 @@ normal_dispatch:
         if (!graph_support) {
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
-            compute_impl();
+            compute_impl_unlocked();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -31524,7 +31646,7 @@ normal_dispatch:
                     GGML_LOG_INFO("[SYCL-GRAPH] MoE streaming mode without unified cache: disabling graphs\n");
                     logged_once = true;
                 }
-                compute_impl();
+                compute_impl_unlocked();
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
             }
@@ -31536,7 +31658,7 @@ normal_dispatch:
         if (cgraph->n_nodes < MIN_GRAPH_NODES) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - graph too small (%d < %d nodes)\n", cgraph->n_nodes,
                             MIN_GRAPH_NODES);
-            compute_impl();
+            compute_impl_unlocked();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -31616,7 +31738,7 @@ normal_dispatch:
                 GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");
                 graph_unpin_weights(sycl_ctx);  // Clean up any partial pins
                 GGML_SYCL_DEBUG("[DEBUG] About to call graph_compute_impl after weight preload failure\n");
-                compute_impl();
+                compute_impl_unlocked();
                 GGML_SYCL_DEBUG("[DEBUG] graph_compute_impl returned\n");
                 record_completion(false);
                 return GGML_STATUS_SUCCESS;
@@ -31643,7 +31765,7 @@ normal_dispatch:
             GGML_LOG_WARN("[SYCL-GRAPH] MoE pointer table prep failed, disabling graphs for all splits\n");
             sycl_ctx->moe_graphs_disabled = true;
             graph_unpin_moe_experts(sycl_ctx);
-            compute_impl();
+            compute_impl_unlocked();
             record_completion(false);
             return GGML_STATUS_SUCCESS;
         }
@@ -31658,7 +31780,7 @@ normal_dispatch:
         if (warmup_n_nodes != cgraph->n_nodes) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup pass for %s phase (n_nodes=%d, warmed=%d)\n",
                             is_decode_phase ? "decode" : "prompt", cgraph->n_nodes, warmup_n_nodes);
-            compute_impl();
+            compute_impl_unlocked();
             warmup_n_nodes = cgraph->n_nodes;
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup complete for %s phase\n", is_decode_phase ? "decode" : "prompt");
@@ -31747,7 +31869,7 @@ normal_dispatch:
                 sycl_ctx->exec_graph.reset();
                 sycl_ctx->exec_graph_n_nodes = 0;
                 sycl_ctx->exec_graph_hash = 0;
-                compute_impl();
+                compute_impl_unlocked();
             }
             GGML_SYCL_DEBUG("[SYCL-GRAPH] re-record+update done\n");
         } else if (sycl_ctx->exec_graph) {
@@ -31846,7 +31968,7 @@ normal_dispatch:
                 sycl_ctx->input_tensors_cached      = false;
                 sycl_ctx->cached_input_tensors.clear();
                 sycl_ctx->cached_input_dev_ptrs.clear();
-                compute_impl();
+                compute_impl_unlocked();
                 record_completion(false);
 
                 return GGML_STATUS_SUCCESS;
@@ -31857,7 +31979,7 @@ normal_dispatch:
 
 #endif
     {
-        compute_impl();
+        compute_impl_unlocked();
     }
 
     // In prefix mode, dispatch the CPU suffix before record_completion.

@@ -63,6 +63,80 @@ struct runtime_alloc_record {
 
 static std::unordered_map<void *, runtime_alloc_record> g_runtime_alloc_registry;
 static std::unordered_map<std::string, alloc_tier> g_runtime_cohort_tier;
+static std::mutex g_offload_pool_mutex;
+static std::atomic<uint64_t> g_offload_pool_lease_id{ 1 };
+
+struct offload_pool_key {
+    int                 device = -1;
+    offload_buffer_role role = offload_buffer_role::OTHER;
+    alloc_tier          tier = alloc_tier::HOST_PINNED;
+    runtime_category    category = runtime_category::OTHER;
+    size_t              alignment = 64;
+};
+
+struct offload_pool_key_hash {
+    size_t operator()(const offload_pool_key & key) const {
+        size_t h = 0;
+        h = detail::cache_hash_combine(h, std::hash<int>()(key.device));
+        h = detail::cache_hash_combine(h, std::hash<int>()(static_cast<int>(key.role)));
+        h = detail::cache_hash_combine(h, std::hash<int>()(static_cast<int>(key.tier)));
+        h = detail::cache_hash_combine(h, std::hash<int>()(static_cast<int>(key.category)));
+        h = detail::cache_hash_combine(h, std::hash<size_t>()(key.alignment));
+        return h;
+    }
+};
+
+static bool operator==(const offload_pool_key & a, const offload_pool_key & b) {
+    return a.device == b.device &&
+           a.role == b.role &&
+           a.tier == b.tier &&
+           a.category == b.category &&
+           a.alignment == b.alignment;
+}
+
+struct offload_pool_slot {
+    alloc_handle      handle{};
+    offload_pool_key  key{};
+    bool              in_use = false;
+    uint64_t          lease_id = 0;
+};
+
+static std::unordered_map<void *, offload_pool_slot> g_offload_pool_slots;
+static std::unordered_map<offload_pool_key, std::vector<void *>, offload_pool_key_hash> g_offload_pool_free;
+
+static std::atomic<uint64_t> g_offload_wait_count{ 0 };
+static std::atomic<uint64_t> g_offload_wait_count_forced{ 0 };
+static std::atomic<uint64_t> g_offload_wait_count_fallback{ 0 };
+static std::atomic<uint64_t> g_offload_alloc_count_host{ 0 };
+static std::atomic<uint64_t> g_offload_alloc_count_device{ 0 };
+static std::atomic<uint64_t> g_offload_alloc_count_shared{ 0 };
+static std::atomic<uint64_t> g_offload_pool_hit_count{ 0 };
+static std::atomic<uint64_t> g_offload_pool_miss_count{ 0 };
+static std::atomic<uint64_t> g_offload_cross_domain_transfer_count{ 0 };
+static std::atomic<uint64_t> g_offload_cross_domain_transfer_count_pp{ 0 };
+static std::atomic<uint64_t> g_offload_cross_domain_transfer_count_tg{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_h2d{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_d2h{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_h2d_pp{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_h2d_tg{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_d2h_pp{ 0 };
+static std::atomic<uint64_t> g_offload_transfer_bytes_d2h_tg{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_cpu{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu_island{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_cpu_pp{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_cpu_tg{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu_pp{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu_tg{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu_island_pp{ 0 };
+static std::atomic<uint64_t> g_offload_dispatch_count_gpu_island_tg{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_count{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_count_pp{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_count_tg{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_elided_count{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_elided_count_pp{ 0 };
+static std::atomic<uint64_t> g_offload_transition_wait_elided_count_tg{ 0 };
+static std::atomic<int>      g_offload_phase{ static_cast<int>(offload_phase::UNKNOWN) };
 
 static int get_device_id_from_queue(sycl::queue & queue);
 
@@ -73,6 +147,13 @@ static const char * alloc_tier_name(alloc_tier tier) {
         case alloc_tier::MMAP_TRACKED: return "mmap_tracked";
         default: return "unknown";
     }
+}
+
+static inline size_t align_up(size_t value, size_t alignment) {
+    if (alignment <= 1) {
+        return value;
+    }
+    return (value + alignment - 1) / alignment * alignment;
 }
 
 static runtime_category category_from_role(alloc_role role) {
@@ -126,6 +207,277 @@ bool unified_alloc_strict_mode() {
     const int strict = (env && std::atoi(env) != 0) ? 1 : 0;
     s_strict.store(strict, std::memory_order_release);
     return strict != 0;
+}
+
+bool offload_stats_enabled() {
+    const char * env = std::getenv("GGML_SYCL_OFFLOAD_STATS");
+    return env && std::atoi(env) != 0;
+}
+
+void offload_stats_reset() {
+    g_offload_wait_count.store(0, std::memory_order_relaxed);
+    g_offload_wait_count_forced.store(0, std::memory_order_relaxed);
+    g_offload_wait_count_fallback.store(0, std::memory_order_relaxed);
+    g_offload_alloc_count_host.store(0, std::memory_order_relaxed);
+    g_offload_alloc_count_device.store(0, std::memory_order_relaxed);
+    g_offload_alloc_count_shared.store(0, std::memory_order_relaxed);
+    g_offload_pool_hit_count.store(0, std::memory_order_relaxed);
+    g_offload_pool_miss_count.store(0, std::memory_order_relaxed);
+    g_offload_cross_domain_transfer_count.store(0, std::memory_order_relaxed);
+    g_offload_cross_domain_transfer_count_pp.store(0, std::memory_order_relaxed);
+    g_offload_cross_domain_transfer_count_tg.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_h2d.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_d2h.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_h2d_pp.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_h2d_tg.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_d2h_pp.store(0, std::memory_order_relaxed);
+    g_offload_transfer_bytes_d2h_tg.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_cpu.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu_island.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_cpu_pp.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_cpu_tg.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu_pp.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu_tg.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu_island_pp.store(0, std::memory_order_relaxed);
+    g_offload_dispatch_count_gpu_island_tg.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_count.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_count_pp.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_count_tg.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_elided_count.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_elided_count_pp.store(0, std::memory_order_relaxed);
+    g_offload_transition_wait_elided_count_tg.store(0, std::memory_order_relaxed);
+    g_offload_phase.store(static_cast<int>(offload_phase::UNKNOWN), std::memory_order_relaxed);
+}
+
+void offload_stats_set_phase(offload_phase phase) {
+    g_offload_phase.store(static_cast<int>(phase), std::memory_order_relaxed);
+}
+
+offload_phase offload_stats_phase() {
+    const int phase = g_offload_phase.load(std::memory_order_relaxed);
+    switch (phase) {
+        case static_cast<int>(offload_phase::PP): return offload_phase::PP;
+        case static_cast<int>(offload_phase::TG): return offload_phase::TG;
+        default: return offload_phase::UNKNOWN;
+    }
+}
+
+static inline offload_phase offload_stats_current_phase() {
+    const int phase = g_offload_phase.load(std::memory_order_relaxed);
+    switch (phase) {
+        case static_cast<int>(offload_phase::PP): return offload_phase::PP;
+        case static_cast<int>(offload_phase::TG): return offload_phase::TG;
+        default: return offload_phase::UNKNOWN;
+    }
+}
+
+void offload_stats_note_wait(bool fallback) {
+    g_offload_wait_count.fetch_add(1, std::memory_order_relaxed);
+    if (fallback) {
+        g_offload_wait_count_fallback.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_offload_wait_count_forced.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void offload_stats_note_alloc(alloc_tier tier) {
+    switch (tier) {
+        case alloc_tier::DEVICE_VRAM:
+            g_offload_alloc_count_device.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case alloc_tier::HOST_PINNED:
+            g_offload_alloc_count_host.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case alloc_tier::MMAP_TRACKED:
+            g_offload_alloc_count_shared.fetch_add(1, std::memory_order_relaxed);
+            break;
+        default:
+            break;
+    }
+}
+
+void offload_stats_note_pool_hit() {
+    g_offload_pool_hit_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void offload_stats_note_pool_miss() {
+    g_offload_pool_miss_count.fetch_add(1, std::memory_order_relaxed);
+}
+
+void offload_stats_note_transfer(bool h2d, size_t bytes) {
+    const offload_phase phase = offload_stats_current_phase();
+    if (h2d) {
+        g_offload_transfer_bytes_h2d.fetch_add(bytes, std::memory_order_relaxed);
+        if (phase == offload_phase::PP) {
+            g_offload_transfer_bytes_h2d_pp.fetch_add(bytes, std::memory_order_relaxed);
+        } else if (phase == offload_phase::TG) {
+            g_offload_transfer_bytes_h2d_tg.fetch_add(bytes, std::memory_order_relaxed);
+        }
+    } else {
+        g_offload_transfer_bytes_d2h.fetch_add(bytes, std::memory_order_relaxed);
+        if (phase == offload_phase::PP) {
+            g_offload_transfer_bytes_d2h_pp.fetch_add(bytes, std::memory_order_relaxed);
+        } else if (phase == offload_phase::TG) {
+            g_offload_transfer_bytes_d2h_tg.fetch_add(bytes, std::memory_order_relaxed);
+        }
+    }
+}
+
+void offload_stats_note_cross_domain_transfer(size_t bytes) {
+    GGML_UNUSED(bytes);
+    const offload_phase phase = offload_stats_current_phase();
+    g_offload_cross_domain_transfer_count.fetch_add(1, std::memory_order_relaxed);
+    if (phase == offload_phase::PP) {
+        g_offload_cross_domain_transfer_count_pp.fetch_add(1, std::memory_order_relaxed);
+    } else if (phase == offload_phase::TG) {
+        g_offload_cross_domain_transfer_count_tg.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void offload_stats_note_dispatch(bool cpu, bool gpu_island) {
+    const offload_phase phase = offload_stats_current_phase();
+    if (cpu) {
+        g_offload_dispatch_count_cpu.fetch_add(1, std::memory_order_relaxed);
+        if (phase == offload_phase::PP) {
+            g_offload_dispatch_count_cpu_pp.fetch_add(1, std::memory_order_relaxed);
+        } else if (phase == offload_phase::TG) {
+            g_offload_dispatch_count_cpu_tg.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    g_offload_dispatch_count_gpu.fetch_add(1, std::memory_order_relaxed);
+    if (phase == offload_phase::PP) {
+        g_offload_dispatch_count_gpu_pp.fetch_add(1, std::memory_order_relaxed);
+    } else if (phase == offload_phase::TG) {
+        g_offload_dispatch_count_gpu_tg.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (gpu_island) {
+        g_offload_dispatch_count_gpu_island.fetch_add(1, std::memory_order_relaxed);
+        if (phase == offload_phase::PP) {
+            g_offload_dispatch_count_gpu_island_pp.fetch_add(1, std::memory_order_relaxed);
+        } else if (phase == offload_phase::TG) {
+            g_offload_dispatch_count_gpu_island_tg.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+void offload_stats_note_transition_wait(bool waited) {
+    const offload_phase phase = offload_stats_current_phase();
+    if (waited) {
+        g_offload_transition_wait_count.fetch_add(1, std::memory_order_relaxed);
+        if (phase == offload_phase::PP) {
+            g_offload_transition_wait_count_pp.fetch_add(1, std::memory_order_relaxed);
+        } else if (phase == offload_phase::TG) {
+            g_offload_transition_wait_count_tg.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+
+    g_offload_transition_wait_elided_count.fetch_add(1, std::memory_order_relaxed);
+    if (phase == offload_phase::PP) {
+        g_offload_transition_wait_elided_count_pp.fetch_add(1, std::memory_order_relaxed);
+    } else if (phase == offload_phase::TG) {
+        g_offload_transition_wait_elided_count_tg.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+offload_stats_snapshot offload_stats_get() {
+    offload_stats_snapshot s{};
+    s.wait_count                  = g_offload_wait_count.load(std::memory_order_relaxed);
+    s.wait_count_forced           = g_offload_wait_count_forced.load(std::memory_order_relaxed);
+    s.wait_count_fallback         = g_offload_wait_count_fallback.load(std::memory_order_relaxed);
+    s.alloc_count_host            = g_offload_alloc_count_host.load(std::memory_order_relaxed);
+    s.alloc_count_device          = g_offload_alloc_count_device.load(std::memory_order_relaxed);
+    s.alloc_count_shared          = g_offload_alloc_count_shared.load(std::memory_order_relaxed);
+    s.pool_hit_count              = g_offload_pool_hit_count.load(std::memory_order_relaxed);
+    s.pool_miss_count             = g_offload_pool_miss_count.load(std::memory_order_relaxed);
+    s.cross_domain_transfer_count = g_offload_cross_domain_transfer_count.load(std::memory_order_relaxed);
+    s.cross_domain_transfer_count_pp = g_offload_cross_domain_transfer_count_pp.load(std::memory_order_relaxed);
+    s.cross_domain_transfer_count_tg = g_offload_cross_domain_transfer_count_tg.load(std::memory_order_relaxed);
+    s.transfer_bytes_h2d          = g_offload_transfer_bytes_h2d.load(std::memory_order_relaxed);
+    s.transfer_bytes_d2h          = g_offload_transfer_bytes_d2h.load(std::memory_order_relaxed);
+    s.transfer_bytes_h2d_pp       = g_offload_transfer_bytes_h2d_pp.load(std::memory_order_relaxed);
+    s.transfer_bytes_h2d_tg       = g_offload_transfer_bytes_h2d_tg.load(std::memory_order_relaxed);
+    s.transfer_bytes_d2h_pp       = g_offload_transfer_bytes_d2h_pp.load(std::memory_order_relaxed);
+    s.transfer_bytes_d2h_tg       = g_offload_transfer_bytes_d2h_tg.load(std::memory_order_relaxed);
+    s.dispatch_count_cpu          = g_offload_dispatch_count_cpu.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu          = g_offload_dispatch_count_gpu.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu_island   = g_offload_dispatch_count_gpu_island.load(std::memory_order_relaxed);
+    s.dispatch_count_cpu_pp       = g_offload_dispatch_count_cpu_pp.load(std::memory_order_relaxed);
+    s.dispatch_count_cpu_tg       = g_offload_dispatch_count_cpu_tg.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu_pp       = g_offload_dispatch_count_gpu_pp.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu_tg       = g_offload_dispatch_count_gpu_tg.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu_island_pp = g_offload_dispatch_count_gpu_island_pp.load(std::memory_order_relaxed);
+    s.dispatch_count_gpu_island_tg = g_offload_dispatch_count_gpu_island_tg.load(std::memory_order_relaxed);
+    s.transition_wait_count       = g_offload_transition_wait_count.load(std::memory_order_relaxed);
+    s.transition_wait_count_pp    = g_offload_transition_wait_count_pp.load(std::memory_order_relaxed);
+    s.transition_wait_count_tg    = g_offload_transition_wait_count_tg.load(std::memory_order_relaxed);
+    s.transition_wait_elided_count = g_offload_transition_wait_elided_count.load(std::memory_order_relaxed);
+    s.transition_wait_elided_count_pp = g_offload_transition_wait_elided_count_pp.load(std::memory_order_relaxed);
+    s.transition_wait_elided_count_tg = g_offload_transition_wait_elided_count_tg.load(std::memory_order_relaxed);
+    return s;
+}
+
+void offload_stats_log_summary(const char * tag, int device) {
+    if (!offload_stats_enabled()) {
+        return;
+    }
+    const offload_stats_snapshot s = offload_stats_get();
+    const offload_phase phase = offload_stats_current_phase();
+    const char * phase_name = phase == offload_phase::PP ? "pp"
+                             : phase == offload_phase::TG ? "tg"
+                             : "unknown";
+    fprintf(stderr,
+            "[SYCL-OFFLOAD-STATS] tag=%s device=%d wait_count=%llu wait_count_forced=%llu "
+            "wait_count_fallback=%llu alloc_count_host=%llu alloc_count_device=%llu "
+            "alloc_count_shared=%llu pool_hit_count=%llu pool_miss_count=%llu phase=%s "
+            "cross_domain_transfer_count=%llu cross_domain_transfer_count_pp=%llu cross_domain_transfer_count_tg=%llu "
+            "transfer_bytes_h2d=%llu transfer_bytes_h2d_pp=%llu transfer_bytes_h2d_tg=%llu "
+            "transfer_bytes_d2h=%llu transfer_bytes_d2h_pp=%llu transfer_bytes_d2h_tg=%llu "
+            "dispatch_count_cpu=%llu dispatch_count_gpu=%llu dispatch_count_gpu_island=%llu "
+            "dispatch_count_cpu_pp=%llu dispatch_count_cpu_tg=%llu "
+            "dispatch_count_gpu_pp=%llu dispatch_count_gpu_tg=%llu "
+            "dispatch_count_gpu_island_pp=%llu dispatch_count_gpu_island_tg=%llu "
+            "transition_wait_count=%llu transition_wait_count_pp=%llu transition_wait_count_tg=%llu "
+            "transition_wait_elided_count=%llu transition_wait_elided_count_pp=%llu transition_wait_elided_count_tg=%llu\n",
+            tag ? tag : "graph",
+            device,
+            (unsigned long long) s.wait_count,
+            (unsigned long long) s.wait_count_forced,
+            (unsigned long long) s.wait_count_fallback,
+            (unsigned long long) s.alloc_count_host,
+            (unsigned long long) s.alloc_count_device,
+            (unsigned long long) s.alloc_count_shared,
+            (unsigned long long) s.pool_hit_count,
+            (unsigned long long) s.pool_miss_count,
+            phase_name,
+            (unsigned long long) s.cross_domain_transfer_count,
+            (unsigned long long) s.cross_domain_transfer_count_pp,
+            (unsigned long long) s.cross_domain_transfer_count_tg,
+            (unsigned long long) s.transfer_bytes_h2d,
+            (unsigned long long) s.transfer_bytes_h2d_pp,
+            (unsigned long long) s.transfer_bytes_h2d_tg,
+            (unsigned long long) s.transfer_bytes_d2h,
+            (unsigned long long) s.transfer_bytes_d2h_pp,
+            (unsigned long long) s.transfer_bytes_d2h_tg,
+            (unsigned long long) s.dispatch_count_cpu,
+            (unsigned long long) s.dispatch_count_gpu,
+            (unsigned long long) s.dispatch_count_gpu_island,
+            (unsigned long long) s.dispatch_count_cpu_pp,
+            (unsigned long long) s.dispatch_count_cpu_tg,
+            (unsigned long long) s.dispatch_count_gpu_pp,
+            (unsigned long long) s.dispatch_count_gpu_tg,
+            (unsigned long long) s.dispatch_count_gpu_island_pp,
+            (unsigned long long) s.dispatch_count_gpu_island_tg,
+            (unsigned long long) s.transition_wait_count,
+            (unsigned long long) s.transition_wait_count_pp,
+            (unsigned long long) s.transition_wait_count_tg,
+            (unsigned long long) s.transition_wait_elided_count,
+            (unsigned long long) s.transition_wait_elided_count_pp,
+            (unsigned long long) s.transition_wait_elided_count_tg);
 }
 
 static bool parse_env_mb_value(const char * name, size_t & out_mb) {
@@ -4912,7 +5264,186 @@ bool unified_alloc(const alloc_request & req_in, alloc_handle * out) {
     }
 
     *out = rec.handle;
+    offload_stats_note_alloc(tier);
     return true;
+}
+
+bool acquire_offload_buffer(const offload_buffer_request & req_in, offload_buffer_lease * out) {
+    if (out == nullptr) {
+        return false;
+    }
+    *out = {};
+
+    if (req_in.queue == nullptr) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] offload pool acquire failed: missing queue\n");
+        return false;
+    }
+
+    offload_buffer_request req = req_in;
+    if (req.device < 0) {
+        req.device = get_device_id_from_queue(*req.queue);
+    }
+    if (req.device < 0 || req.device >= GGML_SYCL_MAX_DEVICES) {
+        GGML_LOG_ERROR("[UNIFIED-ALLOC] offload pool acquire failed: invalid device=%d\n", req.device);
+        return false;
+    }
+
+    const size_t alignment = std::max<size_t>(req.alignment, 64);
+    const size_t alloc_size = align_up(std::max<size_t>(req.size, 1), alignment);
+
+    alloc_request areq{};
+    areq.queue         = req.queue;
+    areq.device        = req.device;
+    areq.size          = alloc_size;
+    areq.intent        = req.intent;
+    if (areq.intent.role == alloc_role::OTHER) {
+        areq.intent.role = alloc_role::STAGING;
+    }
+    if (areq.intent.category == runtime_category::OTHER) {
+        areq.intent.category = runtime_category::HOST_COMPUTE;
+    }
+    const bool has_explicit_tier_constraint =
+        areq.intent.constraints.must_host_pinned ||
+        areq.intent.constraints.must_device;
+
+    // Default staging roles to host-pinned, but preserve explicit caller
+    // constraints so compute-buffer users can intentionally target VRAM.
+    if (!has_explicit_tier_constraint) {
+        switch (req.role) {
+            case offload_buffer_role::STAGING_SRC0:
+            case offload_buffer_role::STAGING_SRC1:
+            case offload_buffer_role::STAGING_DST:
+            case offload_buffer_role::RETAINED_SCRATCH:
+                areq.intent.constraints.must_host_pinned = true;
+                break;
+            default:
+                break;
+        }
+    }
+
+    const alloc_tier tier = unified_select_tier(areq);
+    offload_pool_key key{};
+    key.device    = req.device;
+    key.role      = req.role;
+    key.tier      = tier;
+    key.category  = areq.intent.category;
+    key.alignment = alignment;
+
+    {
+        std::lock_guard<std::mutex> lock(g_offload_pool_mutex);
+        auto it_bucket = g_offload_pool_free.find(key);
+        if (it_bucket != g_offload_pool_free.end()) {
+            size_t best_idx  = std::numeric_limits<size_t>::max();
+            size_t best_size = std::numeric_limits<size_t>::max();
+            for (size_t i = 0; i < it_bucket->second.size(); ++i) {
+                void * ptr = it_bucket->second[i];
+                auto slot_it = g_offload_pool_slots.find(ptr);
+                if (slot_it == g_offload_pool_slots.end() || slot_it->second.in_use) {
+                    continue;
+                }
+                if (slot_it->second.handle.size < alloc_size) {
+                    continue;
+                }
+                if (slot_it->second.handle.size < best_size) {
+                    best_size = slot_it->second.handle.size;
+                    best_idx = i;
+                }
+            }
+            if (best_idx != std::numeric_limits<size_t>::max()) {
+                void * ptr = it_bucket->second[best_idx];
+                it_bucket->second.erase(it_bucket->second.begin() + static_cast<ptrdiff_t>(best_idx));
+                if (it_bucket->second.empty()) {
+                    g_offload_pool_free.erase(it_bucket);
+                }
+
+                auto slot_it = g_offload_pool_slots.find(ptr);
+                GGML_ASSERT(slot_it != g_offload_pool_slots.end());
+                slot_it->second.in_use = true;
+                slot_it->second.lease_id = g_offload_pool_lease_id.fetch_add(1, std::memory_order_relaxed);
+                out->handle = slot_it->second.handle;
+                out->lease_id = slot_it->second.lease_id;
+                out->valid = true;
+                offload_stats_note_pool_hit();
+                return true;
+            }
+        }
+    }
+
+    alloc_handle h{};
+    if (!unified_alloc(areq, &h) || h.ptr == nullptr) {
+        return false;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_offload_pool_mutex);
+        offload_pool_slot slot{};
+        slot.handle = h;
+        slot.key = key;
+        slot.in_use = true;
+        slot.lease_id = g_offload_pool_lease_id.fetch_add(1, std::memory_order_relaxed);
+        g_offload_pool_slots[h.ptr] = slot;
+        out->handle = h;
+        out->lease_id = slot.lease_id;
+        out->valid = true;
+    }
+    offload_stats_note_pool_miss();
+    return true;
+}
+
+bool release_offload_buffer(const offload_buffer_lease & lease) {
+    if (!lease.valid || lease.handle.ptr == nullptr) {
+        return true;
+    }
+
+    std::lock_guard<std::mutex> lock(g_offload_pool_mutex);
+    auto it = g_offload_pool_slots.find(lease.handle.ptr);
+    if (it == g_offload_pool_slots.end()) {
+        if (unified_alloc_strict_mode()) {
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] strict offload-pool release unknown ptr=%p lease=%llu\n",
+                           lease.handle.ptr, static_cast<unsigned long long>(lease.lease_id));
+        }
+        return false;
+    }
+    if (!it->second.in_use || it->second.lease_id != lease.lease_id) {
+        if (unified_alloc_strict_mode()) {
+            GGML_LOG_ERROR("[UNIFIED-ALLOC] strict offload-pool stale lease ptr=%p lease=%llu active=%llu in_use=%d\n",
+                           lease.handle.ptr,
+                           static_cast<unsigned long long>(lease.lease_id),
+                           static_cast<unsigned long long>(it->second.lease_id),
+                           it->second.in_use ? 1 : 0);
+        }
+        return false;
+    }
+
+    it->second.in_use = false;
+    g_offload_pool_free[it->second.key].push_back(lease.handle.ptr);
+    return true;
+}
+
+void offload_buffer_pool_trim(int device) {
+    std::vector<alloc_handle> free_list;
+    {
+        std::lock_guard<std::mutex> lock(g_offload_pool_mutex);
+        for (auto it = g_offload_pool_slots.begin(); it != g_offload_pool_slots.end();) {
+            const offload_pool_slot & slot = it->second;
+            if (!slot.in_use && (device < 0 || slot.key.device == device)) {
+                free_list.push_back(slot.handle);
+                it = g_offload_pool_slots.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        g_offload_pool_free.clear();
+        for (const auto & kv : g_offload_pool_slots) {
+            if (!kv.second.in_use) {
+                g_offload_pool_free[kv.second.key].push_back(kv.first);
+            }
+        }
+    }
+
+    for (const alloc_handle & h : free_list) {
+        (void) unified_free(h);
+    }
 }
 
 bool unified_lookup(void * ptr, alloc_handle * out) {

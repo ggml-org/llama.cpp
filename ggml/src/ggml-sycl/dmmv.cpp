@@ -2761,12 +2761,17 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                             vx, y, dst, ncols, nrows, item_ct1, debug_buf);
                     });
             });
-            stream->submit([&](sycl::handler & cgh) {
-                cgh.depends_on(debug_event);
-                cgh.host_task([debug_buf, stream]() {
-                    ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
+            if (ggml_sycl_host_task_stable_for_queue(*stream)) {
+                stream->submit([&](sycl::handler & cgh) {
+                    cgh.depends_on(debug_event);
+                    cgh.host_task([debug_buf, stream]() {
+                        ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
+                    });
                 });
-            });
+            } else {
+                debug_event.wait();
+                ggml_sycl_free_device_tracked_bytes(debug_buf, 256 * sizeof(float), *stream);
+            }
         } else {
             stream->parallel_for(
                 sycl::nd_range<3>(block_nums * block_dims, block_dims),

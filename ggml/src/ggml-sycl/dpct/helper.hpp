@@ -950,16 +950,31 @@ namespace dpct
             std::string filter = "";
             char* env = getenv("ONEAPI_DEVICE_SELECTOR");
             if (env) {
-                if (std::strstr(env, "level_zero")) {
+                const std::string selector = env;
+                const bool has_level_zero = selector.find("level_zero") != std::string::npos;
+                const bool has_opencl     = selector.find("opencl") != std::string::npos;
+                const bool has_cuda       = selector.find("cuda") != std::string::npos;
+                const bool has_hip        = selector.find("hip") != std::string::npos;
+                const int backend_count   = static_cast<int>(has_level_zero) + static_cast<int>(has_opencl) +
+                                          static_cast<int>(has_cuda) + static_cast<int>(has_hip);
+
+                // Mixed backend selectors (for example "level_zero:0;opencl:cpu")
+                // need all matching platforms visible; forcing a single platform
+                // would hide CPU devices and break host offload.
+                if (backend_count > 1) {
+                    return "";
+                }
+
+                if (has_level_zero) {
                     filter = "level-zero";
                 }
-                else if (std::strstr(env, "opencl")) {
+                else if (has_opencl) {
                     filter = "opencl";
                 }
-                else if (std::strstr(env, "cuda")) {
+                else if (has_cuda) {
                     filter = "cuda";
                 }
-                else if (std::strstr(env, "hip")) {
+                else if (has_hip) {
                     filter = "hip";
                 }
                 else {

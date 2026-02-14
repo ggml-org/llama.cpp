@@ -1053,6 +1053,14 @@ enum class alloc_role : uint8_t {
     OTHER     = 6,
 };
 
+enum class offload_buffer_role : uint8_t {
+    STAGING_SRC0     = 0,
+    STAGING_SRC1     = 1,
+    STAGING_DST      = 2,
+    RETAINED_SCRATCH = 3,
+    OTHER            = 4,
+};
+
 struct alloc_constraints {
     bool must_device               = false;
     bool must_host_pinned          = false;
@@ -1084,6 +1092,21 @@ struct alloc_handle {
     uint64_t         alloc_id = 0;
 };
 
+struct offload_buffer_request {
+    sycl::queue *       queue     = nullptr;
+    int                 device    = -1;
+    size_t              size      = 0;
+    size_t              alignment = 64;
+    offload_buffer_role role      = offload_buffer_role::OTHER;
+    alloc_intent        intent{};
+};
+
+struct offload_buffer_lease {
+    alloc_handle handle{};
+    uint64_t     lease_id = 0;
+    bool         valid    = false;
+};
+
 bool      unified_alloc(const alloc_request & req, alloc_handle * out);
 bool      unified_free(const alloc_handle & handle);
 bool      unified_free_ptr(void * ptr, int expected_device = -1);
@@ -1091,6 +1114,66 @@ bool      unified_lookup(void * ptr, alloc_handle * out);
 alloc_tier unified_select_tier(const alloc_request & req);
 bool      unified_alloc_validate_registry(int device = -1, const char * where = nullptr);
 bool      unified_alloc_strict_mode();
+
+bool      acquire_offload_buffer(const offload_buffer_request & req, offload_buffer_lease * out);
+bool      release_offload_buffer(const offload_buffer_lease & lease);
+void      offload_buffer_pool_trim(int device = -1);
+
+struct offload_stats_snapshot {
+    uint64_t wait_count                 = 0;
+    uint64_t wait_count_forced          = 0;
+    uint64_t wait_count_fallback        = 0;
+    uint64_t alloc_count_host           = 0;
+    uint64_t alloc_count_device         = 0;
+    uint64_t alloc_count_shared         = 0;
+    uint64_t pool_hit_count             = 0;
+    uint64_t pool_miss_count            = 0;
+    uint64_t cross_domain_transfer_count = 0;
+    uint64_t cross_domain_transfer_count_pp = 0;
+    uint64_t cross_domain_transfer_count_tg = 0;
+    uint64_t transfer_bytes_h2d         = 0;
+    uint64_t transfer_bytes_d2h         = 0;
+    uint64_t transfer_bytes_h2d_pp      = 0;
+    uint64_t transfer_bytes_h2d_tg      = 0;
+    uint64_t transfer_bytes_d2h_pp      = 0;
+    uint64_t transfer_bytes_d2h_tg      = 0;
+    uint64_t dispatch_count_cpu         = 0;
+    uint64_t dispatch_count_gpu         = 0;
+    uint64_t dispatch_count_gpu_island  = 0;
+    uint64_t dispatch_count_cpu_pp      = 0;
+    uint64_t dispatch_count_cpu_tg      = 0;
+    uint64_t dispatch_count_gpu_pp      = 0;
+    uint64_t dispatch_count_gpu_tg      = 0;
+    uint64_t dispatch_count_gpu_island_pp = 0;
+    uint64_t dispatch_count_gpu_island_tg = 0;
+    uint64_t transition_wait_count      = 0;
+    uint64_t transition_wait_count_pp   = 0;
+    uint64_t transition_wait_count_tg   = 0;
+    uint64_t transition_wait_elided_count = 0;
+    uint64_t transition_wait_elided_count_pp = 0;
+    uint64_t transition_wait_elided_count_tg = 0;
+};
+
+enum class offload_phase : uint8_t {
+    UNKNOWN = 0,
+    PP      = 1,
+    TG      = 2,
+};
+
+bool                  offload_stats_enabled();
+void                  offload_stats_reset();
+void                  offload_stats_set_phase(offload_phase phase);
+offload_phase         offload_stats_phase();
+void                  offload_stats_note_wait(bool fallback = false);
+void                  offload_stats_note_alloc(alloc_tier tier);
+void                  offload_stats_note_pool_hit();
+void                  offload_stats_note_pool_miss();
+void                  offload_stats_note_transfer(bool h2d, size_t bytes);
+void                  offload_stats_note_cross_domain_transfer(size_t bytes);
+void                  offload_stats_note_dispatch(bool cpu, bool gpu_island = false);
+void                  offload_stats_note_transition_wait(bool waited);
+offload_stats_snapshot offload_stats_get();
+void                  offload_stats_log_summary(const char * tag, int device);
 
 class scoped_unified_alloc {
   public:
