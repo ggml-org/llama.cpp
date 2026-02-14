@@ -1206,6 +1206,22 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.vision_expert_query_key_value",  # cogvlm
         ),
 
+        MODEL_TENSOR.INDEXER_K_NORM: (
+            "model.layers.{bid}.self_attn.indexer.k_norm", # DSA
+        ),
+
+        MODEL_TENSOR.INDEXER_PROJ: (
+            "model.layers.{bid}.self_attn.indexer.weights_proj", # DSA
+        ),
+
+        MODEL_TENSOR.INDEXER_ATTN_K: (
+            "model.layers.{bid}.self_attn.indexer.wk", # DSA
+        ),
+
+        MODEL_TENSOR.INDEXER_ATTN_Q_B: (
+            "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
+        ),
+
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (

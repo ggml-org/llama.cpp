@@ -47,6 +47,15 @@ struct block_q4_0
 };
 
 //------------------------------------------------------------------------------
+// block_q4_1
+//------------------------------------------------------------------------------
+struct block_q4_1 {
+    half d; // delta
+    half m; // min
+    uchar qs[QK4_1 / 2]; // nibbles / quants
+};
+
+//------------------------------------------------------------------------------
 // block_q6_K
 //------------------------------------------------------------------------------
 struct block_q6_K {
@@ -145,6 +154,48 @@ kernel void kernel_restore_block_q4_0_noshuffle(
 
         b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
         b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q4_1
+// Convert the block_q4_1 format to 2 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q4_1(
+    global struct block_q4_1 * src0,
+    global uchar * dst_q,
+    global half  * dst_d,
+    global half  * dst_m
+) {
+    global struct block_q4_1 * b = (global struct block_q4_1 *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_1/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+    global half  * m = (global half *) dst_m + get_global_id(0);
+
+    *d = b->d;
+    *m = b->m;
+
+    for (int i = 0; i < QK4_1/2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q4_1(
+    global uchar * src_q,
+    global half  * src_d,
+    global half  * src_m,
+    global struct block_q4_1 * dst
+) {
+    global struct block_q4_1 * b = (global struct block_q4_1 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_1/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+    global half  * m = (global half *) src_m + get_global_id(0);
+
+    b->d = *d;
+    b->m = *m;
+    for (int i = 0; i < QK4_1/2; ++i) {
+        b->qs[i] = q[i];
     }
 }
 
