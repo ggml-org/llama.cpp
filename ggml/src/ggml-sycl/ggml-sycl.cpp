@@ -6935,6 +6935,7 @@ static ggml_backend_buffer_t tiered_kv_buft_alloc_buffer(ggml_backend_buffer_typ
             }
             return nullptr;
         }
+        ggml_sycl::offload_stats_note_host_alloc("kv_tier:cold_host", cold_size);
         ggml_sycl::unified_cache_add_runtime_host_bytes(cold_size);
     }
 
@@ -9889,6 +9890,7 @@ void * ggml_sycl_malloc_host(size_t size, const sycl::queue & queue, const char 
     }
     if (ptr != nullptr) {
         ggml_sycl_alloc_trace_record("host", size, tag);
+        ggml_sycl::offload_stats_note_host_alloc(tag ? tag : "malloc_host", size);
     }
     return ptr;
 }

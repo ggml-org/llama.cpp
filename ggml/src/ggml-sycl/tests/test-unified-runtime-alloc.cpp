@@ -474,6 +474,31 @@ static bool offload_transition_wait_stats_split_by_phase() {
     return true;
 }
 
+static bool offload_host_alloc_stats_split_by_tag() {
+    TEST_BEGIN("offload_host_alloc_stats_split_by_tag");
+    offload_stats_reset();
+
+    offload_stats_note_host_alloc("unified_alloc:host", 128);
+    offload_stats_note_host_alloc("unified_alloc:host", 64);
+    offload_stats_note_host_alloc("unified_cache:host_chunk", 256);
+    offload_stats_note_host_alloc("host_malloc", 512);
+    offload_stats_note_host_alloc("custom:other", 32);
+
+    const offload_stats_snapshot stats = offload_stats_get();
+    TEST_ASSERT(stats.host_alloc_call_count == 5, "unexpected host_alloc_call_count");
+    TEST_ASSERT(stats.host_alloc_bytes == 992, "unexpected host_alloc_bytes");
+    TEST_ASSERT(stats.host_alloc_calls_unified_alloc_host == 2, "unexpected unified_alloc host calls");
+    TEST_ASSERT(stats.host_alloc_bytes_unified_alloc_host == 192, "unexpected unified_alloc host bytes");
+    TEST_ASSERT(stats.host_alloc_calls_unified_cache_host_chunk == 1, "unexpected host_chunk calls");
+    TEST_ASSERT(stats.host_alloc_bytes_unified_cache_host_chunk == 256, "unexpected host_chunk bytes");
+    TEST_ASSERT(stats.host_alloc_calls_host_malloc == 1, "unexpected host_malloc calls");
+    TEST_ASSERT(stats.host_alloc_bytes_host_malloc == 512, "unexpected host_malloc bytes");
+    TEST_ASSERT(stats.host_alloc_calls_other == 1, "unexpected other calls");
+    TEST_ASSERT(stats.host_alloc_bytes_other == 32, "unexpected other bytes");
+    TEST_PASS();
+    return true;
+}
+
 int main() {
     fprintf(stderr, "===========================================\n");
     fprintf(stderr, "Unified Runtime Allocator Tests\n");
@@ -514,6 +539,7 @@ int main() {
     ok &= offload_dispatch_counts_split_by_phase();
     ok &= offload_phase_roundtrip();
     ok &= offload_transition_wait_stats_split_by_phase();
+    ok &= offload_host_alloc_stats_split_by_tag();
 
     fprintf(stderr, "-------------------------------------------\n");
     fprintf(stderr, "Tests: %d run, %d passed\n", g_tests_run, g_tests_passed);

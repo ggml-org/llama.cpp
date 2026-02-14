@@ -470,6 +470,7 @@ void * ggml_sycl_host_malloc(size_t size) try {
             GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of TP shared host memory\n", size / 1024.0 / 1024.0);
             return nullptr;
         }
+        ggml_sycl::offload_stats_note_host_alloc("tp_shared_host", size);
         ggml_sycl_alloc_trace_record("host", size, "tp_shared_host");
         {
             std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
@@ -489,6 +490,7 @@ void * ggml_sycl_host_malloc(size_t size) try {
                        "syclGetErrorString is not supported");
         return nullptr;
     }
+    ggml_sycl::offload_stats_note_host_alloc("host_malloc", size);
     ggml_sycl_alloc_trace_record("host", size, "host_malloc");
     {
         std::lock_guard<std::mutex> guard(g_sycl_host_alloc_mutex);
@@ -1766,6 +1768,12 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
         try {
             g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
             g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, *g_pp_shared_context);
+            if (g_pp_transfer_buf[0]) {
+                ggml_sycl::offload_stats_note_host_alloc("pp_shared_transfer", alloc_size);
+            }
+            if (g_pp_transfer_buf[1]) {
+                ggml_sycl::offload_stats_note_host_alloc("pp_shared_transfer", alloc_size);
+            }
         } catch (const sycl::exception & e) {
             GGML_LOG_ERROR("SYCL PP: Failed to allocate host buffers in shared context: %s\n", e.what());
             if (g_pp_transfer_buf[0]) {

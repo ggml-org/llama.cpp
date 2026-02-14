@@ -136,6 +136,18 @@ static std::atomic<uint64_t> g_offload_transition_wait_count_tg{ 0 };
 static std::atomic<uint64_t> g_offload_transition_wait_elided_count{ 0 };
 static std::atomic<uint64_t> g_offload_transition_wait_elided_count_pp{ 0 };
 static std::atomic<uint64_t> g_offload_transition_wait_elided_count_tg{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_call_count{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_bytes{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_calls_unified_alloc_host{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_bytes_unified_alloc_host{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_calls_unified_cache_host_chunk{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_bytes_unified_cache_host_chunk{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_calls_host_malloc{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_bytes_host_malloc{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_calls_other{ 0 };
+static std::atomic<uint64_t> g_offload_host_alloc_bytes_other{ 0 };
+static std::mutex g_offload_host_alloc_by_tag_mutex;
+static std::unordered_map<std::string, std::pair<uint64_t, uint64_t>> g_offload_host_alloc_by_tag;
 static std::atomic<int>      g_offload_phase{ static_cast<int>(offload_phase::UNKNOWN) };
 
 static int get_device_id_from_queue(sycl::queue & queue);
@@ -247,6 +259,20 @@ void offload_stats_reset() {
     g_offload_transition_wait_elided_count.store(0, std::memory_order_relaxed);
     g_offload_transition_wait_elided_count_pp.store(0, std::memory_order_relaxed);
     g_offload_transition_wait_elided_count_tg.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_call_count.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_calls_unified_alloc_host.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes_unified_alloc_host.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_calls_unified_cache_host_chunk.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes_unified_cache_host_chunk.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_calls_host_malloc.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes_host_malloc.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_calls_other.store(0, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes_other.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(g_offload_host_alloc_by_tag_mutex);
+        g_offload_host_alloc_by_tag.clear();
+    }
     g_offload_phase.store(static_cast<int>(offload_phase::UNKNOWN), std::memory_order_relaxed);
 }
 
@@ -384,6 +410,41 @@ void offload_stats_note_transition_wait(bool waited) {
     }
 }
 
+void offload_stats_note_host_alloc(const char * tag, size_t bytes) {
+    if (bytes == 0) {
+        return;
+    }
+    g_offload_host_alloc_call_count.fetch_add(1, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes.fetch_add(bytes, std::memory_order_relaxed);
+
+    const std::string tag_s = tag && tag[0] != '\0' ? std::string(tag) : std::string("(unknown)");
+    {
+        std::lock_guard<std::mutex> lock(g_offload_host_alloc_by_tag_mutex);
+        auto & entry = g_offload_host_alloc_by_tag[tag_s];
+        entry.first += 1;
+        entry.second += bytes;
+    }
+
+    if (tag_s == "unified_alloc:host") {
+        g_offload_host_alloc_calls_unified_alloc_host.fetch_add(1, std::memory_order_relaxed);
+        g_offload_host_alloc_bytes_unified_alloc_host.fetch_add(bytes, std::memory_order_relaxed);
+        return;
+    }
+    if (tag_s.find("unified_cache:host_chunk") != std::string::npos ||
+        tag_s.find("unified_cache:host_temp") != std::string::npos) {
+        g_offload_host_alloc_calls_unified_cache_host_chunk.fetch_add(1, std::memory_order_relaxed);
+        g_offload_host_alloc_bytes_unified_cache_host_chunk.fetch_add(bytes, std::memory_order_relaxed);
+        return;
+    }
+    if (tag_s == "host_malloc" || tag_s == "tp_shared_host") {
+        g_offload_host_alloc_calls_host_malloc.fetch_add(1, std::memory_order_relaxed);
+        g_offload_host_alloc_bytes_host_malloc.fetch_add(bytes, std::memory_order_relaxed);
+        return;
+    }
+    g_offload_host_alloc_calls_other.fetch_add(1, std::memory_order_relaxed);
+    g_offload_host_alloc_bytes_other.fetch_add(bytes, std::memory_order_relaxed);
+}
+
 offload_stats_snapshot offload_stats_get() {
     offload_stats_snapshot s{};
     s.wait_count                  = g_offload_wait_count.load(std::memory_order_relaxed);
@@ -418,7 +479,40 @@ offload_stats_snapshot offload_stats_get() {
     s.transition_wait_elided_count = g_offload_transition_wait_elided_count.load(std::memory_order_relaxed);
     s.transition_wait_elided_count_pp = g_offload_transition_wait_elided_count_pp.load(std::memory_order_relaxed);
     s.transition_wait_elided_count_tg = g_offload_transition_wait_elided_count_tg.load(std::memory_order_relaxed);
+    s.host_alloc_call_count = g_offload_host_alloc_call_count.load(std::memory_order_relaxed);
+    s.host_alloc_bytes = g_offload_host_alloc_bytes.load(std::memory_order_relaxed);
+    s.host_alloc_calls_unified_alloc_host = g_offload_host_alloc_calls_unified_alloc_host.load(std::memory_order_relaxed);
+    s.host_alloc_bytes_unified_alloc_host = g_offload_host_alloc_bytes_unified_alloc_host.load(std::memory_order_relaxed);
+    s.host_alloc_calls_unified_cache_host_chunk =
+        g_offload_host_alloc_calls_unified_cache_host_chunk.load(std::memory_order_relaxed);
+    s.host_alloc_bytes_unified_cache_host_chunk =
+        g_offload_host_alloc_bytes_unified_cache_host_chunk.load(std::memory_order_relaxed);
+    s.host_alloc_calls_host_malloc = g_offload_host_alloc_calls_host_malloc.load(std::memory_order_relaxed);
+    s.host_alloc_bytes_host_malloc = g_offload_host_alloc_bytes_host_malloc.load(std::memory_order_relaxed);
+    s.host_alloc_calls_other = g_offload_host_alloc_calls_other.load(std::memory_order_relaxed);
+    s.host_alloc_bytes_other = g_offload_host_alloc_bytes_other.load(std::memory_order_relaxed);
     return s;
+}
+
+static std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> offload_host_alloc_top_by_calls(size_t top_n) {
+    std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> rows;
+    {
+        std::lock_guard<std::mutex> lock(g_offload_host_alloc_by_tag_mutex);
+        rows.reserve(g_offload_host_alloc_by_tag.size());
+        for (const auto & it : g_offload_host_alloc_by_tag) {
+            rows.push_back(it);
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto & a, const auto & b) {
+        if (a.second.first != b.second.first) {
+            return a.second.first > b.second.first;
+        }
+        return a.second.second > b.second.second;
+    });
+    if (rows.size() > top_n) {
+        rows.resize(top_n);
+    }
+    return rows;
 }
 
 void offload_stats_log_summary(const char * tag, int device) {
@@ -442,7 +536,12 @@ void offload_stats_log_summary(const char * tag, int device) {
             "dispatch_count_gpu_pp=%llu dispatch_count_gpu_tg=%llu "
             "dispatch_count_gpu_island_pp=%llu dispatch_count_gpu_island_tg=%llu "
             "transition_wait_count=%llu transition_wait_count_pp=%llu transition_wait_count_tg=%llu "
-            "transition_wait_elided_count=%llu transition_wait_elided_count_pp=%llu transition_wait_elided_count_tg=%llu\n",
+            "transition_wait_elided_count=%llu transition_wait_elided_count_pp=%llu transition_wait_elided_count_tg=%llu "
+            "host_alloc_call_count=%llu host_alloc_bytes=%llu "
+            "host_alloc_calls_unified_alloc_host=%llu host_alloc_bytes_unified_alloc_host=%llu "
+            "host_alloc_calls_unified_cache_host_chunk=%llu host_alloc_bytes_unified_cache_host_chunk=%llu "
+            "host_alloc_calls_host_malloc=%llu host_alloc_bytes_host_malloc=%llu "
+            "host_alloc_calls_other=%llu host_alloc_bytes_other=%llu\n",
             tag ? tag : "graph",
             device,
             (unsigned long long) s.wait_count,
@@ -477,7 +576,47 @@ void offload_stats_log_summary(const char * tag, int device) {
             (unsigned long long) s.transition_wait_count_tg,
             (unsigned long long) s.transition_wait_elided_count,
             (unsigned long long) s.transition_wait_elided_count_pp,
-            (unsigned long long) s.transition_wait_elided_count_tg);
+            (unsigned long long) s.transition_wait_elided_count_tg,
+            (unsigned long long) s.host_alloc_call_count,
+            (unsigned long long) s.host_alloc_bytes,
+            (unsigned long long) s.host_alloc_calls_unified_alloc_host,
+            (unsigned long long) s.host_alloc_bytes_unified_alloc_host,
+            (unsigned long long) s.host_alloc_calls_unified_cache_host_chunk,
+            (unsigned long long) s.host_alloc_bytes_unified_cache_host_chunk,
+            (unsigned long long) s.host_alloc_calls_host_malloc,
+            (unsigned long long) s.host_alloc_bytes_host_malloc,
+            (unsigned long long) s.host_alloc_calls_other,
+            (unsigned long long) s.host_alloc_bytes_other);
+
+    int top_n = 5;
+    if (const char * env = std::getenv("GGML_SYCL_HOST_ALLOC_TOP")) {
+        top_n = std::max(1, std::atoi(env));
+    }
+    const auto rows = offload_host_alloc_top_by_calls(static_cast<size_t>(top_n));
+    if (!rows.empty()) {
+        fprintf(stderr, "[SYCL-OFFLOAD-HOST-ALLOC] tag=%s device=%d top=%d",
+                tag ? tag : "graph", device, top_n);
+        for (const auto & row : rows) {
+            fprintf(stderr, " [%s calls=%llu bytes=%llu]",
+                    row.first.c_str(),
+                    (unsigned long long) row.second.first,
+                    (unsigned long long) row.second.second);
+        }
+        fprintf(stderr, "\n");
+    }
+
+    long warn_calls = 0;
+    if (const char * env = std::getenv("GGML_SYCL_HOST_ALLOC_WARN_CALLS")) {
+        warn_calls = std::strtol(env, nullptr, 10);
+    }
+    if (warn_calls > 0 && s.host_alloc_call_count > static_cast<uint64_t>(warn_calls)) {
+        fprintf(stderr,
+                "[SYCL-OFFLOAD-HOST-ALLOC] WARN tag=%s device=%d host_alloc_call_count=%llu exceeds threshold=%ld\n",
+                tag ? tag : "graph",
+                device,
+                (unsigned long long) s.host_alloc_call_count,
+                warn_calls);
+    }
 }
 
 static bool parse_env_mb_value(const char * name, size_t & out_mb) {

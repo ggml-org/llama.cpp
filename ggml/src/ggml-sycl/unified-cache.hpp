@@ -1152,6 +1152,16 @@ struct offload_stats_snapshot {
     uint64_t transition_wait_elided_count = 0;
     uint64_t transition_wait_elided_count_pp = 0;
     uint64_t transition_wait_elided_count_tg = 0;
+    uint64_t host_alloc_call_count = 0;
+    uint64_t host_alloc_bytes      = 0;
+    uint64_t host_alloc_calls_unified_alloc_host = 0;
+    uint64_t host_alloc_bytes_unified_alloc_host = 0;
+    uint64_t host_alloc_calls_unified_cache_host_chunk = 0;
+    uint64_t host_alloc_bytes_unified_cache_host_chunk = 0;
+    uint64_t host_alloc_calls_host_malloc = 0;
+    uint64_t host_alloc_bytes_host_malloc = 0;
+    uint64_t host_alloc_calls_other = 0;
+    uint64_t host_alloc_bytes_other = 0;
 };
 
 enum class offload_phase : uint8_t {
@@ -1172,6 +1182,7 @@ void                  offload_stats_note_transfer(bool h2d, size_t bytes);
 void                  offload_stats_note_cross_domain_transfer(size_t bytes);
 void                  offload_stats_note_dispatch(bool cpu, bool gpu_island = false);
 void                  offload_stats_note_transition_wait(bool waited);
+void                  offload_stats_note_host_alloc(const char * tag, size_t bytes);
 offload_stats_snapshot offload_stats_get();
 void                  offload_stats_log_summary(const char * tag, int device);
 
