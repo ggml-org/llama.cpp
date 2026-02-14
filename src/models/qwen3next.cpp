@@ -183,11 +183,13 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
     identity = ggml_diag   (ctx0, identity);
 
     ggml_tensor * lhs = ggml_add(ctx0, attn, identity);
+    cb(lhs, "dnet_add_ch_lhs", il);
+
     attn = ggml_neg(ctx0, attn);
 
     ggml_tensor * lin_solve = ggml_solve_tri(ctx0, lhs, attn, true, true, false);
     attn = ggml_add(ctx0, lin_solve, identity);
-    cb(attn, "attn_solved", il); // [CS, CS, n_chunks, H_k * n_seqs]
+    cb(attn, "dnet_add_ch_attn_solved", il); // [CS, CS, n_chunks, H_k * n_seqs]
 
     // [S_v, CS, n_chunks, H_v * n_seqs]
     v = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, v_b)), attn);
@@ -257,6 +259,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
 
     ggml_tensor * s_t = ggml_transpose(ctx0, s);
     s_t = ggml_cont_4d(ctx0, s_t, S_v, S_v, 1, H_v * n_seqs);
+    cb(s_t, "dnet_add_ch_state", il);
 
     // [CS, S_v, n_chunks, H_v * n_seqs]
     ggml_tensor * v_t = ggml_cont(ctx0, ggml_transpose(ctx0, v));
@@ -286,7 +289,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
 
         // [S_v, CS, 1, H_v * n_seqs]
         ggml_tensor * o_ch = ggml_add(ctx0, attn_inter, v_attn);
-        cb(o_ch, "core_attn_out", il);
+        cb(o_ch, "dnet_add_ch_attn_out", il);
 
         v = ggml_set_inplace(ctx0, v, o_ch, v->nb[1], v->nb[2], v->nb[3], chunk * v->nb[2]);
 
@@ -298,6 +301,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_chu
         ggml_tensor * ch_g_last_exp = get_slice_2d(ctx0, g_last_exp, chunk);
         s_t = ggml_mul(ctx0, s_t, ch_g_last_exp);
         s_t = ggml_add(ctx0, s_t, kgv);
+        cb(s_t, "dnet_add_ch_state", il);
     }
 
     s_t = ggml_reshape_4d(ctx0, s_t, S_v, S_v, H_v, n_seqs);
@@ -387,6 +391,8 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_delta_net_aut
     kd = ggml_mul   (ctx0, k, d_t);
 
     s_t = ggml_add(ctx0, s_t, kd);
+
+    cb(s_t, "dnet_add_ar_state", il);
 
     ggml_tensor * s_q = ggml_mul     (ctx0, s_t, q);
     ggml_tensor * o   = ggml_sum_rows(ctx0, s_q);
