@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
-	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { ChatAttachmentsList, LazyMarkdownContent, MarkdownContent } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
@@ -128,7 +128,7 @@
 			>
 				{#if currentConfig.renderUserContentAsMarkdown}
 					<div bind:this={messageElement} class="text-md">
-						<MarkdownContent
+						<LazyMarkdownContent
 							class="markdown-user-content text-primary-foreground"
 							content={message.content}
 						/>

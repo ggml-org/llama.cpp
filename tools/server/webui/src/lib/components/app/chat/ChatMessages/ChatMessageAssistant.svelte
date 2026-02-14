@@ -5,6 +5,7 @@
 		ChatMessageStatistics,
 		ChatMessageThinkingBlock,
 		CopyToClipboardIcon,
+		LazyMarkdownContent,
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
@@ -243,7 +244,11 @@
 	{:else if message.role === 'assistant'}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else if message.timestamp && !isLoading()}
+			<!-- Completed message: use lazy loading for performance with many messages -->
+			<LazyMarkdownContent content={messageContent || ''} />
 		{:else}
+			<!-- Streaming message: render immediately -->
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
 	{:else}

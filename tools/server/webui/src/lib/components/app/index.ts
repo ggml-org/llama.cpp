@@ -62,6 +62,7 @@ export { default as BadgeModality } from './misc/BadgeModality.svelte';
 export { default as ConversationSelection } from './misc/ConversationSelection.svelte';
 export { default as CopyToClipboardIcon } from './misc/CopyToClipboardIcon.svelte';
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
+export { default as LazyMarkdownContent } from './misc/LazyMarkdownContent.svelte';
 export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
 export { default as RemoveButton } from './misc/RemoveButton.svelte';
 export { default as SearchInput } from './misc/SearchInput.svelte';
