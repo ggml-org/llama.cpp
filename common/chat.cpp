@@ -2029,9 +2029,25 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto has_reasoning_content = msg.contains("reasoning_content") && msg.at("reasoning_content").is_string();
         auto has_tool_calls = msg.contains("tool_calls") && msg.at("tool_calls").is_array();
 
-        if (has_reasoning_content && has_tool_calls) {
+
+        if (msg.at("role") == "tool")
+        {
+                auto adjusted_message = msg;
+                std::string response = msg.value("content",std::string());
+                adjusted_message["content"] = json::parse(response);
+                adjusted_messages.push_back(adjusted_message);
+        } else if (has_tool_calls) {
             auto adjusted_message = msg;
-            adjusted_message["thinking"] = msg.at("reasoning_content");
+            if(has_reasoning_content)
+            {
+                adjusted_message["thinking"] = msg.at("reasoning_content");
+            }
+            for ( auto& tool_call : adjusted_message.at("tool_calls"))
+            {
+                auto& function = tool_call.at("function");
+                std::string args = function.value("arguments",std::string());
+                function["arguments"] = json::parse(args);
+            }
             adjusted_messages.push_back(adjusted_message);
         } else {
             adjusted_messages.push_back(msg);
