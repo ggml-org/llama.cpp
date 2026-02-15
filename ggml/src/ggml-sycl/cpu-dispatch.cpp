@@ -552,6 +552,94 @@ static bool        g_staging_flush_pending[STAGING_BANKS] = { false, false };
 static sycl::event g_staging_compute_evt[STAGING_BANKS];
 static bool        g_staging_compute_pending[STAGING_BANKS] = { false, false };
 
+// ---------------------------------------------------------------------------
+// Compute buffer mirror: host-pinned copy of the VRAM compute buffer.
+// CPU ops read/write the mirror directly via offset mapping.  Boundary memcpys
+// at GPU↔CPU transitions replace per-op D2H/H2D staging, reducing ~200+ copies
+// per token to ~5-7 boundary copies.
+// ---------------------------------------------------------------------------
+static struct {
+    void * host_base = nullptr;   // host-pinned mirror (sycl::malloc_host)
+    void * vram_base = nullptr;   // VRAM compute buffer base pointer
+    size_t size      = 0;         // buffer size in bytes
+    bool   active    = false;
+} g_compute_mirror;
+
+static inline bool is_in_compute_mirror(const void * ptr) {
+    if (!g_compute_mirror.active || !ptr) {
+        return false;
+    }
+    uintptr_t p = (uintptr_t) ptr;
+    uintptr_t b = (uintptr_t) g_compute_mirror.vram_base;
+    return p >= b && p < b + g_compute_mirror.size;
+}
+
+static inline void * compute_mirror_host_ptr(const void * vram_ptr) {
+    return (char *) g_compute_mirror.host_base + ((uintptr_t) vram_ptr - (uintptr_t) g_compute_mirror.vram_base);
+}
+
+void ggml_sycl_compute_mirror_init(void * vram_base, size_t size, sycl::queue * q) {
+    if (g_compute_mirror.active) {
+        return;  // already allocated
+    }
+    if (!vram_base || size == 0 || !q) {
+        return;
+    }
+    try {
+        void * host = sycl::malloc_host(size, *q);
+        if (!host) {
+            GGML_LOG_WARN("[COMPUTE-MIRROR] Failed to allocate %zu bytes host mirror\n", size);
+            return;
+        }
+        g_compute_mirror.host_base = host;
+        g_compute_mirror.vram_base = vram_base;
+        g_compute_mirror.size      = size;
+        g_compute_mirror.active    = true;
+        GGML_LOG_INFO("[COMPUTE-MIRROR] Allocated %.2f MiB host mirror for zero-staging CPU offload\n",
+                      size / (1024.0 * 1024.0));
+    } catch (const sycl::exception & e) {
+        GGML_LOG_WARN("[COMPUTE-MIRROR] sycl::malloc_host failed: %s\n", e.what());
+    }
+}
+
+void ggml_sycl_compute_mirror_teardown(sycl::queue * q) {
+    if (!g_compute_mirror.active) {
+        return;
+    }
+    if (g_compute_mirror.host_base && q) {
+        sycl::free(g_compute_mirror.host_base, *q);
+    }
+    g_compute_mirror = {};
+}
+
+bool ggml_sycl_compute_mirror_active() {
+    return g_compute_mirror.active;
+}
+
+void ggml_sycl_compute_mirror_sync_to_host(const ggml_tensor * t, sycl::queue * q) {
+    if (!g_compute_mirror.active || !t || !t->data) {
+        return;
+    }
+    if (!is_in_compute_mirror(t->data)) {
+        return;
+    }
+    void * mirror = compute_mirror_host_ptr(t->data);
+    size_t nbytes = ggml_nbytes(t);
+    q->memcpy(mirror, t->data, nbytes);
+}
+
+void ggml_sycl_compute_mirror_sync_to_device(const ggml_tensor * t, sycl::queue * q) {
+    if (!g_compute_mirror.active || !t || !t->data) {
+        return;
+    }
+    if (!is_in_compute_mirror(t->data)) {
+        return;
+    }
+    void * mirror = compute_mirror_host_ptr(t->data);
+    size_t nbytes = ggml_nbytes(t);
+    q->memcpy(t->data, mirror, nbytes);
+}
+
 static void staging_track_cpu_event(const sycl::event & evt) {
     try {
         if (!ggml_sycl_should_add_dependency(evt)) {
@@ -753,6 +841,16 @@ static void * get_host_ptr(const ggml_tensor * t,
     }
 
     // Non-weight tensors (activations, compute buffers).
+    // Compute buffer mirror: return host mirror pointer directly.
+    // The mirror is synced at GPU↔CPU boundaries in graph_compute_impl,
+    // so no per-tensor D2H copy is needed here.
+    if (g_compute_mirror.active && is_in_compute_mirror(t->data)) {
+        if (out_event) {
+            *out_event = sycl::event{};
+        }
+        return compute_mirror_host_ptr(t->data);
+    }
+
     // Check persistent staging cache for leaf tensors.
     // Leaf tensors (RoPE freqs, masks) have stable data between tokens.
     if (t->data) {
@@ -889,6 +987,11 @@ static void flush_output(ggml_tensor *       t,
     if (g_retained_active && g_retained_map.count(t)) {
         return;
     }
+    // Compute buffer mirror: skip per-op H2D flush.  CPU wrote to the host
+    // mirror, and boundary sync in graph_compute_impl copies mirror→VRAM.
+    if (g_compute_mirror.active && is_in_compute_mirror(t->data)) {
+        return;
+    }
     void * dev_ptr = ggml_sycl_get_data_ptr(t, device);
     auto & entry   = g_cpu_staging[g_staging_bank][2];
     if (!dev_ptr || !entry.ptr) {
@@ -925,6 +1028,10 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
     // Host-accessible buffer → use tensor->data directly
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return t->data;
+    }
+    // Compute buffer mirror: write directly to mirror.  Boundary sync handles H2D.
+    if (g_compute_mirror.active && is_in_compute_mirror(t->data)) {
+        return compute_mirror_host_ptr(t->data);
     }
     // Device-resident: allocate staging but don't copy (will be written by kernel)
     size_t nbytes = ggml_nbytes(t);
