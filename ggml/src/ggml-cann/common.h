@@ -46,6 +46,7 @@
 
 #define MATRIX_ROW_PADDING    512
 #define GGML_CANN_MAX_STREAMS 8
+#define GGML_CANN_NUM_COMPUTE_STREAMS 4  // Number of streams for parallel compute
 
 /**
  * @brief Handles CANN-related errors by printing an error message and
@@ -564,6 +565,15 @@ struct ggml_backend_cann_context {
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = { nullptr }; /**< Array of streams for the device. */
 
+    // Multi-stream parallel execution support
+    bool multi_stream_enabled = false;  /**< Whether multi-stream execution is enabled. */
+    int current_stream_idx = 0;         /**< Current stream index for round-robin scheduling. */
+    aclrtEvent stream_events[GGML_CANN_NUM_COMPUTE_STREAMS] = { nullptr }; /**< Events for stream synchronization. */
+    std::vector<const ggml_tensor *> unsynced_nodes; /**< Nodes that have been executed but not synced. */
+
+    // Operator fusion support
+    bool operator_fusion_enabled = false; /**< Whether operator fusion is enabled. */
+
     /**
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
@@ -577,6 +587,25 @@ struct ggml_backend_cann_context {
         GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
                       acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
 #endif
+
+        // Read environment variables for multi-stream and operator fusion
+        multi_stream_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_MULTI_STREAM").value_or(""));
+        operator_fusion_enabled = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
+
+        // Handle conflicts and set final values
+#ifdef USE_ACL_GRAPH
+        if (acl_graph_mode && multi_stream_enabled) {
+            // ACL graph has higher performance, disable multi-stream
+            multi_stream_enabled = false;
+            GGML_LOG_WARN("%s: device %d multi-stream disabled when ACL graph mode is enabled\n", 
+                          __func__, device);
+        } else
+#endif
+        if (multi_stream_enabled && operator_fusion_enabled) {
+            // Multi-stream enabled, disable operator fusion (fusion has low benefit with multi-stream)
+            GGML_LOG_WARN("%s: device %d operator fusion is not supported in multi-stream mode\n", 
+                            __func__, device);
+        }
     }
 
     /**
@@ -590,6 +619,12 @@ struct ggml_backend_cann_context {
         for (int i = 0; i < GGML_CANN_MAX_STREAMS; ++i) {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
+            }
+        }
+        // Clean up multi-stream events
+        for (int i = 0; i < GGML_CANN_NUM_COMPUTE_STREAMS; ++i) {
+            if (stream_events[i] != nullptr) {
+                ACL_CHECK(aclrtDestroyEvent(stream_events[i]));
             }
         }
     }
