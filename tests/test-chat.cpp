@@ -3555,9 +3555,26 @@ Hey there!<|im_end|>
     }
 
     {
-        // Step-3.5-Flash template (uses same XML format as Qwen3-Coder but lacks <function> and <parameters> markers)
+        // Step-3.5-Flash template: uses same XML output format as Qwen3-Coder and Nemotron v3,
+        // but with <think> support. Routes to the Nemotron v3 PEG parser for streaming and
+        // schema-aware parameter parsing.
         auto tmpls = read_templates("models/templates/stepfun-ai-Step-3.5-Flash.jinja");
-        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Grammar and PEG parser should be generated with thinking_forced_open
+        {
+            common_chat_templates_inputs inputs;
+            inputs.messages = { message_user };
+            inputs.tools = { special_function_tool };
+            inputs.enable_thinking = true;
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params.format);
+            assert_equals(true, params.thinking_forced_open);
+            assert_equals(false, params.grammar.empty());
+            assert_equals(false, params.parser.empty());
+            auto grammar = build_grammar(params.grammar);
+            GGML_ASSERT(grammar && "Failed to build Step-3.5-Flash grammar with thinking_forced_open");
+        }
     }
 }
 
@@ -3792,6 +3809,196 @@ static void test_template_output_peg_parsers() {
         });
 
         // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+              "I need to output the invoice details in JSON\n"
+              "</think>\n"
+              R"({"amount": 123.45, "date": "2025-12-03"})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
+    {
+        // Step-3.5-Flash (uses Nemotron v3 PEG parser with thinking_forced_open)
+        // Unlike Nemotron, Step-3.5-Flash always emits <think> regardless of enable_thinking,
+        // so all inputs must include a </think> delimiter.
+        auto tmpls = read_templates("models/templates/stepfun-ai-Step-3.5-Flash.jinja");
+
+        // Test basic message with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test basic message without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "</think>\nHello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist;
+        });
+
+        // Test tool call without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with thinking
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls with thinking
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.reasoning_content = "I'm\nthinking";
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test parallel tool calls without thinking content
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with code string parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter and no closing </parameter> tag
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "</think>\n"
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format (JSON schema with thinking)
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input =
               "I need to output the invoice details in JSON\n"
