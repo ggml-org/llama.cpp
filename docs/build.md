@@ -13,6 +13,21 @@ cd llama.cpp
 
 The following sections describe how to build with different backends and options.
 
+* [CPU Build](#cpu-build)
+* [BLAS Build](#blas-build)
+* [Metal Build](#metal-build)
+* [SYCL](#sycl)
+* [CUDA](#cuda)
+* [MUSA](#musa)
+* [HIP](#hip)
+* [Vulkan](#vulkan)
+* [CANN](#cann)
+* [Arm® KleidiAI™](#arm-kleidiai)
+* [OpenCL](#opencl)
+* [Android](#android-1)
+* [OpenVINO](#openvino)
+* [Notes about GPU-accelerated backends](#notes-about-gpu-accelerated-backends)
+
 ## CPU Build
 
 Build llama.cpp using `CMake`:
@@ -718,6 +733,190 @@ Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/m
 
 To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
 
+## OpenVINO
+
+[OpenVINO](https://docs.openvino.ai/2025/index.html) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
+The OpenVINO backend enhances performance by leveraging hardware-specific optimizations and can be enabled for use with llama.cpp.
+
+Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support. For more detailed information on OpenVINO backend, refer to [OPENVINO.md](backend/OPENVINO.md)
+
+### Prerequisites
+
+- Linux or Windows system with Intel hardware (CPU, GPU, or NPU)
+- **For Intel GPU or NPU Usage**: Install the appropriate hardware drivers for your Intel GPU or NPU. For detailed instructions, see: [Additional Configurations for Hardware Acceleration](https://docs.openvino.ai/2025/get-started/install-openvino/configurations.html).
+
+- **Linux:**
+    - Git, CMake, and Ninja software tools are needed for building.
+    ```bash
+      sudo apt-get update
+      sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
+    ```
+    - OpenCL
+    ```bash
+        sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+    ```
+
+- **Windows:**
+    - Download Microsoft.VisualStudio.2022.BuildTools: [Visual_Studio_Build_Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
+    Select "Desktop development with C++" under workloads
+    - Install git
+    - Install OpenCL with vcpkg
+      ```powershell
+      cd C:\
+      git clone https://github.com/microsoft/vcpkg
+      cd vcpkg
+      bootstrap-vcpkg.bat
+      vcpkg install opencl
+      ```
+    - Use "x64 Native Tools Command Prompt" for Build
+
+### 1. Install OpenVINO Runtime
+
+- Follow the guide to install OpenVINO Runtime from an archive file: [Linux](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html) | [Windows](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-windows.html)
+
+- **Linux:**
+
+    <details>
+    <summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
+    <br>
+
+    ```bash
+    wget https://raw.githubusercontent.com/ravi9/misc-scripts/main/openvino/ov-archive-install/install-openvino-from-archive.sh
+    chmod +x install-openvino-from-archive.sh
+    ./install-openvino-from-archive.sh
+    ```
+
+    Verify OpenVINO is initialized properly:
+    ```bash
+    echo $OpenVINO_DIR
+    ```
+    </details>
+
+
+### 2. Build llama.cpp with OpenVINO Backend
+
+Clone the OpenVINO-enabled llama.cpp fork and build it:
+
+```bash
+git clone https://github.com/ravi9/llama.cpp.git
+cd llama.cpp
+git switch dev_backend_openvino
+```
+
+- **Linux:**
+    ```bash
+    source /opt/intel/openvino/setupvars.sh
+    cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
+    cmake --build build/ReleaseOV --parallel
+    ```
+
+- **Windows:**
+    ```bash
+    "C:\Program Files (x86)\Intel\openvino_2025.3.0\setupvars.bat"
+    cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+    cmake --build build\ReleaseOV --parallel
+    ```
+
+### 3. Download Sample Model
+
+Download models for testing:
+
+```bash
+mkdir -p ~/models/
+wget https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf \
+     -O ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
+```
+
+### 4. Run inference with OpenVINO backend:
+
+When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
+
+```bash
+# If device is unset or unavailable, default to CPU.
+export GGML_OPENVINO_DEVICE=GPU
+./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
+```
+
+To run in chat mode:
+```bash
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
+```
+
+### Configuration Options
+
+Control OpenVINO behavior using these environment variables:
+
+-   **`GGML_OPENVINO_DEVICE`**: Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables static compilation mode for optimal performance.
+-   **`GGML_OPENVINO_CACHE_DIR`**: Directory for model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet.
+-   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling.
+-   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`.
+-   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps.
+
+### Example with Profiling
+
+```bash
+GGML_OPENVINO_PROFILING=1 GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
+```
+
+### Docker build Llama.cpp with OpenVINO Backend
+You can build and run llama.cpp with OpenVINO backend using Docker.
+
+```bash
+# Build the base runtime image with compiled shared libraries and minimal dependencies.
+docker build -t llama-openvino:base -f .devops/openvino.Dockerfile .
+
+# Build the complete image with all binaries, Python tools, gguf-py library, and model conversion utilities.
+docker build --target=full -t llama-openvino:full -f .devops/openvino.Dockerfile .
+
+# Build a minimal CLI-only image containing just the llama-cli executable.
+docker build --target=light -t llama-openvino:light -f .devops/openvino.Dockerfile .
+
+# Builds a server-only image with llama-server executable, health check endpoint, and REST API support.
+docker build --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
+
+# If you are behind a proxy:
+docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy --target=light --t llama-openvino:light -f .devops/openvino.Dockerfile .
+```
+
+Run llama.cpp with OpenVINO backend Docker container.
+Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
+
+```bash
+#  Run Docker container
+docker run --rm -it -v ~/models:/models llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+
+# With Intel GPU access (iGPU or dGPU)
+docker run --rm -it -v ~/models:/models \
+--device=/dev/dri --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
+llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+
+# With Intel NPU access
+docker run --rm -it --env GGML_OPENVINO_DEVICE=NPU -v ~/models:/models \
+--device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
+llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+```
+
+Run Llama.cpp Server with OpenVINO Backend
+```bash
+# Run the Server Docker container server
+docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
+
+# In a NEW terminal, test the server with curl
+
+# If you are behind a proxy, make sure to set NO_PROXY to avoid proxy for localhost
+export NO_PROXY=localhost,127.0.0.1
+
+# Test health endpoint
+curl -f http://localhost:8080/health
+
+# Test with a simple prompt
+curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: application/json" \
+ -d '{"messages":[{"role":"user","content":"Write a poem about OpenVINO"}],"max_tokens":100}' | jq .
+
+```
+
+
+---
 ## Notes about GPU-accelerated backends
 
 The GPU may still be used to accelerate some parts of the computation even when using the `-ngl 0` option. You can fully disable GPU acceleration by using `--device none`.
