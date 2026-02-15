@@ -6320,6 +6320,24 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_sycl_set_device(ctx->device);
 
     queue_ptr stream = ctx->stream;
+
+    // Host-pinned buffers (CPU offload compute): Level Zero GPU queue can't memset
+    // host USM pointers (UR_RESULT_ERROR_DEVICE_LOST).  Detect BEFORE touching the
+    // GPU queue — a prior failed host-USM operation may have poisoned the queue.
+    {
+        bool is_host_ptr = false;
+        try {
+            sycl::usm::alloc pt = sycl::get_pointer_type(ctx->dev_ptr, stream->get_context());
+            is_host_ptr = (pt != sycl::usm::alloc::device);
+        } catch (...) {
+            is_host_ptr = true;
+        }
+        if (is_host_ptr) {
+            ::memset(ctx->dev_ptr, value, buffer->size);
+            return;
+        }
+    }
+
     // Keep clear path simple: wait prior work, then submit direct memset.
     // Submitting a dependent event after waiting it can still create extra queue
     // pressure in low-memory scenarios and has triggered UR OOM on some drivers.
@@ -6417,6 +6435,18 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
         GGML_ABORT("Error: Tensor data pointer is null.\n");
     }
     void * target_ptr = static_cast<char *>(tensor->data) + offset;
+    // Host-pinned buffers: Level Zero GPU queue can't memset host USM pointers.
+    bool is_host_ptr = false;
+    try {
+        sycl::usm::alloc pt = sycl::get_pointer_type(target_ptr, stream->get_context());
+        is_host_ptr = (pt != sycl::usm::alloc::device);
+    } catch (...) {
+        is_host_ptr = true;
+    }
+    if (is_host_ptr) {
+        ::memset(target_ptr, value, size);
+        return;
+    }
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memset(target_ptr, value, size)));
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).wait()));
 }
