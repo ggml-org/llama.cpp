@@ -393,6 +393,7 @@ extern "C" {
         void * kv_overrides;                  // pointer to vector containing overrides
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
+        bool dry_run;                         // calculate and show the final quantization size without performing quantization
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
