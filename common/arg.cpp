@@ -3448,6 +3448,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--spec-ckpt-num-tries"}, "N",
+        string_format("number of tries for speculative decoding with recurrent memory (default: %d)", params.speculative.ckpt_num_tries),
+        [](common_params & params, int value) {
+            if (value < 0 || value > 10) {
+                throw std::invalid_argument("number of tries must be between 0 and 10 inclusive");
+            }
+            params.speculative.ckpt_num_tries = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-ctkd", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"
