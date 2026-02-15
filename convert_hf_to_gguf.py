@@ -10966,7 +10966,7 @@ class ModernBertModel(BertModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # these layers act as MLM head, so we don't need them
-        if name.startswith("decoder."):
+        if name.startswith("decoder.") or name.startswith("head.norm"):
             return
 
         if name.startswith("model."):
