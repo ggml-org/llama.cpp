@@ -17,7 +17,7 @@ class LlamacppDatabase extends Dexie {
 
 const db = new LlamacppDatabase();
 import { v4 as uuid } from 'uuid';
-import { MessageRole } from '$lib/enums/chat';
+import { MessageRole } from '$lib/enums';
 
 export class DatabaseService {
 	/**

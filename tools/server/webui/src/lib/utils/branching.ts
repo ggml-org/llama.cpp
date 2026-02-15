@@ -15,7 +15,7 @@
  *        └── message 5 (assistant)
  */
 
-import { MessageRole } from '$lib/enums/chat';
+import { MessageRole } from '$lib/enums';
 
 /**
  * Filters messages to get the conversation path from root to a specific leaf node.

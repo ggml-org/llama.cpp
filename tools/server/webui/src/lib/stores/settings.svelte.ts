@@ -33,7 +33,7 @@
 
 import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import { ParameterSyncService } from '$lib/services/parameter-sync';
+import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
 	configToParameterRecord,

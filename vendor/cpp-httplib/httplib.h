@@ -3336,7 +3336,6 @@ private:
 } // namespace sse
 
 
-
 } // namespace httplib
 
 #endif // CPPHTTPLIB_HTTPLIB_H

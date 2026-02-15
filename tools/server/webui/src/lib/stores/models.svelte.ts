@@ -1,6 +1,6 @@
 import { SvelteSet } from 'svelte/reactivity';
-import { ModelsService } from '$lib/services/models';
-import { PropsService } from '$lib/services/props';
+import { ModelsService } from '$lib/services/models.service';
+import { PropsService } from '$lib/services/props.service';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { serverStore } from '$lib/stores/server.svelte';
 

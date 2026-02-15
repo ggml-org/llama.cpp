@@ -105,7 +105,7 @@
 
 	const { handleModelChange } = useModelChangeValidation({
 		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
-		onSuccess: (modelName) => onRegenerate(modelName)
+		onSuccess: (modelName: string) => onRegenerate(modelName)
 	});
 
 	function handleCopyModel() {
