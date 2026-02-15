@@ -60,6 +60,7 @@ export interface DatabaseMessage {
 	timestamp: number;
 	role: ChatRole;
 	content: string;
+	toolCallId?: string;
 	parent: string;
 	thinking: string;
 	toolCalls?: string;
