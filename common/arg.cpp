@@ -1332,6 +1332,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
+    add_opt(common_arg({ "-ct", "--compute-type" }, "[f32|f16|bf16|default]",
+                       string_format("set intermediate computation precision ('f32', 'f16', 'bf16' or 'default', default: '%s')",
+                                     llama_compute_type_name(params.compute_type)),
+                       [](common_params & params, const std::string & value) {
+                           if (value == "f32") {
+                               params.compute_type = LLAMA_COMPUTE_TYPE_F32;
+                           } else if (value == "f16") {
+                               params.compute_type = LLAMA_COMPUTE_TYPE_F16;
+                           } else if (value == "bf16") {
+                               params.compute_type = LLAMA_COMPUTE_TYPE_BF16;
+                           } else if (value == "default") {
+                               params.compute_type = LLAMA_COMPUTE_TYPE_DEFAULT;
+                           } else {
+                               throw std::runtime_error(
+                                   string_format("error: unknown value for --compute-type: '%s'\n", value.c_str()));
+                           }
+                       }).set_env("LLAMA_ARG_COMPUTE_TYPE"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
