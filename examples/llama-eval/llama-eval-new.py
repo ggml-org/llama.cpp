@@ -278,7 +278,7 @@ class Processor:
                 # Print task completion status
                 pred_display = task_state.pred if task_state.pred else "N/A"
                 success_ratio = correct / total if total > 0 else 0.0
-                print(f"{total:3}/{n_cases:3}  {task_state.case_id:<15} AIME2025   {task_state.prompt[:50]:<50}    {task_state.gold:<10} {pred_display:<10} {'✓' if task_state.correct else '✗'}  [{correct:3}/{total:3}, {success_ratio:.3f}]")
+                print(f"{total:3}/{n_cases:3}  {task_state.case_id:<15} AIME2025   {task_state.prompt[:40]:<40}    {task_state.gold:<10} {pred_display:<10} {'✓' if task_state.correct else '✗'}  [{correct:3}/{total:3}, {success_ratio:.3f}]")
 
                 if self.verbose:
                     print(f"\nCase {total}: {task_state.correct}")
