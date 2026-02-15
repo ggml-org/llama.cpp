@@ -1884,7 +1884,18 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
 
+    // Handle thinking tags (e.g. Step-3.5-Flash unconditionally emits <think>)
+    if (string_ends_with(data.prompt, "<think>\n")) {
+        if (!params.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
+
     data.preserved_tokens = {
+        "<think>",
+        "</think>",
         "<tool_call>",
         "</tool_call>",
         "<function=",
@@ -3129,16 +3140,17 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
-    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
-    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Also matches Step-3.5-Flash which uses the same output format.
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        // Nemotron 3 Nano 30B A3B
-        if (src.find("<think>") != std::string::npos) {
+        // Nemotron 3 Nano 30B A3B: also has bare <function> and plural <parameters>,
+        // which Step-3.5-Flash lacks despite also having <think>
+        if (src.find("<think>") != std::string::npos &&
+            src.find("<function>") != std::string::npos &&
+            src.find("<parameters>") != std::string::npos) {
             return common_chat_params_init_nemotron_v3(tmpl, params);
         }
         return common_chat_params_init_qwen3_coder_xml(tmpl, params);
