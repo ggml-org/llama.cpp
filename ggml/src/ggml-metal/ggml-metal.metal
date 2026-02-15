@@ -2354,6 +2354,7 @@ kernel void kernel_rwkv_wkv7_f32(
     constant    uint & T,
     constant    uint & C,
     constant    uint & H,
+    constant    uint & fuse_exp,
     uint3 tgpig[[threadgroup_position_in_grid]],
     uint3 tpitg[[thread_position_in_threadgroup]],
     uint3   ntg[[threads_per_threadgroup]])  {
@@ -2362,6 +2363,8 @@ kernel void kernel_rwkv_wkv7_f32(
     const uint batch_id = tgpig.x / H;
     const uint head_id = tgpig.x % H;
     const uint tid = tpitg.x;
+
+    constexpr float w_scale = -0.6065306597f; // -exp(-0.5)
 
     if (batch_id >= B || head_id >= H) {
         return;
@@ -2389,7 +2392,7 @@ kernel void kernel_rwkv_wkv7_f32(
     for (uint t = start_t; t < end_t; t += C) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
         _r[tid] = r[t];
-        _w[tid] = w[t];
+        _w[tid] = fuse_exp ? exp(w_scale / (1 + exp(-w[t]))) : w[t];
         _k[tid] = k[t];
         _a[tid] = a[t];
         _b[tid] = b[t];
