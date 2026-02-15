@@ -176,9 +176,14 @@ AIME dataset loaded: 1000 questions
 - [ ] Different success rates work as expected
 
 ## Next Steps
-1. Implement basic server structure
-2. Load AIME dataset
-3. Implement regex matching
-4. Add response generation with success rate
-5. Test with curl commands
-6. Integrate with eval script once simulator works
+
+1. ✓ Implement basic server structure
+2. ✓ Load AIME dataset
+3. ✓ Implement regex matching
+4. ✓ Add response generation with success rate
+5. ✓ Test with curl commands
+6. ✓ Integrate with eval script once simulator works
+7. ✓ Implement eval state object
+8. ✓ Implement processor object
+9. ✓ Add real-time progress reporting
+10. ✓ Add enhanced grading system with LLM judge

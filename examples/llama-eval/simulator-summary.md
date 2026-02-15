@@ -112,10 +112,11 @@ python3 llama-server-simulator.py \
 3. ✓ Question matching with Levenshtein distance
 4. ✓ Response generation with configurable success rate
 5. ✓ Testing with curl requests
-6. ⏭️ Integrate with eval script
-7. ⏭️ Implement eval state object
-8. ⏭️ Implement processor object
-9. ⏭️ Add real-time progress reporting
+6. ✓ Integrate with eval script
+7. ✓ Implement eval state object
+8. ✓ Implement processor object
+9. ✓ Add real-time progress reporting
+10. ✓ Add enhanced grading system with LLM judge
 
 ## Known Limitations
 
@@ -133,3 +134,5 @@ python3 llama-server-simulator.py \
 4. Distributed evaluation
 5. Real-time progress reporting
 6. Eval state serialization
+7. Enhanced grading with LLM judge
+8. Response truncation for better answer extraction
