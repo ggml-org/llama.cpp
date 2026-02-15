@@ -328,3 +328,68 @@ Questions:
 - Updated `_grade_llm()` to use instance variables instead of parameters
 - Simplified Processor initialization to pass judge config to grader
 - Updated startup info to show judge server and model
+
+### llama-eval-new.py GSM8K Dataset Support
+
+**Changes Made:**
+1. **GSM8K Dataset Integration** - Added support for GSM8K dataset alongside AIME
+   - Created `Gsm8kDataset` class with proper answer extraction logic
+   - GSM8K uses `"question"` field instead of `"problem"` field
+   - GSM8K answer field contains full reasoning with `####` prefix
+   - Extracts numeric answer from answer field during initialization
+   - Uses same regex grader pattern as AIME (`\b(\d+)\b`)
+
+2. **Dataset Type Configuration** - Added dataset selection support
+   - Added `--dataset` CLI argument with choices `aime` and `gsm8k`
+   - Updated `Processor` class to accept `dataset_type` parameter
+   - Dataset-specific initialization in `Processor.__init__()`
+   - Dataset name displayed in task summary table
+
+3. **Template Registry** - Added dataset-specific prompt templates
+   - AIME template: includes `\boxed{}` wrapper for final answer
+   - GSM8K template: plain text answer without wrapper
+   - Templates applied based on `question["dataset_type"]` field
+
+4. **Answer Extraction Logic** - Fixed GSM8K answer extraction
+   - GSM8K has pre-extracted `"gold"` field with numeric answer
+   - `Gsm8kDataset.get_answer()` checks for `"gold"` field first
+   - Falls back to answer field if gold field not present
+   - `AimeDataset.get_answer()` simplified to remove duplicate method
+
+5. **Task ID Format** - Fixed duplicate prefix in task IDs
+   - Changed from `f"{dataset_type}_{eval_state.id}_{chunk_idx:03d}_{i:03d}"`
+   - To `f"{dataset_type}_{chunk_idx:03d}_{i:03d}"`
+   - Removed redundant `eval_state.id` (was "gsm8k" for GSM8K)
+
+6. **Column Width Adjustments** - Improved table formatting
+   - Task ID column: 25 characters
+   - Dataset column: 5 characters
+   - Prompt column: 40 characters
+   - Expected column: 10 characters
+
+**Testing Results:**
+- ✅ GSM8K dataset loads correctly with 7473 questions
+- ✅ Numeric answers extracted from full reasoning text
+- ✅ Task summary table displays correctly with adjusted column widths
+- ✅ Task IDs show correct format (e.g., `gsm8k_000_3169`)
+- ✅ Both AIME and GSM8K datasets work with same script
+- ✅ Answer extraction works for both boxed and plain text formats
+- ✅ Progress tracking shows extracted answers for both datasets
+
+**Key Technical Decisions:**
+- GSM8K uses `"question"` field instead of `"problem"` field
+- GSM8K answer field contains full reasoning with `####` prefix
+- Numeric answer extracted during dataset initialization
+- Same regex grader pattern works for both datasets
+- Dataset selection via CLI argument for separate runs
+- Template registry supports different prompt formats per dataset
+- Task ID format simplified to avoid duplication
+
+**Refactoring:**
+- Removed duplicate `get_question()` method from `AimeDataset`
+- Removed "2025" suffix from eval state ID (was remnant from old version)
+- Removed "2025" suffix from task summary table output
+- Removed "2025" suffix from progress tracking output
+- Updated `Processor.__init__()` to initialize appropriate dataset based on type
+- Updated `_process_single_case()` to handle both `"problem"` and `"question"` fields
+- Updated `process()` method to display dataset name and use `dataset_type` for task states
