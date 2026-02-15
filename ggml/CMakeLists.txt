@@ -298,7 +298,7 @@ if (GGML_BUILD_TESTS OR GGML_SYCL_BUILD_XMX_TESTS)
     enable_testing()
 endif ()
 
-if (GGML_BUILD_TESTS)
+if (GGML_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests")
     add_subdirectory(tests)
 endif ()
 

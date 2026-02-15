@@ -1120,15 +1120,54 @@ namespace dpct
         }
         dev_mgr()
         {
-            // Prefer an explicit GPU selector to avoid default-selector failures
-            // on systems where GPU devices are available but not picked as "default".
-            sycl::device default_device = []() {
+            // Enumerate devices directly from platforms to avoid selector failures
+            // when ONEAPI_DEVICE_SELECTOR filters available devices.
+            // Selectors (gpu_selector_v, default_selector_v) can throw even when
+            // devices exist if the selector filter doesn't match any device.
+            sycl::device default_device;
+            bool found_device = false;
+
+            auto Platforms = sycl::platform::get_platforms();
+            // First pass: try to find any GPU device
+            for (const auto &Platform : Platforms) {
                 try {
-                    return sycl::device(sycl::gpu_selector_v);
-                } catch (const sycl::exception &) {
-                    return sycl::device(sycl::default_selector_v);
+                    auto devices = Platform.get_devices();
+                    for (const auto &device : devices) {
+                        if (device.is_gpu()) {
+                            default_device = device;
+                            found_device = true;
+                            break;
+                        }
+                    }
+                    if (found_device) break;
+                } catch (...) {
+                    continue;  // Skip platforms that fail device enumeration
                 }
-            }();
+            }
+
+            // Second pass: if no GPU found, accept any device (CPU, accelerator, etc.)
+            if (!found_device) {
+                for (const auto &Platform : Platforms) {
+                    try {
+                        auto devices = Platform.get_devices();
+                        if (!devices.empty()) {
+                            default_device = devices[0];
+                            found_device = true;
+                            break;
+                        }
+                    } catch (...) {
+                        continue;
+                    }
+                }
+            }
+
+            // Fatal error: no SYCL devices available on any platform
+            if (!found_device) {
+                fprintf(stderr, "SYCL device manager initialization failed: no devices found on any platform.\n");
+                fprintf(stderr, "Check ONEAPI_DEVICE_SELECTOR environment variable and available SYCL runtimes.\n");
+                GGML_ABORT("No SYCL devices available");
+            }
+
             _devs.push_back(std::make_shared<device_ext>(default_device));
 
             std::vector<sycl::device> sycl_all_devs;
@@ -1136,7 +1175,7 @@ namespace dpct
             if (default_device.is_cpu())
                 _cpu_device = 0;
 
-            auto Platforms = sycl::platform::get_platforms();
+            // Re-enumerate platforms for full device list (already have Platforms from above)
             // Keep track of the number of devices per backend
             std::map<sycl::backend, size_t> DeviceNums;
             std::map<std::string, std::vector<sycl::device>> backend_devices;

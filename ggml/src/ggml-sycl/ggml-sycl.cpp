@@ -3342,12 +3342,12 @@ struct ggml_backend_sycl_buffer_context {
             ggml_sycl_set_device(device);
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
         }
-        // Release extra used by tensors and null tensor->extra to avoid dangling pointers
+        // Release extra allocations.  Do NOT touch tensor->extra or tensor->layout
+        // here — the ggml_context that owns the tensors may already be freed by the
+        // time this buffer destructor runs (destruction order: gallocr frees buffers
+        // before the ggml_context is freed).
         for (auto & [tensor, extra] : tensor_extras) {
-            if (tensor != nullptr) {
-                tensor->extra  = nullptr;
-                tensor->layout = nullptr;
-            }
+            (void) tensor;  // intentionally unused — tensor may be dangling
             release_extra_gpu(extra);
         }
     }
@@ -3377,6 +3377,9 @@ bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
 }
 
 static void ggml_backend_sycl_buffer_free_buffer(ggml_backend_buffer_t buffer) try {
+    if (!buffer || !buffer->context) {
+        return;
+    }
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
     ggml_sycl_set_device(ctx->device);
 
@@ -5449,8 +5452,11 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 return set_tensor_sync_mode::STREAM;
             }
         }
-        cached.store(static_cast<int>(set_tensor_sync_mode::NONE), std::memory_order_release);
-        return set_tensor_sync_mode::NONE;
+        // Default to GLOBAL sync for correctness: the previous graph execution
+        // may still be reading from input tensor buffers when set_tensor writes
+        // new data.  Without a drain, this is a RAW race on device memory.
+        cached.store(static_cast<int>(set_tensor_sync_mode::GLOBAL), std::memory_order_release);
+        return set_tensor_sync_mode::GLOBAL;
     };
     switch (get_set_tensor_sync_mode()) {
         case set_tensor_sync_mode::GLOBAL:
@@ -5701,8 +5707,6 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     bool has_preconverted_tiled = (extra && extra->xmx_mxfp4_tiled[ctx->device] != nullptr);
 
     // === Direct upload path (cache miss or cache disabled) ===
-    sycl::event upload_last;
-    bool        upload_has_event = false;
     if (has_preconverted_tiled) {
         GGML_SYCL_DEBUG("[XMX] Skipping SoA upload for %s, using pre-converted tiled layout\n", tensor->name);
         if (reorder_from_pool && reorder_lease.valid) {
@@ -5723,23 +5727,18 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         void *       dst_ptr        = (char *) tensor->data + offset;
         const size_t copy_size      = reorder_size;
         const size_t max_chunk_size = 256 * 1024 * 1024;
-        size_t       bytes_copied   = 0;
-        while (bytes_copied < copy_size) {
-            const size_t chunk_size = std::min(max_chunk_size, copy_size - bytes_copied);
-            if (!upload_has_event) {
-                upload_last =
-                    (*stream).memcpy((char *) dst_ptr + bytes_copied, (char *) reorder_buf + bytes_copied, chunk_size);
-            } else {
-                upload_last = (*stream).submit([&](sycl::handler & cgh) {
-                    cgh.depends_on(upload_last);
-                    cgh.memcpy((char *) dst_ptr + bytes_copied, (char *) reorder_buf + bytes_copied, chunk_size);
-                });
+        if (copy_size > max_chunk_size) {
+            size_t bytes_copied = 0;
+            while (bytes_copied < copy_size) {
+                size_t chunk_size = std::min(max_chunk_size, copy_size - bytes_copied);
+                SYCL_CHECK(CHECK_TRY_ERROR(
+                    (*stream)
+                        .memcpy((char *) dst_ptr + bytes_copied, (char *) reorder_buf + bytes_copied, chunk_size)
+                        .wait()));
+                bytes_copied += chunk_size;
             }
-            upload_has_event = true;
-            bytes_copied += chunk_size;
-        }
-        if (upload_has_event) {
-            SYCL_CHECK(CHECK_TRY_ERROR(upload_last.wait_and_throw()));
+        } else {
+            SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(dst_ptr, reorder_buf, copy_size).wait()));
         }
         if (reorder_from_pool && reorder_lease.valid) {
             (void) ggml_sycl::release_offload_buffer(reorder_lease);
@@ -5779,19 +5778,11 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         while (bytes_copied < size) {
             const size_t chunk_size = std::min(stage_chunk, size - bytes_copied);
             memcpy(stage_ptr, (const char *) data + bytes_copied, chunk_size);
-            if (!upload_has_event) {
-                upload_last = (*stream).memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size);
-            } else {
-                upload_last = (*stream).submit([&](sycl::handler & cgh) {
-                    cgh.depends_on(upload_last);
-                    cgh.memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size);
-                });
-            }
-            upload_has_event = true;
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                (*stream)
+                    .memcpy((char *) tensor->data + offset + bytes_copied, stage_ptr, chunk_size)
+                    .wait()));
             bytes_copied += chunk_size;
-        }
-        if (upload_has_event) {
-            SYCL_CHECK(CHECK_TRY_ERROR(upload_last.wait_and_throw()));
         }
         (void) ggml_sycl::release_offload_buffer(stage_lease);
     }
