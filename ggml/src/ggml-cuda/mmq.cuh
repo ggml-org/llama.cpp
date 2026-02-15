@@ -2716,7 +2716,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #pragma unroll
         for (int l = 0; l < QR2_XXS; ++l) {
             const uint2 grid_pos = ((const uint2*)iq2xxs_grid)[aux8[l]];
-            const uint signs = unpack_ksigns(aux32 >> (7 * l));
+            const uint32_t signs = unpack_ksigns(aux32 >> (7 * l));
 
             const int signs0 = __vcmpne4(signs & 0x08040201, 0);
             const int grid0 = __vsub4(grid_pos.x ^ signs0, signs0);
@@ -2777,7 +2777,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     #pragma unroll
         for (int l = 0; l < QR2_XS; ++l) {
             const uint2 grid_pos = ((const uint2*)iq2xs_grid)[q2[l] & 0x1FF];
-            const uint signs = unpack_ksigns(q2[l] >> 9);
+            const uint32_t signs = unpack_ksigns(q2[l] >> 9);
 
             const int signs0 = __vcmpne4(signs & 0x08040201, 0);
             const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
@@ -2907,7 +2907,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 #pragma unroll
         for (int l = 0; l < QR3_XXS; ++l) {
             const int2 grid_pos = make_int2(iq3xxs_grid[q3[2*l+0]], iq3xxs_grid[q3[2*l+1]]);
-            const uint signs = unpack_ksigns(aux32 >> (7*l));
+            const uint32_t signs = unpack_ksigns(aux32 >> (7*l));
 
             const int signs0 = __vcmpne4(signs & 0x08040201, 0);
             const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);

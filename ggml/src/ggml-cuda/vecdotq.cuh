@@ -94,11 +94,11 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, con
 #endif
 }
 
-static __device__ __forceinline__ uint unpack_ksigns(const uint8_t v) {
+static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
     // v is a 7 bit int, with the 8th sign being encodable as popcnt
     // with xor we can "correct" the bit instead of having to mask
-    const uint p = __popc(v) & 1;
-    const uint s = v ^ p << 7;
+    const uint32_t p = __popc(v) & 1;
+    const uint32_t s = v ^ p << 7;
     // broadcast over uint to allow for 0x08040201 / 0x80402010 as selectors
     return s * 0x01010101;
 }
@@ -915,7 +915,7 @@ static __device__ __forceinline__ float vec_dot_iq2_xxs_q8_1(
 #pragma unroll
     for (int k0 = 0; k0 < 8; k0 += 2) {
         const uint2 grid_pos = ((const uint2*)iq2xxs_grid)[aux8[k0/2]];
-        const uint signs = unpack_ksigns(aux32 >> (7 * k0 / 2));
+        const uint32_t signs = unpack_ksigns(aux32 >> (7 * k0 / 2));
 
         const int signs0 = __vcmpne4(signs & 0x08040201, 0);
         const int grid0 = __vsub4(grid_pos.x ^ signs0, signs0);
@@ -952,7 +952,7 @@ static __device__ __forceinline__ float vec_dot_iq2_xs_q8_1(
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
         const uint2 grid_pos = ((const uint2*)iq2xs_grid)[q2[l0/2] & 0x1FF];
-        const uint signs = unpack_ksigns(q2[l0/2] >> 9);
+        const uint32_t signs = unpack_ksigns(q2[l0/2] >> 9);
 
         const int signs0 = __vcmpne4(signs & 0x08040201, 0);
         const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
@@ -1039,7 +1039,7 @@ static __device__ __forceinline__ float vec_dot_iq3_xxs_q8_1(
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
         const int2 grid_pos = make_int2(iq3xxs_grid[q3[l0 + 0]], iq3xxs_grid[q3[l0 + 1]]);
-        const uint signs = unpack_ksigns(aux32 >> (7*l0/2));
+        const uint32_t signs = unpack_ksigns(aux32 >> (7*l0/2));
 
         const int signs0 = __vcmpne4(signs & 0x08040201, 0);
         const int grid_l = __vsub4(grid_pos.x ^ signs0, signs0);
