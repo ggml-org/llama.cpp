@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
@@ -34,6 +35,15 @@ Please reason step by step, and put your final answer within \\boxed{{}}.
 """,
     "gsm8k": """{question}
 Please reason step by step, and provide your final answer.
+""",
+    "gpqa": """{Question}
+
+(A) {A}
+(B) {B}
+(C) {C}
+(D) {D}
+
+Express your final answer as the corresponding option 'A', 'B', 'C', or 'D'.
 """,
 }
 
@@ -96,6 +106,15 @@ class AimeDataset:
             return str(normalized) if normalized is not None else answer
         return str(answer)
 
+    def get_prompt(self, question: Dict) -> str:
+        """Get formatted prompt for the question"""
+        if question["dataset_type"] == "gpqa":
+            return TEMPLATE_REGISTRY["gpqa"].format(**question)
+        else:
+            return TEMPLATE_REGISTRY[question["dataset_type"]].format(
+                question=question["problem"] if "problem" in question else question["question"]
+            )
+
 class Gsm8kDataset:
     def __init__(self, split: str = "train"):
         self.split = split
@@ -146,17 +165,87 @@ class Gsm8kDataset:
             return str(normalized) if normalized is not None else answer
         return str(answer)
 
+    def get_prompt(self, question: Dict) -> str:
+        """Get formatted prompt for the question"""
+        return TEMPLATE_REGISTRY[question["dataset_type"]].format(
+            question=question["problem"] if "problem" in question else question["question"]
+        )
+
+class GpqaDataset:
+    def __init__(self, variant: str = "diamond", seed: int = 1234):
+        self.variant = variant
+        self.seed = seed
+        self.questions: List[Dict] = []
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading GPQA dataset (variant: {self.variant})...")
+        import pandas as pd
+
+        url = f"https://openaipublic.blob.core.windows.net/simple-evals/gpqa_{self.variant}.csv"
+        df = pd.read_csv(url)
+
+        rng = random.Random(self.seed)
+
+        self.questions = []
+        for _, row in df.iterrows():
+            question = row.to_dict()
+            question["dataset_type"] = "gpqa"
+
+            # Shuffle the answer options
+            correct_answer = question["Correct Answer"]
+            incorrect_answers = [
+                question["Incorrect Answer 1"],
+                question["Incorrect Answer 2"],
+                question["Incorrect Answer 3"]
+            ]
+
+            # Create list of (answer, is_correct) tuples
+            options = [(ans, ans == correct_answer) for ans in incorrect_answers]
+            options.append((correct_answer, True))
+
+            # Shuffle the options
+            rng.shuffle(options)
+
+            # Extract shuffled answers and determine correct letter
+            shuffled_answers = [ans for ans, _ in options]
+            correct_letter = chr(ord('A') + options.index((correct_answer, True)))
+
+            # Store shuffled answers and correct letter
+            question["shuffled_answers"] = shuffled_answers
+            question["correct_letter"] = correct_letter
+
+            self.questions.append(question)
+
+        print(f"GPQA dataset loaded: {len(self.questions)} questions")
+
+    def get_question(self, index: int) -> Dict:
+        """Get question by index"""
+        return self.questions[index]
+
+    def get_answer(self, question: Dict) -> str:
+        # GPQA returns the correct letter (A, B, C, or D)
+        return question["correct_letter"]
+
+    def get_prompt(self, question: Dict) -> str:
+        """Get formatted prompt for the question"""
+        return TEMPLATE_REGISTRY["gpqa"].format(
+            Question=question["Question"],
+            A=question["shuffled_answers"][0],
+            B=question["shuffled_answers"][1],
+            C=question["shuffled_answers"][2],
+            D=question["shuffled_answers"][3]
+        )
+
 class Grader:
     def __init__(
         self,
-        grader_type: str = "regex",
-        grader_regex_type: str = "aime",
+        grader_type: str = "llm",
         grader_script: Optional[str] = None,
         judge_model_name: Optional[str] = None,
         judge_server_url: str = ""
     ):
         self.grader_type = grader_type
-        self.grader_regex_type = grader_regex_type
         self.grader_script = grader_script
         self.judge_model_name = judge_model_name
         self.judge_server_url = judge_server_url
@@ -164,9 +253,7 @@ class Grader:
 
     def _get_pattern(self) -> Optional[str]:
         if self.grader_type == "regex":
-            if self.grader_regex_type not in GRADER_PATTERNS:
-                raise ValueError(f"Unknown grader regex type: {self.grader_regex_type}")
-            return GRADER_PATTERNS[self.grader_regex_type]
+            return GRADER_PATTERNS.get("aime")  # Default to aime pattern
         return None
 
     def _extract_answer_regex(self, pred: str) -> Optional[str]:
@@ -221,18 +308,21 @@ class Grader:
         """Grade using LLM-based extraction"""
         prompt = f"""Extract the answer from this response:
 
-Response: {pred}
-
 Expected answer: {gold}
 
-Please provide only the extracted answer, nothing else."""
+===
+
+Response: {pred}
+
+===
+
+Please provide only the extracted answer, nothing else. If there is no clear answer in the response, reply with 'no answer'."""
         url = f"{self.judge_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
             "model": self.judge_model_name,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
-            "max_tokens": 256
         }
 
         try:
@@ -264,14 +354,16 @@ class Processor:
     def __init__(
         self,
         server_url: str,
-        n_predict: int = 2048,
+        n_predict: int = -1,
         threads: int = 32,
         verbose: bool = False,
         grader: Optional[Grader] = None,
         model_name: Optional[str] = None,
         judge_server_url: str = "",
         judge_model_name: Optional[str] = None,
-        dataset_type: str = "aime"
+        dataset_type: str = "aime",
+        seed: int = 1234,
+        sampling_config: Optional[Dict[str, Any]] = None
     ):
         self.server_url = server_url
         self.n_predict = n_predict
@@ -281,12 +373,14 @@ class Processor:
         self.judge_server_url = judge_server_url if judge_server_url else server_url
         self.judge_model_name = judge_model_name
         self.dataset_type = dataset_type
+        self.seed = seed
         self.grader = grader or Grader()
+        self.sampling_config = sampling_config or {"n_predict": n_predict}
         self.eval_state = EvalState(
             id=dataset_type,
             tasks=[dataset_type],
             task_states={},
-            sampling_config={"temperature": 0, "max_tokens": n_predict}
+            sampling_config=self.sampling_config
         )
 
         # Pass judge configuration to grader if using LLM grader
@@ -301,6 +395,8 @@ class Processor:
             self.dataset = AimeDataset()
         elif dataset_type == "gsm8k":
             self.dataset = Gsm8kDataset()
+        elif dataset_type == "gpqa":
+            self.dataset = GpqaDataset(variant="diamond", seed=self.seed)
         else:
             raise ValueError(f"Unknown dataset type: {dataset_type}")
 
@@ -311,9 +407,16 @@ class Processor:
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
-            "max_tokens": self.n_predict
+            "n_predict": self.n_predict
         }
+        if self.sampling_config.get("temperature") is not None:
+            data["temperature"] = self.sampling_config["temperature"]
+        if self.sampling_config.get("top_k") is not None:
+            data["top_k"] = self.sampling_config["top_k"]
+        if self.sampling_config.get("top_p") is not None:
+            data["top_p"] = self.sampling_config["top_p"]
+        if self.sampling_config.get("min_p") is not None:
+            data["min_p"] = self.sampling_config["min_p"]
 
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
@@ -322,14 +425,9 @@ class Processor:
     def _process_single_case(self, i: int, task_id: str) -> TaskState:
         """Process a single case (thread-safe)"""
         question = self.dataset.get_question(i)
-        dataset_id = f"{self.dataset_type}_{self.dataset.split}_{i}"
+        dataset_id = f"{self.dataset_type}_{i}"
         gold = self.dataset.get_answer(question)
-
-        # Apply template if available
-        if question["dataset_type"] in TEMPLATE_REGISTRY:
-            prompt = TEMPLATE_REGISTRY[question["dataset_type"]].format(question=question["problem"] if "problem" in question else question["question"])
-        else:
-            prompt = question["problem"] if "problem" in question else question["question"]
+        prompt = self.dataset.get_prompt(question)
 
         task_state = TaskState(
             case_id=task_id,
@@ -361,12 +459,15 @@ class Processor:
             n_cases = len(self.dataset.questions)
 
         print(f"\nProcessing {n_cases} {self.dataset_type.upper()} questions...")
-        print(f"Server: {self.server_url}")
+        print(f"Server: {self.server_url} (model: {self.model_name})")
         print(f"Threads: {self.threads}")
         print(f"Max tokens: {self.n_predict}")
+        print(f"Seed: {self.seed}")
+        print(f"Sampling: temp={self.sampling_config.get('temperature', 'skip')}, top-k={self.sampling_config.get('top_k', 'skip')}, top-p={self.sampling_config.get('top_p', 'skip')}, min-p={self.sampling_config.get('min_p', 'skip')}")
         print(f"Grader: {self.grader.grader_type}", end="")
         if self.grader.grader_type == "llm":
-            print(f" (judge server: {self.judge_server_url}, model: {self.judge_model_name})", end="")
+            judge_model = self.judge_model_name if self.judge_model_name else self.model_name
+            print(f" (judge server: {self.judge_server_url}, model: {judge_model})", end="")
         print()
         print()
 
@@ -389,9 +490,14 @@ class Processor:
         print("  Task ID             Dataset  Prompt (first 40 chars)                        Expected    Status")
         for i, task_id in task_list:
             question = self.dataset.get_question(i)
-            prompt = question["problem"] if "problem" in question else question["question"]
+            prompt = self.dataset.get_prompt(question)
             gold = self.dataset.get_answer(question)
-            truncated_prompt = prompt[:40] + "..." if len(prompt) > 40 else prompt
+            first_line = prompt.split('\n')[0]
+            truncated_prompt = first_line[:43]
+            if len(first_line) > 43:
+                truncated_prompt += "..."
+            else:
+                truncated_prompt = truncated_prompt.ljust(43) + "..."
             print(f"  {task_id:<20} {self.dataset_type.upper()}   {truncated_prompt:<40}    {gold:<10} pending")
         print()
 
@@ -413,7 +519,13 @@ class Processor:
                 # Print task completion status
                 extracted_display = task_state.extracted if task_state.extracted else "N/A"
                 success_ratio = correct / total if total > 0 else 0.0
-                print(f"{total:3}/{n_cases:3}  {task_state.case_id:<20} {self.dataset_type.upper()}   {task_state.prompt[:40]:<40}    {task_state.gold:<10} {extracted_display:<10} {'✓' if task_state.correct else '✗'}  [{correct:3}/{total:3}, {success_ratio:.3f}]")
+                first_line = task_state.prompt.split('\n')[0]
+                truncated_prompt = first_line[:43]
+                if len(first_line) > 43:
+                    truncated_prompt += "..."
+                else:
+                    truncated_prompt = truncated_prompt.ljust(43) + "..."
+                print(f"{total:3}/{n_cases:3}  {task_state.case_id:<20} {self.dataset_type.upper()}   {truncated_prompt:<40}    {task_state.gold:<10} {extracted_display:<10} {'✓' if task_state.correct else '✗'}  [{correct:3}/{total:3}, {success_ratio:.3f}]")
 
                 if self.verbose:
                     print(f"\nCase {total}: {task_state.correct}")
@@ -456,7 +568,7 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "gsm8k"],
+        choices=["aime", "gsm8k", "gpqa"],
         help="Dataset type (default: aime)"
     )
     parser.add_argument(
@@ -474,8 +586,32 @@ def main():
     parser.add_argument(
         "--n_predict",
         type=int,
-        default=2048,
-        help="Max tokens to predict per prompt (default: 2048)"
+        default=-1,
+        help="Max tokens to predict per prompt (default: -1, infinite)"
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=None,
+        help="Sampling temperature (default: not passed)"
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="Top K sampling (default: not passed)"
+    )
+    parser.add_argument(
+        "--top-p",
+        type=float,
+        default=None,
+        help="Top P sampling (default: not passed)"
+    )
+    parser.add_argument(
+        "--min-p",
+        type=float,
+        default=None,
+        help="Min P sampling (default: not passed)"
     )
     parser.add_argument(
         "--threads",
@@ -503,16 +639,9 @@ def main():
     parser.add_argument(
         "--grader-type",
         type=str,
-        default="regex",
+        default="llm",
         choices=["regex", "cli", "llm"],
-        help="Grader type: regex, cli, or llm (default: regex)"
-    )
-    parser.add_argument(
-        "--grader-regex-type",
-        type=str,
-        default="aime",
-        choices=list(GRADER_PATTERNS.keys()),
-        help="Regex grader type (default: aime)"
+        help="Grader type: regex, cli, or llm (default: llm)"
     )
     parser.add_argument(
         "--grader-script",
@@ -529,20 +658,36 @@ def main():
     parser.add_argument(
         "--judge-model",
         type=str,
-        default=None,
+        default="",
         help="Model name for LLM judge (default: same as main model)"
     )
 
     args = parser.parse_args()
 
+    # Validate grader type for GPQA
+    if args.dataset == "gpqa" and args.grader_type != "llm":
+        print("Error: GPQA dataset requires --grader-type llm")
+        parser.print_help()
+        sys.exit(1)
+
     grader = Grader(
         grader_type=args.grader_type,
-        grader_regex_type=args.grader_regex_type,
-        grader_script=args.grader_script
+        grader_script=args.grader_script,
+        judge_model_name=args.judge_model if args.judge_model else args.model
     )
 
     if args.grader_type == "llm" and not args.judge_server:
         print("Warning: Using same server for LLM judge (no --judge-server specified)")
+
+    sampling_config = {"n_predict": args.n_predict}
+    if args.temperature is not None:
+        sampling_config["temperature"] = args.temperature
+    if args.top_k is not None:
+        sampling_config["top_k"] = args.top_k
+    if args.top_p is not None:
+        sampling_config["top_p"] = args.top_p
+    if args.min_p is not None:
+        sampling_config["min_p"] = args.min_p
 
     processor = Processor(
         server_url=args.server,
@@ -553,7 +698,8 @@ def main():
         model_name=args.model,
         judge_server_url=args.judge_server,
         judge_model_name=args.judge_model,
-        dataset_type=args.dataset
+        dataset_type=args.dataset,
+        sampling_config=sampling_config
     )
 
     eval_state = processor.process(n_cases=args.n_cases, seed=args.seed)
