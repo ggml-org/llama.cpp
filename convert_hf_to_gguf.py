@@ -1085,6 +1085,9 @@ class TextModel(ModelBase):
         if chkhsh == "cdf5f35325780597efd76153d4d1c16778f766173908894c04afc20108536267":
             # ref: https://huggingface.co/zai-org/GLM-4.7-Flash
             res = "glm4"
+        if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
+            # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
+            res = "deepseek-v3"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
