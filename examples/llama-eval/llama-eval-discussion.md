@@ -160,9 +160,10 @@ Questions:
 1. **Eval State Object** - Structured dataclass with ID, tasks, task states, and sampling config
 2. **Processor Object** - Handles processing, grading, and state management
 3. **Real-time Feedback** - Shows correct/incorrect status for each case
-4. **Flexible Grading System** - Supports regex and CLI-based grading
+4. **Flexible Grading System** - Supports regex, CLI, and LLM-based grading
 5. **Structured JSON Output** - Saves complete eval state to JSON file
 6. **HuggingFace Dataset Caching** - Uses cached dataset path to avoid HF Hub requests
+7. **Enhanced Answer Extraction** - Extracts answers from full responses for display
 
 **Grading System:**
 - **Regex Grading**: Built-in patterns for different task types
@@ -173,6 +174,11 @@ Questions:
   - Script accepts `--answer <pred>` and `--expected <gold>`
   - Returns exit code 0 if correct, non-zero if incorrect
   - 30-second timeout to prevent hanging
+- **LLM Judge**: Generic answer extraction using LLM
+  - Uses configured server and model for extraction
+  - Includes problem statement in prompt for context
+  - Case-insensitive comparison
+  - Returns extracted answer for display
 
 **Configuration Options:**
 - `--server`: llama-server URL (default: http://localhost:8033)
@@ -181,9 +187,11 @@ Questions:
 - `--threads`: Number of threads for parallel requests (default: 32)
 - `--verbose`: Show detailed output for each case
 - `--output`: Output file for eval state (default: llama-eval-state.json)
-- `--grader-type`: `regex` or `cli`
+- `--grader-type`: `regex`, `cli`, or `llm`
 - `--grader-regex-type`: aime, gsm8k, mmlu, hellaswag, arc, winogrande
 - `--grader-script`: Path to CLI grader script
+- `--judge-server`: Server URL for LLM judge (default: same as main server)
+- `--judge-model`: Model name for LLM judge (default: same as main model)
 
 **Testing Results:**
 - ✅ Works with simulator at 100% success rate (all correct)
@@ -193,6 +201,12 @@ Questions:
 - ✅ JSON output contains complete eval state with all cases
 - ✅ HF Hub telemetry disabled (no warnings)
 - ✅ Uses cached dataset path to avoid HF Hub requests when available
+- ✅ Regex grader extracts answers correctly from various formats
+- ✅ LLM judge can extract answers with problem context
+- ✅ Response truncation focuses grading on final answer
+- ✅ Case-insensitive matching works for both regex and LLM grader
+- ✅ Judge model and server configuration propagate correctly
+- ✅ Progress table shows extracted answers instead of full responses
 
 **Key Technical Decisions:**
 - Removed Levenshtein matching - eval script only sends requests and validates answers
@@ -201,6 +215,10 @@ Questions:
 - Handles both boxed and plain text formats for AIME answers
 - 30-second timeout for CLI grader
 - Validates script exists before running
+- Judge parameters set once during Grader construction
+- LLM judge prompt includes problem statement for better extraction
+- Response truncation to last 2-3 lines focuses grading on final answer
+- Case-insensitive comparison for more flexible matching
 
 **Refactoring:**
 - Removed all task implementations except AIME
@@ -209,6 +227,9 @@ Questions:
 - Removed complex task loading logic
 - Removed summary reporting (replaced with real-time feedback)
 - Added HuggingFace dataset caching optimization
+- Added LLM grader support with configurable server and model
+- Added response truncation before grading
+- Refactored grader interface to return extracted answers
 
 ### llama-eval-new.py Threading and Model Parameter Updates
 
@@ -245,3 +266,65 @@ Questions:
 - Changed from sequential loop to ThreadPoolExecutor with futures
 - Updated verbose output to show total count instead of index
 - Made eval state updates thread-safe
+
+### llama-eval-new.py Enhanced Grading System
+
+**Changes Made:**
+1. **Enhanced Grader Interface** - Updated to return extracted answers
+   - `grade()` method now returns `Tuple[bool, Optional[str]]` (correctness + extracted answer)
+   - Added `extracted` field to `TaskState` dataclass
+   - All grader types (regex, cli, llm) now return extracted answers
+
+2. **Improved Regex Grader**
+   - New `_extract_answer_regex()` method extracts answers using configured patterns
+   - Supports case-insensitive matching
+   - Returns first valid match found
+   - Handles both single values and multiple matches
+
+3. **LLM-Based Judge**
+   - New `_grade_llm()` method for generic answer extraction
+   - Includes problem statement in prompt for context
+   - Configurable server URL (defaults to main server)
+   - Configurable model name (defaults to main model)
+   - Case-insensitive comparison
+   - Returns extracted answer for display
+
+4. **Response Truncation**
+   - New `_truncate_response()` method keeps only last 2-3 lines
+   - Applied before grading to focus on final answer section
+
+5. **CLI Grader Update**
+   - Now also returns extracted answer
+   - Returns None if grading fails
+
+6. **Display Updates**
+   - Progress table shows extracted answer instead of full response
+   - Verbose mode shows full response plus extracted answer
+
+7. **New CLI Arguments**
+   - `--grader-type`: Added "llm" option
+   - `--judge-server`: Separate server for LLM judge
+   - `--judge-model`: Separate model for LLM judge
+
+**Testing Results:**
+- ✅ Regex grader extracts answers correctly from various formats
+- ✅ LLM judge can extract answers with problem context
+- ✅ Response truncation focuses grading on final answer
+- ✅ Case-insensitive matching works for both regex and LLM grader
+- ✅ Judge model and server configuration propagate correctly
+- ✅ Progress table shows extracted answers instead of full responses
+
+**Key Technical Decisions:**
+- Judge parameters set once during Grader construction (not on each call)
+- LLM judge prompt includes problem statement for better extraction
+- Response truncation to last 2-3 lines focuses grading on final answer
+- Case-insensitive comparison for more flexible matching
+- Judge configuration propagates through Processor to Grader
+- Display shows extracted answer for cleaner output
+
+**Refactoring:**
+- Removed judge parameters from `grade()` method calls
+- Added `judge_server_url` and `judge_model_name` to Grader class
+- Updated `_grade_llm()` to use instance variables instead of parameters
+- Simplified Processor initialization to pass judge config to grader
+- Updated startup info to show judge server and model
