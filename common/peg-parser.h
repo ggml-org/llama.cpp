@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -111,6 +112,8 @@ class common_peg_ast_arena {
 
     void visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const;
     void visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const;
+
+    std::string dump();
 };
 
 struct common_peg_parse_result {
@@ -139,6 +142,7 @@ struct common_peg_parse_result {
 struct common_peg_parse_context {
     std::string input;
     bool is_partial;
+    bool debug = false;  // Enable debug output for parser tracing
     common_peg_ast_arena ast;
 
     int parse_depth;
@@ -207,6 +211,7 @@ struct common_peg_chars_parser {
 };
 
 struct common_peg_json_string_parser {};
+struct common_peg_python_dict_string_parser {};
 
 struct common_peg_until_parser {
     std::vector<std::string> delimiters;
@@ -255,6 +260,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_space_parser,
     common_peg_chars_parser,
     common_peg_json_string_parser,
+    common_peg_python_dict_string_parser,
     common_peg_until_parser,
     common_peg_schema_parser,
     common_peg_rule_parser,
@@ -299,6 +305,8 @@ class common_peg_arena {
     friend class common_peg_parser_builder;
 
   private:
+    std::string dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const;
+
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
 
@@ -311,8 +319,15 @@ class common_peg_parser_builder {
     common_peg_parser wrap(common_peg_parser_id id) { return common_peg_parser(id, *this); }
     common_peg_parser add(const common_peg_parser_variant & p) { return wrap(arena_.add_parser(p)); }
 
+    bool allow_python_dict_format_ = false;
+
   public:
     common_peg_parser_builder();
+
+    // Enable/disable Python dict format support (single-quoted strings).
+    // When enabled, JSON parsers will also accept Python dict-style single-quoted strings.
+    void set_allow_python_dict_format(bool allow) { allow_python_dict_format_ = allow; }
+    bool get_allow_python_dict_format() const { return allow_python_dict_format_; }
 
     // Match nothing, always succeed.
     //   S -> ε
@@ -418,9 +433,31 @@ class common_peg_parser_builder {
     // Useful for extracting content within a JSON string.
     common_peg_parser json_string_content();
 
+    // Matches a string that accepts both JSON double-quoted and Python dict single-quoted styles.
+    // This is useful when you explicitly want to accept both formats regardless of the allow_python_dict_format flag.
+    common_peg_parser flexible_string();
+
+    // Matches a Python dict-style single-quoted string content without the surrounding quotes.
+    // Useful for extracting content within a Python dict string.
+    common_peg_parser python_dict_string_content();
+
     // Matches a JSON object member with a key and associated parser as the
     // value.
     common_peg_parser json_member(const std::string & key, const common_peg_parser & p);
+
+    // Creates a complete Python dict format parser supporting objects, arrays, single-quoted strings,
+    // numbers, booleans, and null. Similar to JSON but uses single quotes for strings.
+    //   value -> object | array | string | number | true | false | null
+    common_peg_parser python_dict();
+    common_peg_parser python_dict_object();
+    common_peg_parser python_dict_string();
+    common_peg_parser python_dict_array();
+    common_peg_parser python_dict_number();
+    common_peg_parser python_dict_bool();
+    common_peg_parser python_dict_null();
+
+    // A marker, i.e. text delimited by a pair of <> or []
+    common_peg_parser marker();
 
     // Wraps a parser with JSON schema metadata for grammar generation.
     // Used internally to convert JSON schemas to GBNF grammar rules.
