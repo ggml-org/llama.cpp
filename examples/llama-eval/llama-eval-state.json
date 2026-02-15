@@ -1,0 +1,29 @@
+{
+  "id": "gpqa",
+  "tasks": [
+    "gpqa"
+  ],
+  "task_states": {
+    "gpqa": {
+      "total": 1,
+      "correct": 0,
+      "cases": {
+        "gpqa": [
+          {
+            "case_id": "gpqa_000_184",
+            "prompt": "Consider a system with Hamiltonian operator $H = \\varepsilon \\vec{\\sigma}.\\vec{n}$. Here, $\\vec{n}$ is an arbitrary unit vector, $\\varepsilon $ is a constant of dimension energy, and components of $\\vec{\\sigma}$ are the Pauli spin matrices. What are the eigenvalues of the Hamiltonian operator?\n\n\n(A) +\\hbar/2, -\\hbar/2\n(B) +1, -1\n(C) +\\varepsilon \\hbar/2, - \\varepsilon \\hbar/2\n(D) + \\varepsilon, -\\varepsilon\n\n\nExpress your final answer as the corresponding option 'A', 'B', 'C', or 'D'.\n",
+            "gold": "+ \\varepsilon, -\\varepsilon\n",
+            "pred": null,
+            "extracted": null,
+            "correct": false,
+            "status": "error: HTTPConnectionPool(host='localhost', port=8034): Max retries exceeded with url: /v1/chat/completions (Caused by NewConnectionError(\"HTTPConnection(host='localhost', port=8034): Failed to establish a new connection: [Errno 61] Connection refused\"))"
+          }
+        ]
+      }
+    }
+  },
+  "sampling_config": {
+    "temperature": 0,
+    "max_tokens": 2048
+  }
+}
