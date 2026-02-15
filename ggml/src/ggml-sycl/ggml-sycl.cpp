@@ -24881,14 +24881,23 @@ static void classify_cpu_layer_blocks(ggml_backend_sycl_context & ctx,
     }
 
     // Phase 3: batch threshold — large batches (PP) stay on GPU.
-    // Use PP/TG split thresholds with fallback compatibility to legacy env.
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (node_cpu_flags[i] == 1) {
+    // If ANY MUL_MAT in the graph exceeds the batch threshold, this is a PP
+    // graph.  CPU dispatch with staging round-trips is only beneficial for TG
+    // (batch=1); for PP the GPU is always faster even with weight streaming.
+    // Clear ALL CPU flags for the entire graph rather than per-op, because
+    // non-MUL_MAT ops (ROPE, RMS_NORM, ADD, GLU) would still be CPU-dispatched
+    // and their staging overhead dominates PP latency.
+    {
+        bool is_pp_graph = false;
+        for (int i = 0; i < cgraph->n_nodes && !is_pp_graph; i++) {
             ggml_tensor * node = cgraph->nodes[i];
-            // Only apply batch threshold to MUL_MAT — for that op, ne[1] is the
-            // batch dimension.  For other ops (ROPE, SOFT_MAX, etc.) ne[1] has
-            // different semantics (e.g. n_heads) and would incorrectly trigger.
-            if (node && node->op == GGML_OP_MUL_MAT && node->ne[1] > ggml_sycl_cpu_batch_threshold_for_tensor(node)) {
+            if (node && node->op == GGML_OP_MUL_MAT &&
+                node->ne[1] > ggml_sycl_cpu_batch_threshold_for_tensor(node)) {
+                is_pp_graph = true;
+            }
+        }
+        if (is_pp_graph) {
+            for (int i = 0; i < cgraph->n_nodes; i++) {
                 node_cpu_flags[i] = 0;
             }
         }
