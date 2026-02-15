@@ -259,6 +259,8 @@ static const char * split_mode_str(llama_split_mode mode) {
             return "layer";
         case LLAMA_SPLIT_MODE_ROW:
             return "row";
+        case LLAMA_SPLIT_MODE_GROUP:
+            return "group";
         default:
             GGML_ABORT("invalid split mode");
     }
@@ -440,8 +442,8 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                   (default: %s)\n",
            join(cmd_params_defaults.n_cpu_moe, ",").c_str());
-    printf("  -sm, --split-mode <none|layer|row>        (default: %s)\n",
-           join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
+    printf("  -sm, --split-mode <none|layer|row|group>  (default: %s)\n",
+            join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                       (default: %s)\n",
            join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>              (default: %s)\n",
@@ -723,6 +725,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                         mode = LLAMA_SPLIT_MODE_LAYER;
                     } else if (m == "row") {
                         mode = LLAMA_SPLIT_MODE_ROW;
+                    } else if (m == "group") {
+                        mode = LLAMA_SPLIT_MODE_GROUP;
                     } else {
                         invalid_param = true;
                         break;

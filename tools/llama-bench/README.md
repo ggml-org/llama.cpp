@@ -51,7 +51,7 @@ test parameters:
   --poll <0...100>                          (default: 50)
   -ngl, --n-gpu-layers <n>                  (default: 99)
   -ncmoe, --n-cpu-moe <n>                   (default: 0)
-  -sm, --split-mode <none|layer|row>        (default: layer)
+  -sm, --split-mode <none|layer|row|group>  (default: layer)
   -mg, --main-gpu <i>                       (default: 0)
   -nkvo, --no-kv-offload <0|1>              (default: 0)
   -fa, --flash-attn <0|1>                   (default: 0)
