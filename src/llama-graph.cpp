@@ -420,12 +420,16 @@ bool llm_graph_input_attn_k::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+    const auto n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
     res &= self_kq_mask->ne[0] == mctx->get_n_kv();
-    res &= self_kq_mask->ne[1] == params.ubatch.n_tokens;
+    res &= self_kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+    res &= self_kq_mask->ne[2] == 1;
+    res &= self_kq_mask->ne[3] == n_stream;
 
     return res;
 }
@@ -447,6 +451,8 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+    const auto n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
@@ -456,10 +462,14 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
   //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= self_kq_mask->ne[0] == mctx->get_base()->get_n_kv();
-    res &= self_kq_mask->ne[1] == params.ubatch.n_tokens;
+    res &= self_kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+    res &= self_kq_mask->ne[2] == 1;
+    res &= self_kq_mask->ne[3] == n_stream;
 
     res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
-    res &= self_kq_mask_swa->ne[1] == params.ubatch.n_tokens;
+    res &= self_kq_mask_swa->ne[1] == params.ubatch.n_tokens/n_stream;
+    res &= self_kq_mask_swa->ne[2] == 1;
+    res &= self_kq_mask_swa->ne[3] == n_stream;
 
     return res;
 }
@@ -516,13 +526,17 @@ bool llm_graph_input_mem_hybrid::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+    const auto n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
     bool res = true;
 
     res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
   //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= inp_attn->self_kq_mask->ne[0] == mctx->get_attn()->get_n_kv();
-    res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens;
+    res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+    res &= inp_attn->self_kq_mask->ne[2] == 1;
+    res &= inp_attn->self_kq_mask->ne[3] == n_stream;
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -561,12 +575,16 @@ bool llm_graph_input_mem_hybrid_k::can_reuse(const llm_graph_params & params) {
 
     this->mctx = mctx;
 
+    const auto n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
     bool res = true;
 
     res &= inp_attn->self_k_idxs->ne[0] == params.ubatch.n_tokens;
 
     res &= inp_attn->self_kq_mask->ne[0] == mctx->get_attn()->get_n_kv();
-    res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens;
+    res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+    res &= inp_attn->self_kq_mask->ne[2] == 1;
+    res &= inp_attn->self_kq_mask->ne[3] == n_stream;
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
 
@@ -616,6 +634,8 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
 
     this->mctx = mctx;
 
+    const auto n_stream = params.cparams.kv_unified ? 1 : params.ubatch.n_seqs_unq;
+
     bool res = true;
 
     const auto * attn_ctx = mctx->get_attn();
@@ -626,7 +646,9 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
       //res &= inp_attn->self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
         res &= inp_attn->self_kq_mask->ne[0] == attn_ctx->get_base()->get_n_kv();
-        res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens;
+        res &= inp_attn->self_kq_mask->ne[1] == params.ubatch.n_tokens/n_stream;
+        res &= inp_attn->self_kq_mask->ne[2] == 1;
+        res &= inp_attn->self_kq_mask->ne[3] == n_stream;
     }
 
     // swa tensors may not be allocated if there are no SWA attention layers
@@ -635,7 +657,9 @@ bool llm_graph_input_mem_hybrid_iswa::can_reuse(const llm_graph_params & params)
       //res &= inp_attn->self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
         res &= inp_attn->self_kq_mask_swa->ne[0] == attn_ctx->get_swa()->get_n_kv();
-        res &= inp_attn->self_kq_mask_swa->ne[1] == params.ubatch.n_tokens;
+        res &= inp_attn->self_kq_mask_swa->ne[1] == params.ubatch.n_tokens/n_stream;
+        res &= inp_attn->self_kq_mask_swa->ne[2] == 1;
+        res &= inp_attn->self_kq_mask_swa->ne[3] == n_stream;
     }
 
     res &= inp_rs->s_copy->ne[0] == mctx->get_recr()->get_n_rs();
