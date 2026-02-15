@@ -41,7 +41,13 @@ export type {
 	ChatAttachmentPreviewItem,
 	ChatMessageSiblingInfo,
 	ChatMessagePromptProgress,
-	ChatMessageTimings
+	ChatMessageTimings,
+	ChatStreamCallbacks,
+	ErrorDialogState,
+	LiveProcessingStats,
+	LiveGenerationStats,
+	AttachmentDisplayItemsOptions,
+	FileProcessingResult
 } from './chat';
 
 // Database types
@@ -59,12 +65,24 @@ export type {
 } from './database';
 
 // Model types
-export type { ModelModalities, ModelOption } from './models';
+export type { ModelModalities, ModelOption, ModalityCapabilities } from './models';
 
 // Settings types
 export type {
 	SettingsConfigValue,
 	SettingsFieldConfig,
 	SettingsChatServiceOptions,
-	SettingsConfigType
+	SettingsConfigType,
+	ParameterValue,
+	ParameterRecord,
+	ParameterInfo,
+	SyncableParameter
 } from './settings';
+
+// Common types
+export type {
+	KeyValuePair,
+	BinaryDetectionOptions,
+	ClipboardTextAttachment,
+	ParsedClipboardContent
+} from './common';

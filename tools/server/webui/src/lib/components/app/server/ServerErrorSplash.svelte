@@ -8,7 +8,7 @@
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { fade, fly, scale } from 'svelte/transition';
-	import { KeyboardKey } from '$lib/enums/keyboard';
+	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
 		class?: string;

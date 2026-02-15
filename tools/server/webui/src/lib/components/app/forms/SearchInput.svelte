@@ -46,7 +46,7 @@
 
 <div class="relative {className}">
 	<Search
-		class="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"
+		class="absolute top-1/2 left-3 z-10 h-4 w-4 -translate-y-1/2 transform text-muted-foreground"
 	/>
 
 	<Input
