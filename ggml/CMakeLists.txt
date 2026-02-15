@@ -148,6 +148,7 @@ message(DEBUG "INS_ENB             : ${INS_ENB}")
 option(GGML_CPU_HBM          "ggml: use memkind for CPU HBM" OFF)
 option(GGML_CPU_REPACK       "ggml: use runtime weight conversion of Q4_0 to Q4_X_X" ON)
 option(GGML_CPU_KLEIDIAI     "ggml: use KleidiAI optimized kernels if applicable" OFF)
+option(GGML_USE_STFMA        "ggml: use sparse-ternary-fma for ternary quantization" ON)
 option(GGML_SSE42            "ggml: enable SSE 4.2"          ${INS_ENB})
 option(GGML_AVX              "ggml: enable AVX"              ${INS_ENB})
 option(GGML_AVX_VNNI         "ggml: enable AVX-VNNI"         OFF)
@@ -399,6 +400,12 @@ target_compile_definitions(ggml-base PRIVATE
     GGML_VERSION="${GGML_INSTALL_VERSION}"
     GGML_COMMIT="${GGML_BUILD_COMMIT}"
 )
+
+if (GGML_USE_STFMA)
+    target_compile_definitions(ggml-base PRIVATE GGML_USE_STFMA)
+    target_compile_definitions(ggml-base PRIVATE GGML_STFMA_THRESHOLD=1024)
+    message(STATUS "sparse-ternary-fma: enabled (threshold: 1024)")
+endif()
 message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
 message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 
