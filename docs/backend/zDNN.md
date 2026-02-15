@@ -1,5 +1,10 @@
 # llama.cpp for IBM zDNN Accelerator
 
+> [!WARNING]
+> **Note:** zDNN is **not** the same as ZenDNN.
+> - **zDNN** (this page): IBM's Deep Neural Network acceleration library for IBM Z & LinuxONE Mainframes
+> - **ZenDNN**: AMD's deep learning library for AMD EPYC CPUs ([see ZenDNN documentation](ZenDNN.md))
+
 ## Background
 
 IBM zDNN (Z Deep Neural Network) is a hardware acceleration library designed specifically to leverage the IBM NNPA (Neural Network Processor Assist) accelerator located within IBM Telum I and II processors. It provides significant performance improvements for neural network inference operations.

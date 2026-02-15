@@ -27,11 +27,12 @@ dockerTools.buildLayeredImage {
   name = llama-cpp.pname;
   tag = "latest";
 
-  contents =
-    [ llama-cpp ]
-    ++ lib.optionals interactive [
-      coreutils
-      dockerTools.binSh
-      dockerTools.caCertificates
-    ];
+  contents = [
+    llama-cpp
+  ]
+  ++ lib.optionals interactive [
+    coreutils
+    dockerTools.binSh
+    dockerTools.caCertificates
+  ];
 }

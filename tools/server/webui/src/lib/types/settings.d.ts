@@ -14,6 +14,12 @@ export interface SettingsFieldConfig {
 
 export interface SettingsChatServiceOptions {
 	stream?: boolean;
+	// Model (required in ROUTER mode, optional in MODEL mode)
+	model?: string;
+	// System message to inject
+	systemMessage?: string;
+	// Disable reasoning format (use 'none' instead of 'auto')
+	disableReasoningFormat?: boolean;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
@@ -37,6 +43,7 @@ export interface SettingsChatServiceOptions {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string | string[];
+	backend_sampling?: boolean;
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
@@ -45,7 +52,7 @@ export interface SettingsChatServiceOptions {
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
 	onModel?: (model: string) => void;
-	onFirstValidChunk?: () => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,
 		reasoningContent?: string,

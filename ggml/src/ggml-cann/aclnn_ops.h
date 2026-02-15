@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2023-2024 The ggml authors
+ * Copyright (c) 2023-2026 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -47,6 +47,7 @@
 #include <aclnnop/aclnn_sign.h>
 #include <aclnnop/aclnn_silu.h>
 #include <aclnnop/aclnn_sin.h>
+#include <aclnnop/aclnn_slice.h>
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_tanh.h>
 
@@ -813,67 +814,20 @@ void ggml_cann_step(ggml_backend_cann_context & ctx, ggml_tensor * dst);
  */
 void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
-/*
- * @brief A generic wrapper for ACL resources with custom deleter support.
- */
-using any_acl_resource = std::unique_ptr<void, std::function<void(void *)>>;
-
 /**
- * @brief Trait structure used to define how to destroy a given ACL resource type.
+ * @brief Forward Gated Linear Attention on the CANN backend.
  *
- * @tparam T ACL resource type.
- */
-template <typename T> struct acl_resource_traits;
-
-/**
- * @brief Specialization for aclTensor, defines how to destroy an aclTensor resource.
- */
-template <> struct acl_resource_traits<aclTensor> {
-    static void destroy(void * p) { ACL_CHECK(aclDestroyTensor(static_cast<aclTensor *>(p))); }
-};
-
-/**
- * @brief Specialization for aclIntArray, defines how to destroy an aclIntArray resource.
- */
-template <> struct acl_resource_traits<aclIntArray> {
-    static void destroy(void * p) { ACL_CHECK(aclDestroyIntArray(static_cast<aclIntArray *>(p))); }
-};
-
-/**
- * @brief Specialization for aclScalar, defines how to destroy an aclScalar resource.
- */
-template <> struct acl_resource_traits<aclScalar> {
-    static void destroy(void * p) { ACL_CHECK(aclDestroyScalar(static_cast<aclScalar *>(p))); }
-};
-
-/**
- * @brief Specialization for aclTensorList, defines how to destroy an aclTensorList resource.
- */
-template <> struct acl_resource_traits<aclTensorList> {
-    static void destroy(void * p) { ACL_CHECK(aclDestroyTensorList(static_cast<aclTensorList *>(p))); }
-};
-
-/**
- * @brief Creates a generic ACL resource wrapper with proper destruction logic.
+ * Expects dst->src[0..4] = {k, v, q, g, s} with shape conventions:
+ *   k, v, q, g: [D] with outer dims T x H batched as ne[2]=T, ne[1]=H
+ *   s: initial state [B, H, D, D], where B is batch and D=C/H
+ * dst holds both outputs (o) and updated state; a scale factor is read from op params.
  *
- * @tparam T ACL resource type.
- * @param ptr Raw pointer to ACL resource.
- * @return any_acl_resource Smart pointer that handles destruction.
- */
-template <typename T> any_acl_resource make_acl_resource(T * ptr) {
-    return any_acl_resource(static_cast<void *>(ptr), [](void * p) { acl_resource_traits<T>::destroy(p); });
-}
-
-/**
- * @brief Registers multiple ACL resources into a vector for lifetime management.
+ * The kernel updates per time step l: S_new = g ⊗ S_old + k ⊗ v, then computes o = (S_new^T q) * scale.
  *
- * @tparam Args Variadic list of ACL resource types.
- * @param vec Target vector to hold ACL resources.
- * @param args Raw pointers to ACL resources.
+ * @param ctx Backend context providing stream/allocator utilities.
+ * @param dst Output tensor; src deps are k, v, q, g, s as above.
  */
-template <typename... Args> void register_acl_resources(std::vector<any_acl_resource> & vec, Args *... args) {
-    (vec.emplace_back(make_acl_resource(args)), ...);
-}
+void ggml_cann_gated_linear_attn(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief Launches an asynchronous task using the memory allocator.
@@ -893,19 +847,19 @@ template <typename... Args> void register_acl_resources(std::vector<any_acl_reso
  * same stream are executed in queue order.
  */
 
-#define GGML_CANN_CALL_ACLNN_OP(CTX, OP_NAME, ...)                                           \
-    do {                                                                                     \
-        uint64_t        workspaceSize = 0;                                                   \
-        aclOpExecutor * executor;                                                            \
-        void *          workspaceAddr = nullptr;                                             \
-        ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor)); \
-        /* workspace should alloced in main thread to keep malloc order when using vmm. */   \
-        if (workspaceSize > 0) {                                                             \
-            ggml_cann_pool_alloc workspace_allocator(CTX.pool(), workspaceSize);             \
-            workspaceAddr = workspace_allocator.get();                                       \
-        }                                                                                    \
-        ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, CTX.stream()));     \
-    } while (0)
+#    define GGML_CANN_CALL_ACLNN_OP(CTX, OP_NAME, ...)                                           \
+        do {                                                                                     \
+            uint64_t        workspaceSize = 0;                                                   \
+            aclOpExecutor * executor;                                                            \
+            void *          workspaceAddr = nullptr;                                             \
+            ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor)); \
+            /* workspace should alloced in main thread to keep malloc order when using vmm. */   \
+            if (workspaceSize > 0) {                                                             \
+                ggml_cann_pool_alloc workspace_allocator(CTX.pool(), workspaceSize);             \
+                workspaceAddr = workspace_allocator.get();                                       \
+            }                                                                                    \
+            ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, CTX.stream()));     \
+        } while (0)
 
 /**
  * @brief   Performs sparse expert-based matrix multiplication using the CANN backend.
@@ -933,6 +887,22 @@ template <typename... Args> void register_acl_resources(std::vector<any_acl_reso
  *            Expected to be of shape [M, K, N, 1].
  */
 void ggml_cann_mul_mat_id(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
+/**
+ * @brief Performs fused ADD + RMS_NORM operation using the CANN backend.
+ *
+ * This function fuses the ADD and RMS_NORM operations into a single kernel call
+ * for better performance. It first adds two input tensors (x1 + x2), then applies
+ * RMS normalization to the result.
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param dst The ADD operation node, contains the two input tensors to be added.
+ * @param rms_norm_tensor The RMS_NORM operation node, contains the gamma weights
+ *                        and epsilon parameter.
+ */
+void ggml_cann_op_add_rms_norm_fused(ggml_backend_cann_context & ctx,
+                                     ggml_tensor *               add_node,
+                                     ggml_tensor *               rms_norm_node);
 
 /**
  * @brief   Check whether a tensor is a weight tensor for matrix multiplication.
@@ -1032,6 +1002,8 @@ void ggml_cann_op_unary(std::function<void(ggml_backend_cann_context &, aclTenso
                         ggml_backend_cann_context &                                                ctx,
                         ggml_tensor *                                                              dst);
 
+void ggml_cann_ssm_conv(ggml_backend_cann_context & ctx, ggml_tensor * dst);
+
 /**
  * @brief Applies a gated (GLU-style) unary operation using the CANN backend.
  *
@@ -1087,13 +1059,13 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
  * @see ggml_cann_op_unary
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_OP_UNARY(OP_NAME)                                                              \
-    do {                                                                                              \
-        auto lambda = [](ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor * acl_dst) { \
-            GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);                                  \
-        };                                                                                            \
-        ggml_cann_op_unary(lambda, ctx, dst);                                                         \
-    } while (0)
+#    define GGML_CANN_CALL_OP_UNARY(OP_NAME)                                                              \
+        do {                                                                                              \
+            auto lambda = [](ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor * acl_dst) { \
+                GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);                                  \
+            };                                                                                            \
+            ggml_cann_op_unary(lambda, ctx, dst);                                                         \
+        } while (0)
 
 /**
  * @brief Helper macro to call a gated unary ACL operator via ggml_cann_op_unary_gated.
@@ -1116,12 +1088,32 @@ void ggml_cann_op_unary_gated(std::function<void(ggml_backend_cann_context &, ac
  * @see ggml_cann_op_unary_gated
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_OP_UNARY_GATED(OP_NAME)                                                        \
-    do {                                                                                              \
-        auto lambda = [](ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor * acl_dst) { \
-            GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);                                  \
-        };                                                                                            \
-        ggml_cann_op_unary_gated(lambda, ctx, dst);                                                   \
-    } while (0)
+#    define GGML_CANN_CALL_OP_UNARY_GATED(OP_NAME)                                                        \
+        do {                                                                                              \
+            auto lambda = [](ggml_backend_cann_context & ctx, aclTensor * acl_src, aclTensor * acl_dst) { \
+                GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);                                  \
+            };                                                                                            \
+            ggml_cann_op_unary_gated(lambda, ctx, dst);                                                   \
+        } while (0)
 
 #endif  // CANN_ACLNN_OPS
+
+/**
+ * @brief Performs outer product operation on two ggml tensors using the CANN backend.
+ *
+ * @details This function computes the outer product of two input tensors (src0 and src1)
+ * and stores the result in the destination tensor. The outer product operation is defined as:
+ * dst[i,j,k,l] = sum_m (src0[i,m,k,l] * src1[j,m,k,l])
+ *
+ * The function supports multiple data types including F32, F16. For floating-point
+ * types, it uses batch matrix multiplication for efficient computation.
+ *
+ * The implementation handles 4D tensor broadcasting and batch processing automatically.
+ *
+ * @param ctx The CANN backend context for operation execution and memory management.
+ * @param dst The destination ggml_tensor where the outer product result will be stored.
+ *            The input tensors are assumed to be `dst->src[0]` and `dst->src[1]`.
+ *
+ * @see GGML_CANN_CALL_ACLNN_OP for CANN operator invocation
+ */
+void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst);

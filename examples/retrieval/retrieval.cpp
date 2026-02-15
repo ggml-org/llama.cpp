@@ -149,10 +149,10 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx   = llama_init->context();
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
@@ -217,13 +217,13 @@ int main(int argc, char ** argv) {
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
     // allocate output
-    const int n_embd = llama_model_n_embd(model);
-    std::vector<float> embeddings(n_chunks * n_embd, 0);
+    const int n_embd_out = llama_model_n_embd_out(model);
+    std::vector<float> embeddings(n_chunks * n_embd_out, 0);
     float * emb = embeddings.data();
 
     // break into batches
-    int p = 0; // number of prompts processed already
-    int s = 0; // number of prompts in current batch
+    unsigned int p = 0; // number of prompts processed already
+    unsigned int s = 0; // number of prompts in current batch
     for (int k = 0; k < n_chunks; k++) {
         // clamp to n_batch tokens
         auto & inp = chunks[k].tokens;
@@ -231,9 +231,9 @@ int main(int argc, char ** argv) {
         const uint64_t n_toks = inp.size();
 
         // encode if at capacity
-        if (batch.n_tokens + n_toks > n_batch) {
-            float * out = emb + p * n_embd;
-            batch_process(ctx, batch, out, s, n_embd);
+        if (batch.n_tokens + n_toks > n_batch || s >= llama_n_seq_max(ctx)) {
+            float * out = emb + p * n_embd_out;
+            batch_process(ctx, batch, out, s, n_embd_out);
             common_batch_clear(batch);
             p += s;
             s = 0;
@@ -245,12 +245,12 @@ int main(int argc, char ** argv) {
     }
 
     // final batch
-    float * out = emb + p * n_embd;
-    batch_process(ctx, batch, out, s, n_embd);
+    float * out = emb + p * n_embd_out;
+    batch_process(ctx, batch, out, s, n_embd_out);
 
     // save embeddings to chunks
     for (int i = 0; i < n_chunks; i++) {
-        chunks[i].embedding = std::vector<float>(emb + i * n_embd, emb + (i + 1) * n_embd);
+        chunks[i].embedding = std::vector<float>(emb + i * n_embd_out, emb + (i + 1) * n_embd_out);
         // clear tokens as they are no longer needed
         chunks[i].tokens.clear();
     }
@@ -266,8 +266,8 @@ int main(int argc, char ** argv) {
 
         batch_add_seq(query_batch, query_tokens, 0);
 
-        std::vector<float> query_emb(n_embd, 0);
-        batch_process(ctx, query_batch, query_emb.data(), 1, n_embd);
+        std::vector<float> query_emb(n_embd_out, 0);
+        batch_process(ctx, query_batch, query_emb.data(), 1, n_embd_out);
 
         common_batch_clear(query_batch);
 
@@ -275,7 +275,7 @@ int main(int argc, char ** argv) {
         {
             std::vector<std::pair<int, float>> similarities;
             for (int i = 0; i < n_chunks; i++) {
-                float sim = common_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd);
+                float sim = common_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd_out);
                 similarities.push_back(std::make_pair(i, sim));
             }
 

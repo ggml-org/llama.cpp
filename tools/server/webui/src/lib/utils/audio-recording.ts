@@ -1,4 +1,4 @@
-import { MimeTypeAudio } from '$lib/enums/files';
+import { MimeTypeAudio } from '$lib/enums';
 
 /**
  * AudioRecorder - Browser-based audio recording with MediaRecorder API

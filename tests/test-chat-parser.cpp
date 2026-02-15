@@ -54,113 +54,109 @@ static void assert_throws(const std::function<void()> & fn, const std::string & 
 static void test_reasoning() {
   //common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
   {
-    common_chat_msg_parser builder("<tnk>Cogito</tnk>Ergo sum", /* is_partial= */ false, {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    common_chat_msg_parser builder("<tnk>Cogito</tnk>Ergo sum", /* is_partial= */ false, params);
     assert_equals(false, builder.try_parse_reasoning("<tnk>", "</tnk>"));
     assert_equals("<tnk>Cogito</tnk>Ergo sum", builder.consume_rest());
   }
   {
-    common_chat_msg_parser builder("<tnk>Cogito</tnk>Ergo sum", /* is_partial= */ false, {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    common_chat_msg_parser builder("<tnk>Cogito</tnk>Ergo sum", /* is_partial= */ false, params);
     assert_equals(true, builder.try_parse_reasoning("<tnk>", "</tnk>"));
     assert_equals(std::string("Cogito"), builder.result().reasoning_content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
   {
-    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, params);
     assert_equals(false, builder.try_parse_reasoning("<tnk>", "</tnk>"));
     assert_equals("Cogito</tnk>Ergo sum", builder.consume_rest());
   }
   {
-    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ true,
-    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = true;
+    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, params);
     assert_equals(true, builder.try_parse_reasoning("<tnk>", "</tnk>"));
     assert_equals(std::string("Cogito"), builder.result().reasoning_content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
   {
-    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ true,
-        /* .thinking_forced_open = */ true,
-    });
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = true;
+    params.thinking_forced_open = true;
+    common_chat_msg_parser builder("Cogito</tnk>Ergo sum", /* is_partial= */ false, params);
     assert_equals(true, builder.try_parse_reasoning("<tnk>", "</tnk>"));
     assert_equals("<think>Cogito</think>", builder.result().content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
   {
     const std::string variant("content_only_inline_think");
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ false,
-    };
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    params.parse_tool_calls = false;
     const std::string input = "<think>Pense</think>Bonjour";
-    auto msg = common_chat_parse(input, false, syntax);
+    auto msg = common_chat_parse(input, false, params);
     assert_equals(variant, std::string("Pense"), msg.reasoning_content);
     assert_equals(variant, std::string("Bonjour"), msg.content);
   }
   {
     const std::string variant("llama_3_inline_think");
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ false,
-    };
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_LLAMA_3_X;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    params.parse_tool_calls = false;
     const std::string input = "<think>Plan</think>Réponse";
-    auto msg = common_chat_parse(input, false, syntax);
+    auto msg = common_chat_parse(input, false, params);
     assert_equals(variant, std::string("Plan"), msg.reasoning_content);
     assert_equals(variant, std::string("Réponse"), msg.content);
   }
   // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
   {
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ true,
-        /* .parse_tool_calls = */ true,
-    };
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = true;
+    params.parse_tool_calls = true;
     const std::string variant("deepseek_v3_1_reasoning_format_deepseek");
-    common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, syntax);
+    common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, params);
     assert_equals(variant, true, builder.try_parse_reasoning("<think>", "</think>"));
     assert_equals(variant, std::string("REASONING"), builder.result().reasoning_content);
     assert_equals(variant, std::string("ok"), builder.consume_rest());
   }
   // Test DeepSeek V3.1 parsing - reasoning_format none - reasoning content followed by "</think>" and then regular content
   {
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ true,
-        /* .parse_tool_calls = */ true,
-    };
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    params.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = true;
+    params.parse_tool_calls = true;
     const std::string variant("deepseek_v3_1_reasoning_format_none");
     const std::string input = "REASONING</think>ok";
-    auto msg = common_chat_parse(input, false, syntax);
+    auto msg = common_chat_parse(input, false, params);
     assert_equals(variant, std::string("REASONING</think>ok"), msg.content);
     assert_equals(variant, std::string(""), msg.reasoning_content);
   }
@@ -256,15 +252,14 @@ static void test_deepseek_v3_1_tool_calls() {
     //common_log_set_verbosity_thold(LOG_DEFAULT_DEBUG);
     // variant: happy path for when it works as the model card says it should
     const std::string variant("simple");
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ true,
-    };
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    params.reasoning_in_content = false;
+    params.thinking_forced_open = false;
+    params.parse_tool_calls = true;
     const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-    auto msg = common_chat_parse(input, false, syntax);
+    auto msg = common_chat_parse(input, false, params);
     assert_equals<std::size_t>(variant, 1, msg.tool_calls.size());
     assert_equals(variant, std::string("get_time"), msg.tool_calls[0].name);
     // JSON arguments are dumped without spaces
@@ -274,16 +269,15 @@ static void test_deepseek_v3_1_tool_calls() {
 
     // variant: simple + thinking open
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ true,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = true;
+        params.parse_tool_calls = true;
         const std::string variant("simple_thinking");
         const std::string in = "REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
         assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
@@ -292,16 +286,15 @@ static void test_deepseek_v3_1_tool_calls() {
     }
     // variant: simple + multiple tool calls
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ false,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = false;
+        params.parse_tool_calls = true;
         const std::string variant("simple_multiple_tool_calls");
         const std::string in = "CONTENT<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁call▁begin｜>get_weather<｜tool▁sep｜>{\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals<std::size_t>(variant, 2, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
         assert_equals(variant, std::string("{\"city\":\"Paris\"}"), m.tool_calls[0].arguments);
@@ -314,16 +307,15 @@ static void test_deepseek_v3_1_tool_calls() {
 
     // variant: thinking forced open + tool call in reasoning content
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ true,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = true;
+        params.parse_tool_calls = true;
         const std::string variant("thinking_forced_open_tool_call_in_reasoning");
         const std::string in = "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time2<｜tool▁sep｜>{\"city\": \"Tokyo2\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>REASONING</think><｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
         assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
         assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
@@ -336,16 +328,15 @@ static void test_deepseek_v3_1_tool_calls() {
     //          to make tool calls in reasoning content according to the model card, but it does sometimes, so
     //          add the reasoning content as regular content and parse the tool calls.
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ true,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = true;
+        params.parse_tool_calls = true;
         const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_not_partial");
         const std::string in = "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals(variant, std::string("REASONING"), m.content);
         assert_equals(variant, std::string(""), m.reasoning_content);
         assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
@@ -355,16 +346,15 @@ static void test_deepseek_v3_1_tool_calls() {
 
     // variant: thinking forced open + tool call in reasoning content + no closing think + partial
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ true,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = true;
+        params.parse_tool_calls = true;
         const std::string variant("thinking_forced_open_tool_call_in_reasoning_no_closing_think_partial");
         const std::string in = "REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
-        auto m = common_chat_parse(in, /* is_partial= */ true, syntax);
+        auto m = common_chat_parse(in, /* is_partial= */ true, params);
         assert_equals(variant, std::string("REASONING<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>"), m.reasoning_content);
         assert_equals(variant, std::string(""), m.content);
         assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
@@ -372,32 +362,30 @@ static void test_deepseek_v3_1_tool_calls() {
 
     // variant: thinking not forced open + reasoning + regular content + no tool calls
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ true,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = true;
+        params.parse_tool_calls = true;
         const std::string variant("thinking_forced_open_reasoning_regular_content_no_tool_calls");
         const std::string in = "REASONING</think>CONTENT";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
         assert_equals(variant, std::string("CONTENT"), m.content);
         assert_equals(variant, std::string("REASONING"), m.reasoning_content);
     }
     // variant: thinking not forced open + missing reasoning + no tool calls
     {
-        common_chat_syntax syntax = {
-            /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-            /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-            /* .reasoning_in_content = */ false,
-            /* .thinking_forced_open = */ false,
-            /* .parse_tool_calls = */ true,
-        };
+        common_chat_parser_params params;
+        params.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        params.reasoning_in_content = false;
+        params.thinking_forced_open = false;
+        params.parse_tool_calls = true;
         const std::string variant("thinking_not_forced_open_missing_reasoning_no_tool_calls");
         const std::string in = "CONTENT";
-        auto m = common_chat_parse(in, false, syntax);
+        auto m = common_chat_parse(in, false, params);
         assert_equals<std::size_t>(variant, 0, m.tool_calls.size());
         assert_equals(variant, std::string("CONTENT"), m.content);
         assert_equals(variant, std::string(""), m.reasoning_content);

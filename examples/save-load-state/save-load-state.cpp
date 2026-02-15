@@ -34,10 +34,10 @@ int main(int argc, char ** argv) {
     std::string result2;
 
     // init
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx   = llama_init->context();
 
     if (model == nullptr || ctx == nullptr) {
         fprintf(stderr, "%s : failed to init\n", __func__);
@@ -240,6 +240,12 @@ int main(int argc, char ** argv) {
     llama_sampler_free(smpl3);
 
     llama_batch_free(batch);
+
+    // this one is managed by common_init_result
+    //llama_free(ctx);
+
+    llama_free(ctx2);
+    llama_free(ctx3);
 
     if (result0 != result2) {
         fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);

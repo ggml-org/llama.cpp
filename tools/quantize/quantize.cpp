@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cctype>
 #include <algorithm>
+#include <filesystem>
 
 struct quant_option {
     std::string name;
@@ -118,7 +119,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
-    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
+    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file] [--prune-layers] [--keep-split] [--override-kv]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
@@ -130,6 +131,8 @@ static void usage(const char * executable) {
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type TENSOR=TYPE: quantize this tensor to this ggml_type. example: --tensor-type attn_q=q8_0\n");
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
+    printf("  --tensor-type-file tensor_type.txt: list of tensors to quantize to specific ggml_type. example: --tensor-type-file tensor_type_list.txt\n");
+    printf("      Advanced option to selectively quantize a long list of tensors. Format to be tensor_name=ggml_type, separated by spaces/newline.\n");
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
@@ -414,6 +417,23 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     return true;
 }
 
+static bool parse_tensor_type_file(const char * filename, std::vector<tensor_quantization> & tensor_type) {
+    std::ifstream file(filename);
+    if (!file) {
+        printf("\n%s: failed to open file '%s': %s\n\n", __func__, filename, std::strerror(errno));
+        return false;
+    }
+
+    std::string arg;
+    while (file >> arg) {
+        if (!parse_tensor_type(arg.c_str(), tensor_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers) {
     if (!data) {
         printf("\n%s: no layer pruning ids provided\n\n", __func__);
@@ -477,6 +497,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
             if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--tensor-type-file") == 0) {
+            if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
@@ -643,6 +667,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (std::error_code ec; std::filesystem::equivalent(fname_inp, fname_out, ec)) {
+        fprintf(stderr, "%s: error: input and output files are the same: '%s'\n", __func__, fname_inp.c_str());
+        return 1;
+    }
+
     print_build_info();
 
     fprintf(stderr, "%s: quantizing '%s' to '%s' as %s", __func__, fname_inp.c_str(), fname_out.c_str(), ftype_str.c_str());
@@ -680,3 +709,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+

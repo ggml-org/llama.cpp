@@ -1,0 +1,372 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 1420">
+  <style>
+    .title { fill: #c9d1d9; font-family: -apple-system, system-ui, sans-serif; font-size: 16px; font-weight: 600; }
+    .subtitle { fill: #8b949e; font-family: -apple-system, system-ui, sans-serif; font-size: 10px; font-weight: 500; }
+    .header { fill: #8b949e; font-family: -apple-system, system-ui, sans-serif; font-size: 10px; font-weight: 500; }
+    .model { fill: #c9d1d9; font-family: -apple-system, system-ui, sans-serif; font-size: 13px; font-weight: 600; }
+    .cell { fill: #8b949e; font-family: ui-monospace, monospace; font-size: 11px; }
+    .value { fill: #c9d1d9; font-family: ui-monospace, monospace; font-size: 13px; }
+    .value-vanilla { fill: #a0a8b0; font-family: ui-monospace, monospace; font-size: 13px; }
+    .gain { fill: #57ab5a; font-family: ui-monospace, monospace; font-size: 11px; }
+    .gain-big { fill: #57ab5a; font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; }
+    .gain-huge { fill: #3fb950; font-family: ui-monospace, monospace; font-size: 13px; font-weight: 700; }
+    .grid { stroke-width: 1; }
+    .grid-thick { stroke: #30363d; stroke-width: 1.5; }
+    .foot { fill: #484f58; font-family: -apple-system, system-ui, sans-serif; font-size: 9px; }
+  </style>
+
+  <!-- Title Section -->
+  <text x="400" y="30" class="title" text-anchor="middle">GFX906 Fork Benchmarks · Detailed Comparison</text>
+  <text x="400" y="48" class="subtitle" text-anchor="middle">Single MI50 (@iacoppbk) · ROCm 7.1.1 · K Q8_0, V F16 · pl@225W</text>
+
+  <!-- Header row -->
+  <text x="90" y="78" class="header" text-anchor="middle">MODEL</text>
+  <text x="190" y="78" class="header" text-anchor="middle">CTX</text>
+  <text x="270" y="78" class="header" text-anchor="middle">TEST</text>
+  <text x="390" y="78" class="header" text-anchor="middle">VANILLA [t/s]</text>
+  <text x="510" y="78" class="header" text-anchor="middle">FORK [t/s]</text>
+  <text x="620" y="78" class="header" text-anchor="middle">GAIN</text>
+
+  <line x1="20" y1="90" x2="700" y2="90" class="grid-thick"/>
+
+  <!-- ========== Qwen3-VL 30B A3B Q4_1 ========== -->
+  <text x="80" y="180" class="model" text-anchor="middle">Qwen3-VL 30B</text>
+  <text x="80" y="198" class="cell" text-anchor="middle">A3B Q4_1 · 17.9GB</text>
+
+  <!-- pp512 -->
+  <text x="190" y="122" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="122" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="122" class="value-vanilla" text-anchor="middle">1404</text>
+  <text x="510" y="122" class="value" text-anchor="middle">1683</text>
+  <text x="620" y="122" class="gain-big" text-anchor="middle">+19.8%</text>
+  <line x1="160" y1="134" x2="700" y2="134" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 -->
+  <text x="190" y="154" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="154" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="154" class="value-vanilla" text-anchor="middle">1801</text>
+  <text x="510" y="154" class="value" text-anchor="middle">2222</text>
+  <text x="620" y="154" class="gain-big" text-anchor="middle">+23.4%</text>
+  <line x1="160" y1="166" x2="700" y2="166" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 -->
+  <text x="190" y="186" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="186" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="186" class="value-vanilla" text-anchor="middle">1280</text>
+  <text x="510" y="186" class="value" text-anchor="middle">1573</text>
+  <text x="620" y="186" class="gain-big" text-anchor="middle">+22.9%</text>
+  <line x1="160" y1="198" x2="700" y2="198" class="grid" opacity="0.4"/>
+
+  <!-- tg128 -->
+  <text x="190" y="218" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="218" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="218" class="value-vanilla" text-anchor="middle">108</text>
+  <text x="510" y="218" class="value" text-anchor="middle">131</text>
+  <text x="620" y="218" class="gain-big" text-anchor="middle">+20.5%</text>
+  <line x1="160" y1="230" x2="700" y2="230" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 -->
+  <text x="190" y="250" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="250" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="250" class="value-vanilla" text-anchor="middle">101</text>
+  <text x="510" y="250" class="value" text-anchor="middle">124</text>
+  <text x="620" y="250" class="gain-big" text-anchor="middle">+22.7%</text>
+  <line x1="160" y1="262" x2="700" y2="262" class="grid" opacity="0.4"/>
+
+  <!-- pp512 @ d8192 -->
+  <text x="190" y="282" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="282" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="282" class="value-vanilla" text-anchor="middle">759</text>
+  <text x="510" y="282" class="value" text-anchor="middle">857</text>
+  <text x="620" y="282" class="gain" text-anchor="middle">+12.9%</text>
+  <line x1="160" y1="294" x2="700" y2="294" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 @ d8192 -->
+  <text x="190" y="308" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="308" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="308" class="value-vanilla" text-anchor="middle">863</text>
+  <text x="510" y="308" class="value" text-anchor="middle">1049</text>
+  <text x="620" y="308" class="gain-big" text-anchor="middle">+21.6%</text>
+  <line x1="160" y1="320" x2="700" y2="320" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 @ d8192 -->
+  <text x="190" y="334" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="334" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="334" class="value-vanilla" text-anchor="middle">719</text>
+  <text x="510" y="334" class="value" text-anchor="middle">876</text>
+  <text x="620" y="334" class="gain-big" text-anchor="middle">+21.8%</text>
+  <line x1="160" y1="346" x2="700" y2="346" class="grid" opacity="0.4"/>
+
+  <!-- tg128 @ d8192 -->
+  <text x="190" y="360" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="360" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="360" class="value-vanilla" text-anchor="middle">61</text>
+  <text x="510" y="360" class="value" text-anchor="middle">109</text>
+  <text x="620" y="360" class="gain-huge" text-anchor="middle">+76.9%</text>
+  <line x1="160" y1="372" x2="700" y2="372" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 @ d8192 -->
+  <text x="190" y="386" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="386" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="386" class="value-vanilla" text-anchor="middle">57</text>
+  <text x="510" y="386" class="value" text-anchor="middle">107</text>
+  <text x="620" y="386" class="gain-huge" text-anchor="middle">+88.2%</text>
+
+  <line x1="20" y1="402" x2="700" y2="402" class="grid-thick"/>
+
+  <!-- ========== GPT-OSS 20B MXFP4 MoE ========== -->
+  <text x="80" y="492" class="model" text-anchor="middle">GPT-OSS 20B</text>
+  <text x="80" y="510" class="cell" text-anchor="middle">MXFP4 MoE · 11.3GB</text>
+
+  <!-- pp512 -->
+  <text x="190" y="434" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="434" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="434" class="value-vanilla" text-anchor="middle">1231</text>
+  <text x="510" y="434" class="value" text-anchor="middle">1365</text>
+  <text x="620" y="434" class="gain" text-anchor="middle">+10.9%</text>
+  <line x1="160" y1="446" x2="700" y2="446" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 -->
+  <text x="190" y="466" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="466" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="466" class="value-vanilla" text-anchor="middle">1453</text>
+  <text x="510" y="466" class="value" text-anchor="middle">1648</text>
+  <text x="620" y="466" class="gain-big" text-anchor="middle">+13.4%</text>
+  <line x1="160" y1="478" x2="700" y2="478" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 -->
+  <text x="190" y="498" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="498" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="498" class="value-vanilla" text-anchor="middle">1301</text>
+  <text x="510" y="498" class="value" text-anchor="middle">1499</text>
+  <text x="620" y="498" class="gain-big" text-anchor="middle">+15.2%</text>
+  <line x1="160" y1="510" x2="700" y2="510" class="grid" opacity="0.4"/>
+
+  <!-- tg128 -->
+  <text x="190" y="530" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="530" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="530" class="value-vanilla" text-anchor="middle">131</text>
+  <text x="510" y="530" class="value" text-anchor="middle">146</text>
+  <text x="620" y="530" class="gain" text-anchor="middle">+11.5%</text>
+  <line x1="160" y1="542" x2="700" y2="542" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 -->
+  <text x="190" y="562" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="562" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="562" class="value-vanilla" text-anchor="middle">119</text>
+  <text x="510" y="562" class="value" text-anchor="middle">140</text>
+  <text x="620" y="562" class="gain-big" text-anchor="middle">+17.2%</text>
+  <line x1="160" y1="574" x2="700" y2="574" class="grid" opacity="0.4"/>
+
+  <!-- pp512 @ d8192 -->
+  <text x="190" y="594" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="594" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="594" class="value-vanilla" text-anchor="middle">926</text>
+  <text x="510" y="594" class="value" text-anchor="middle">1058</text>
+  <text x="620" y="594" class="gain-big" text-anchor="middle">+14.2%</text>
+  <line x1="160" y1="606" x2="700" y2="606" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 @ d8192 -->
+  <text x="190" y="620" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="620" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="620" class="value-vanilla" text-anchor="middle">1095</text>
+  <text x="510" y="620" class="value" text-anchor="middle">1279</text>
+  <text x="620" y="620" class="gain-big" text-anchor="middle">+16.8%</text>
+  <line x1="160" y1="632" x2="700" y2="632" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 @ d8192 -->
+  <text x="190" y="646" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="646" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="646" class="value-vanilla" text-anchor="middle">968</text>
+  <text x="510" y="646" class="value" text-anchor="middle">1195</text>
+  <text x="620" y="646" class="gain-big" text-anchor="middle">+23.4%</text>
+  <line x1="160" y1="658" x2="700" y2="658" class="grid" opacity="0.4"/>
+
+  <!-- tg128 @ d8192 -->
+  <text x="190" y="672" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="672" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="672" class="value-vanilla" text-anchor="middle">96</text>
+  <text x="510" y="672" class="value" text-anchor="middle">131</text>
+  <text x="620" y="672" class="gain-big" text-anchor="middle">+37.0%</text>
+  <line x1="160" y1="684" x2="700" y2="684" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 @ d8192 -->
+  <text x="190" y="698" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="698" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="698" class="value-vanilla" text-anchor="middle">89</text>
+  <text x="510" y="698" class="value" text-anchor="middle">129</text>
+  <text x="620" y="698" class="gain-big" text-anchor="middle">+44.5%</text>
+
+  <line x1="20" y1="714" x2="700" y2="714" class="grid-thick"/>
+
+  <!-- ========== Qwen3 4B Q8_0 ========== -->
+  <text x="80" y="804" class="model" text-anchor="middle">Qwen3 4B</text>
+  <text x="80" y="822" class="cell" text-anchor="middle">Q8_0 · 4.0GB</text>
+
+  <!-- pp512 -->
+  <text x="190" y="746" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="746" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="746" class="value-vanilla" text-anchor="middle">1041</text>
+  <text x="510" y="746" class="value" text-anchor="middle">1452</text>
+  <text x="620" y="746" class="gain-huge" text-anchor="middle">+39.5%</text>
+  <line x1="160" y1="758" x2="700" y2="758" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 -->
+  <text x="190" y="778" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="778" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="778" class="value-vanilla" text-anchor="middle">1097</text>
+  <text x="510" y="778" class="value" text-anchor="middle">1481</text>
+  <text x="620" y="778" class="gain-huge" text-anchor="middle">+35.0%</text>
+  <line x1="160" y1="790" x2="700" y2="790" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 -->
+  <text x="190" y="810" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="810" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="810" class="value-vanilla" text-anchor="middle">896</text>
+  <text x="510" y="810" class="value" text-anchor="middle">1215</text>
+  <text x="620" y="810" class="gain-huge" text-anchor="middle">+35.6%</text>
+  <line x1="160" y1="822" x2="700" y2="822" class="grid" opacity="0.4"/>
+
+  <!-- tg128 -->
+  <text x="190" y="842" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="842" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="842" class="value-vanilla" text-anchor="middle">107</text>
+  <text x="510" y="842" class="value" text-anchor="middle">119</text>
+  <text x="620" y="842" class="gain" text-anchor="middle">+11.5%</text>
+  <line x1="160" y1="854" x2="700" y2="854" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 -->
+  <text x="190" y="874" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="874" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="874" class="value-vanilla" text-anchor="middle">95</text>
+  <text x="510" y="874" class="value" text-anchor="middle">114</text>
+  <text x="620" y="874" class="gain-big" text-anchor="middle">+20.0%</text>
+  <line x1="160" y1="886" x2="700" y2="886" class="grid" opacity="0.4"/>
+
+  <!-- pp512 @ d8192 -->
+  <text x="190" y="906" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="906" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="906" class="value-vanilla" text-anchor="middle">680</text>
+  <text x="510" y="906" class="value" text-anchor="middle">877</text>
+  <text x="620" y="906" class="gain-big" text-anchor="middle">+29.0%</text>
+  <line x1="160" y1="918" x2="700" y2="918" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 @ d8192 -->
+  <text x="190" y="932" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="932" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="932" class="value-vanilla" text-anchor="middle">711</text>
+  <text x="510" y="932" class="value" text-anchor="middle">937</text>
+  <text x="620" y="932" class="gain-big" text-anchor="middle">+31.8%</text>
+  <line x1="160" y1="944" x2="700" y2="944" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 @ d8192 -->
+  <text x="190" y="958" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="958" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="958" class="value-vanilla" text-anchor="middle">599</text>
+  <text x="510" y="958" class="value" text-anchor="middle">823</text>
+  <text x="620" y="958" class="gain-huge" text-anchor="middle">+37.2%</text>
+  <line x1="160" y1="970" x2="700" y2="970" class="grid" opacity="0.4"/>
+
+  <!-- tg128 @ d8192 -->
+  <text x="190" y="984" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="984" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="984" class="value-vanilla" text-anchor="middle">58</text>
+  <text x="510" y="984" class="value" text-anchor="middle">97</text>
+  <text x="620" y="984" class="gain-huge" text-anchor="middle">+65.3%</text>
+  <line x1="160" y1="996" x2="700" y2="996" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 @ d8192 -->
+  <text x="190" y="1010" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1010" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="1010" class="value-vanilla" text-anchor="middle">52</text>
+  <text x="510" y="1010" class="value" text-anchor="middle">94</text>
+  <text x="620" y="1010" class="gain-huge" text-anchor="middle">+78.9%</text>
+
+  <line x1="20" y1="1026" x2="700" y2="1026" class="grid-thick"/>
+
+  <!-- ========== DeepSeek2 (GLM) 30B A3B Q4_1 ========== -->
+  <text x="80" y="1116" class="model" text-anchor="middle">GLM 4.7 (DeepSeek2)</text>
+  <text x="80" y="1134" class="cell" text-anchor="middle">30B A3B Q4_1 · 17.7GB</text>
+
+  <!-- pp512 -->
+  <text x="190" y="1058" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="1058" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="1058" class="value-vanilla" text-anchor="middle">1035</text>
+  <text x="510" y="1058" class="value" text-anchor="middle">1164</text>
+  <text x="620" y="1058" class="gain-big" text-anchor="middle">+12.5%</text>
+  <line x1="160" y1="1070" x2="700" y2="1070" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 -->
+  <text x="190" y="1090" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="1090" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="1090" class="value-vanilla" text-anchor="middle">1235</text>
+  <text x="510" y="1090" class="value" text-anchor="middle">1321</text>
+  <text x="620" y="1090" class="gain" text-anchor="middle">+7.0%</text>
+  <line x1="160" y1="1102" x2="700" y2="1102" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 -->
+  <text x="190" y="1122" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="1122" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="1122" class="value-vanilla" text-anchor="middle">702</text>
+  <text x="510" y="1122" class="value" text-anchor="middle">738</text>
+  <text x="620" y="1122" class="gain" text-anchor="middle">+5.1%</text>
+  <line x1="160" y1="1134" x2="700" y2="1134" class="grid" opacity="0.4"/>
+
+  <!-- tg128 -->
+  <text x="190" y="1154" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="1154" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="1154" class="value-vanilla" text-anchor="middle">82</text>
+  <text x="510" y="1154" class="value" text-anchor="middle">91</text>
+  <text x="620" y="1154" class="gain" text-anchor="middle">+11.1%</text>
+  <line x1="160" y1="1166" x2="700" y2="1166" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 -->
+  <text x="190" y="1186" class="cell" text-anchor="middle">—</text>
+  <text x="270" y="1186" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="1186" class="value-vanilla" text-anchor="middle">74</text>
+  <text x="510" y="1186" class="value" text-anchor="middle">88</text>
+  <text x="620" y="1186" class="gain-big" text-anchor="middle">+18.5%</text>
+  <line x1="160" y1="1198" x2="700" y2="1198" class="grid" opacity="0.4"/>
+
+  <!-- pp512 @ d8192 -->
+  <text x="190" y="1218" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1218" class="cell" text-anchor="middle">pp512</text>
+  <text x="390" y="1218" class="value-vanilla" text-anchor="middle">380</text>
+  <text x="510" y="1218" class="value" text-anchor="middle">386</text>
+  <text x="620" y="1218" class="gain" text-anchor="middle">+1.6%</text>
+  <line x1="160" y1="1230" x2="700" y2="1230" class="grid" opacity="0.4"/>
+
+  <!-- pp2048 @ d8192 -->
+  <text x="190" y="1244" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1244" class="cell" text-anchor="middle">pp2048</text>
+  <text x="390" y="1244" class="value-vanilla" text-anchor="middle">409</text>
+  <text x="510" y="1244" class="value" text-anchor="middle">425</text>
+  <text x="620" y="1244" class="gain" text-anchor="middle">+3.9%</text>
+  <line x1="160" y1="1256" x2="700" y2="1256" class="grid" opacity="0.4"/>
+
+  <!-- pp8192 @ d8192 -->
+  <text x="190" y="1270" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1270" class="cell" text-anchor="middle">pp8192</text>
+  <text x="390" y="1270" class="value-vanilla" text-anchor="middle">287</text>
+  <text x="510" y="1270" class="value" text-anchor="middle">325</text>
+  <text x="620" y="1270" class="gain" text-anchor="middle">+13.2%</text>
+  <line x1="160" y1="1282" x2="700" y2="1282" class="grid" opacity="0.4"/>
+
+  <!-- tg128 @ d8192 -->
+  <text x="190" y="1296" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1296" class="cell" text-anchor="middle">tg128</text>
+  <text x="390" y="1296" class="value-vanilla" text-anchor="middle">54</text>
+  <text x="510" y="1296" class="value" text-anchor="middle">63</text>
+  <text x="620" y="1296" class="gain-big" text-anchor="middle">+17.3%</text>
+  <line x1="160" y1="1308" x2="700" y2="1308" class="grid" opacity="0.4"/>
+
+  <!-- tg2048 @ d8192 -->
+  <text x="190" y="1322" class="cell" text-anchor="middle">8192</text>
+  <text x="270" y="1322" class="cell" text-anchor="middle">tg2048</text>
+  <text x="390" y="1322" class="value-vanilla" text-anchor="middle">49</text>
+  <text x="510" y="1322" class="value" text-anchor="middle">57</text>
+  <text x="620" y="1322" class="gain-big" text-anchor="middle">+17.1%</text>
+
+  <line x1="20" y1="1338" x2="700" y2="1338" class="grid-thick"/>
+
+</svg>

@@ -13,18 +13,16 @@
 #include <vector>
 #include <cinttypes>
 
-#define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
-
-const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
-
 using json = nlohmann::ordered_json;
 
 #define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_CNT(slot, fmt, ...) LOG_CNT(""                                 fmt,                                                                __VA_ARGS__)
 #define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 
 #define SRV_INF(fmt, ...) LOG_INF("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
 #define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_ERR(fmt, ...) LOG_ERR("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -107,9 +105,7 @@ bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next);
 
-std::vector<common_adapter_lora_info> parse_lora_request(
-        const std::vector<common_adapter_lora_info> & lora_base,
-        const json & data);
+std::map<int, float> parse_lora_request(const json & data);
 
 bool are_lora_equal(
         const std::vector<common_adapter_lora_info> & l1,
@@ -217,6 +213,8 @@ public:
                 llama_pos pos,
                 int32_t seq_id,
                 size_t & n_tokens_out) const;
+
+    server_tokens clone() const;
 };
 
 
@@ -274,32 +272,45 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
-// used by /completions endpoint
-json oaicompat_completion_params_parse(const json & body);
-
-struct oaicompat_parser_options {
+// global server parameters for chat formatting / parsing
+struct server_chat_params {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
-    std::map<std::string,std::string> chat_template_kwargs;
-    common_chat_templates * tmpls;
+    std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
+    common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    std::string media_path;
 };
+
+// used by /completions endpoint
+json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
-    const oaicompat_parser_options & opt,
+    const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
 
+// convert OpenAI Responses API format to OpenAI Chat Completions API format
+json convert_responses_to_chatcmpl(const json & body);
+
+// convert Anthropic Messages API format to OpenAI Chat Completions API format
+json convert_anthropic_to_oai(const json & body);
+
 // TODO: move it to server-task.cpp
-json format_embeddings_response_oaicompat(const json & request, const json & embeddings, bool use_base64 = false);
+json format_embeddings_response_oaicompat(
+    const json & request,
+    const std::string & model_name,
+    const json & embeddings,
+    bool use_base64 = false);
 
 // TODO: move it to server-task.cpp
 json format_response_rerank(
         const json & request,
+        const std::string & model_name,
         const json & ranks,
         bool is_tei_format,
         std::vector<std::string> & texts,
@@ -314,13 +325,19 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 std::string safe_json_to_str(const json & data);
 
 std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
+std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens);
 
 // format incomplete utf-8 multibyte character for output
 std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token);
 
 // format server-sent event (SSE), return the formatted string to send
 // note: if data is a json array, it will be sent as multiple events, one per item
-std::string format_sse(const json & data);
+std::string format_oai_sse(const json & data);
+
+std::string format_oai_resp_sse(const json & data);
+
+// format Anthropic-style SSE with event types
+std::string format_anthropic_sse(const json & data);
 
 bool is_valid_utf8(const std::string & str);
 

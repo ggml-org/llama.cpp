@@ -94,7 +94,7 @@ def copy_with_new_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, new
     writer.write_ti_data_to_file()
 
     for tensor in reader.tensors:
-        writer.write_tensor_data(tensor.data)
+        writer.write_tensor_data(tensor.data, tensor_endianess=reader.endianess)
         bar.update(tensor.n_bytes)
 
     writer.close()

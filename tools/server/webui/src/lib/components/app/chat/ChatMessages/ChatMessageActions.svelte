@@ -71,7 +71,7 @@
 			{/if}
 
 			{#if role === 'assistant' && onRegenerate}
-				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={onRegenerate} />
+				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
 			{#if role === 'assistant' && onContinue}

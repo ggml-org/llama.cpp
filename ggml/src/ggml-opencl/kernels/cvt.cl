@@ -47,6 +47,16 @@ struct block_q4_0
 };
 
 //------------------------------------------------------------------------------
+// block_q6_K
+//------------------------------------------------------------------------------
+struct block_q6_K {
+    uint8_t ql[QK_K/2];      // quants, lower 4 bits
+    uint8_t qh[QK_K/4];      // quants, upper 2 bits
+    int8_t  scales[QK_K/16]; // scales, quantized with 8 bits
+    half d;                  // super-block scale
+};
+
+//------------------------------------------------------------------------------
 // kernel_convert_block_q4_0
 // Convert the block_q4_0 format to 2 separate arrays (AOS -> SOA).
 // This kernel does not deshuffle the bits.
@@ -114,6 +124,27 @@ kernel void kernel_convert_block_q4_0_noshuffle(
             printf("%04x - %02x\n", *(global ushort*)d, ((x0 & 0xF0) >> 4) | (x1 & 0xF0));
         }
 #endif
+    }
+}
+
+kernel void kernel_restore_block_q4_0_noshuffle(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_q4_0 * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK4_0/4; ++i) {
+        uchar x0 = q[i + 0      ] ;
+        uchar x1 = q[i + QK4_0/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
     }
 }
 
@@ -240,5 +271,96 @@ kernel void kernel_restore_block_q8_0(
     b->d = *d;
     for (int i = 0; i < QK8_0; ++i) {
         b->qs[i] = q[i];
+    }
+}
+
+kernel void kernel_restore_block_q8_0_trans(
+    global uchar * src_q,
+    global half  * src_d,
+    global block_q8_0 * dst,
+    uint ne00,
+    uint ne01
+){
+    uint num_blk_per_row = ne00 / QK8_0;
+
+    global block_q8_0 * b = (global block_q8_0 *) dst + get_global_id(0) * num_blk_per_row;
+    global uchar      * q = (global uchar *) src_q + get_global_id(0) * 4; // 4 8-bit packed
+    global half       * d = (global half *) src_d + get_global_id(0);
+
+    for (uint blk = 0; blk < num_blk_per_row; blk++) {
+        b->d = *d;
+
+        for (uint i = 0; i < QK8_0; i+=4) {
+            b->qs[i]   = q[0];
+            b->qs[i+1] = q[1];
+            b->qs[i+2] = q[2];
+            b->qs[i+3] = q[3];
+
+            q += 4 * ne01; // M stride
+        }
+
+        d += ne01;
+
+        b++;
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q6_K
+// Convert the block_q6_K format to 3 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+// Each thread processes a super block.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q6_K(
+    global struct block_q6_K * src0,
+    global uchar * dst_ql,
+    global uchar * dst_qh,
+    global char  * dst_s,
+    global half  * dst_d
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) src0 + get_global_id(0);
+    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        ql[i] = b->ql[i];
+    }
+    for (int i = 0; i < QK_K/4; ++i) {
+        qh[i] = b->qh[i];
+    }
+    for (int i = 0; i < QK_K/16; ++i) {
+        s[i] = b->scales[i];
+    }
+}
+
+// Restore block_q6_K from flattened arrays.
+// Each thread processes a super block.
+kernel void kernel_restore_block_q6_K(
+    global uchar * dst_ql,
+    global uchar * dst_qh,
+    global char  * dst_s,
+    global half  * dst_d,
+    global struct block_q6_K * dst
+) {
+    global struct block_q6_K * b = (global struct block_q6_K *) dst + get_global_id(0);
+    global uchar * ql = (global uchar *) dst_ql + QK_K/2*get_global_id(0);
+    global uchar * qh = (global uchar *) dst_qh + QK_K/4*get_global_id(0);
+    global char  * s  = (global char  *) dst_s  + QK_K/16*get_global_id(0);
+    global half  * d  = (global half  *) dst_d  + get_global_id(0);
+
+    b->d = *d;
+
+    for (int i = 0; i < QK_K/2; ++i) {
+        b->ql[i] = ql[i];
+    }
+    for (int i = 0; i < QK_K/4; ++i) {
+        b->qh[i] = qh[i];
+    }
+    for (int i = 0; i < QK_K/16; ++i) {
+        b->scales[i] = s[i];
     }
 }

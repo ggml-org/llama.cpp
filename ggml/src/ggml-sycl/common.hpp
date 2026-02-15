@@ -617,4 +617,47 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
     return dpct::pow(base, exph);
 }
 
+static const sycl::uint3 init_fastdiv_values(uint32_t d) {
+    GGML_ASSERT(d != 0);
+
+    uint32_t L = 0;
+    while (L < 32 && (uint32_t{ 1 } << L) < d) {
+        L++;
+    }
+
+    uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
+    return sycl::uint3(mp, L, d);
+}
+
+
+static __dpct_inline__ uint32_t fastdiv(uint32_t n, const sycl::uint3 fastdiv_values) {
+    const uint32_t hi = sycl::mul_hi<unsigned>(n, fastdiv_values.x());
+    return (hi + n) >> fastdiv_values.y();
+}
+
+
+static __dpct_inline__ sycl::uint2 fast_div_modulo(uint32_t n, const sycl::uint3 fastdiv_values) {
+    const uint32_t div_val = fastdiv(n, fastdiv_values);
+    const uint32_t mod_val = n - div_val * fastdiv_values.z();
+    return sycl::uint2(div_val, mod_val);
+}
+
+static __dpct_inline__ int ggml_sycl_dp4a(const int a, const int b, int c) {
+    return dpct::dp4a(a, b, c);
+}
+
+static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
+    uint32_t bits;
+    if (x == 0) {
+        bits = 0x00400000;
+    } else {
+        bits = (uint32_t) x << 23;
+    }
+
+    float result;
+    memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
+
 #endif // GGML_SYCL_COMMON_HPP

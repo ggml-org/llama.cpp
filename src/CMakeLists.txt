@@ -24,13 +24,14 @@ add_library(llama
             llama-kv-cache-iswa.cpp
             llama-memory.cpp
             llama-memory-hybrid.cpp
+            llama-memory-hybrid-iswa.cpp
             llama-memory-recurrent.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
             llama-model-saver.cpp
             llama-model.cpp
             llama-quant.cpp
-            llama-sampling.cpp
+            llama-sampler.cpp
             llama-vocab.cpp
             unicode-data.cpp
             unicode.cpp
@@ -62,12 +63,13 @@ add_library(llama
             models/ernie4-5.cpp
             models/exaone.cpp
             models/exaone4.cpp
+            models/exaone-moe.cpp
             models/falcon-h1.cpp
             models/falcon.cpp
             models/gemma-embedding.cpp
             models/gemma.cpp
             models/gemma2-iswa.cpp
-            models/gemma3-iswa.cpp
+            models/gemma3.cpp
             models/gemma3n-iswa.cpp
             models/glm4-moe.cpp
             models/glm4.cpp
@@ -82,14 +84,18 @@ add_library(llama
             models/internlm2.cpp
             models/jais.cpp
             models/jamba.cpp
+            models/kimi-linear.cpp
             models/lfm2.cpp
             models/llada-moe.cpp
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
+            models/maincoder.cpp
             models/mamba.cpp
+            models/mimo2-iswa.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/modern-bert.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp
@@ -105,6 +111,7 @@ add_library(llama
             models/phi3.cpp
             models/plamo.cpp
             models/plamo2.cpp
+            models/plamo3.cpp
             models/plm.cpp
             models/qwen.cpp
             models/qwen2.cpp
@@ -114,6 +121,7 @@ add_library(llama
             models/qwen3vl.cpp
             models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
+            models/qwen3next.cpp
             models/refact.cpp
             models/rnd1.cpp
             models/rwkv6-base.cpp
@@ -131,12 +139,14 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/mistral3.cpp
             models/graph-context-mamba.cpp
             )
 
 set_target_properties(llama PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_include_directories(llama PRIVATE .)

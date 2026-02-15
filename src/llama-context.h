@@ -26,6 +26,10 @@ struct llama_memory_breakdown_data {
     size_t model   = 0; // memory allocated for the model
     size_t context = 0; // memory allocated for the context
     size_t compute = 0; // memory allocated for temporary compute buffers
+
+    size_t total() const {
+        return model + context + compute;
+    }
 };
 
 struct llama_context {
@@ -35,6 +39,14 @@ struct llama_context {
                   llama_context_params params);
 
     ~llama_context();
+
+    // reserve a new backend scheduler (if needed)
+    // for example, when:
+    //   - changing loras
+    //   - changing samplers
+    //   - changing attention type
+    //   - etc.
+    void sched_reserve();
 
     void synchronize();
 
@@ -65,6 +77,18 @@ struct llama_context {
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
+
+    llama_token * get_sampled_tokens() const;
+    llama_token   get_sampled_token_ith(int32_t idx);
+
+    float * get_sampled_logits_ith(int32_t idx);
+    size_t  get_sampled_logits_count(int32_t idx);
+
+    float * get_sampled_probs_ith(int32_t idx);
+    size_t  get_sampled_probs_count(int32_t idx);
+
+    const llama_token * get_sampled_candidates_ith(int32_t idx);
+    size_t get_sampled_candidates_count(int32_t idx);
 
     void attach_threadpool(
             ggml_threadpool_t threadpool,
@@ -192,12 +216,15 @@ private:
 
     void output_reorder();
 
+    // map the output row index `i` to batch index
+    int64_t output_resolve_row(int32_t i) const;
+
     //
     // graph
     //
 
 public:
-    uint32_t graph_max_nodes() const;
+    uint32_t graph_max_nodes(uint32_t n_tokens) const;
 
     // can reuse the llm_graph_result instance of the context (for example to update a memory module)
     llm_graph_result * get_gf_res_reserve() const;
@@ -206,7 +233,10 @@ public:
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
     // reserve a graph with a dummy ubatch of the specified size
-    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
+    ggml_cgraph * graph_reserve(
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+
+    bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
     llm_graph_params graph_params(
@@ -247,6 +277,31 @@ private:
     size_t  embd_size = 0; // capacity (of floats) for embeddings
     float * embd      = nullptr;
 
+    // TODO: simplify
+    struct sampling_info {
+        std::map<llama_seq_id, llama_sampler *> samplers;
+
+        float       * logits      = nullptr;
+        size_t        logits_size = 0;
+
+        llama_token * sampled      = nullptr;
+        size_t        sampled_size = 0;
+
+        float       * probs        = nullptr;
+        size_t        probs_size   = 0;
+
+        llama_token * candidates   = nullptr;
+        size_t        candidates_size = 0;
+
+        std::vector<uint32_t> logits_count;
+        std::vector<uint32_t> probs_count;
+        std::vector<uint32_t> candidates_count;
+
+        std::vector<llama_token> token_ids_full_vocab;
+    };
+
+    sampling_info sampling;
+
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
@@ -267,6 +322,8 @@ private:
 
     ggml_backend_sched_ptr sched;
 
+    bool sched_need_reserve = true;
+
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
@@ -281,9 +338,10 @@ private:
 
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
 
-    // buffer types used for the compute buffer of each backend
+    // pointers and buffer types used for the compute buffer of each backend
     std::vector<ggml_backend_t>             backend_ptrs;
     std::vector<ggml_backend_buffer_type_t> backend_buft;
+    std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;

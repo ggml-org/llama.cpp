@@ -19,6 +19,15 @@ def parse_decls(decls_text):
     return decls
 
 
+def replace_repl_placeholders(variant, template_map):
+    for repl, code in variant["REPLS"].items():
+        for key, val in template_map.items():
+            # Match "key" and avoid matching subsequences using by using \b
+            code = re.sub(rf'\b{re.escape(str(key))}\b', str(val), code)
+        variant["REPLS"][repl] = code
+    return variant
+
+
 def replace_placeholders(shader_text, replacements):
     for key, val in replacements.items():
         # Match {{KEY}} literally, where KEY is escaped
@@ -71,6 +80,10 @@ def generate_variants(fname, input_dir, output_dir, outfile):
             decls_map = parse_decls(extract_block(text, "DECLS"))
         except ValueError:
             decls_map = {}
+        try:
+            templates_map = ast.literal_eval(extract_block(text, "REPL_TEMPLATES"))
+        except ValueError:
+            templates_map = {}
 
         for fname in sorted(os.listdir(input_dir)):
             if fname.endswith(".tmpl"):
@@ -90,9 +103,11 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                 if key not in decls_map:
                     raise ValueError(f"DECLS key '{key}' not found.")
                 decls_code += decls_map[key] + "\n\n"
-
             final_shader = re.sub(r'\bDECLS\b', decls_code, shader_template)
             if "REPLS" in variant:
+                variant = replace_repl_placeholders(variant, templates_map)
+                final_shader = replace_placeholders(final_shader, variant["REPLS"])
+                # second run to expand placeholders in repl_template
                 final_shader = replace_placeholders(final_shader, variant["REPLS"])
             final_shader = expand_includes(final_shader, input_dir)
 

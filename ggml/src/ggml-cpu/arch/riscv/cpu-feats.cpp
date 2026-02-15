@@ -1,20 +1,23 @@
 #include "ggml-backend-impl.h"
 
 #if defined(__riscv) && __riscv_xlen == 64
-#include <sys/auxv.h>
-
-//https://github.com/torvalds/linux/blob/master/arch/riscv/include/uapi/asm/hwcap.h#L24
-#ifndef COMPAT_HWCAP_ISA_V
-#define COMPAT_HWCAP_ISA_V (1 << ('V' - 'A'))
-#endif
+#include <asm/hwprobe.h>
+#include <asm/unistd.h>
+#include <unistd.h>
 
 struct riscv64_features {
     bool has_rvv = false;
 
     riscv64_features() {
-        uint32_t hwcap = getauxval(AT_HWCAP);
+        struct riscv_hwprobe probe;
+        probe.key = RISCV_HWPROBE_KEY_IMA_EXT_0;
+        probe.value = 0;
 
-        has_rvv = !!(hwcap & COMPAT_HWCAP_ISA_V);
+        int ret = syscall(__NR_riscv_hwprobe, &probe, 1, 0, NULL, 0);
+
+        if (0 == ret) {
+            has_rvv = !!(probe.value & RISCV_HWPROBE_IMA_V);
+        }
     }
 };
 

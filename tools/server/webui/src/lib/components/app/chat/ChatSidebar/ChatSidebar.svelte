@@ -7,11 +7,9 @@
 	import * as Sidebar from '$lib/components/ui/sidebar';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import Input from '$lib/components/ui/input/input.svelte';
-	import {
-		conversations,
-		deleteConversation,
-		updateConversationName
-	} from '$lib/stores/chat.svelte';
+	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { getPreviewText } from '$lib/utils/text';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
@@ -23,6 +21,9 @@
 	let showEditDialog = $state(false);
 	let selectedConversation = $state<DatabaseConversation | null>(null);
 	let editedName = $state('');
+	let selectedConversationNamePreview = $derived.by(() =>
+		selectedConversation ? getPreviewText(selectedConversation.name) : ''
+	);
 
 	let filteredConversations = $derived.by(() => {
 		if (searchQuery.trim().length > 0) {
@@ -56,7 +57,7 @@
 			showDeleteDialog = false;
 
 			setTimeout(() => {
-				deleteConversation(selectedConversation.id);
+				conversationsStore.deleteConversation(selectedConversation.id);
 				selectedConversation = null;
 			}, 100); // Wait for animation to finish
 		}
@@ -67,7 +68,7 @@
 
 		showEditDialog = false;
 
-		updateConversationName(selectedConversation.id, editedName);
+		conversationsStore.updateConversationName(selectedConversation.id, editedName);
 		selectedConversation = null;
 	}
 
@@ -102,10 +103,14 @@
 
 		await goto(`#/chat/${id}`);
 	}
+
+	function handleStopGeneration(id: string) {
+		chatStore.stopGenerationForChat(id);
+	}
 </script>
 
 <ScrollArea class="h-[100vh]">
-	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 pt-4 pb-2 backdrop-blur-lg md:sticky">
+	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 py-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
 		</a>
@@ -136,6 +141,7 @@
 							onSelect={selectConversation}
 							onEdit={handleEditConversation}
 							onDelete={handleDeleteConversation}
+							onStop={handleStopGeneration}
 						/>
 					</Sidebar.MenuItem>
 				{/each}
@@ -154,15 +160,13 @@
 			</Sidebar.Menu>
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
-
-	<div class="bottom-0 z-10 bg-sidebar bg-sidebar/50 px-4 py-4 backdrop-blur-lg md:sticky"></div>
 </ScrollArea>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
 	title="Delete Conversation"
 	description={selectedConversation
-		? `Are you sure you want to delete "${selectedConversation.name}"? This action cannot be undone and will permanently remove all messages in this conversation.`
+		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
 		: ''}
 	confirmText="Delete"
 	cancelText="Cancel"

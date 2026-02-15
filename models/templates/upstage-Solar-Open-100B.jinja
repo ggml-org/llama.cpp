@@ -1,0 +1,156 @@
+{#- ======== Template Parameters ========  #}
+{%- set add_generation_prompt = add_generation_prompt if add_generation_prompt is defined else true %}
+{%- set default_system_prompt = default_system_prompt if default_system_prompt is defined else true %}
+{%- set reasoning_effort = reasoning_effort if reasoning_effort is defined else "high" %}
+{%- set think_render_option = think_render_option if think_render_option is defined else "lastthink" %}
+
+{#- ======== System Block State ========  #}
+{%- set sys_ns = namespace(is_first_block=true) -%}
+
+{#- ======== Find last user message index ========  #}
+{%- set last_user_idx = namespace(value=-1) -%}
+{%- for message in messages -%}
+    {%- if message.role == 'user' -%}
+        {%- set last_user_idx.value = loop.index0 -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{#- ======== System messages renderers ========  #}
+{%- macro render_system_message(user_system_messages) %}
+    {%- if default_system_prompt %}
+        {%- if not sys_ns.is_first_block %}{{- "\n\n" }}{%- endif %}
+        {%- set sys_ns.is_first_block = false %}
+        {{- "## Provider System Prompt\n\nYou are Solar Open 100B, a large language model trained by Upstage AI, a Korean startup. Your knowledge cutoff is 2025-07. The current date is " + strftime_now("%Y-%m-%d") + "." }}
+    {%- endif -%}
+    {%- if user_system_messages %}
+        {%- if not sys_ns.is_first_block %}{{- "\n\n" }}{%- endif %}
+        {%- set sys_ns.is_first_block = false %}
+        {{- "## System Prompt" }}
+        {%- for system_message in user_system_messages %}
+            {{- "\n\n" }}
+            {{- system_message }}
+        {%- endfor %}
+    {%- endif -%}
+{%- endmacro %}
+
+{%- macro render_tool_instruction(tools) %}
+    {%- if not sys_ns.is_first_block %}{{- "\n\n" }}{%- endif %}
+    {%- set sys_ns.is_first_block = false %}
+    {{- "## Tools\n\n### Tool Call Instruction" }}
+    {{- "\nYou may invoke one or more tools to assist with the user's query. Available tools are provided in JSON Schema format: <|tools:begin|><|tool:begin|><tools-json-object><|tool:end|>...<|tools:end|>\n" }}
+    {{- "\n### Available Tools\n" }}
+    {{- "<|tools:begin|>" }}
+    {%- for tool in tools %}
+        {{- "<|tool:begin|>" }}
+        {{- tool.function | tojson }}
+        {{- "<|tool:end|>" }}
+    {%- endfor %}
+    {{- "<|tools:end|>\n" }}
+    {{- "\n### Tool Call Format\n" }}
+    {{- "For each tool call, return a JSON object with the following structure, enclosed within <|tool_call:begin|> and <|tool_call:end|> tags: \n<|tool_call:begin|><tool-call-id><|tool_call:name|><tool-name><|tool_call:args|><args-json-object><|tool_call:end|>\n" }}
+    {{- "- The <tool-call-id> must be a randomly generated string consisting of 10 lowercase letters (a-z) and/or digits (0-9) (e.g., a1b2c3d4e5)\n" }}
+    {{- "\n### Tool Response Format\n" }}
+    {{- "Each tool is responded by `tool` with the following structure:\n<|tool_response:id|><tool-call-id><|tool_response:name|><tool-name><|tool_response:result|><results><|tool_response:end|>\n" }}
+    {{- "- Ensure the <tool-call-id> matches the corresponding tool call" -}}
+{%- endmacro %}
+
+{%- macro render_json_response_format_instruction(response_format) %}
+    {%- if not sys_ns.is_first_block %}{{- "\n\n" }}{%- endif %}
+    {%- set sys_ns.is_first_block = false %}
+    {{- "## Output Format Constraint" }}
+    {{- "\n\nYour final response should follow the JSON schema: \n[Start of schema]" }}
+    {{- response_format }}
+    {{- "\n[End of schema]\nPlease ensure your answers adhere to this format and do not contain any unnecessary text." }}
+{%- endmacro %}
+
+{%- macro get_tool_name(messages, tool_call_id) %}
+    {%- for msg in messages -%}
+        {%- if msg.role == 'assistant' and msg.tool_calls -%}
+            {%- for tool_call in msg.tool_calls -%}
+                {%- if tool_call.id == tool_call_id -%}
+                    {{- tool_call.function.name }}
+                {%- endif -%}
+            {%- endfor -%}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro %}
+
+{%- macro render_tool_arguments(tool_arguments) %}
+    {%- if tool_arguments is mapping -%}
+        {{- tool_arguments | tojson }}
+    {%- else -%}
+        {{- tool_arguments }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- ======== Render system message ========  #}
+{%- set ns = namespace(system_messages=[]) -%}
+{%- for message in messages -%}
+    {%- if message.role == 'system' -%}
+        {%- set ns.system_messages = ns.system_messages + [message.content] -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if ns.system_messages or default_system_prompt or tools or response_format -%}
+    {{- "<|begin|>system<|content|>" }}
+        {{- render_system_message(ns.system_messages) }}
+        {%- if tools -%}
+            {{- render_tool_instruction(tools) }}
+        {%- endif %}
+        {%- if response_format -%}
+            {{- render_json_response_format_instruction(response_format) }}
+        {%- endif %}
+    {{- "<|end|>" }}
+{%- endif -%}
+
+{#- ======== Render main messages ========  #}
+{%- for message in messages -%}
+    {%- if message.role == 'user' -%}
+         {{- "<|begin|>user<|content|>" + message.content + "<|end|>" }}
+    {%- elif message.role == 'tool' -%}
+        {%- set prev_is_tool = loop.index0 > 0 and messages[loop.index0 - 1].role == 'tool' -%}
+        {%- set next_is_tool = loop.index0 < (messages | length - 1) and messages[loop.index0 + 1].role == 'tool' -%}
+        {%- if not prev_is_tool -%}
+            {{- "<|begin|>tool<|tool_response|>" }}
+        {%- endif -%}
+        {{- "<|tool_response:begin|>" + message.tool_call_id + "<|tool_response:name|>" }}
+        {{- get_tool_name(messages, message.tool_call_id) }}
+        {{- "<|tool_response:result|>" }}
+        {{- message.content }}
+        {{- "<|tool_response:end|>" }}
+        {%- if not next_is_tool -%}
+            {{- "<|end|>" }}
+        {%- endif -%}
+    {%- elif message.role == 'assistant' -%}
+        {#- ======== Assistant Thinking ========  #}
+        {%- if think_render_option == "all" -%}
+            {%- if message.reasoning -%}
+                {{- "<|begin|>assistant<|think|>" + message.reasoning + "<|end|>" }}
+            {%- endif -%}
+        {%- elif think_render_option == "lastthink" -%}
+            {%- if message.reasoning and loop.index0 > last_user_idx.value -%}
+                {{- "<|begin|>assistant<|think|>" + message.reasoning + "<|end|>" }}
+            {%- endif -%}
+        {%- endif -%}
+
+        {#- ======== Assistant Messages ========  #}
+        {%- if message.tool_calls -%}
+            {{- "<|begin|>assistant<|tool_calls|>" }}
+            {%- for tool_call in message.tool_calls -%}
+                {{- "<|tool_call:begin|>" + tool_call.id +"<|tool_call:name|>" + tool_call.function.name + "<|tool_call:args|>" }}
+                {{- render_tool_arguments(tool_call.function.arguments) }}
+                {{- "<|tool_call:end|>" }}
+            {%- endfor -%}
+            {{- "<|calls|>" }}
+        {%- else -%}
+            {{- "<|begin|>assistant<|content|>" + message.content + "<|end|>" }}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+    {%- if reasoning_effort in ["low", "minimal"] -%}
+        {{- "<|begin|>assistant<|think|><|end|>" }}
+    {%- endif -%}
+    {{- "<|begin|>assistant" }}
+{%- endif -%}

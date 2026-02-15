@@ -8,7 +8,8 @@ body:
       value: >
         Thanks for taking the time to fill out this bug report!
         This issue template is intended for bug reports where the compilation of llama.cpp fails.
-        Before opening an issue, please confirm that the compilation still fails with `-DGGML_CCACHE=OFF`.
+        Before opening an issue, please confirm that the compilation still fails
+        after recreating the CMake build directory and with `-DGGML_CCACHE=OFF`.
         If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
         by clearing `~/.cache/ccache` (on Linux).
   - type: textarea

@@ -1339,17 +1339,118 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
+
+    test({
+        SUCCESS,
+        "literal string with escapes",
+        R"""({
+            "properties": {
+                "code": {
+                    "const": " \r \n \" \\ ",
+                    "description": "Generated code",
+                    "title": "Code",
+                    "type": "string"
+                }
+            },
+            "required": [
+                "code"
+            ],
+            "title": "DecoderResponse",
+            "type": "object"
+        })""",
+        R"""(
+            code ::= "\" \\r \\n \\\" \\\\ \"" space
+            code-kv ::= "\"code\"" space ":" space code
+            root ::= "{" space code-kv "}" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+}
+
+static void test_resolves_to_string() {
+    fprintf(stderr, "#\n# Testing resolves_to_string\n#\n");
+
+    auto test = [](const std::string & name, const std::string & schema_str, bool expected) {
+        fprintf(stderr, "- %s\n", name.c_str());
+        common_schema_info info;
+        auto schema = nlohmann::ordered_json::parse(schema_str);
+        info.resolve_refs(schema);
+        bool result = info.resolves_to_string(schema);
+        if (result != expected) {
+            fprintf(stderr, "#\n# Test '%s' failed.\n#\n", name.c_str());
+            fprintf(stderr, "Schema: %s\n", schema_str.c_str());
+            fprintf(stderr, "Expected: %s, Got: %s\n", expected ? "true" : "false", result ? "true" : "false");
+            assert(false);
+        }
+    };
+
+    // Basic type checks
+    test("type string", R"({"type": "string"})", true);
+    test("type integer", R"({"type": "integer"})", false);
+    test("type number", R"({"type": "number"})", false);
+    test("type boolean", R"({"type": "boolean"})", false);
+    test("type object", R"({"type": "object"})", false);
+    test("type array", R"({"type": "array"})", false);
+
+    // Type array (nullable string)
+    test("type array with string", R"({"type": ["string", "null"]})", true);
+    test("type array without string", R"({"type": ["integer", "null"]})", false);
+
+    // String-specific keywords
+    test("minLength implies string", R"({"minLength": 1})", true);
+    test("maxLength implies string", R"({"maxLength": 10})", true);
+    test("pattern implies string", R"({"pattern": "^[a-z]+$"})", true);
+
+    // Format
+    test("format date", R"({"format": "date"})", true);
+    test("format uuid", R"({"format": "uuid"})", true);
+    test("format email", R"({"format": "email"})", true);
+
+    // Const
+    test("const string", R"({"const": "hello"})", true);
+    test("const number", R"({"const": 123})", false);
+
+    // Enum
+    test("enum with strings", R"({"enum": ["a", "b", "c"]})", true);
+    test("enum with numbers", R"({"enum": [1, 2, 3]})", false);
+    test("enum mixed with string", R"({"enum": [1, "a", null]})", true);
+
+    // anyOf
+    test("anyOf with string", R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", true);
+    test("anyOf without string", R"({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})", false);
+
+    // oneOf
+    test("oneOf with string", R"({"oneOf": [{"type": "string"}, {"type": "number"}]})", true);
+    test("oneOf without string", R"({"oneOf": [{"type": "object"}, {"type": "array"}]})", false);
+
+    // allOf - all must be strings
+    test("allOf all strings", R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
+    test("allOf mixed types", R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
+
+    // $ref
+    test("$ref to string",
+        R"({"$ref": "#/$defs/str", "$defs": {"str": {"type": "string"}}})", true);
+    test("$ref to integer",
+        R"({"$ref": "#/$defs/num", "$defs": {"num": {"type": "integer"}}})", false);
+
+    // Nested
+    test("nested anyOf with string",
+        R"({"anyOf": [{"anyOf": [{"type": "integer"}, {"type": "string"}]}, {"type": "boolean"}]})", true);
+
+    fprintf(stderr, "All resolves_to_string tests passed!\n");
 }
 
 int main() {
     fprintf(stderr, "LLAMA_NODE_AVAILABLE = %s\n", getenv("LLAMA_NODE_AVAILABLE") ? "true" : "false");
     fprintf(stderr, "LLAMA_PYTHON_AVAILABLE = %s\n", getenv("LLAMA_PYTHON_AVAILABLE") ? "true" : "false");
 
+    test_resolves_to_string();
+
     test_all("C++", [](const TestCase & tc) {
         try {
             tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
-        } catch (const std::runtime_error & ex) {
+        } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
             tc.verify_status(FAILURE);
         }

@@ -15,18 +15,9 @@
 
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
-#include <syclcompat/math.hpp>
-#include <map>
-
-#ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
-// Allow to use the same namespace for Intel oneMKL and oneMath
-namespace oneapi {
-    namespace math = mkl;
-}
-#else
-#include <oneapi/math.hpp>
-#endif
+
+#include <map>
 
 #include "ggml.h"
 
@@ -92,31 +83,12 @@ inline std::string get_device_backend_and_type(const sycl::device &device) {
 }
 
 template <typename Ts> struct matrix_info_t {
-    oneapi::math::transpose transpose_info[2];
+    oneapi::mkl::transpose transpose_info[2];
     Ts                     value_info[2];
     std::int64_t           size_info[3];
     std::int64_t           ld_info[3];
     std::int64_t           groupsize_info;
 };
-
-inline auto get_onemath_backend(sycl::queue& queue)
-#if defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
-  -> sycl::queue&
-#endif
-{
-// If the backend is known at compile-time, use oneMath backend_selector to use
-// compile-time dispatching and avoid the need to dlopen libraries. Otherwise
-// fallback to runtime dispatching.
-#if defined(GGML_SYCL_NVIDIA)
-    return oneapi::math::backend_selector<oneapi::math::backend::cublas>{ queue };
-#elif defined(GGML_SYCL_AMD)
-    return oneapi::math::backend_selector<oneapi::math::backend::rocblas>{ queue };
-#elif defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
-    return queue;
-#else
-    static_assert(false, "Unsupported backend");
-#endif
-}
 
 namespace dpct
 {
@@ -1735,7 +1707,7 @@ namespace dpct
     namespace detail
     {
     template <class Ta, class Tb, class Tc, class Ts>
-    inline void gemm_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                           int n, int k, const void * alpha, const void * a, int lda, const void * b, int ldb,
                           const void * beta, void * c, int ldc) {
         Ts   alpha_value = dpct::get_value(reinterpret_cast<const Ts *>(alpha), q);
@@ -1743,7 +1715,7 @@ namespace dpct
         auto data_a      = get_memory<const Ta>(a);
         auto data_b      = get_memory<const Tb>(b);
         auto data_c      = get_memory<Tc>(c);
-        oneapi::math::blas::column_major::gemm(get_onemath_backend(q), a_trans, b_trans, m, n, k, alpha_value, data_a,
+        oneapi::mkl::blas::column_major::gemm(q, a_trans, b_trans, m, n, k, alpha_value, data_a,
                                                lda, data_b, ldb, beta_value, data_c, ldc);
     }
 
@@ -1775,7 +1747,7 @@ namespace dpct
         };
 
         template <class Ta, class Tb, class Tc, class Ts>
-        inline void gemm_batch_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans,
+        inline void gemm_batch_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans,
                                     int m, int n, int k, const void * alpha, const void ** a, int lda, const void ** b,
                                     int ldb, const void * beta, void ** c, int ldc, int batch_size,
                                     matrix_info_t<float> * matrix_info) {
@@ -1794,8 +1766,8 @@ namespace dpct
             matrix_info->ld_info[2] = ldc;
             matrix_info->groupsize_info = batch_size;
 
-            sycl::event e = oneapi::math::blas::column_major::gemm_batch(
-                get_onemath_backend(q), matrix_info->transpose_info, matrix_info->transpose_info + 1,
+            sycl::event e = oneapi::mkl::blas::column_major::gemm_batch(
+                q, matrix_info->transpose_info, matrix_info->transpose_info + 1,
                 matrix_info->size_info, matrix_info->size_info + 1, matrix_info->size_info + 2,
                 reinterpret_cast<Ts *>(matrix_info->value_info), reinterpret_cast<const Ta **>(a), matrix_info->ld_info,
                 reinterpret_cast<const Tb **>(b), matrix_info->ld_info + 1,
@@ -1804,7 +1776,7 @@ namespace dpct
         }
 
         template <class Ta, class Tb, class Tc, class Ts>
-        inline void gemm_batch_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans,
+        inline void gemm_batch_impl(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans,
                                     int m, int n, int k, const void * alpha, const void * a, int lda,
                                     long long int stride_a, const void * b, int ldb, long long int stride_b,
                                     const void * beta, void * c, int ldc, long long int stride_c, int batch_size) {
@@ -1813,7 +1785,7 @@ namespace dpct
             auto data_a = get_memory<const Ta>(a);
             auto data_b = get_memory<const Tb>(b);
             auto data_c = get_memory<Tc>(c);
-            oneapi::math::blas::column_major::gemm_batch(get_onemath_backend(q), a_trans, b_trans, m, n, k, alpha_value,
+            oneapi::mkl::blas::column_major::gemm_batch(q, a_trans, b_trans, m, n, k, alpha_value,
                                                          data_a, lda, stride_a, data_b, ldb, stride_b, beta_value,
                                                          data_c, ldc, stride_c, batch_size);
         }
@@ -1860,10 +1832,31 @@ namespace dpct
                                            : id);
     }
 
+    template <typename T1, typename T2>
+    using dot_product_acc_t = std::conditional_t<
+        std::is_unsigned_v<T1> && std::is_unsigned_v<T2>,
+        uint32_t,
+        int32_t>;
+
+    template <typename T>
+    sycl::vec<T, 4> extract_and_sign_or_zero_extend4(T val) {
+      return sycl::vec<T, 1>(val)
+          .template as<sycl::vec<
+              std::conditional_t<std::is_signed_v<T>, int8_t, uint8_t>,
+              4>>()
+          .template convert<T>();
+    }
+
     template <typename T1, typename T2, typename T3>
-    inline auto dp4a(T1 a, T2 b, T3 c)
-    {
-        return syclcompat::dp4a(a, b, c);
+    inline auto dp4a(T1 a, T2 b, T3 c) {
+      dot_product_acc_t<T1, T2> res = c;
+      auto va = extract_and_sign_or_zero_extend4(a);
+      auto vb = extract_and_sign_or_zero_extend4(b);
+      res += va[0] * vb[0];
+      res += va[1] * vb[1];
+      res += va[2] * vb[2];
+      res += va[3] * vb[3];
+      return res;
     }
 
     struct sub_sat
@@ -2279,7 +2272,7 @@ namespace dpct
                            sycl::range<3>(x, y, 1), direction);
     }
 
-    inline void gemm(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m, int n,
+    inline void gemm(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m, int n,
                      int k, const void * alpha, const void * a, library_data_t a_type, int lda, const void * b,
                      library_data_t b_type, int ldb, const void * beta, void * c, library_data_t c_type, int ldc,
                      library_data_t scaling_type) {
@@ -2346,7 +2339,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
             break;
         }
@@ -2385,7 +2378,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc);
             break;
         }
@@ -2427,7 +2420,7 @@ namespace dpct
     /// \param [in] ldc Leading dimension of C.
     /// \param [in] batch_size Specifies the number of matrix multiply operations to perform.
     /// \param [in] scaling_type Data type of the scaling factors.
-    inline void gemm_batch(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_batch(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                            int n, int k, const void * alpha, const void * a[], library_data_t a_type, int lda,
                            const void * b[], library_data_t b_type, int ldb, const void * beta, void * c[],
                            library_data_t c_type, int ldc, int batch_size, library_data_t scaling_type,
@@ -2465,7 +2458,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, batch_size, matrix_info);
             break;
         }
@@ -2473,7 +2466,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc, batch_size, matrix_info);
             break;
         }
@@ -2549,7 +2542,7 @@ namespace dpct
     /// \param [in] stride_c Stride between the different C matrices.
     /// \param [in] batch_size Specifies the number of matrix multiply operations to perform.
     /// \param [in] scaling_type Data type of the scaling factors.
-    inline void gemm_batch(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
+    inline void gemm_batch(sycl::queue & q, oneapi::mkl::transpose a_trans, oneapi::mkl::transpose b_trans, int m,
                            int n, int k, const void * alpha, const void * a, library_data_t a_type, int lda,
                            long long int stride_a, const void * b, library_data_t b_type, int ldb,
                            long long int stride_b, const void * beta, void * c, library_data_t c_type, int ldc,
@@ -2622,7 +2615,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_bfloat16, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, oneapi::math::bfloat16, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c,
                 batch_size);
             break;
@@ -2631,7 +2624,7 @@ namespace dpct
             library_data_t::real_bfloat16, library_data_t::real_bfloat16,
             library_data_t::real_float, library_data_t::real_float):
         {
-            detail::gemm_batch_impl<oneapi::math::bfloat16, oneapi::math::bfloat16, float, float>(
+            detail::gemm_batch_impl<oneapi::mkl::bfloat16, oneapi::mkl::bfloat16, float, float>(
                 q, a_trans, b_trans, m, n, k, alpha, a, lda, stride_a, b, ldb, stride_b, beta, c, ldc, stride_c,
                 batch_size);
             break;
@@ -2970,6 +2963,38 @@ namespace dpct
     inline T1 atomic_fetch_add(T1 *addr, T2 operand,
                             sycl::memory_order memoryOrder) {
     atomic_fetch_add<T1, addressSpace>(addr, operand, memoryOrder);
+    }
+
+    inline unsigned int byte_level_permute(
+        unsigned int a, unsigned int b, unsigned int s) {
+      unsigned int ret;
+      ret = ((((std::uint64_t)b << 32 | a) >> (s & 0x7) * 8) & 0xff) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 4) & 0x7) * 8) & 0xff)
+             << 8) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 8) & 0x7) * 8) & 0xff)
+             << 16) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 12) & 0x7) * 8) & 0xff)
+             << 24);
+      return ret;
+    }
+
+    inline uint32_t byte_level_permute_custom(
+        uint32_t low32, uint32_t high32, uint32_t sel, int mode = 0) {
+      constexpr uint16_t lookup[6][4] = {
+          {0x3210, 0x4321, 0x5432, 0x6543},  // Forward 4-byte extract
+          {0x5670, 0x6701, 0x7012, 0x0123},  // Backward 4-byte extract
+          {0x0000, 0x1111, 0x2222, 0x3333},  // Replicate 8-bit values
+          {0x3210, 0x3211, 0x3222, 0x3333},  // Edge clamp left
+          {0x0000, 0x1110, 0x2210, 0x3210},  // Edge clamp right
+          {0x1010, 0x3232, 0x1010, 0x3232}   // Replicate 16-bit values
+      };
+
+      if (mode >= 1 && mode <= 6) {
+        return byte_level_permute(low32, high32, lookup[mode - 1][sel & 0x3]);
+      } else if (!mode) {
+        return byte_level_permute(low32, high32, sel);
+      }
+      return 0;
     }
 
 } // COPY from DPCT head files

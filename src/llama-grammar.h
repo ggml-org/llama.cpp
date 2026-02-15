@@ -36,11 +36,17 @@ enum llama_gretype {
 
     // any character (.)
     LLAMA_GRETYPE_CHAR_ANY       = 7,
+
+    // terminal element: token (<[token-id]>)
+    LLAMA_GRETYPE_TOKEN          = 8,
+
+    // inverse token (!<[token-id]>)
+    LLAMA_GRETYPE_TOKEN_NOT      = 9,
 };
 
 typedef struct llama_grammar_element {
     enum llama_gretype type;
-    uint32_t           value; // Unicode code point or rule ID
+    uint32_t           value; // Unicode code point, rule ID, or token ID
 } llama_grammar_element;
 
 struct llama_partial_utf8 {
@@ -52,6 +58,7 @@ struct llama_grammar_candidate {
     size_t               index;
     const uint32_t     * code_points;
     llama_partial_utf8   partial_utf8;
+    llama_token          id;
 };
 
 using llama_grammar_rule  = std::vector<      llama_grammar_element>;
@@ -77,9 +84,12 @@ std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
         const llama_grammar_candidates & candidates);
 
 struct llama_grammar_parser {
+    const llama_vocab * vocab;
     std::map<std::string, uint32_t> symbol_ids;
 
     llama_grammar_rules rules;
+
+    llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
     llama_grammar_stack c_rules() const;
 
@@ -109,9 +119,14 @@ struct llama_grammar_parser {
 struct llama_grammar_trigger_pattern {
     std::string pattern;
     std::regex  regex;
+
+    size_t find(const std::string & input) const;
 };
 
 struct llama_grammar {
+    // maintain a list of llama_tokens and their positions in the trigger_buffer
+    using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
+
     // note: allow null vocab for testing (not great)
     const llama_vocab * vocab;
 
@@ -127,6 +142,7 @@ struct llama_grammar {
     bool                     lazy             = false;
     bool                     awaiting_trigger = false; // Initialized to true for lazy grammars only
     std::string              trigger_buffer;           // Output buffered by lazy grammar. Will be cleared once trigger is found.
+    std::vector<token_pos>   trigger_buffer_positions; // Tokens buffered by lazy grammar. Used to replay when a trigger is found.
     std::vector<llama_token> trigger_tokens;           // Tokens that trigger a lazy grammar, or tokens to force printing of (even if special).
     std::vector<llama_grammar_trigger_pattern>
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
@@ -170,4 +186,9 @@ void llama_grammar_accept_impl(
 
 void llama_grammar_accept_str(
               struct llama_grammar & grammar,
+                 const std::string & piece);
+
+void llama_grammar_accept_token(
+              struct llama_grammar & grammar,
+                       llama_token   token,
                  const std::string & piece);

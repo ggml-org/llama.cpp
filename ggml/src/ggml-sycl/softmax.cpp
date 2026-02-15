@@ -277,7 +277,7 @@ static void soft_max_f32_sycl(const float *x, const T *mask,
     const int id       = get_current_device_id();
     const size_t smpbo = ggml_sycl_info().devices[id].smpbo;
 
-    if (nbytes_shared <= smpbo) {
+    if (nbytes_shared <= smpbo && ncols_x <= max_block_size) {
         launch_soft_max_kernels<32, 64, 128, 256, 512, 1024, 2048, 4096>(
             x, mask, sinks, dst, params, stream, block_dims, block_nums,
             nbytes_shared);

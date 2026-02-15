@@ -18,23 +18,23 @@ int main(int argc, char ** argv){
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model_ptr & model = llama_init.model;
-    llama_context_ptr & ctx = llama_init.context;
+    auto * model = llama_init->model();
+    auto * ctx = llama_init->context();
 
     GGML_ASSERT(model != nullptr);
 
     // tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx.get(), params.prompt, true, true);
+    inp = common_tokenize(ctx, params.prompt, true, true);
     fprintf(stderr, "%s: tokenization done\n", __func__);
 
     common_ngram_cache ngram_cache;
     common_ngram_cache_update(ngram_cache, LLAMA_NGRAM_STATIC, LLAMA_NGRAM_STATIC, inp, inp.size(), true);
-    fprintf(stderr, "%s: hashing done, writing file to %s\n", __func__, params.lookup_cache_static.c_str());
+    fprintf(stderr, "%s: hashing done, writing file to %s\n", __func__, params.speculative.lookup_cache_static.c_str());
 
-    common_ngram_cache_save(ngram_cache, params.lookup_cache_static);
+    common_ngram_cache_save(ngram_cache, params.speculative.lookup_cache_static);
 
     return 0;
 }

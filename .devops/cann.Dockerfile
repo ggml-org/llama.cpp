@@ -4,7 +4,7 @@
 
 # Define the CANN base image for easier version updates later
 ARG CHIP_TYPE=910b
-ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc1.alpha001-${CHIP_TYPE}-openeuler22.03-py3.11
+ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc2-${CHIP_TYPE}-openeuler24.03-py3.11
 
 # ==============================================================================
 # BUILD STAGE
@@ -13,7 +13,7 @@ ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc1.alpha001-${CHIP_TYPE}-openeuler2
 FROM ${CANN_BASE_IMAGE} AS build
 
 # -- Install build dependencies --
-RUN yum install -y gcc g++ cmake make git libcurl-devel python3 python3-pip && \
+RUN yum install -y gcc g++ cmake make git openssl-devel python3 python3-pip && \
     yum clean all && \
     rm -rf /var/cache/yum
 
@@ -42,6 +42,7 @@ RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
         -DGGML_CANN=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DSOC_TYPE=ascend${CHIP_TYPE} \
+        -DUSE_ACL_GRAPH=ON \
         . && \
     cmake --build build --config Release -j$(nproc)
 
@@ -107,11 +108,11 @@ ENTRYPOINT ["/app/tools.sh"]
 # ENTRYPOINT ["/app/llama-server"]
 
 ### Target: light
-# Lightweight image containing only llama-cli
+# Lightweight image containing only llama-cli and llama-completion
 # ==============================================================================
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 ENTRYPOINT [ "/app/llama-cli" ]
 

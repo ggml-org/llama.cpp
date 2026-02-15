@@ -46,13 +46,20 @@ struct ggml_kleidiai_context {
 } static ctx = { CPU_FEATURE_NONE, NULL, NULL };
 
 static const char* cpu_feature_to_string(cpu_feature f) {
-    switch (f) {
-        case CPU_FEATURE_NONE:    return "NONE";
-        case CPU_FEATURE_DOTPROD: return "DOTPROD";
-        case CPU_FEATURE_I8MM:    return "I8MM";
-        case CPU_FEATURE_SVE:     return "SVE";
-        case CPU_FEATURE_SME:     return "SME";
-        default:                  return "UNKNOWN";
+    if (f == CPU_FEATURE_NONE) {
+        return "NONE";
+    } else if ((f & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
+        return "SME";
+    } else if ((f & CPU_FEATURE_SVE) == CPU_FEATURE_SVE) {
+        return "SVE";
+    }
+    else if ((f & CPU_FEATURE_I8MM) == CPU_FEATURE_I8MM) {
+        return "I8MM";
+    } else if ((f & CPU_FEATURE_DOTPROD) == CPU_FEATURE_DOTPROD) {
+        return "DOTPROD";
+    }
+    else {
+        return "UNKNOWN";
     }
 }
 
@@ -68,7 +75,7 @@ static void init_kleidiai_context(void) {
 
         ctx.features  = (ggml_cpu_has_dotprod()     ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
                         (ggml_cpu_has_matmul_int8() ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
-                        (ggml_cpu_has_sve()         ? CPU_FEATURE_SVE     : CPU_FEATURE_NONE);
+                        ((ggml_cpu_has_sve() && ggml_cpu_get_sve_cnt() == QK8_0) ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
         if (env_var) {
             sme_enabled = atoi(env_var);

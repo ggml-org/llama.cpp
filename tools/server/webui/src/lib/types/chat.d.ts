@@ -1,4 +1,4 @@
-export type ChatMessageType = 'root' | 'text' | 'think';
+export type ChatMessageType = 'root' | 'text' | 'think' | 'system';
 export type ChatRole = 'user' | 'assistant' | 'system';
 
 export interface ChatUploadedFile {
@@ -16,7 +16,6 @@ export interface ChatAttachmentDisplayItem {
 	name: string;
 	size?: number;
 	preview?: string;
-	type: string;
 	isImage: boolean;
 	uploadedFile?: ChatUploadedFile;
 	attachment?: DatabaseMessageExtra;
@@ -29,7 +28,6 @@ export interface ChatAttachmentPreviewItem {
 	attachment?: DatabaseMessageExtra;
 	preview?: string;
 	name?: string;
-	type?: string;
 	size?: number;
 	textContent?: string;
 }

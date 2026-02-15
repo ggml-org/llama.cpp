@@ -14,3 +14,10 @@ repos:
   hooks:
   -   id: flake8
       additional_dependencies: [flake8-no-print]
+- repo: local
+  hooks:
+  - id: nixfmt
+    name: nixfmt
+    entry: nixfmt
+    language: system
+    files: '\.nix$'

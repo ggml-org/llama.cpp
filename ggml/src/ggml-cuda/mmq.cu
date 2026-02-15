@@ -1,6 +1,11 @@
+#include "common.cuh"
 #include "mmq.cuh"
 #include "quantize.cuh"
 #include "mmid.cuh"
+
+#if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
+#include "gfx906/fused/gather-q8.cuh"
+#endif
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
@@ -114,25 +119,90 @@ void ggml_cuda_mul_mat_q(
     const bool use_stream_k = (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA)
                             || GGML_CUDA_CC_IS_CDNA(cc);
 
+    // TODO: tighter pool buffer size vs q8 path
+    const bool use_native_mxfp4 = blackwell_mma_available(cc) && src0->type == GGML_TYPE_MXFP4;
+
     if (!ids) {
+        // Regular MUL_MAT path - uses q8_cache for cross-op reuse
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
             get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
-        ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
 
+        const int layout = static_cast<int>(mmq_get_q8_1_ds_layout(src0->type));
+
+        const char* src1_q8_1_ptr = nullptr;
+        ggml_cuda_pool_alloc<char> src1_q8_1_pool;
+
+#if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
+        bool use_cached = false;
+        if (!use_native_mxfp4) {
+            // 1. Check if already cached
+            const q8_cache_entry* cached = ctx.q8_cache.lookup(
+                src1, layout, ne10_padded, ne11, ne12, ne13);
+
+            if (cached) {
+                // Cache hit - use cached data
+                fprintf(stderr, "[MMQ HIT] '%s' (layer=%d)\n", src1->name, 
+                        ctx.q8_cache.get_layer_from_tensor(src1));
+                src1_q8_1_ptr = static_cast<const char*>(cached->ptr);
+                use_cached = true;
+            } else if (ctx.q8_cache.is_cache_candidate(src1, layout)) {
+                // DEBUG: Log cache miss for candidate
+                fprintf(stderr, "[MMQ MISS] '%s' (layer=%d) - candidate but not cached\n", 
+                        src1->name, ctx.q8_cache.get_layer_from_tensor(src1));
+                // Multi-consumer tensor - cache it on first use!
+                void* q8_data = ctx.q8_cache.allocate(nbytes_src1_q8_1);
+                
+                if (q8_data) {
+                    const int64_t s11 = src1->nb[1] / ts_src1;
+                    const int64_t s12 = src1->nb[2] / ts_src1;
+                    const int64_t s13 = src1->nb[3] / ts_src1;
+                    quantize_mmq_q8_1_cuda(src1_d, nullptr, static_cast<char*>(q8_data), src0->type,
+                                           ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+                    CUDA_CHECK(cudaGetLastError());
+
+                    ctx.q8_cache.store(src1, layout, q8_data, nbytes_src1_q8_1,
+                                       ne10_padded, ne11, ne12, ne13);
+                    src1_q8_1_ptr = static_cast<const char*>(q8_data);
+                    use_cached = true;
+                } else {
+                    // Arena full - fallback
+                    ctx.q8_cache.fallbacks++;
+                }
+            }
+            // else: not a multi-consumer tensor - don't cache
+        }
+        
+        if (!use_cached)
+#endif
         {
+            // Native mxfp4, caching disabled, or arena full - use pool allocation
+            src1_q8_1_pool.alloc(ctx.pool(), nbytes_src1_q8_1);
+            src1_q8_1_ptr = src1_q8_1_pool.get();
+
             const int64_t s11 = src1->nb[1] / ts_src1;
             const int64_t s12 = src1->nb[2] / ts_src1;
             const int64_t s13 = src1->nb[3] / ts_src1;
-            quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type,
-                ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            if (use_native_mxfp4) {
+                static_assert(sizeof(block_fp4_mmq) == 4 * sizeof(block_q8_1));
+                quantize_mmq_mxfp4_cuda(src1_d, nullptr, const_cast<char*>(src1_q8_1_ptr), src0->type,
+                                        ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            } else {
+                quantize_mmq_q8_1_cuda(src1_d, nullptr, const_cast<char*>(src1_q8_1_ptr), src0->type,
+                                       ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            }
             CUDA_CHECK(cudaGetLastError());
         }
 
-        const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
+        // Stride depends on quantization format
+        const int64_t s12 = use_native_mxfp4 ?
+                                ne11 * ne10_padded * sizeof(block_fp4_mmq) /
+                                    (8 * QK_MXFP4 * sizeof(int))
+                                :
+                                ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
         const int64_t s13 = ne12*s12;
 
         const mmq_args args = {
-            src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
+            src0_d, src0->type, (const int *) src1_q8_1_ptr, nullptr, nullptr, dst_d,
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
@@ -163,6 +233,7 @@ void ggml_cuda_mul_mat_q(
         CUDA_CHECK(cudaGetLastError());
     }
 
+    // Size for gathered Q8_1 output (only the selected rows)
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * sizeof(block_q8_1)/QK8_1 +
         get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
@@ -171,16 +242,88 @@ void ggml_cuda_mul_mat_q(
     const int64_t ne12_flat = 1;
     const int64_t ne13_flat = 1;
 
+#if defined(GGML_USE_HIP) && GFX906_KVQ_MOE_CACHE_ENABLED
+    // MoE caching: quantize full tensor once, gather rows for each expert call
+    bool moe_use_cached = false;
+    if (!use_native_mxfp4) {
+        const int layout = static_cast<int>(mmq_get_q8_1_ds_layout(src0->type));
+
+        const q8_cache_entry* moe_cached = ctx.q8_cache.lookup(
+            src1, layout, ne10_padded, ne11, ne12, ne13);
+
+        // Calculate full tensor size for caching decision
+        const size_t full_nbytes = ne13*ne12*ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
+            get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
+        
+        if (moe_cached) {
+            // Cache hit - use cached data
+            moe_use_cached = true;
+        } else if (ctx.q8_cache.is_cache_candidate(src1, layout)) {
+            // Multi-consumer tensor - cache it on first use!
+            void* full_q8 = ctx.q8_cache.allocate(full_nbytes);
+            
+            if (full_q8) {
+                const int64_t s11 = src1->nb[1] / ts_src1;
+                const int64_t s12 = src1->nb[2] / ts_src1;
+                const int64_t s13 = src1->nb[3] / ts_src1;
+
+                quantize_mmq_q8_1_cuda(src1_d, nullptr, static_cast<char*>(full_q8), src0->type,
+                                       ne10, s11, s12, s13, ne10_padded,
+                                       ne11, ne12, ne13, stream);
+                CUDA_CHECK(cudaGetLastError());
+
+                ctx.q8_cache.store(src1, layout, full_q8, full_nbytes,
+                                   ne10_padded, ne11, ne12, ne13);
+
+                moe_cached = ctx.q8_cache.lookup(src1, layout, ne10_padded, ne11, ne12, ne13);
+                if (moe_cached) {
+                    moe_use_cached = true;
+                }
+            } else {
+                // Arena full - fallback
+                ctx.q8_cache.fallbacks++;
+            }
+        }
+
+        if (moe_use_cached && moe_cached) {
+            // Gather selected rows from cached full Q8_1 tensor
+            const int64_t block_size = sizeof(block_q8_1_mmq);
+            const int64_t n_blocks = ne10_padded / (4*QK8_1);
+
+            gather_q8_1_rows_cuda(
+                moe_cached->ptr,
+                ids_src1.get(),
+                src1_q8_1.get(),
+                block_size,
+                n_blocks,
+                ne11,
+                ne11_flat,
+                stream
+            );
+            CUDA_CHECK(cudaGetLastError());
+        }
+    }
+    
+    if (!moe_use_cached)
+#endif
     {
+        // No caching - original behavior: quantize only selected rows
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
-        const int64_t s13 = src1->nb[2] / ts_src1;
-        quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type,
-            ne10, s11, s12, s13, ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        const int64_t s13 = src1->nb[3] / ts_src1;
+
+        if (use_native_mxfp4) {
+            quantize_mmq_mxfp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+                                    ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        } else {
+            quantize_mmq_q8_1_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src0->type, ne10, s11, s12, s13,
+                                   ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        }
         CUDA_CHECK(cudaGetLastError());
     }
 
-    const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
+    const int64_t s12 = use_native_mxfp4 ? ne11 * ne10_padded * sizeof(block_fp4_mmq) / (8 * QK_MXFP4 * sizeof(int)) :
+                                           ne11 * ne10_padded * sizeof(block_q8_1) / (QK8_1 * sizeof(int));
     const int64_t s13 = ne12*s12;
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
@@ -236,7 +379,7 @@ void ggml_cuda_op_mul_mat_q(
     GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_padded_row_size);
 }
 
-bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
 #ifdef GGML_CUDA_FORCE_CUBLAS
     return false;
 #endif // GGML_CUDA_FORCE_CUBLAS
@@ -297,7 +440,10 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         if (GGML_CUDA_CC_IS_CDNA3(cc)) {
             return true;
         }
-        if (ne11 <= 128 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
+        if (n_experts > 64 || ne11 <= 128) {
+            return true;
+        }
+        if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
             return true;
         }
         if (ne11 <= 256 && (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K)) {
@@ -306,5 +452,35 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return false;
     }
 
-    return (!GGML_CUDA_CC_IS_RDNA4(cc) && !GGML_CUDA_CC_IS_RDNA3(cc) && !GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+    if (amd_wmma_available(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+            // High expert counts are almost always better on MMQ due to
+            //     the synchronization overhead in the cuBLAS/hipBLAS path:
+            // https://github.com/ggml-org/llama.cpp/pull/18202
+            if (n_experts >= 64) {
+                return true;
+            }
+
+            // For some quantization types MMQ can have lower peak TOPS than hipBLAS
+            //     so it's only faster for sufficiently small batch sizes:
+            switch (type) {
+                case GGML_TYPE_Q2_K:
+                    return ne11 <= 128;
+                case GGML_TYPE_Q6_K:
+                    return ne11 <= (GGML_CUDA_CC_IS_RDNA3_0(cc) ? 128 : 256);
+                case GGML_TYPE_IQ2_XS:
+                case GGML_TYPE_IQ2_S:
+                    return GGML_CUDA_CC_IS_RDNA3_5(cc) || ne11 <= 128;
+                default:
+                    return true;
+            }
+        }
+
+        // For RDNA4 MMQ is consistently faster than dequantization + hipBLAS:
+        // https://github.com/ggml-org/llama.cpp/pull/18537#issuecomment-3706422301
+        return true;
+    }
+
+    return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
+
 }

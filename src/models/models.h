@@ -2,8 +2,9 @@
 
 #include "../llama-model.h"
 #include "../llama-graph.h"
-#include "../llama-memory-recurrent.h"
 
+// TODO: remove in follow-up PR - move to .cpp files
+#include "../llama-memory-recurrent.h"
 #include <cmath>
 
 struct llm_graph_context_mamba : public llm_graph_context {
@@ -166,6 +167,10 @@ struct llm_build_exaone : public llm_graph_context {
     llm_build_exaone(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_exaone_moe : public llm_graph_context {
+    llm_build_exaone_moe(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_falcon : public llm_graph_context {
     llm_build_falcon(const llama_model & model, const llm_graph_params & params);
 };
@@ -178,8 +183,9 @@ struct llm_build_gemma2_iswa : public llm_graph_context {
     llm_build_gemma2_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
-struct llm_build_gemma3_iswa : public llm_graph_context {
-    llm_build_gemma3_iswa(const llama_model & model, const llm_graph_params & params);
+template <bool iswa>
+struct llm_build_gemma3 : public llm_graph_context {
+    llm_build_gemma3(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_gemma3n_iswa : public llm_graph_context {
@@ -282,6 +288,33 @@ struct llm_build_jamba : public llm_graph_context_mamba {
     llm_build_jamba(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_kimi_linear : public llm_graph_context_mamba {
+    llm_build_kimi_linear(const llama_model & model, const llm_graph_params & params);
+
+    std::pair<ggml_tensor *, ggml_tensor *> build_kda_autoregressive(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * gk,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                        int   il);
+
+    std::pair<ggml_tensor *, ggml_tensor *> build_kda_chunking(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * gk,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
+                        int   il);
+
+    const llama_model & model;
+};
+
 struct llm_build_lfm2 : public llm_graph_context {
     const llama_model & model;
 
@@ -301,6 +334,7 @@ struct llm_build_llada_moe : public llm_graph_context {
     llm_build_llada_moe(const llama_model & model, const llm_graph_params & params);
 };
 
+template <bool embed>
 struct llm_build_llama : public llm_graph_context {
     llm_build_llama(const llama_model & model, const llm_graph_params & params);
 };
@@ -309,8 +343,16 @@ struct llm_build_llama_iswa : public llm_graph_context {
     llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_maincoder : public llm_graph_context {
+    llm_build_maincoder(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_mamba : public llm_graph_context_mamba {
     llm_build_mamba(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_mimo2_iswa : public llm_graph_context {
+    llm_build_mimo2_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_minicpm3 : public llm_graph_context {
@@ -319,6 +361,14 @@ struct llm_build_minicpm3 : public llm_graph_context {
 
 struct llm_build_minimax_m2 : public llm_graph_context {
     llm_build_minimax_m2(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_mistral3 : public llm_graph_context {
+    llm_build_mistral3(const llama_model & model, const llm_graph_params & params);
+};
+
+struct llm_build_modern_bert : public llm_graph_context {
+    llm_build_modern_bert(const llama_model & model, const llm_graph_params & params);
 };
 
 struct llm_build_mpt : public llm_graph_context {
@@ -390,6 +440,11 @@ struct llm_build_plamo : public llm_graph_context {
     llm_build_plamo(const llama_model & model, const llm_graph_params & params);
 };
 
+template <bool iswa>
+struct llm_build_plamo3 : public llm_graph_context {
+    llm_build_plamo3(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_plm : public llm_graph_context {
     llm_build_plm(const llama_model & model, const llm_graph_params & params);
 };
@@ -421,7 +476,63 @@ struct llm_build_qwen3vl : public llm_graph_context {
 struct llm_build_qwen3vlmoe : public llm_graph_context {
     llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params);
 };
+struct llm_build_qwen3next : public llm_graph_context_mamba {
+    llm_build_qwen3next(const llama_model & model, const llm_graph_params & params);
+private:
+    ggml_tensor * build_layer_attn(
+    llm_graph_input_attn_kv * inp_attn,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                        int   il);
 
+    ggml_tensor * build_layer_attn_linear(
+         llm_graph_input_rs * inp,
+                ggml_tensor * cur,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
+                        int   il);
+
+    ggml_tensor * build_layer_ffn(
+                ggml_tensor * cur,
+                        int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                ggml_tensor * causal_mask,
+                ggml_tensor * identity,
+                ggml_tensor * diag_mask,
+                        int   il);
+
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                int           il);
+
+    ggml_tensor * build_norm_gated(
+                ggml_tensor * input,
+                ggml_tensor * weights,
+                ggml_tensor * gate,
+                        int   layer);
+
+    // returns pair of qkv, z
+    std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                ggml_tensor * input,
+                        int   il);
+
+    const llama_model & model;
+};
 
 struct llm_build_qwen : public llm_graph_context {
     llm_build_qwen(const llama_model & model, const llm_graph_params & params);

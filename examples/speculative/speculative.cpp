@@ -46,7 +46,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.path.empty()) {
+    if (params.speculative.mparams_dft.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -71,14 +71,14 @@ int main(int argc, char ** argv) {
     llama_context * ctx_dft = NULL;
 
     // load the target model
-    common_init_result llama_init_tgt = common_init_from_params(params);
+    auto llama_init_tgt = common_init_from_params(params);
 
-    model_tgt = llama_init_tgt.model.get();
-    ctx_tgt   = llama_init_tgt.context.get();
+    model_tgt = llama_init_tgt->model();
+    ctx_tgt   = llama_init_tgt->context();
 
     // load the draft model
     params.devices = params.speculative.devices;
-    params.model = params.speculative.model;
+    params.model = params.speculative.mparams_dft;
     params.n_gpu_layers = params.speculative.n_gpu_layers;
     if (params.speculative.cpuparams.n_threads > 0) {
         params.cpuparams.n_threads = params.speculative.cpuparams.n_threads;
@@ -87,10 +87,10 @@ int main(int argc, char ** argv) {
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
     params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
 
-    common_init_result llama_init_dft = common_init_from_params(params);
+    auto llama_init_dft = common_init_from_params(params);
 
-    model_dft = llama_init_dft.model.get();
-    ctx_dft   = llama_init_dft.context.get();
+    model_dft = llama_init_dft->model();
+    ctx_dft   = llama_init_dft->context();
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);

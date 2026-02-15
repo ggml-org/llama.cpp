@@ -17,7 +17,7 @@
 		ChatSettingsFields
 	} from '$lib/components/app';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { config, updateMultipleConfig } from '$lib/stores/settings.svelte';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
 
@@ -36,12 +36,6 @@
 			title: 'General',
 			icon: Settings,
 			fields: [
-				{ key: 'apiKey', label: 'API Key', type: 'input' },
-				{
-					key: 'systemMessage',
-					label: 'System Message (will be disabled if left empty)',
-					type: 'textarea'
-				},
 				{
 					key: 'theme',
 					label: 'Theme',
@@ -52,10 +46,21 @@
 						{ value: 'dark', label: 'Dark', icon: Moon }
 					]
 				},
+				{ key: 'apiKey', label: 'API Key', type: 'input' },
+				{
+					key: 'systemMessage',
+					label: 'System Message',
+					type: 'textarea'
+				},
 				{
 					key: 'pasteLongTextToFileLen',
 					label: 'Paste long text to file length',
 					type: 'input'
+				},
+				{
+					key: 'copyTextAttachmentsAsPlainText',
+					label: 'Copy text attachments as plain text',
+					type: 'checkbox'
 				},
 				{
 					key: 'enableContinueGeneration',
@@ -80,18 +85,13 @@
 			icon: Monitor,
 			fields: [
 				{
-					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
-					type: 'checkbox'
-				},
-				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'
 				},
 				{
-					key: 'showTokensPerSecond',
-					label: 'Show tokens per second',
+					key: 'showThoughtInProgress',
+					label: 'Show thought in progress',
 					type: 'checkbox'
 				},
 				{
@@ -100,8 +100,14 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'showModelInfo',
-					label: 'Show model information',
+					key: 'autoMicOnEmpty',
+					label: 'Show microphone on empty input',
+					type: 'checkbox',
+					isExperimental: true
+				},
+				{
+					key: 'renderUserContentAsMarkdown',
+					label: 'Render user content as Markdown',
 					type: 'checkbox'
 				},
 				{
@@ -110,8 +116,13 @@
 					type: 'checkbox'
 				},
 				{
-					key: 'renderUserContentAsMarkdown',
-					label: 'Render user content as Markdown',
+					key: 'alwaysShowSidebarOnDesktop',
+					label: 'Always show sidebar on desktop',
+					type: 'checkbox'
+				},
+				{
+					key: 'autoShowSidebarOnNewChat',
+					label: 'Auto-show sidebar on new chat',
 					type: 'checkbox'
 				}
 			]
@@ -174,6 +185,11 @@
 					key: 'samplers',
 					label: 'Samplers',
 					type: 'input'
+				},
+				{
+					key: 'backend_sampling',
+					label: 'Backend sampling',
+					type: 'checkbox'
 				}
 			]
 		},
@@ -232,11 +248,6 @@
 			title: 'Developer',
 			icon: Code,
 			fields: [
-				{
-					key: 'modelSelectorEnabled',
-					label: 'Enable model selector',
-					type: 'checkbox'
-				},
 				{
 					key: 'showToolCalls',
 					label: 'Show tool call labels',
@@ -342,7 +353,7 @@
 			}
 		}
 
-		updateMultipleConfig(processedConfig);
+		settingsStore.updateMultipleConfig(processedConfig);
 		onSave?.();
 	}
 
@@ -413,7 +424,7 @@
 	</div>
 
 	<!-- Mobile Header with Horizontal Scrollable Menu -->
-	<div class="flex flex-col md:hidden">
+	<div class="flex flex-col pt-6 md:hidden">
 		<div class="border-b border-border/30 py-4">
 			<!-- Horizontal Scrollable Category Menu with Navigation -->
 			<div class="relative flex items-center" style="scroll-padding: 1rem;">

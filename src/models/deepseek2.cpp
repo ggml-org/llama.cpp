@@ -1,17 +1,12 @@
 #include "models.h"
 
-
-
 llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
-    // lite variants include DeepSeek-V2-Lite, GigaChat3-10B-A1.8B
-    bool is_lite = (hparams.n_layer == 27 || hparams.n_layer == 26);
-
-    const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
+    const bool is_mla = hparams.is_mla();
 
     // note: these are the actual head sizes you get when treating as MHA or after "decompression" using wv_b for MLA
-    const int64_t n_embd_head_k = is_mla ? hparams.n_embd_head_k_mla : hparams.n_embd_head_k;
-    const int64_t n_embd_head_v = is_mla ? hparams.n_embd_head_v_mla : hparams.n_embd_head_v;
+    const int64_t n_embd_head_k = hparams.n_embd_head_k_mla();
+    const int64_t n_embd_head_v = hparams.n_embd_head_v_mla();
 
     const int64_t n_embd_head_qk_rope = hparams.n_rot;
     const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
@@ -19,10 +14,16 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
 
     // We have to pre-scale kq_scale and attn_factor to make the YaRN RoPE work correctly.
-    // See https://github.com/ggerganov/llama.cpp/discussions/7416 for detailed explanation.
-    const float mscale      = attn_factor * (1.0f + hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
-    const float kq_scale    = 1.0f * mscale * mscale / sqrtf(float(n_embd_head_k));
-    const float attn_factor = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
+    // See https://github.com/ggml-org/llama.cpp/discussions/7416 for detailed explanation.
+    // And also: https://github.com/ggml-org/llama.cpp/pull/17945 [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+
+    // first cancel the adjustment from llama_hparams::yarn_attn_factor_adjust to get the original attn_factor
+    GGML_ASSERT(ext_factor >= 0.0f);
+    const float attn_factor_org = attn_factor * (1.0f + 0.1f * logf(1.0f / freq_scale));
+
+    // use the original attn_factor to pre-scale the kq_scale
+    const float mscale   = attn_factor_org * (1.0f + 0.1f * hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
+    const float kq_scale = 1.0f * mscale * mscale / sqrtf(float(n_embd_head_k));
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -30,10 +31,17 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
     // {n_embd, n_tokens}
     inpL = build_inp_embd(model.tok_embd);
 
+    // (optional) temperature tuning - used by mistral-large
+    ggml_tensor * inp_attn_scale = nullptr;
+    if (hparams.f_attn_temp_scale != 0.0f) {
+        inp_attn_scale = build_inp_attn_scale();
+    }
+
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    auto * inp_attn = build_attn_inp_kv();
+    auto * inp_attn_kv = !is_mla ? build_attn_inp_kv() : nullptr;
+    auto * inp_attn_k  =  is_mla ? build_attn_inp_k()  : nullptr;
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -47,6 +55,9 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
         // self_attention
         {
             ggml_tensor * q = NULL;
+
+            const bool is_lite = model.layers[il].wq;
+
             if (!is_lite) {
                 q = ggml_mul_mat(ctx0, model.layers[il].wq_a, cur);
                 cb(q, "q", il);
@@ -114,22 +125,28 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
 
                 // {n_embd_head_qk_rope + kv_lora_rank, n_head, n_tokens}
                 // note: rope must go first for in-place context shifting in build_rope_shift()
-                ggml_tensor * Qcur = ggml_concat(ctx0, q_pe, q_nope_absorbed, 0);
+                ggml_tensor * Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
                 cb(Qcur, "Qcur", il);
 
                 kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
                 cb(kv_cmpr, "kv_cmpr_reshape", il);
 
                 // {n_embd_head_qk_rope + kv_lora_rank, 1, n_tokens}
-                ggml_tensor * Kcur = ggml_concat(ctx0, k_pe, kv_cmpr, 0);
+                ggml_tensor * Kcur = ggml_concat(ctx0, kv_cmpr, k_pe, 0);
                 cb(Kcur, "Kcur", il);
 
                 // {kv_lora_rank, 1, n_tokens}
                 ggml_tensor * Vcur = kv_cmpr;
                 cb(Vcur, "Vcur", il);
 
+                if (inp_attn_scale) {
+                    // apply llama 4 temperature scaling
+                    Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                    cb(Qcur, "Qcur_attn_temp_scaled", il);
+                }
+
                 // note: MLA with the absorption optimzation converts into MQA (ie: GQA with 1 group)
-                cur = build_attn(inp_attn,
+                cur = build_attn(inp_attn_k,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
             } else {
@@ -153,15 +170,20 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
                 Vcur = ggml_cont(ctx0, Vcur);
                 cb(Vcur, "Vcur_cont", il);
 
-                // note: rope must go first for in-place context shifting in build_rope_shift()
-                ggml_tensor * Qcur = ggml_concat(ctx0, q_pe, q_nope, 0);
+                ggml_tensor * Qcur = ggml_concat(ctx0, q_nope, q_pe, 0);
                 cb(Qcur, "Qcur", il);
 
-                ggml_tensor * Kcur = ggml_concat(ctx0, ggml_repeat(ctx0, k_pe, q_pe), k_nope, 0);
+                ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
                 cb(Kcur, "Kcur", il);
 
+                if (inp_attn_scale) {
+                    // apply llama 4 temperature scaling
+                    Qcur = ggml_mul(ctx0, Qcur, inp_attn_scale);
+                    cb(Qcur, "Qcur_attn_temp_scaled", il);
+                }
+
                 // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
-                cur = build_attn(inp_attn,
+                cur = build_attn(inp_attn_kv,
                             model.layers[il].wo, NULL,
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }
@@ -193,7 +215,7 @@ llm_build_deepseek2::llm_build_deepseek2(const llama_model & model, const llm_gr
                 model.layers[il].ffn_exp_probs_b,
                 n_expert, n_expert_used,
                 LLM_FFN_SILU, hparams.expert_weights_norm,
-                true, hparams.expert_weights_scale,
+                hparams.expert_weights_scale, hparams.expert_weights_scale,
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il);
             cb(moe_out, "ffn_moe_out", il);

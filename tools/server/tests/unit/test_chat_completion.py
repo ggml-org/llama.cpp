@@ -41,7 +41,8 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
     assert res.status_code == 200
     assert "cmpl" in res.body["id"] # make sure the completion id has the expected format
     assert res.body["system_fingerprint"].startswith("b")
-    assert res.body["model"] == model if model is not None else server.model_alias
+    # we no longer reflect back the model name, see https://github.com/ggml-org/llama.cpp/pull/17668
+    # assert res.body["model"] == model if model is not None else server.model_alias
     assert res.body["usage"]["prompt_tokens"] == n_prompt
     assert res.body["usage"]["completion_tokens"] == n_predicted
     choice = res.body["choices"][0]
@@ -59,7 +60,7 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
 )
 def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason):
     global server
-    server.model_alias = None # try using DEFAULT_OAICOMPAT_MODEL
+    server.model_alias = "llama-test-model"
     server.start()
     res = server.make_stream_request("POST", "/chat/completions", data={
         "max_tokens": max_tokens,
@@ -81,7 +82,7 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
             else:
                 assert "role" not in choice["delta"]
             assert data["system_fingerprint"].startswith("b")
-            assert "gpt-3.5" in data["model"] # DEFAULT_OAICOMPAT_MODEL, maybe changed in the future
+            assert data["model"] == "llama-test-model"
             if last_cmpl_id is None:
                 last_cmpl_id = data["id"]
             assert last_cmpl_id == data["id"] # make sure the completion id is the same for all events in the stream
@@ -198,7 +199,7 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
         choice = res.body["choices"][0]
         assert match_regex(re_content, choice["message"]["content"])
     else:
-        assert res.status_code != 200
+        assert res.status_code == 400
         assert "error" in res.body
 
 
@@ -433,8 +434,8 @@ def test_context_size_exceeded_stream():
 @pytest.mark.parametrize(
     "n_batch,batch_count,reuse_cache",
     [
-        (64, 3, False),
-        (64, 1, True),
+        (64, 4, False),
+        (64, 2, True),
     ]
 )
 def test_return_progress(n_batch, batch_count, reuse_cache):
@@ -461,10 +462,18 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
     res = make_cmpl_request()
     last_progress = None
     total_batch_count = 0
+
     for data in res:
         cur_progress = data.get("prompt_progress", None)
         if cur_progress is None:
             continue
+        if total_batch_count == 0:
+            # first progress report must have n_cache == n_processed
+            assert cur_progress["total"] > 0
+            assert cur_progress["cache"] == cur_progress["processed"]
+            if reuse_cache:
+                # when reusing cache, we expect some cached tokens
+                assert cur_progress["cache"] > 0
         if last_progress is not None:
             assert cur_progress["total"] == last_progress["total"]
             assert cur_progress["cache"] == last_progress["cache"]
@@ -472,7 +481,32 @@ def test_return_progress(n_batch, batch_count, reuse_cache):
         total_batch_count += 1
         last_progress = cur_progress
 
+    # last progress should indicate completion (all tokens processed)
     assert last_progress is not None
     assert last_progress["total"] > 0
     assert last_progress["processed"] == last_progress["total"]
     assert total_batch_count == batch_count
+
+
+def test_chat_completions_multiple_choices():
+    global server
+    server.start()
+    # make sure cache can be reused across multiple choices and multiple requests
+    # ref: https://github.com/ggml-org/llama.cpp/pull/18663
+    for _ in range(2):
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 8,
+            "n": 2,
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+            # test forcing the same slot to be used
+            # the scheduler should not be locked up in this case
+            "id_slot": 0,
+        })
+        assert res.status_code == 200
+        assert len(res.body["choices"]) == 2
+        for choice in res.body["choices"]:
+            assert "assistant" == choice["message"]["role"]
+            assert choice["finish_reason"] == "length"

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 The ggml authors
+ * Copyright (c) 2023-2026 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -26,6 +26,7 @@
 #include "ggml.h"
 
 #include <aclnnop/aclnn_add.h>
+#include <aclnnop/aclnn_add_rms_norm.h>
 #include <aclnnop/aclnn_addcdiv.h>
 #include <aclnnop/aclnn_argmax.h>
 #include <aclnnop/aclnn_avgpool2d.h>
@@ -42,6 +43,7 @@
 #include <aclnnop/aclnn_exp.h>
 #include <aclnnop/aclnn_fill_scalar.h>
 #include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
+#include <aclnnop/aclnn_ger.h>
 #include <aclnnop/aclnn_group_norm.h>
 #include <aclnnop/aclnn_grouped_matmul_v3.h>
 #include <aclnnop/aclnn_gt_scalar.h>
@@ -56,6 +58,7 @@
 #include <aclnnop/aclnn_mean.h>
 #include <aclnnop/aclnn_mm.h>
 #include <aclnnop/aclnn_mul.h>
+#include <aclnnop/aclnn_mv.h>
 #include <aclnnop/aclnn_permute.h>
 #include <aclnnop/aclnn_pow.h>
 #include <aclnnop/aclnn_pow_tensor_tensor.h>
@@ -1961,7 +1964,7 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context & ctx, ggml_tensor * 
     acl_tensor_ptr acl_weight_tensor;
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
+    static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (weight_to_nz && is_matmul_weight(weight)) {
         acl_weight_tensor = ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, n_dims, ACL_FORMAT_FRACTAL_NZ);
     } else {
@@ -2206,78 +2209,120 @@ static void aclnn_index_fill_tensor(ggml_backend_cann_context & ctx,
 }
 
 /**
- * @brief Initializes and caches sine/cosine positional encoding values
- *        (used in RoPE, Rotary Position Embedding) for attention layers.
+ * @brief Initializes and caches all intermediate tensors required for RoPE
+ *        (Rotary Position Embedding), including support for Yarn, mRoPE,
+ *        i-mRoPE, Neox repeat strategy, independent sectors, frequency factors，
+ *        and multi-section rotary groups.
  *
- * This function computes and caches the sin/cos values of
- * θ = position * theta_scale for RoPE encoding. The cache is shared
- * across attention layers, and only the first attention layer will
- * trigger initialization. The cache includes repeated sin/cos values
- * with different repeat methods depending on the @param is_neox flag.
+ * This function computes and caches the per-dimension θ coefficients used for
+ * Q/K rotary embedding. The cache is shared across layers, and recomputed only
+ * when any dependent parameter changes.
  *
- * Steps performed by this function:
- *   1. Identify whether the target tensor belongs to Q/K in attention
- *      and restrict computation to the first layer only.
- *   2. Initialize the theta scale array (arange → power → freq scaling).
- *   3. Allocate sin/cos caches if the max prompt length increases.
- *   4. Compute θ = position * theta_scale.
- *   5. Compute sin(θ), cos(θ) and optionally scale by attn_factor.
- *   6. Expand sin/cos values by repeat or repeat_interleave depending
- *      on whether @param is_neox is enabled.
+ * The function now supports:
+ *   - Yarn RoPE extrapolation (via @param corr_dims and @param ext_factor)
+ *   - Per-dimension independent sector exponent rules (indep_sects + sections[])
+ *   - Multi-section RoPE (mRoPE) index mapping (mrope_used + is_imrope)
+ *   - Frequency factor division (src2)
+ *   - Neox / normal repeat expansion modes
  *
- * @param ctx                The CANN backend context, holding memory pool,
- *                           stream, and persistent buffers for rope init/cache.
- * @param dst                The destination ggml_tensor whose computation
- *                           depends on the RoPE values (usually Qcur/Kcur).
- * @param theta_scale        Scalar exponent base for computing theta scale values.
- * @param freq_scale         Frequency scaling factor, applied to theta scale.
- * @param attn_factor        Attention scaling factor, applied to sin/cos.
- * @param is_neox            Whether to use Neox-style repeat strategy
- *                           (dim expansion vs repeat_interleave).
+ * @param ctx                CANN backend context, containing memory pool,
+ *                           cached buffers, and runtime stream.
+ * @param dst                Destination ggml_tensor whose computation
+ *                           depends on RoPE (typically Qcur or Kcur).
+ * @param corr_dims          [low, high] Yarn correction range.
+ * @param ext_factor         Yarn extrapolation strength. 0 = disabled.
+ * @param theta_scale        Base multiplier for per-dimension θ exponent.
+ * @param freq_scale         Global frequency scaling factor.
+ * @param attn_factor        Optional scaling applied to sin/cos (if needed).
+ * @param is_neox            Whether to use Neox-style dimension interleave.
+ * @param sections           4-way sector sizes for independent-section RoPE
+ *                           and multi-section mRoPE (t/h/w/e).
+ * @param mrope_used         Whether to enable multi-section rotary embedding.
+ * @param is_imrope          Whether to apply interleaved mRoPE rules.
+ * @param indep_sects        Whether each dimension runs independent exponent
+ *                           resets based on @p sections.
  */
-static void aclnn_cache_init(ggml_backend_cann_context & ctx,
-                             ggml_tensor *               dst,
-                             float *                     corr_dims,
-                             float                       ext_factor,
-                             float                       theta_scale,
-                             float                       freq_scale,
-                             float                       attn_factor,
-                             bool                        is_neox) {
-    ggml_tensor * src0 = dst->src[0];  // input
+static void aclnn_rope_cache_init(ggml_backend_cann_context & ctx,
+                                  ggml_tensor *               dst,
+                                  float *                     corr_dims,
+                                  float                       ext_factor,
+                                  float                       theta_scale,
+                                  float                       freq_scale,
+                                  float                       attn_factor,
+                                  bool                        is_neox,
+                                  int                         sections[4],
+                                  bool                        mrope_used,
+                                  bool                        is_imrope,
+                                  bool                        indep_sects,
+                                  int64_t                     rope_dims) {
     ggml_tensor * src1 = dst->src[1];  // position
     ggml_tensor * src2 = dst->src[2];  // freq_factors
 
-    if (src2 == nullptr && ctx.rope_cache.cached && ctx.rope_cache.ext_factor == ext_factor &&
-        ctx.rope_cache.theta_scale == theta_scale && ctx.rope_cache.freq_scale == freq_scale &&
-        ctx.rope_cache.attn_factor == attn_factor && ctx.rope_cache.is_neox == is_neox) {
+    int64_t theta_scale_length = rope_dims / 2;
+    int64_t position_length    = dst->ne[2];
+
+    // TODO: check theta_scale_length and position_length.
+    if (src2 == nullptr && ctx.rope_cache.cached &&
+        ctx.rope_cache.equal(theta_scale_length, position_length, ext_factor, theta_scale, freq_scale, attn_factor,
+                             is_neox, indep_sects, mrope_used, is_imrope, sections)) {
         // use cache.
         return;
     }
 
-    int64_t theta_scale_length = src0->ne[0] / 2;
-    int64_t theta_scale_ne[]   = { theta_scale_length, 1, 1, 1 };
-    size_t  theta_scale_nb[]   = { sizeof(float), sizeof(float), sizeof(float), theta_scale_length * sizeof(float) };
+    // Step0: calculate tensor shape.
+    int64_t theta_scale_ne[] = { theta_scale_length, 1, 1, 1 };
+    size_t  theta_scale_nb[] = { sizeof(float), theta_scale_length * sizeof(float), theta_scale_length * sizeof(float),
+                                 theta_scale_length * sizeof(float) };
 
     GGML_ASSERT(src1->type == GGML_TYPE_I32);
-    int64_t position_length = src1->ne[0];
-    int64_t position_ne[]   = { 1, 1, position_length, 1 };
-    size_t  position_nb[]   = { sizeof(int32_t), sizeof(int32_t), sizeof(int32_t), sizeof(int32_t) * position_length };
+    int64_t position_ne[] = { 1, 1, position_length, 1 };
+    size_t  position_nb[] = { sizeof(int32_t), sizeof(int32_t), sizeof(int32_t), sizeof(int32_t) * position_length };
 
-    int64_t theta_ne[] = { theta_scale_length, 1, position_length, 1 };
-    size_t  theta_nb[GGML_MAX_DIMS];
-    theta_nb[0] = sizeof(float);
+    int64_t cache_ne[] = { theta_scale_length, 1, position_length, 1 };
+    size_t  cache_nb[GGML_MAX_DIMS];
+    cache_nb[0] = sizeof(float);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        theta_nb[i] = theta_nb[i - 1] * theta_ne[i - 1];
+        cache_nb[i] = cache_nb[i - 1] * cache_ne[i - 1];
     }
 
-    // theta_scale arange, [0,1,...,ne00/2 - 1]
+    // Step1: Compute the coefficient of theta. During the cache_init process, aside from
+    // (1) multiplying by the position,
+    // (2) dividing by freq_factors,
+    // (3) computing the sine and cosine,
+    // the other parameters used in the computation generally do not change in most scenarios.
+    // Therefore, we can first compute this part of the result and then cache it.
+
+    // Step1.1: prepare theta_scale exponent. if this exponent updated, should update theta_scale_tensor.
     acl_tensor_ptr acl_theta_scale_tensor;
-    // cache theta scale
-    if (ctx.rope_cache.theta_scale_length != theta_scale_length ||
-        // theta_scale and freq_scale should not change during the current token inference process,
-        // so we can directly use == here instead of comparing the absolute difference.
-        ctx.rope_cache.theta_scale != theta_scale || ctx.rope_cache.freq_scale != freq_scale) {
-        ctx.rope_cache.theta_scale_length = theta_scale_length;
+    bool           theta_scale_updated = false;
+    if (ctx.rope_cache.theta_scale_length != theta_scale_length || ctx.rope_cache.theta_scale != theta_scale ||
+        ctx.rope_cache.indep_sects != indep_sects) {
+        theta_scale_updated = true;
+        if (ctx.rope_cache.theta_scale_exp_host != nullptr) {
+            free(ctx.rope_cache.theta_scale_exp_host);
+        }
+        ctx.rope_cache.theta_scale_exp_host = (float *) malloc(theta_scale_length * sizeof(float));
+        GGML_ASSERT(ctx.rope_cache.theta_scale_exp_host != nullptr);
+        if (!indep_sects) {
+            ctx.rope_cache.theta_scale_exp_host[0] = 1;
+            for (int i = 1; i < theta_scale_length; i++) {
+                ctx.rope_cache.theta_scale_exp_host[i] = ctx.rope_cache.theta_scale_exp_host[i - 1] * theta_scale;
+            }
+        } else {
+            int sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+            int sec_w     = sections[1] + sections[0];
+            int sec_e     = sections[2] + sec_w;
+
+            ctx.rope_cache.theta_scale_exp_host[0] = 1;
+            for (int i = 1; i < theta_scale_length; i++) {
+                int sector = i % sect_dims;
+                if (sector == 0 || sector == sections[0] || sector == sec_w || sector == sec_e) {
+                    ctx.rope_cache.theta_scale_exp_host[i] = 1;
+                    continue;
+                }
+                ctx.rope_cache.theta_scale_exp_host[i] = ctx.rope_cache.theta_scale_exp_host[i - 1] * theta_scale;
+            }
+        }
 
         if (ctx.rope_cache.theta_scale_cache != nullptr) {
             ACL_CHECK(aclrtFree(ctx.rope_cache.theta_scale_cache));
@@ -2285,74 +2330,140 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
         ACL_CHECK(aclrtMalloc(&ctx.rope_cache.theta_scale_cache, theta_scale_length * sizeof(float),
                               ACL_MEM_MALLOC_HUGE_FIRST));
 
-        acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
-                                                         theta_scale_ne, theta_scale_nb, 1);
+        ACL_CHECK(aclrtMemcpyAsync(ctx.rope_cache.theta_scale_cache, theta_scale_length * sizeof(float),
+                                   ctx.rope_cache.theta_scale_exp_host, theta_scale_length * sizeof(float),
+                                   ACL_MEMCPY_HOST_TO_DEVICE, ctx.stream()));
+    }
+    acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
+                                                     theta_scale_ne, theta_scale_nb, 1);
 
-        float start      = 0;
-        float step       = 1;
-        float stop       = theta_scale_length;
-        float n_elements = theta_scale_length;
-        aclnn_arange(ctx, acl_theta_scale_tensor.get(), start, stop, step, n_elements);
-
-        ggml_cann_pool_alloc yarn_ramp_allocator(ctx.pool());
-        acl_tensor_ptr       acl_yarn_ramp_tensor;
-        if (ext_factor != 0) {
-            // -rope_yarn_ramp
-            // const float y = (i0 / 2 - low) / MAX(0.001f, high - low);
-            // return MIN(1, MAX(0, y)) - 1;
-            yarn_ramp_allocator.alloc(theta_scale_length * sizeof(float));
-            void * yarn_ramp_buffer = yarn_ramp_allocator.get();
-            acl_yarn_ramp_tensor =
-                ggml_cann_create_tensor(yarn_ramp_buffer, ACL_FLOAT, sizeof(float), theta_scale_ne, theta_scale_nb, 1);
-            float          zero_value = 0, one_value = 1;
-            float          denom_safe_value = MAX(0.001f, corr_dims[1] - corr_dims[0]);
-            acl_scalar_ptr low              = ggml_cann_create_scalar(&corr_dims[0], aclDataType::ACL_FLOAT);
-            acl_scalar_ptr zero             = ggml_cann_create_scalar(&zero_value, aclDataType::ACL_FLOAT);
-            acl_scalar_ptr one              = ggml_cann_create_scalar(&one_value, aclDataType::ACL_FLOAT);
-            acl_scalar_ptr denom_safe       = ggml_cann_create_scalar(&denom_safe_value, aclDataType::ACL_FLOAT);
-            acl_scalar_ptr ext_factor_sc    = ggml_cann_create_scalar(&ext_factor, aclDataType::ACL_FLOAT);
-
-            GGML_CANN_CALL_ACLNN_OP(ctx, Subs, acl_theta_scale_tensor.get(), low.get(), one.get(),
-                                    acl_yarn_ramp_tensor.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceDivs, acl_yarn_ramp_tensor.get(), denom_safe.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceThreshold, acl_yarn_ramp_tensor.get(), zero.get(), zero.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceClampMax, acl_yarn_ramp_tensor.get(), one.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), one.get(), one.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), ext_factor_sc.get());
-
-            // theta_interp = freq_scale * theta_extrap;
-            // theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
-            // theta = freq_scale * theta_extrap * (1 - ramp_mix) + theta_extrap * ramp_mix;
-            // theta = freq_scale * theta_extrap - freq_scale * theta_extrap * ramp_mix + theta_extrap * ramp_mix;
-            // theta = theta_extrap * (freq_scale - freq_scale * ramp_mix + ramp_mix);
-            //
-            // we cache (freq_scale - freq_scale * ramp_mix + ramp_mix), Considering that the rope_yarn_ramp here is the inverse
-            // cache freq_scale + (freq_scale - 1) * ramp_mix
-            float          freq_scale_1    = freq_scale - 1;
-            acl_scalar_ptr freq_scale_sc   = ggml_cann_create_scalar(&freq_scale, aclDataType::ACL_FLOAT);
-            acl_scalar_ptr freq_scale_1_sc = ggml_cann_create_scalar(&freq_scale_1, aclDataType::ACL_FLOAT);
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), freq_scale_1_sc.get());
-            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdds, acl_yarn_ramp_tensor.get(), freq_scale_sc.get(), one.get());
+    // Step1.2: prepare rope_yarn_ramp, if this part updated, should update theta_scale_tensor.
+    // TODO: acl_yarn_ramp_tensor use rope cache.
+    bool           yarn_ramp_tensor_updated = false;
+    acl_tensor_ptr acl_yarn_ramp_tensor;
+    if (ext_factor != 0 && (theta_scale_updated || ctx.rope_cache.theta_scale_length != theta_scale_length ||
+                            ctx.rope_cache.freq_scale != freq_scale)) {
+        yarn_ramp_tensor_updated = true;
+        if (ctx.rope_cache.yarn_ramp_cache != nullptr) {
+            ACL_CHECK(aclrtFree(ctx.rope_cache.yarn_ramp_cache));
         }
+        ACL_CHECK(aclrtMalloc(&ctx.rope_cache.yarn_ramp_cache, theta_scale_length * sizeof(float),
+                              ACL_MEM_MALLOC_HUGE_FIRST));
+        // -rope_yarn_ramp
+        // const float y = (i0 / 2 - low) / MAX(0.001f, high - low);
+        // return MIN(1, MAX(0, y)) - 1;
+        acl_yarn_ramp_tensor      = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
+                                                            theta_scale_ne, theta_scale_nb, 1);
+        float          zero_value = 0, one_value = 1;
+        float          denom_safe_value = MAX(0.001f, corr_dims[1] - corr_dims[0]);
+        acl_scalar_ptr low              = ggml_cann_create_scalar(&corr_dims[0], aclDataType::ACL_FLOAT);
+        acl_scalar_ptr zero             = ggml_cann_create_scalar(&zero_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr one              = ggml_cann_create_scalar(&one_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr denom_safe       = ggml_cann_create_scalar(&denom_safe_value, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr ext_factor_sc    = ggml_cann_create_scalar(&ext_factor, aclDataType::ACL_FLOAT);
 
-        // power
-        acl_scalar_ptr acl_theta_scale = ggml_cann_create_scalar(&theta_scale, aclDataType::ACL_FLOAT);
-        GGML_CANN_CALL_ACLNN_OP(ctx, PowScalarTensor, acl_theta_scale.get(), acl_theta_scale_tensor.get(),
-                                acl_theta_scale_tensor.get());
+        aclnn_arange(ctx, acl_yarn_ramp_tensor.get(), 0, theta_scale_length, 1, theta_scale_length);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), low.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceDivs, acl_yarn_ramp_tensor.get(), denom_safe.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceThreshold, acl_yarn_ramp_tensor.get(), zero.get(), zero.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceClampMax, acl_yarn_ramp_tensor.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceSubs, acl_yarn_ramp_tensor.get(), one.get(), one.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), ext_factor_sc.get());
 
-        if (ext_factor != 0) {
+        // theta_interp = freq_scale * theta_extrap;
+        // theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
+        // theta = freq_scale * theta_extrap * (1 - ramp_mix) + theta_extrap * ramp_mix;
+        // theta = freq_scale * theta_extrap - freq_scale * theta_extrap * ramp_mix + theta_extrap * ramp_mix;
+        // theta = theta_extrap * (freq_scale - freq_scale * ramp_mix + ramp_mix);
+        //
+        // we cache (freq_scale - freq_scale * ramp_mix + ramp_mix), Considering that the rope_yarn_ramp here is the inverse
+        // cache freq_scale + (freq_scale - 1) * ramp_mix
+        float          freq_scale_1    = freq_scale - 1;
+        acl_scalar_ptr freq_scale_sc   = ggml_cann_create_scalar(&freq_scale, aclDataType::ACL_FLOAT);
+        acl_scalar_ptr freq_scale_1_sc = ggml_cann_create_scalar(&freq_scale_1, aclDataType::ACL_FLOAT);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMuls, acl_yarn_ramp_tensor.get(), freq_scale_1_sc.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdds, acl_yarn_ramp_tensor.get(), freq_scale_sc.get(), one.get());
+    } else {
+        acl_yarn_ramp_tensor = ggml_cann_create_tensor(ctx.rope_cache.yarn_ramp_cache, ACL_FLOAT, sizeof(float),
+                                                       theta_scale_ne, theta_scale_nb, 1);
+    }
+    // Step 1.3: update theta_scale_tensor according to ext_factor or freq_scale.
+    if (ext_factor != 0) {
+        if (theta_scale_updated || yarn_ramp_tensor_updated) {
+            theta_scale_updated = true;
             aclnn_mul(ctx, acl_theta_scale_tensor.get(), acl_yarn_ramp_tensor.get());
-        } else if (freq_scale != 1) {
-            aclnn_muls(ctx, acl_theta_scale_tensor.get(), freq_scale, nullptr, true);
         }
     } else {
-        // use cache
+        if (freq_scale != 1 && (ctx.rope_cache.freq_scale != freq_scale || theta_scale_updated)) {
+            theta_scale_updated = true;
+            aclnn_muls(ctx, acl_theta_scale_tensor.get(), freq_scale, nullptr, true);
+        }
+    }
+
+    // Nothing changed, use cache.
+    if (!theta_scale_updated) {
         acl_theta_scale_tensor = ggml_cann_create_tensor(ctx.rope_cache.theta_scale_cache, ACL_FLOAT, sizeof(float),
                                                          theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
     }
 
+    // Step 1.4: prepare select index if mrope
+    acl_tensor_ptr position_select_index_tensor;
+    if (mrope_used) {
+        if (ctx.rope_cache.sections[0] != sections[0] || ctx.rope_cache.sections[1] != sections[1] ||
+            ctx.rope_cache.sections[2] != sections[2] || ctx.rope_cache.sections[3] != sections[3] ||
+            ctx.rope_cache.theta_scale_length != theta_scale_length || ctx.rope_cache.is_imrope != is_imrope) {
+            if (ctx.rope_cache.position_select_index_host != nullptr) {
+                free(ctx.rope_cache.position_select_index_host);
+            }
+            ctx.rope_cache.position_select_index_host = (int *) malloc(theta_scale_length * sizeof(int));
+            GGML_ASSERT(ctx.rope_cache.position_select_index_host != nullptr);
+            int sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+            int sec_w     = sections[1] + sections[0];
+            int sec_e     = sections[2] + sec_w;
+            // t,h,w,e
+            for (int i = 0; i < theta_scale_length; i++) {
+                int sector = i % sect_dims;
+
+                if (is_imrope) {  // qwen3vl apply interleaved mrope
+                    if (sector % 3 == 1 && sector < 3 * sections[1]) {
+                        ctx.rope_cache.position_select_index_host[i] = 1;
+                    } else if (sector % 3 == 2 && sector < 3 * sections[2]) {
+                        ctx.rope_cache.position_select_index_host[i] = 2;
+                    } else if (sector % 3 == 0 && sector < 3 * sections[0]) {
+                        ctx.rope_cache.position_select_index_host[i] = 0;
+                    } else {
+                        ctx.rope_cache.position_select_index_host[i] = 3;
+                    }
+                } else {
+                    if (sector >= sections[0] && sector < sec_w) {
+                        ctx.rope_cache.position_select_index_host[i] = 1;
+                    } else if (sector >= sec_w && sector < sec_e) {
+                        ctx.rope_cache.position_select_index_host[i] = 2;
+                    } else if (sector >= sec_e) {
+                        ctx.rope_cache.position_select_index_host[i] = 3;
+                    } else {
+                        ctx.rope_cache.position_select_index_host[i] = 0;
+                    }
+                }
+            }
+
+            if (ctx.rope_cache.position_select_index != nullptr) {
+                ACL_CHECK(aclrtFree(ctx.rope_cache.position_select_index));
+            }
+            ACL_CHECK(aclrtMalloc(&ctx.rope_cache.position_select_index, theta_scale_length * sizeof(int),
+                                  ACL_MEM_MALLOC_HUGE_FIRST));
+
+            ACL_CHECK(aclrtMemcpyAsync(ctx.rope_cache.position_select_index, theta_scale_length * sizeof(int),
+                                       ctx.rope_cache.position_select_index_host, theta_scale_length * sizeof(int),
+                                       ACL_MEMCPY_HOST_TO_DEVICE, ctx.stream()));
+        }
+
+        position_select_index_tensor = ggml_cann_create_tensor(ctx.rope_cache.position_select_index, ACL_INT32,
+                                                               sizeof(int), theta_scale_ne, theta_scale_nb, 1);
+    }
+
+    // Step2: divide by freq_factors
     ggml_cann_pool_alloc freq_fac_res_allocator(ctx.pool());
-    // freq_factors
     if (src2) {
         freq_fac_res_allocator.alloc(theta_scale_length * sizeof(float));
         void *         freq_fac_res_ptr = freq_fac_res_allocator.get();
@@ -2365,6 +2476,85 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
         std::swap(acl_theta_scale_tensor, acl_freq_fac_res_tensor);
     }
 
+    // Step3: prepare position_tensor
+    acl_tensor_ptr       acl_position_tensor;
+    ggml_cann_pool_alloc mrope_position_acllocator(ctx.pool());
+    if (mrope_used) {
+        // Step3.1: select current position;
+        // position :
+        // pos1: [[0, 1 ,2 ,3 ],
+        // pos2:  [4, 5 ,6 ,7 ],
+        // pos3:  [8, 9 ,10,11],
+        // pos4:  [12,13,14,15] ]
+        //
+        // select index = [0, 1, 2, 2, 1, 0]
+        //
+        // selected_tensor:
+        // [[0, 1 ,2 ,3 ],
+        //  [4, 5 ,6 ,7 ],
+        //  [8, 9 ,10,11],
+        //  [8, 9 ,10,11],
+        //  [4, 5 ,6 ,7 ],
+        //  [0, 1 ,2 ,3 ]]
+        //
+        // transpose, from [seq_len:dims] to [dims:seq_len]
+        // [0, 4, 8 ,8 ,4, 0],
+        // [1, 5, 9, 9, 5, 1],
+        // [2, 6, 10,10,6 ,2],
+        // [3, 7, 11,11,7 3 ]]
+        //
+        // multipy by theta_scale_tensor
+        // [theta_scale^0, theta_scale^1, ..., theta_scale ^ n]
+
+        int64_t        mrope_position_ne[] = { position_length, 4 };
+        size_t         mrope_position_nb[] = { sizeof(int), position_length * sizeof(int) };
+        acl_tensor_ptr mrope_position =
+            ggml_cann_create_tensor(src1->data, ggml_cann_type_mapping(src1->type), ggml_type_size(src1->type),
+                                    mrope_position_ne, mrope_position_nb, 2);
+
+        // selected position tensor's shape is a transpose of cache tensor.
+        int64_t selected_position_ne[] = { position_length, theta_scale_length };
+        size_t  selected_position_nb[] = { sizeof(float), position_length * sizeof(float) };
+        mrope_position_acllocator.alloc(theta_scale_length * position_length * sizeof(float));
+        void * mrope_position_buffer = mrope_position_acllocator.get();
+        acl_position_tensor =
+            ggml_cann_create_tensor(mrope_position_buffer, ggml_cann_type_mapping(src1->type),
+                                    ggml_type_size(src1->type), selected_position_ne, selected_position_nb, 2);
+        GGML_CANN_CALL_ACLNN_OP(ctx, IndexSelect, mrope_position.get(), 0, position_select_index_tensor.get(),
+                                acl_position_tensor.get());
+
+        // transpose
+        int64_t transposed_ne[] = { position_length, 1, theta_scale_length, 1 };
+        size_t  transposed_nb[GGML_MAX_DIMS];
+        transposed_nb[0] = sizeof(float);
+        for (int i = 1; i < GGML_MAX_DIMS; i++) {
+            transposed_nb[i] = transposed_nb[i - 1] * transposed_ne[i - 1];
+        }
+
+        std::swap(transposed_ne[0], transposed_ne[2]);
+        std::swap(transposed_nb[0], transposed_nb[2]);
+
+        acl_position_tensor =
+            ggml_cann_create_tensor(mrope_position_buffer, ggml_cann_type_mapping(src1->type),
+                                    ggml_type_size(src1->type), transposed_ne, transposed_nb, GGML_MAX_DIMS);
+
+    } else {
+        // auto bcast.
+        acl_position_tensor =
+            ggml_cann_create_tensor(src1->data, ggml_cann_type_mapping(src1->type), ggml_type_size(src1->type),
+                                    position_ne, position_nb, GGML_MAX_DIMS);
+    }
+
+    // Step4: multiply by the position
+    int64_t              theta_length = theta_scale_length * position_length;
+    ggml_cann_pool_alloc theta_allocator(ctx.pool(), theta_length * sizeof(float));
+    void *               theta_buffer = theta_allocator.get();
+
+    acl_tensor_ptr acl_theta_tensor =
+        ggml_cann_create_tensor(theta_buffer, ACL_FLOAT, sizeof(float), cache_ne, cache_nb, GGML_MAX_DIMS);
+    aclnn_mul(ctx, acl_position_tensor.get(), acl_theta_scale_tensor.get(), acl_theta_tensor.get());
+
+    // Step5: calculate sin cos.
     // init sin_repeat && cos_repeat, only to accelerate first layer on each device
     if (position_length > ctx.rope_cache.position_length) {
         ctx.rope_cache.position_length = position_length;
@@ -2381,44 +2571,30 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
             aclrtMalloc(&ctx.rope_cache.cos_cache, repeat_theta_length * sizeof(float), ACL_MEM_MALLOC_HUGE_FIRST));
     }
 
-    // position
-    acl_tensor_ptr acl_position_tensor =
-        ggml_cann_create_tensor(src1->data, ggml_cann_type_mapping(src1->type), ggml_type_size(src1->type), position_ne,
-                                position_nb, GGML_MAX_DIMS);
-
-    // power * position
-    int64_t              theta_length = theta_scale_length * position_length;
-    ggml_cann_pool_alloc theta_allocator(ctx.pool(), theta_length * sizeof(float));
-    void *               theta_buffer = theta_allocator.get();
-
-    acl_tensor_ptr acl_theta_tensor =
-        ggml_cann_create_tensor(theta_buffer, ACL_FLOAT, sizeof(float), theta_ne, theta_nb, GGML_MAX_DIMS);
-    aclnn_mul(ctx, acl_position_tensor.get(), acl_theta_scale_tensor.get(), acl_theta_tensor.get());
-
     // sin/cos
     ggml_cann_pool_alloc sin_allocator(ctx.pool(), theta_length * sizeof(float));
     void *               sin_buffer = sin_allocator.get();
     acl_tensor_ptr       acl_sin_tensor =
-        ggml_cann_create_tensor(sin_buffer, ACL_FLOAT, sizeof(float), theta_ne, theta_nb, GGML_MAX_DIMS, ACL_FORMAT_ND);
+        ggml_cann_create_tensor(sin_buffer, ACL_FLOAT, sizeof(float), cache_ne, cache_nb, GGML_MAX_DIMS, ACL_FORMAT_ND);
     aclnn_sin(ctx, acl_theta_tensor.get(), acl_sin_tensor.get());
 
     ggml_cann_pool_alloc cos_allocator(ctx.pool(), theta_length * sizeof(float));
     void *               cos_buffer = cos_allocator.get();
     acl_tensor_ptr       acl_cos_tensor =
-        ggml_cann_create_tensor(cos_buffer, ACL_FLOAT, sizeof(float), theta_ne, theta_nb, GGML_MAX_DIMS, ACL_FORMAT_ND);
+        ggml_cann_create_tensor(cos_buffer, ACL_FLOAT, sizeof(float), cache_ne, cache_nb, GGML_MAX_DIMS, ACL_FORMAT_ND);
     aclnn_cos(ctx, acl_theta_tensor.get(), acl_cos_tensor.get());
 
     if (ext_factor != 0) {
         attn_factor *= 1.0f + 0.1f * logf(1.0f / freq_scale);
     }
 
-    // attn_factor
+    // Step 5: multiply by attn_factor
     if (attn_factor != 1) {
         aclnn_muls(ctx, acl_sin_tensor.get(), attn_factor, nullptr, true);
         aclnn_muls(ctx, acl_cos_tensor.get(), attn_factor, nullptr, true);
     }
 
-    int64_t sin_reshape_ne[4] = { src0->ne[0], 1, src0->ne[2], 1 };
+    int64_t sin_reshape_ne[4] = { rope_dims, 1, dst->ne[2], 1 };
     size_t  sin_reshape_nb[GGML_MAX_DIMS];
     sin_reshape_nb[0] = sizeof(float);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
@@ -2429,8 +2605,9 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
     acl_tensor_ptr acl_cos_repeat_tensor = ggml_cann_create_tensor(ctx.rope_cache.cos_cache, ACL_FLOAT, sizeof(float),
                                                                    sin_reshape_ne, sin_reshape_nb, GGML_MAX_DIMS);
 
-    // repeat
+    // Step 6: repeat
     if (is_neox) {
+        // [sinθ1, sinθ1, sinθ2, sinθ2, ..., sinθn, sinθn]
         int64_t repeatsArray[] = { 1, 1, 1, 2 };
         aclnn_repeat(ctx, acl_sin_tensor.get(), acl_sin_repeat_tensor.get(), repeatsArray);
         aclnn_repeat(ctx, acl_cos_tensor.get(), acl_cos_repeat_tensor.get(), repeatsArray);
@@ -2438,17 +2615,15 @@ static void aclnn_cache_init(ggml_backend_cann_context & ctx,
         int64_t num_repeats = 2;
         int64_t dim         = 3;
         int64_t output_size = theta_scale_length * num_repeats;
+        // [sinθ1, sinθ2, ..., sinθn, sinθ1, sinθ2, ..., sinθn]
         aclnn_repeat_interleave(ctx, acl_sin_tensor.get(), acl_sin_repeat_tensor.get(), dim, num_repeats, output_size);
         aclnn_repeat_interleave(ctx, acl_cos_tensor.get(), acl_cos_repeat_tensor.get(), dim, num_repeats, output_size);
     }
 
-    // Other layers use cache except first layer.
-    ctx.rope_cache.cached      = true;
-    ctx.rope_cache.ext_factor  = ext_factor;
-    ctx.rope_cache.theta_scale = theta_scale;
-    ctx.rope_cache.freq_scale  = freq_scale;
-    ctx.rope_cache.attn_factor = attn_factor;
-    ctx.rope_cache.is_neox     = is_neox;
+    // Update cached value.
+    ctx.rope_cache.cached = true;
+    ctx.rope_cache.set(theta_scale_length, position_length, ext_factor, theta_scale, freq_scale, attn_factor, is_neox,
+                       indep_sects, mrope_used, is_imrope, sections);
 }
 
 #ifdef __cplusplus
@@ -2474,6 +2649,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 
     // param
     float     freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    int       sections[4];
     // const int n_past     = ((int32_t *) dst->op_params)[0];
     const int n_dims     = ((int32_t *) dst->op_params)[1];
     const int mode       = ((int32_t *) dst->op_params)[2];
@@ -2488,22 +2664,54 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
     memcpy(&beta_fast, (int32_t *) dst->op_params + 9, sizeof(float));
     memcpy(&beta_slow, (int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&sections, (int32_t *) dst->op_params + 11, sizeof(int) * 4);
 
-    // TODO: n_dims <= ne0
-    GGML_ASSERT(n_dims == ne0);
     GGML_ASSERT(n_dims % 2 == 0);
+    GGML_ASSERT(n_dims <= ne00);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
     float corr_dims[2];
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
-    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
+    bool       is_neox    = mode & GGML_ROPE_TYPE_NEOX;
+    const bool is_imrope  = mode == GGML_ROPE_TYPE_IMROPE;  // qwen3vl apply interleaved mrope
+    // mrope_used means the GGML_ROPE_TYPE_MROPE bit is set.
+    // Note: this bit is also set for imrope and some vision modes,
+    // so mrope_used does NOT exclusively indicate pure mrope.
+    const bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
+    const bool is_vision  = mode == GGML_ROPE_TYPE_VISION;
+
+    if (mrope_used) {
+        GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+    }
+
+    if (is_vision) {
+        GGML_ASSERT(n_dims == ne0 / 2);
+    }
+
+    if (is_imrope || mrope_used) {
+        is_neox = true;
+    }
+
+    int64_t rope_dims = n_dims;
+
+    //Our current RotaryPositionEmbedding does not support the VISION mode,
+    //but essentially it only modifies theta_base in mrope,
+    //then repeats it at the end in the same way as is_neox.
+    //In fact, RoPE is still applied across all dimensions.
+    if (is_vision) {
+        rope_dims = src0->ne[0];
+    }
+    int64_t tail_dims = ne00 - rope_dims;
+    bool    has_tail  = tail_dims > 0;
 
     // init ctx.rope_cos/rope_sin cache
-    aclnn_cache_init(ctx, dst, corr_dims, ext_factor, theta_scale, freq_scale, attn_factor, is_neox);
+    aclnn_rope_cache_init(ctx, dst, corr_dims, ext_factor, theta_scale, freq_scale, attn_factor, is_neox, sections,
+                          mrope_used, is_imrope, is_vision, rope_dims);
 
-    int64_t sin_reshape_ne[4] = { ne00, 1, ne02, 1 };
+    // Cache is generated with ne00 dimensions, so we use ne00 for reshape
+    int64_t sin_reshape_ne[4] = { rope_dims, 1, ne02, 1 };
     size_t  sin_reshape_nb[GGML_MAX_DIMS];
     sin_reshape_nb[0] = sizeof(float);
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
@@ -2516,7 +2724,6 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 
     acl_tensor_ptr acl_src = ggml_cann_create_tensor(src0);
     acl_tensor_ptr acl_dst = ggml_cann_create_tensor(dst);
-
 #ifdef ASCEND_310P
     // Special ROPE operation for 310P
 
@@ -2656,47 +2863,124 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     }
     return;
 #endif
+    int64_t acl_mode = is_neox ? 0 : 1;
 
-    // ggml_mode = 0 --> aclnn_model = 1
-    int64_t acl_mode = mode == 0 ? 1 : mode;
+    // Pre-define head and tail dimensions for reuse
+    int64_t head_ne[GGML_MAX_DIMS] = { rope_dims, ne01, ne02, ne03 };
+    int64_t tail_ne[GGML_MAX_DIMS] = { tail_dims, ne01, ne02, ne03 };
 
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-            {
-                GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src.get(), acl_cos_reshape_tensor.get(),
-                                        acl_sin_reshape_tensor.get(), acl_mode, acl_dst.get());
-                break;
-            }
-        case GGML_TYPE_F16:
-            {
-                ggml_cann_pool_alloc src_trans_allocator(ctx.pool(), ggml_nelements(src0) * sizeof(float));
-                void *               src_trans_buffer = src_trans_allocator.get();
-                ggml_cann_pool_alloc dst_trans_allocator(ctx.pool(), ggml_nelements(dst) * sizeof(float));
-                void *               dst_trans_buffer = dst_trans_allocator.get();
+    // Step 1: Prepare trans tensors for F16 type conversion to F32 if needed
+    bool                 src_dst_need_trans = false;
+    ggml_cann_pool_alloc src_trans_allocator(ctx.pool());
+    ggml_cann_pool_alloc dst_trans_allocator(ctx.pool());
+    acl_tensor_ptr       acl_src_trans_tensor;
+    acl_tensor_ptr       acl_dst_trans_tensor;
+    void *               src_trans_buffer = nullptr;
+    void *               dst_trans_buffer = nullptr;
+    size_t               src_dst_trans_nb[GGML_MAX_DIMS];
+    if (src0->type == GGML_TYPE_F16) {
+        src_dst_need_trans = true;
+        src_trans_buffer   = src_trans_allocator.alloc(ggml_nelements(src0) * sizeof(float));
+        dst_trans_buffer   = dst_trans_allocator.alloc(ggml_nelements(dst) * sizeof(float));
 
-                size_t src_trans_nb[GGML_MAX_DIMS];
-                src_trans_nb[0] = sizeof(float);
-                for (int i = 1; i < GGML_MAX_DIMS; i++) {
-                    src_trans_nb[i] = src_trans_nb[i - 1] * src0->ne[i - 1];
-                }
+        src_dst_trans_nb[0] = sizeof(float);
+        for (int i = 1; i < GGML_MAX_DIMS; i++) {
+            src_dst_trans_nb[i] = src_dst_trans_nb[i - 1] * src0->ne[i - 1];
+        }
+        acl_src_trans_tensor = ggml_cann_create_tensor(src_trans_buffer, ACL_FLOAT, sizeof(float), src0->ne,
+                                                       src_dst_trans_nb, GGML_MAX_DIMS);
+        acl_dst_trans_tensor = ggml_cann_create_tensor(dst_trans_buffer, ACL_FLOAT, sizeof(float), dst->ne,
+                                                       src_dst_trans_nb, GGML_MAX_DIMS);
+        aclnn_cast(ctx, acl_src.get(), acl_src_trans_tensor.get(), ACL_FLOAT);
+    }
 
-                acl_tensor_ptr acl_src_trans_tensor = ggml_cann_create_tensor(
-                    src_trans_buffer, ACL_FLOAT, sizeof(float), src0->ne, src_trans_nb, GGML_MAX_DIMS);
-                acl_tensor_ptr acl_dst_trans_tensor = ggml_cann_create_tensor(
-                    dst_trans_buffer, ACL_FLOAT, sizeof(float), dst->ne, src_trans_nb, GGML_MAX_DIMS);
+    // Step 2: Prepare head tensors for tail splitting if needed
+    acl_tensor_ptr acl_src_head;
+    acl_tensor_ptr acl_dst_head;
+    if (has_tail) {
+        // Create head views for RotaryPositionEmbedding (only first rope_dims dimensions)
+        // RotaryPositionEmbedding requires contiguous dst tensor, so we use a temporary buffer
+        if (src_dst_need_trans) {
+            // Use F32 trans tensor strides
+            acl_src_head = ggml_cann_create_tensor((char *) src_trans_buffer, ACL_FLOAT, sizeof(float), head_ne,
+                                                   src_dst_trans_nb, GGML_MAX_DIMS);
+        } else {
+            // Use original F32 tensor strides
+            acl_src_head = ggml_cann_create_tensor((char *) src0->data, ACL_FLOAT, sizeof(float), head_ne, src0->nb,
+                                                   GGML_MAX_DIMS);
+        }
 
-                aclnn_cast(ctx, acl_src.get(), acl_src_trans_tensor.get(), ACL_FLOAT);
+        int64_t              head_elements = rope_dims * ne01 * ne02 * ne03;
+        ggml_cann_pool_alloc dst_head_contiguous_allocator(ctx.pool(), head_elements * sizeof(float));
+        void *               dst_head_contiguous_buffer = dst_head_contiguous_allocator.get();
 
-                GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src_trans_tensor.get(),
-                                        acl_cos_reshape_tensor.get(), acl_sin_reshape_tensor.get(), acl_mode,
-                                        acl_dst_trans_tensor.get());
+        size_t head_contiguous_nb[GGML_MAX_DIMS];
+        head_contiguous_nb[0] = sizeof(float);
+        for (int i = 1; i < GGML_MAX_DIMS; i++) {
+            head_contiguous_nb[i] = head_contiguous_nb[i - 1] * head_ne[i - 1];
+        }
+        acl_dst_head = ggml_cann_create_tensor(dst_head_contiguous_buffer, ACL_FLOAT, sizeof(float), head_ne,
+                                               head_contiguous_nb, GGML_MAX_DIMS);
+    }
 
-                aclnn_cast(ctx, acl_dst_trans_tensor.get(), acl_dst.get(), ACL_FLOAT16);
-                break;
-            }
-        default:
-            GGML_ABORT("Unsupported tensor type for GGML_OP_ROPE");
-            break;
+    // Step 3: Execute RotaryPositionEmbedding
+    if (has_tail) {
+        // Rotate only the head portion (first rope_dims dimensions)
+        GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src_head.get(), acl_cos_reshape_tensor.get(),
+                                acl_sin_reshape_tensor.get(), acl_mode, acl_dst_head.get());
+
+        // Copy head result from contiguous buffer back to destination tensor
+        if (src_dst_need_trans) {
+            acl_tensor_ptr acl_dst_head_target = ggml_cann_create_tensor(
+                (char *) dst_trans_buffer, ACL_FLOAT, sizeof(float), head_ne, src_dst_trans_nb, GGML_MAX_DIMS);
+            cann_copy(ctx, acl_dst_head.get(), acl_dst_head_target.get());
+        } else {
+            acl_tensor_ptr acl_dst_head_target =
+                ggml_cann_create_tensor((char *) dst->data, ACL_FLOAT, sizeof(float), head_ne, dst->nb, GGML_MAX_DIMS);
+            cann_copy(ctx, acl_dst_head.get(), acl_dst_head_target.get());
+        }
+    } else if (src_dst_need_trans) {
+        // Rotate full tensor (no tail), using trans tensors
+        GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src_trans_tensor.get(), acl_cos_reshape_tensor.get(),
+                                acl_sin_reshape_tensor.get(), acl_mode, acl_dst_trans_tensor.get());
+    } else {
+        // Rotate full tensor (no tail), using original tensors
+        GGML_CANN_CALL_ACLNN_OP(ctx, RotaryPositionEmbedding, acl_src.get(), acl_cos_reshape_tensor.get(),
+                                acl_sin_reshape_tensor.get(), acl_mode, acl_dst.get());
+    }
+
+    // Step 4: Copy unrotated tail portion from source to destination
+    if (has_tail) {
+        size_t src_tail_offset;
+        size_t dst_tail_offset;
+
+        auto copy_tail_device = [&](void * src_ptr, void * dst_ptr, aclDataType dtype, size_t elem_size,
+                                    size_t * nb_src_arr, size_t * nb_dst_arr) {
+            acl_tensor_ptr acl_src_tail =
+                ggml_cann_create_tensor(src_ptr, dtype, elem_size, tail_ne, nb_src_arr, GGML_MAX_DIMS);
+            acl_tensor_ptr acl_dst_tail =
+                ggml_cann_create_tensor(dst_ptr, dtype, elem_size, tail_ne, nb_dst_arr, GGML_MAX_DIMS);
+            cann_copy(ctx, acl_src_tail.get(), acl_dst_tail.get());
+        };
+
+        if (src_dst_need_trans) {
+            // Use F32 trans tensor strides and offsets
+            src_tail_offset = rope_dims * src_dst_trans_nb[0];
+            dst_tail_offset = rope_dims * src_dst_trans_nb[0];
+            copy_tail_device((char *) src_trans_buffer + src_tail_offset, (char *) dst_trans_buffer + dst_tail_offset,
+                             ACL_FLOAT, sizeof(float), src_dst_trans_nb, src_dst_trans_nb);
+        } else {
+            // Use original tensor strides and offsets
+            src_tail_offset = rope_dims * nb00;
+            dst_tail_offset = rope_dims * nb0;
+            copy_tail_device((char *) src0->data + src_tail_offset, (char *) dst->data + dst_tail_offset,
+                             ggml_cann_type_mapping(dst->type), ggml_element_size(dst), src0->nb, dst->nb);
+        }
+    }
+
+    // Step 5: Cast back to F16 if needed
+    if (src_dst_need_trans) {
+        aclnn_cast(ctx, acl_dst_trans_tensor.get(), acl_dst.get(), ACL_FLOAT16);
     }
 }
 
@@ -2720,6 +3004,18 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context & ctx, ggml_tensor * 
     acl_tensor_ptr acl_weight = ggml_cann_create_tensor(src0, src0->ne, src0->nb, 3, ACL_FORMAT_NCL);
     acl_tensor_ptr acl_dst    = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3, ACL_FORMAT_NCL);
 
+    // get base information of input and kernel
+    int64_t input_len   = *(src1->ne);
+    int64_t dst_len     = *(dst->ne);
+    int64_t kernel_size = *(src0->ne);
+
+    // set the max kernel size for each conv
+    int64_t max_kernel_size = 255;
+
+    // compute the partition of kernel
+    int64_t part_num = 1;
+    part_num         = (kernel_size + max_kernel_size - 1) / max_kernel_size;
+
     int64_t strideVal[1];
     strideVal[0]                    = s0;
     acl_int_array_ptr stride        = ggml_cann_create_int_array(strideVal, 1);
@@ -2727,14 +3023,128 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context & ctx, ggml_tensor * 
     acl_int_array_ptr padding       = ggml_cann_create_int_array(paddingVal, 1);
     int64_t           dilationVal[] = { 1 };
     acl_int_array_ptr dilation      = ggml_cann_create_int_array(dilationVal, 1);
+    bool              transposed    = true;
+    int64_t           groups        = 1;
     int8_t            cubeMathType  = 0;
 
 #ifdef ASCEND_310P
     cubeMathType = 1;
 #endif
 
-    GGML_CANN_CALL_ACLNN_OP(ctx, Convolution, acl_input.get(), acl_weight.get(), nullptr, stride.get(), padding.get(),
-                            dilation.get(), true, padding.get(), 1, acl_dst.get(), cubeMathType);
+    auto weight_type = ggml_cann_type_mapping(src0->type);
+    auto dst_type    = ggml_cann_type_mapping(dst->type);
+
+    // slice the kernel to make each conv available
+    int64_t slice_dim   = -1;
+    int64_t slice_start = 0;
+    int64_t slice_end   = max_kernel_size;
+    int64_t slice_step  = 1;
+    int64_t interval    = max_kernel_size;
+
+    int64_t left_pad_len  = dilationVal[0] * (max_kernel_size - 1) + 1 - 2 * paddingVal[0];
+    int64_t right_pad_len = 0;
+
+    acl_scalar_ptr alpha      = nullptr;
+    float          alphaValue = 1.0;
+    alpha                     = ggml_cann_create_scalar(&alphaValue, aclDataType::ACL_FLOAT);
+
+    // set zero to destination
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, acl_dst.get());
+
+    for (int k = 0; k < part_num; k++) {
+        // create part kernel tensor and slice from big kernel
+        slice_start = max_kernel_size * k;
+        if (k == part_num - 1) {
+            slice_end = kernel_size;
+            interval  = kernel_size - max_kernel_size * k;
+        } else {
+            slice_end = max_kernel_size * (k + 1);
+        }
+
+        int64_t part_ne[4];
+        for (int i = 0; i < 4; i++) {
+            part_ne[i] = *(src0->ne + i);
+        }
+        part_ne[0] = interval;
+
+        size_t part_nb[4];
+        part_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            part_nb[i] = part_nb[i - 1] * part_ne[i - 1];
+        }
+
+        ggml_cann_pool_alloc part_kernel_allocator;
+        part_kernel_allocator.alloc(ctx.pool(), part_nb[3]);
+        void * part_kernel_buf = part_kernel_allocator.get();
+
+        acl_tensor_ptr part_kernel = ggml_cann_create_tensor(part_kernel_buf, weight_type, ggml_element_size(src0),
+                                                             part_ne, part_nb, 3, ACL_FORMAT_NCL);
+
+        GGML_CANN_CALL_ACLNN_OP(ctx, Slice, acl_weight.get(), slice_dim, slice_start, slice_end, slice_step,
+                                part_kernel.get());
+
+        // create the part conv result tensor
+        int64_t part_dst_ne[4];
+        for (int i = 0; i < 4; i++) {
+            part_dst_ne[i] = *(dst->ne + i);
+        }
+        part_dst_ne[0] = (input_len - 1) * strideVal[0] - 2 * paddingVal[0] + dilationVal[0] * (part_ne[0] - 1) + 1;
+
+        size_t part_dst_nb[4];
+        part_dst_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            part_dst_nb[i] = part_dst_nb[i - 1] * part_dst_ne[i - 1];
+        }
+        ggml_cann_pool_alloc part_dst_allocator;
+        part_dst_allocator.alloc(ctx.pool(), part_dst_nb[3]);
+        void * part_dst_buf = part_dst_allocator.get();
+
+        acl_tensor_ptr acl_part_dst = ggml_cann_create_tensor(part_dst_buf, dst_type, ggml_element_size(dst),
+                                                              part_dst_ne, part_dst_nb, 3, ACL_FORMAT_NCL);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, acl_part_dst.get());
+
+        // compute part conv transpose 1d
+        GGML_CANN_CALL_ACLNN_OP(ctx, Convolution, acl_input.get(), part_kernel.get(), nullptr, stride.get(),
+                                padding.get(), dilation.get(), transposed, padding.get(), groups, acl_part_dst.get(),
+                                cubeMathType);
+
+        // compute the position of part result in final result
+        int64_t global_start = slice_start;
+        int64_t global_end   = std::min((input_len - 1) * strideVal[0] + slice_end, dst_len);
+
+        left_pad_len  = global_start;
+        right_pad_len = dst_len - global_end;
+
+        std::vector<int64_t> padDataVal = { left_pad_len, right_pad_len };
+        acl_int_array_ptr    padData    = ggml_cann_create_int_array(padDataVal.data(), 2);
+
+        acl_scalar_ptr pad_value    = nullptr;
+        float          pad_valueVal = 0.0;
+        pad_value                   = ggml_cann_create_scalar(&pad_valueVal, aclDataType::ACL_FLOAT);
+
+        int64_t conv_result_ne[4];
+        for (int i = 0; i < 4; i++) {
+            conv_result_ne[i] = *(dst->ne + i);
+        }
+
+        size_t conv_result_nb[4];
+        conv_result_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            conv_result_nb[i] = conv_result_nb[i - 1] * conv_result_ne[i - 1];
+        }
+
+        ggml_cann_pool_alloc conv_result_allocator;
+        conv_result_allocator.alloc(ctx.pool(), conv_result_nb[3]);
+        void * conv_result_buf = conv_result_allocator.get();
+
+        acl_tensor_ptr conv_result = ggml_cann_create_tensor(conv_result_buf, dst_type, ggml_element_size(dst),
+                                                             conv_result_ne, conv_result_nb, 3, ACL_FORMAT_NCL);
+
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, conv_result.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, ConstantPadNd, acl_part_dst.get(), padData.get(), pad_value.get(),
+                                conv_result.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, acl_dst.get(), conv_result.get(), alpha.get());
+    }
 }
 
 void ggml_cann_elu(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
@@ -3234,5 +3644,285 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context & ctx, ggml_tensor * dst
         }
     } else {
         GGML_ABORT("Function is not implemented.");
+    }
+}
+
+static void ggml_cann_out_prod_fp(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];  // weight
+    ggml_tensor * src1 = dst->src[1];  // input
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    acl_tensor_ptr acl_dst = ggml_cann_create_tensor(dst);
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, acl_dst.get());
+
+    const int64_t dps2 = ne2 / ne02;
+    const int64_t dps3 = ne3 / ne03;
+    for (int64_t i3 = 0; i3 < ne3; i3++) {
+        for (int64_t i2 = 0; i2 < ne2; i2++) {
+            const int64_t i02 = i2 / dps2;
+            const int64_t i03 = i3 / dps3;
+
+            const int64_t  i12 = i2;
+            const int64_t  i13 = i3;
+            acl_tensor_ptr accumulator =
+                ggml_cann_create_tensor((char *) dst->data + i2 * nb2 + i3 * nb3, ggml_cann_type_mapping(dst->type),
+                                        ggml_type_size(dst->type), dst->ne, dst->nb, 2);
+
+            // The outer product needs to be accumulated in this dimension.
+            for (int64_t i1 = 0; i1 < ne11; i1++) {
+                acl_tensor_ptr acl_input = ggml_cann_create_tensor(
+                    (char *) src1->data + i1 * nb11 + i12 * nb12 + i13 * nb13, ggml_cann_type_mapping(src0->type),
+                    ggml_type_size(src0->type), src1->ne, src1->nb, 1);
+
+                acl_tensor_ptr acl_weight = ggml_cann_create_tensor(
+                    (char *) src0->data + i1 * nb01 + i02 * nb02 + i03 * nb03, ggml_cann_type_mapping(src0->type),
+                    ggml_type_size(src0->type), src0->ne, src0->nb, 1);
+
+                ggml_cann_pool_alloc output_allocator(ctx.pool());
+                void *               output_buffer = output_allocator.alloc(ggml_nbytes(dst));
+                acl_tensor_ptr       acl_out = ggml_cann_create_tensor(output_buffer, ggml_cann_type_mapping(dst->type),
+                                                                       ggml_type_size(dst->type), dst->ne, dst->nb, 2);
+
+                GGML_CANN_CALL_ACLNN_OP(ctx, Ger, acl_input.get(), acl_weight.get(), acl_out.get());
+                float       alpha_value = 1.0f;
+                aclScalar * alpha       = aclCreateScalar(&alpha_value, ACL_FLOAT);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, accumulator.get(), acl_out.get(), alpha);
+            }
+        }
+    }
+}
+
+void ggml_cann_out_prod(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+
+    const enum ggml_type type = src0->type;
+
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+            ggml_cann_out_prod_fp(ctx, dst);
+            break;
+        default:
+            GGML_ABORT("Unsupport type for GGML_OP_OUT_PROD");
+            break;
+    }
+}
+
+void ggml_cann_ssm_conv(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];  // conv_x
+    ggml_tensor * src1 = dst->src[1];  // conv1d.weight
+
+    // This op is currently defined only for F32 in ggml_cpu
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    // Shapes follow ggml_compute_forward_ssm_conv_f32
+    const int64_t nc  = src1->ne[0];   // d_conv
+    const int64_t ncs = src0->ne[0];   // d_conv - 1 + n_t
+    const int64_t nr  = src0->ne[1];   // d_inner
+    const int64_t n_s = src0->ne[2];   // n_seqs
+
+    const int64_t n_t = dst->ne[1];    // tokens per sequence
+
+    GGML_ASSERT(dst->ne[0] == nr);     // dst: {d_inner, n_t, n_s}
+    GGML_ASSERT(src1->ne[1] == nr);    // weight: {d_conv, d_inner}
+    GGML_ASSERT(ncs == nc - 1 + n_t);  // conv_x: {d_conv - 1 + n_t, d_inner, n_s}
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+    GGML_ASSERT(src1->nb[0] == sizeof(float));
+
+    // --- Build CANN tensors ---
+
+    // 1) Input: conv_x as NCL
+    //
+    // src0->ne = { ncs, nr, n_s, 1 }  // {L_in, C, N}
+    // Passing ACL_FORMAT_NCL here means:
+    //   reversed dims -> [N, C, L_in] = [n_s, nr, ncs]
+    acl_tensor_ptr acl_x = ggml_cann_create_tensor(src0, src0->ne, src0->nb, 3, ACL_FORMAT_NCL);
+
+    // 2) Weights: depthwise conv kernel, view src1 as {K, 1, C}
+    //
+    // src1 original:   ne = { nc, nr, 1, 1 }  // [K, C, 1, 1]
+    // we want a view:  ne_w = { nc, 1, nr }   // [K, 1, C]
+    // so that reversed dims -> [C, 1, K] which matches
+    //   [out_channels, in_channels/groups, kernel_size]
+    int64_t w_ne[GGML_MAX_DIMS] = { nc, 1, nr, 1 };  // [K, 1 input ch. per group, C groups]
+    // Layout: src1 data is [K, C] with
+    //   offset(k, c) = k*nb0 + c*nb1
+    // We want offset_w(k, 0, c) = k*nb0 + c*nb1,
+    // so we can reuse nb0 and nb1, and set nb2 = nb1.
+    size_t  w_nb[GGML_MAX_DIMS] = { src1->nb[0], src1->nb[1], src1->nb[1], src1->nb[3] };  // same as src1
+
+    acl_tensor_ptr acl_w = ggml_cann_create_tensor(src1->data, ggml_cann_type_mapping(src1->type),
+                                                   ggml_type_size(src1->type), w_ne, w_nb, 3, ACL_FORMAT_NCL);
+
+    // 3) Output: dst is { d_inner, n_t, n_s } (CLN)
+    //
+    // We need an NCL view of the same buffer:
+    //   desired NCL logical shape: { L_out = n_t, C = nr, N = n_s }
+    //
+    // Original CLN layout:
+    //   dst->ne = { nr, n_t, n_s }
+    //   dst->nb[0] = sizeof(float)
+    //   dst->nb[1] = nr * sizeof(float)
+    //   dst->nb[2] = nr * n_t * sizeof(float)
+    //
+    // We want offset_new(L, C, N) = offset_orig(C, L, N).
+    // Choose:
+    //   nb_y[0] = nr * sizeof(float);           // step in L
+    //   nb_y[1] = sizeof(float);                // step in C
+    //   nb_y[2] = nr * n_t * sizeof(float);     // step in N
+    int64_t y_ne[GGML_MAX_DIMS] = { n_t, nr, n_s, 1 };  // [L_out, C, N]
+    size_t  y_nb[GGML_MAX_DIMS] = { dst->ne[0] * sizeof(float), sizeof(float), dst->ne[0] * dst->ne[1] * sizeof(float),
+                                    dst->nb[3] };       // [nr, 1, nr * n_t]
+
+    acl_tensor_ptr acl_y = ggml_cann_create_tensor(dst->data, ggml_cann_type_mapping(dst->type),
+                                                   ggml_type_size(dst->type), y_ne, y_nb, 3, ACL_FORMAT_NCL);
+
+    // --- Conv1d parameters: depthwise, stride 1, no padding ("valid") ---
+    int64_t strideVal[1]   = { 1 };
+    int64_t paddingVal[1]  = { 0 };
+    int64_t dilationVal[1] = { 1 };
+
+    acl_int_array_ptr stride   = ggml_cann_create_int_array(strideVal, 1);
+    acl_int_array_ptr padding  = ggml_cann_create_int_array(paddingVal, 1);
+    acl_int_array_ptr dilation = ggml_cann_create_int_array(dilationVal, 1);
+
+    const bool    transposed   = false;
+    const int64_t groups       = nr;  // depthwise: one group per inner dim
+    int8_t        cubeMathType = 0;
+
+#ifdef ASCEND_310P
+    cubeMathType = 1;
+#endif
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, Convolution,
+                            acl_x.get(),    // input:  N, C, L_in = ncs
+                            acl_w.get(),    // weight: [C, 1, K] with groups=nr
+                            nullptr,        // bias
+                            stride.get(), padding.get(), dilation.get(), transposed,
+                            padding.get(),  // output padding (unused for non-transposed)
+                            groups, acl_y.get(), cubeMathType);
+}
+
+void ggml_cann_op_add_rms_norm_fused(ggml_backend_cann_context & ctx,
+                                     ggml_tensor *               add_node,
+                                     ggml_tensor *               rms_norm_node) {
+    // Get the two input tensors for ADD operation
+    ggml_tensor * x1 = add_node->src[0];
+    ggml_tensor * x2 = add_node->src[1];
+
+    // Create ACL tensors for the two ADD inputs
+    acl_tensor_ptr acl_x1 = ggml_cann_create_tensor(x1);
+    acl_tensor_ptr acl_x2 = ggml_cann_create_tensor(x2);
+
+    // Get epsilon parameter from rms_norm_tensor
+    float eps;
+    memcpy(&eps, rms_norm_node->op_params, sizeof(float));
+
+    // Build gamma tensor (RMS normalization scaling factor)
+    // Gamma should match the normalized dimensions (last dimension of x1)
+    size_t acl_gamma_nb[GGML_MAX_DIMS];
+    acl_gamma_nb[0] = ggml_type_size(rms_norm_node->type);
+    for (int i = 1; i < GGML_MAX_DIMS; i++) {
+        acl_gamma_nb[i] = acl_gamma_nb[i - 1] * x1->ne[i - 1];
+    }
+    acl_tensor_ptr acl_gamma =
+        get_cache_acl_tensor(ctx, &ctx.rms_norm_one_tensor_cache.cache, ctx.rms_norm_one_tensor_cache.size, x1->ne,
+                             acl_gamma_nb, rms_norm_node->type,
+                             1,    // dims - only the last dimension
+                             1.0f  // value
+        );
+
+    // Build rstdOut tensor (output for normalized standard deviation)
+    // Shape should be the dimensions that are NOT normalized
+    int64_t acl_rstd_ne[] = { 1, x1->ne[1], x1->ne[2], x1->ne[3] };
+    size_t  acl_rstd_nb[GGML_MAX_DIMS - 1];
+    acl_rstd_nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS - 1; i++) {
+        acl_rstd_nb[i] = acl_rstd_nb[i - 1] * acl_rstd_ne[i - 1];
+    }
+    acl_tensor_ptr acl_rstd =
+        get_cache_acl_tensor(ctx, &ctx.rms_norm_zero_tensor_cache.cache, ctx.rms_norm_zero_tensor_cache.size,
+                             acl_rstd_ne, acl_rstd_nb, GGML_TYPE_F32, GGML_MAX_DIMS,
+                             0.0f  // value
+        );
+
+    acl_tensor_ptr acl_xout = ggml_cann_create_tensor(add_node);
+
+    // Create yOut tensor (final output after RMS normalization)
+    acl_tensor_ptr acl_yout = ggml_cann_create_tensor(rms_norm_node);
+
+    // Call fused ADD + RMS_NORM operator
+    GGML_CANN_CALL_ACLNN_OP(ctx, AddRmsNorm, acl_x1.get(), acl_x2.get(), acl_gamma.get(),
+                            eps,  // double type
+                            acl_yout.get(), acl_rstd.get(), acl_xout.get());
+}
+
+void ggml_cann_gated_linear_attn(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * k = dst->src[0];
+    ggml_tensor * v = dst->src[1];
+    ggml_tensor * q = dst->src[2];
+    ggml_tensor * g = dst->src[3];
+    ggml_tensor * s = dst->src[4];
+
+    int64_t B = dst->src[4]->ne[1];
+    int64_t T = dst->src[0]->ne[2];
+    int64_t H = dst->src[0]->ne[1];
+    int64_t C = dst->ne[0];
+    int64_t D = C / H;
+    int64_t L = T / B;
+
+    int64_t ne_qkg[2] = { 1, D };
+    int64_t ne_s[2]   = { D, D };
+    int64_t ne_st[2]  = { ne_s[1], ne_s[0] };
+    int64_t ne_vo[2]  = { D, 1 };
+    int64_t ne_q[1]   = { D };
+    size_t  nb_base   = ggml_type_size(k->type);
+    size_t  nb_qkg[2] = { nb_base, nb_base };
+    size_t  nb_s[2]   = { nb_base, D * nb_base };
+    size_t  nb_st[2]  = { nb_s[1], nb_s[0] };
+    size_t  nb_vo[2]  = { nb_base, D * nb_base };
+    size_t  nb_q[1]   = { nb_base };
+
+    const float scale = ggml_get_op_params_f32(dst, 0);
+
+    acl_tensor_ptr acl_s     = ggml_cann_create_tensor(s, s->ne, s->nb, 2, ACL_FORMAT_ND);
+    acl_tensor_ptr new_state = ggml_cann_create_tensor(dst, s->ne, s->nb, 2, ACL_FORMAT_ND, (B * L * H * D) * nb_base);
+    cann_copy(ctx, acl_s.get(), new_state.get());
+
+    for (int64_t b = 0; b < B; b++) {
+        for (int64_t h = 0; h < H; h++) {
+            size_t         s_offset = (b * (H * D * D) + h * (D * D)) * nb_base;
+            // D * D
+            acl_tensor_ptr acl_s_new =
+                ggml_cann_create_tensor(dst, ne_s, nb_s, 2, ACL_FORMAT_ND, (B * L * H * D) * nb_base + s_offset);
+            acl_tensor_ptr acl_s_new_t =
+                ggml_cann_create_tensor(dst, ne_st, nb_st, 2, ACL_FORMAT_ND, (B * L * H * D) * nb_base + s_offset);
+            for (int64_t l = 0; l < L; l++) {
+                size_t               qkvgo_offset = (b * (L * H * D) + l * (H * D) + h * (D)) * nb_base;
+                // D * 1
+                acl_tensor_ptr       acl_k = ggml_cann_create_tensor(k, ne_qkg, nb_qkg, 2, ACL_FORMAT_ND, qkvgo_offset);
+                acl_tensor_ptr       acl_g = ggml_cann_create_tensor(g, ne_qkg, nb_qkg, 2, ACL_FORMAT_ND, qkvgo_offset);
+                // D
+                acl_tensor_ptr       acl_q = ggml_cann_create_tensor(q, ne_q, nb_q, 1, ACL_FORMAT_ND, qkvgo_offset);
+                // 1 * D
+                acl_tensor_ptr       acl_v = ggml_cann_create_tensor(v, ne_vo, nb_vo, 2, ACL_FORMAT_ND, qkvgo_offset);
+                // D
+                acl_tensor_ptr       acl_o = ggml_cann_create_tensor(dst, ne_q, nb_q, 1, ACL_FORMAT_ND, qkvgo_offset);
+                // k ⊗ v
+                size_t               buf_size = D * D * nb_base;
+                ggml_cann_pool_alloc buffer_allocator(ctx.pool(), buf_size);
+                acl_tensor_ptr       tmp_tensor = ggml_cann_create_tensor(
+                    buffer_allocator.get(), ggml_cann_type_mapping(k->type), nb_base, ne_s, nb_s, 2);
+                aclnn_mul(ctx, acl_k.get(), acl_v.get(), tmp_tensor.get());
+                //s_new = g ⊗ s_old + k ⊗ v
+                aclnn_mul(ctx, acl_s_new.get(), acl_g.get(), nullptr);
+                aclnn_add(ctx, acl_s_new.get(), tmp_tensor.get(), nullptr);
+                // compute output
+                GGML_CANN_CALL_ACLNN_OP(ctx, Mv, acl_s_new_t.get(), acl_q.get(), acl_o.get(), 1);
+                aclnn_muls(ctx, acl_o.get(), scale, nullptr, true);
+            }
+        }
     }
 }

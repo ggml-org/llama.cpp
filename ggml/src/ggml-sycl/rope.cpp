@@ -207,7 +207,6 @@ static void rope_vision(const T * x, T * dst, const int ne0, const int ne1, cons
         const int p = sector;
         theta_base  = pos[channel_x] * sycl::pow(theta_scale, (float) p);
     } else {
-        // Simplified from CUDA backend code: if (sector >= sections.v[0] && sector < sec_w) which is just sector >= sections.v[0]
         const int p = sector - sections.v[0];
         theta_base  = pos[channel_x + ne2] * sycl::pow(theta_scale, (float) p);
     }
