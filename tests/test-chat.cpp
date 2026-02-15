@@ -3553,6 +3553,12 @@ Hey there!<|im_end|>
         auto grammar = build_grammar(params.grammar);
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
+
+    {
+        // Step-3.5-Flash template (uses same XML format as Qwen3-Coder but lacks <function> and <parameters> markers)
+        auto tmpls = read_templates("models/templates/stepfun-ai-Step-3.5-Flash.jinja");
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+    }
 }
 
 static void test_template_output_peg_parsers() {
