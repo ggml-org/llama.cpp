@@ -83,6 +83,7 @@ add_library(llama
             models/hunyuan-moe.cpp
             models/internlm2.cpp
             models/jais.cpp
+            models/jais2.cpp
             models/jamba.cpp
             models/kimi-linear.cpp
             models/lfm2.cpp
