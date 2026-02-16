@@ -25673,69 +25673,98 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 // Collect this node and all subsequent CPU nodes until
                 // a GPU node, GPU island, or end of graph.
                 std::vector<ggml_tensor *> cpu_batch;
-                cpu_batch.push_back(node);
 
-                int j = i + 1;
-                while (j < cgraph->n_nodes) {
-                    ggml_tensor * next = cgraph->nodes[j];
-                    if (!next || ggml_sycl_is_noop(next)) {
-                        j++;
-                        continue;
+                // Check if a node can be CPU-dispatched in batched mode.
+                // Returns false for nodes whose sources are in device-only memory
+                // (e.g. attention kq/kqv MUL_MATs that use KV cache as src[0]).
+                auto can_batch_cpu = [&](const ggml_tensor * t) -> bool {
+                    for (int s = 0; s < GGML_MAX_SRC && t->src[s]; s++) {
+                        const ggml_tensor * src = t->src[s];
+                        if (!src->buffer) continue;
+                        if (ggml_backend_buffer_is_host(src->buffer)) continue;
+                        // MUL_MAT src[0] = weights: cpu_mul_mat gets data from
+                        // host cache, not from src->data directly. Allow these.
+                        if (t->op == GGML_OP_MUL_MAT && s == 0) continue;
+                        // Non-host, non-weight buffer → device memory, can't access
+                        return false;
                     }
-                    int8_t jflag = (j < (int)node_cpu_flags.size()) ? node_cpu_flags[j] : FLAG_UNKNOWN;
-                    if (jflag != FLAG_CPU) {
-                        break;  // hit GPU node or island → end of batch
-                    }
-                    cpu_batch.push_back(next);
-                    j++;
-                }
+                    return true;
+                };
 
-                // Submit ONE host_task for the entire CPU batch.
-                // Inside: set batched_mode=true so kernels run synchronously
-                // without individual queue submissions.
-                auto & sctx = *sycl_ctx;
-                sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
-                    cgh.host_task([&sctx, cpu_batch]() {
-                        ggml_sycl_batched_mode_set(true);
-                        ggml_sycl_host_task_mode_set(false);
-                        for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
-                            ggml_tensor * n = cpu_batch[bi];
+                // If the first node can't be CPU-dispatched (e.g. attention MUL_MAT
+                // with device-only KV cache), skip batch and fall through to GPU.
+                if (!can_batch_cpu(node)) {
+                    // Fall through to GPU dispatch below
+                } else {
+                    cpu_batch.push_back(node);
 
-                            // Try fusion with next node in batch
-                            if (bi + 1 < cpu_batch.size()) {
-                                ggml_tensor * next = cpu_batch[bi + 1];
-                                if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
-                                    && next->src[0] == n) {
-                                    if (ggml_sycl_compute_fused_rms_norm_mul(sctx, n, next)) {
-                                        bi++;
-                                        continue;
-                                    }
-                                }
-                                if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
-                                    && next->src[0] == n) {
-                                    if (ggml_sycl_compute_fused_add_rms_norm(sctx, n, next)) {
-                                        bi++;
-                                        continue;
-                                    }
-                                }
-                            }
-
-                            // Call CPU dispatch directly — these nodes are already
-                            // pre-classified as CPU.  Do NOT call ggml_sycl_compute_forward()
-                            // because should_dispatch_to_cpu() uses thread_local state
-                            // that isn't set on the host_task thread, causing fallthrough
-                            // to GPU dispatch → deadlock on the in-order queue.
-                            bool ok = ggml_sycl_compute_forward_cpu(sctx, n);
-                            GGML_ASSERT(ok);
+                    int j = i + 1;
+                    while (j < cgraph->n_nodes) {
+                        ggml_tensor * next = cgraph->nodes[j];
+                        if (!next || ggml_sycl_is_noop(next)) {
+                            j++;
+                            continue;
                         }
-                        ggml_sycl_batched_mode_set(false);
-                        ggml_sycl_host_task_mode_set(true);
-                    });
-                });
+                        int8_t jflag = (j < (int)node_cpu_flags.size()) ? node_cpu_flags[j] : FLAG_UNKNOWN;
+                        if (jflag != FLAG_CPU) {
+                            break;  // hit GPU node or island → end of batch
+                        }
+                        if (!can_batch_cpu(next)) {
+                            break;  // device-only sources → end of batch
+                        }
+                        cpu_batch.push_back(next);
+                        j++;
+                    }
 
-                // Advance loop index past the batch
-                i = j - 1;  // -1 because loop will i++
-                continue;
+                    // Submit ONE host_task for the entire CPU batch.
+                    auto & sctx = *sycl_ctx;
+                    sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
+                        cgh.host_task([&sctx, cpu_batch]() {
+                            ggml_sycl_batched_mode_set(true);
+                            ggml_sycl_host_task_mode_set(false);
+                            for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
+                                ggml_tensor * n = cpu_batch[bi];
+
+                                // Try fusion with next node in batch
+                                if (bi + 1 < cpu_batch.size()) {
+                                    ggml_tensor * next = cpu_batch[bi + 1];
+                                    if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
+                                        && next->src[0] == n) {
+                                        if (ggml_sycl_compute_fused_rms_norm_mul(sctx, n, next)) {
+                                            bi++;
+                                            continue;
+                                        }
+                                    }
+                                    if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
+                                        && next->src[0] == n) {
+                                        if (ggml_sycl_compute_fused_add_rms_norm(sctx, n, next)) {
+                                            bi++;
+                                            continue;
+                                        }
+                                    }
+                                }
+
+                                // Call CPU dispatch directly — these nodes are already
+                                // pre-classified as CPU.  Do NOT call ggml_sycl_compute_forward()
+                                // because should_dispatch_to_cpu() uses thread_local state
+                                // that isn't set on the host_task thread, causing fallthrough
+                                // to GPU dispatch → deadlock on the in-order queue.
+                                bool ok = ggml_sycl_compute_forward_cpu(sctx, n);
+                                if (!ok) {
+                                    fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
+                                            ggml_op_name(n->op), n->name ? n->name : "?");
+                                }
+                                GGML_ASSERT(ok);
+                            }
+                            ggml_sycl_batched_mode_set(false);
+                            ggml_sycl_host_task_mode_set(true);
+                        });
+                    });
+
+                    // Advance loop index past the batch
+                    i = j - 1;  // -1 because loop will i++
+                    continue;
+                }
             }
 
             // Non-HOST_COMPUTE CPU fusion (legacy per-op host_task path)
@@ -31440,6 +31469,17 @@ normal_dispatch:
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
     // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
     // check_graph_compatibility() validates that cache can hold all layer experts.
+    // HOST_COMPUTE batched host_task is incompatible with SYCL graph recording
+    // (host_task not supported in recorded graphs). Disable graph replay entirely.
+    {
+        static const bool host_compute_on = [] {
+            const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
+            return env && (std::string(env) == "1" || std::string(env) == "true");
+        }();
+        if (host_compute_on && !g_ggml_sycl_disable_graph) {
+            g_ggml_sycl_disable_graph = 1;
+        }
+    }
     // Fast path: skip O(n_nodes) check_graph_compatibility scans when replaying cached graph.
     // If exec_graph is valid, we already verified compatibility during recording.
     bool use_sycl_graph;
