@@ -143,16 +143,15 @@ class AimeDataset:
             )
 
 class Aime2025Dataset:
-    def __init__(self, variant: str = "I"):
-        self.variant = variant
+    def __init__(self):
         self.questions: List[Dict] = []
         self._load_dataset()
 
     def _load_dataset(self):
-        print(f"Loading AIME2025 dataset (variant: {self.variant})...")
+        print(f"Loading AIME2025 dataset...")
         from datasets import load_dataset
 
-        config_name = f"AIME2025-{self.variant}"
+        config_name = "AIME2025-I"
         cache_path = cache_dir / "opencompass___AIME2025" / "default" / "0.0.0"
         if cache_path.exists():
             print(f"Using cached dataset from {cache_path}")
@@ -167,6 +166,22 @@ class Aime2025Dataset:
             self.questions.append(question)
 
         print(f"AIME2025 dataset loaded: {len(self.questions)} questions")
+
+        print(f"Loading AIME2025 dataset (part 2)...")
+        config_name_2 = "AIME2025-II"
+        cache_path_2 = cache_dir / "opencompass___AIME2025" / "default" / "0.0.0"
+        if cache_path_2.exists():
+            print(f"Using cached dataset from {cache_path_2}")
+            ds_2 = load_dataset("opencompass/AIME2025", config_name_2, split="test", cache_dir=str(cache_path_2))
+        else:
+            ds_2 = load_dataset("opencompass/AIME2025", config_name_2, split="test")
+
+        for row in ds_2:
+            question = dict(row)
+            question["dataset_type"] = "aime2025"
+            self.questions.append(question)
+
+        print(f"AIME2025 dataset loaded: {len(self.questions)} questions (total)")
 
     def get_question(self, index: int) -> Dict:
         """Get question by index"""
@@ -491,7 +506,7 @@ class Processor:
         if dataset_type == "aime":
             self.dataset = AimeDataset()
         elif dataset_type == "aime2025":
-            self.dataset = Aime2025Dataset(variant="I")
+            self.dataset = Aime2025Dataset()
         elif dataset_type == "gsm8k":
             self.dataset = Gsm8kDataset()
         elif dataset_type == "gpqa":
