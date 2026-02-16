@@ -308,6 +308,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 break;
             case LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM:
             case LLAMA_VOCAB_PRE_TYPE_HUNYUAN_DENSE:
+            case LLAMA_VOCAB_PRE_TYPE_JOYAI_LLM:
                 regex_exprs = {
                     "\\p{N}{1,3}",
                     "[一-龥぀-ゟ゠-ヿ]+",

@@ -1049,6 +1049,9 @@ class TextModel(ModelBase):
         if chkhsh == "9ca2dd618e8afaf09731a7cf6e2105b373ba6a1821559f258b272fe83e6eb902":
             # ref: https://huggingface.co/zai-org/GLM-4.5-Air
             res = "glm4"
+        if chkhsh == "cdf5f35325780597efd76153d4d1c16778f766173908894c04afc20108536267":
+            # ref: https://huggingface.co/zai-org/GLM-4.7-Flash
+            res = "glm4"
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
@@ -1082,12 +1085,6 @@ class TextModel(ModelBase):
         if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
             # ref: https://huggingface.co/aari1995/German_Semantic_V3
             res = "jina-v2-de"
-        if chkhsh == "cdf5f35325780597efd76153d4d1c16778f766173908894c04afc20108536267":
-            # ref: https://huggingface.co/zai-org/GLM-4.7-Flash
-            res = "glm4"
-        if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
-            # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
-            res = "deepseek-v3"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1271,6 +1268,9 @@ class TextModel(ModelBase):
         if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
             # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
             res = "qwen35"
+        if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
+            # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
+            res = "joyai_llm"
 
         if res is None:
             logger.warning("\n")
