@@ -53,6 +53,38 @@
 extern "C" {
 #endif
 
+#ifndef TSAVORITE_GGML_ASSERT
+#define TSAVORITE_GGML_ASSERT(x) do { if (!(x)) abort(); } while (0)
+#endif
+
+// ============================================================================
+//                           EDIT ONLY THESE #defines
+// ============================================================================
+
+// Max rows per TMU call (MAR window)
+#ifndef TMU_M_TILE_MAX
+#define TMU_M_TILE_MAX    64
+#endif
+
+// TMU FP32 store granularity (floats per output cacheline)
+#ifndef TMU_N_BLOCK
+#define TMU_N_BLOCK       32
+#endif
+
+// K alignment for FP32 streaming
+#ifndef TMU_K_MULTIPLE
+#define TMU_K_MULTIPLE    32
+#endif
+
+
+// Supported static K shapes in this build:
+#define TMU_K_576   576
+#define TMU_K_1536  1536
+#define TMU_K_2048  2048
+
+// ============================================================================
+
+
 #define TSAVORITE_DEVICE_MAX_BUF_LEN 1024 * 1024 * 128
 
 enum ggml_tsavorite_input_tensors_count {
@@ -76,8 +108,9 @@ enum ggml_tsavorite_kernel_mode {
     GGML_TSAVORITE_KERNEL_MODE_MLIR
 };
 
-enum ggml_tsavorite_kernel_mode ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR; 
-enum ggml_tsavorite_log_type ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_ALL;
+extern enum ggml_tsavorite_kernel_mode ggml_tsavorite_kernel_mode_flag; 
+extern enum ggml_tsavorite_log_type ggml_tsavorite_log_type_val;
+
 #define GGML_TSAVORITE_LOG_INFO(...)                                                               \
   do {                                                                                             \
     if (ggml_tsavorite_log_type_val >= GGML_TSAVORITE_LOG_INFO) {                                  \
@@ -142,6 +175,7 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_GEGLU_QUICK,
 
   GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX,
+  GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT,
   GGML_TSAVORITE_KERNEL_TYPE_RESHAPE,
   GGML_TSAVORITE_KERNEL_TYPE_VIEW,
   GGML_TSAVORITE_KERNEL_TYPE_PERMUTE,
@@ -194,6 +228,15 @@ extern void _mlir_ciface_txe_silu_host(void *a, void *res);
 extern void _mlir_ciface_txe_swiglu_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_soft_max_host(void *a, void *b, void *res, void *buf);
 extern void _mlir_ciface_txe_rms_norm_host(void *a, void *res, void *buf);
+
+
+// -----------------------------------------------------------------------------
+// TMU static MUL_MAT entrypoints generated for Python blobs
+// (These must match the function names produced by TXEBlobBuilderBackend.)
+// -----------------------------------------------------------------------------
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k576_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k1536_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_mul_mat_tile_f32_k2048_host(void *a, void *b, void *res);
 
 /* 
  * FP16 Kernels 
