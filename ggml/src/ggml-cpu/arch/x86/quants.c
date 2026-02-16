@@ -2371,16 +2371,17 @@ static const int8_t keven_signs_q2xs[1024] = {
 
 #if defined(__AVX2__)
 // shifts to 7 bit signs in xxs quantizations
-static const uint32_t ksigns_shift_xxs[8] = {0, 7, 14, 21, 0, 7, 14, 21};
+static const uint32_t ksigns_shift_xxs[4] = {0, 7, 14, 21};
 // for _mm256_shuffle_epi8, has 0x80 at indices that are encoded with odd bit counts
-static const uint32_t ksigns_popc_odd[8] = {
-    0x00808000, 0x80000080, 0x80000080, 0x00808000,
-    0x00808000, 0x80000080, 0x80000080, 0x00808000,
+static const uint32_t ksigns_popc_odd[4] = {0x00808000, 0x80000080, 0x80000080, 0x00808000,};
+// for _mm256_shuffle_epi8, broadcasts bytes 0, 2, 4, 6 / 8, 10, 12, 14
+static const uint64_t ksigns_bcast_1[4] = {
+    0x0000000000000000ULL, 0x0202020202020202ULL,
+    0x0404040404040404ULL, 0x0606060606060606ULL,
 };
-// for _mm256_shuffle_epi8, broadcasts bytes 0, 4, 8, 12
-static const uint64_t ksigns_bcast_xxs[4] = {
-    0x0000000000000000ULL, 0x0404040404040404ULL,
-    0x0808080808080808ULL, 0x0C0C0C0C0C0C0C0CULL,
+static const uint64_t ksigns_bcast_2[4] = {
+    0x0808080808080808ULL, 0x0A0A0A0A0A0A0A0AULL,
+    0x0C0C0C0C0C0C0C0CULL, 0x0E0E0E0E0E0E0E0EULL,
 };
 #endif
 
@@ -2402,10 +2403,11 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
     uint32_t aux32[4];
     const uint8_t * aux8 = (const uint8_t *)aux32;
 
-    const __m256i ks_shift = _mm256_loadu_si256((const __m256i *)ksigns_shift_xxs);
-    const __m256i ks_bcast = _mm256_loadu_si256((const __m256i *)ksigns_bcast_xxs);
-    const __m256i popc_odd = _mm256_loadu_si256((const __m256i *)ksigns_popc_odd);
-    const __m256i mask_nib = _mm256_set1_epi32(0x0F);
+    const __m128i ks_shift = _mm_loadu_si128((const __m128i *)ksigns_shift_xxs);
+    const __m128i ks_mask  = _mm_set1_epi32(0x7F);
+    const __m128i popc_odd = _mm_loadu_si128((const __m128i *)ksigns_popc_odd);
+    const __m256i ks_bc_1 = _mm256_loadu_si256((const __m256i *)ksigns_bcast_1);
+    const __m256i ks_bc_2 = _mm256_loadu_si256((const __m256i *)ksigns_bcast_2);
     const __m256i ks_bsel  = _mm256_set1_epi64x(0x8040201008040201LL);
 
     __m256 accumf = _mm256_setzero_ps();
@@ -2422,18 +2424,22 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
             const __m256i q2_1 = _mm256_set_epi64x(iq2xxs_grid[aux8[ 3]], iq2xxs_grid[aux8[ 2]], iq2xxs_grid[aux8[1]], iq2xxs_grid[aux8[0]]);
             const __m256i q2_2 = _mm256_set_epi64x(iq2xxs_grid[aux8[11]], iq2xxs_grid[aux8[10]], iq2xxs_grid[aux8[9]], iq2xxs_grid[aux8[8]]);
 
-            const __m256i s_raw = MM256_SET_M128I(_mm_set1_epi32(aux32[3]), _mm_set1_epi32(aux32[1]));
-            // shift each value to their offset. bits 0-6 now ok, 7-31 are garbage
-            const __m256i s_7   = _mm256_srlv_epi32(s_raw, ks_shift);
-            // count the bits via xor+lut, correct bit 8
-            const __m256i nib   = _mm256_xor_si256(_mm256_srli_epi32(s_7, 4), s_7);
-            const __m256i popc  = _mm256_shuffle_epi8(popc_odd, _mm256_and_si256(nib, mask_nib));
-            const __m256i s_8   = _mm256_xor_si256(s_7, popc);
-            // extract into two __m256i, broadcast bytes 0, 4, 8, 12
-            const __m256i s1_e  = _mm256_permute2x128_si256(s_8, s_8, 0x00);
-            const __m256i s2_e  = _mm256_permute2x128_si256(s_8, s_8, 0x11);
-            const __m256i s1_b  = _mm256_shuffle_epi8(s1_e, ks_bcast);
-            const __m256i s2_b  = _mm256_shuffle_epi8(s2_e, ks_bcast);
+            __m128i s_l = _mm_set1_epi32(aux32[1]);
+            __m128i s_h = _mm_set1_epi32(aux32[3]);
+            // shift each value to their offset, then zero out garbage
+            s_l = _mm_srlv_epi32(s_l, ks_shift);
+            s_h = _mm_srlv_epi32(s_h, ks_shift);
+            s_l = _mm_and_si128(s_l, ks_mask);
+            s_h = _mm_and_si128(s_h, ks_mask);
+            // pack, count bits via xor+lut, correct bit 8
+            __m128i signs_128 = _mm_packus_epi32(s_l, s_h);
+            const __m128i cnt4 = _mm_xor_si128(_mm_srli_epi16(signs_128, 4), signs_128);
+            const __m128i popc = _mm_shuffle_epi8(popc_odd, cnt4);
+            signs_128 = _mm_or_si128(signs_128, popc);
+            // expand to 256 bits, then broadcast to 8 bytes each
+            __m256i signs_256 = _mm256_broadcastsi128_si256(signs_128);
+            const __m256i s1_b  = _mm256_shuffle_epi8(signs_256, ks_bc_1);
+            const __m256i s2_b  = _mm256_shuffle_epi8(signs_256, ks_bc_2);
             // set 0xFF in bytes that contain bit, then invert via xor+sub
             const __m256i s1    = _mm256_cmpeq_epi8(_mm256_and_si256(s1_b, ks_bsel), ks_bsel);
             const __m256i s2    = _mm256_cmpeq_epi8(_mm256_and_si256(s2_b, ks_bsel), ks_bsel);
