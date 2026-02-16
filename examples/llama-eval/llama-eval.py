@@ -51,6 +51,9 @@ TEMPLATE_REGISTRY = {
     "aime": """{question}
 Please reason step by step, and put your final answer within \\boxed{{}}.
 """,
+    "aime2025": """{question}
+Please reason step by step, and put your final answer within \\boxed{{}}.
+""",
     "gsm8k": """{question}
 Please reason step by step, and provide your final answer.
 """,
@@ -132,6 +135,49 @@ class AimeDataset:
             return TEMPLATE_REGISTRY[question["dataset_type"]].format(
                 question=question["problem"] if "problem" in question else question["question"]
             )
+
+class Aime2025Dataset:
+    def __init__(self, variant: str = "I"):
+        self.variant = variant
+        self.questions: List[Dict] = []
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading AIME2025 dataset (variant: {self.variant})...")
+        from datasets import load_dataset
+
+        config_name = f"AIME2025-{self.variant}"
+        cache_path = cache_dir / "opencompass___AIME2025" / "default" / "0.0.0"
+        if cache_path.exists():
+            print(f"Using cached dataset from {cache_path}")
+            ds = load_dataset("opencompass/AIME2025", config_name, split="test", cache_dir=str(cache_path))
+        else:
+            ds = load_dataset("opencompass/AIME2025", config_name, split="test")
+
+        self.questions = []
+        for row in ds:
+            question = dict(row)
+            question["dataset_type"] = "aime2025"
+            self.questions.append(question)
+
+        print(f"AIME2025 dataset loaded: {len(self.questions)} questions")
+
+    def get_question(self, index: int) -> Dict:
+        """Get question by index"""
+        return self.questions[index]
+
+    def get_answer(self, question: Dict) -> str:
+        answer = question["answer"]
+        if isinstance(answer, str):
+            normalized = normalize_number(answer)
+            return str(normalized) if normalized is not None else answer
+        return str(answer)
+
+    def get_prompt(self, question: Dict) -> str:
+        """Get formatted prompt for the question"""
+        return TEMPLATE_REGISTRY["aime2025"].format(
+            question=question["question"]
+        )
 
 class Gsm8kDataset:
     def __init__(self, split: str = "train"):
@@ -342,6 +388,7 @@ Response: {pred}
 ===
 
 Please provide only the extracted answer, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
+
         url = f"{self.judge_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
@@ -418,6 +465,8 @@ class Processor:
         # Initialize appropriate dataset
         if dataset_type == "aime":
             self.dataset = AimeDataset()
+        elif dataset_type == "aime2025":
+            self.dataset = Aime2025Dataset(variant="I")
         elif dataset_type == "gsm8k":
             self.dataset = Gsm8kDataset()
         elif dataset_type == "gpqa":
@@ -593,7 +642,7 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "gsm8k", "gpqa"],
+        choices=["aime", "aime2025", "gsm8k", "gpqa"],
         help="Dataset type (default: aime)"
     )
     parser.add_argument(
