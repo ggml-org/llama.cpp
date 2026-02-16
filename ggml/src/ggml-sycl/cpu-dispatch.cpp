@@ -853,6 +853,15 @@ static void * get_host_ptr(const ggml_tensor * t,
         }
     }
 
+    // Batched mode: we're inside a host_task on gpu_q.  Cannot submit memcpy
+    // to gpu_q (deadlock — in-order queue blocked by this host_task).  If we
+    // reached here, the tensor isn't host-accessible → return nullptr so the
+    // caller falls back to GPU dispatch or fails gracefully.
+    if (g_batched_mode) {
+        GGML_SYCL_DEBUG("[CPU-STAGE] Skipping staging in batched mode for %s\n", t->name ? t->name : "(null)");
+        return nullptr;
+    }
+
     // Resolve the device pointer.  For view/permute tensors (e.g. KV cache
     // views), extra->data_device may be NULL.  Walk the view_src chain to
     // find a base tensor with a known device pointer, then add the offset.
@@ -923,6 +932,10 @@ static void flush_output(ggml_tensor *       t,
                          const sycl::event * dep_evt              = nullptr,
                          bool                dep_event_same_queue = false) {
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
+        return;
+    }
+    // Batched mode: inside a host_task on gpu_q — cannot submit memcpy (deadlock).
+    if (g_batched_mode) {
         return;
     }
     // HOST_COMPUTE: host-pinned buffers don't need staging flush.
@@ -2660,11 +2673,19 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
     const size_t rms_nbytes = ggml_nbytes(rms_dst);
     float *      rms_out;
     bool         retained_rms = false;
-    if (g_retained_active) {
+    // Batched mode: write directly to rms_dst->data (host-pinned USM).
+    // The batched path returns early before flush logic, so staging would
+    // leave rms_dst->data stale — subsequent ops in the batch would read
+    // wrong values.
+    if (g_batched_mode && rms_dst->data && is_host_accessible_usm(rms_dst->data, device)) {
+        rms_out = static_cast<float *>(rms_dst->data);
+    } else if (g_retained_active) {
         rms_out      = static_cast<float *>(ggml_sycl_cpu_retained_alloc_output(rms_dst));
         retained_rms = (rms_out != nullptr);
-    }
-    if (!retained_rms) {
+        if (!retained_rms) {
+            rms_out = static_cast<float *>(staging_ensure(g_staging_bank, 0, rms_nbytes, gpu_q));
+        }
+    } else {
         rms_out = static_cast<float *>(staging_ensure(g_staging_bank, 0, rms_nbytes, gpu_q));
     }
     if (!rms_out) {

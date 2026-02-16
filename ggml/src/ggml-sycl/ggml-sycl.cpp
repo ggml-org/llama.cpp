@@ -20272,42 +20272,6 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                         const float * src1_data = static_cast<const float *>(ggml_sycl_get_data_ptr(src1, ctx.device));
                         float *       dst_data  = static_cast<float *>(ggml_sycl_get_data_ptr(dst, ctx.device));
 
-                        // One-shot USM pointer type diagnostic (first 8 weight tensors)
-                        {
-                            static std::atomic<int> usm_diag_left{ 500 };
-                            int                     rem = usm_diag_left.fetch_sub(1);
-                            if (rem > 0 && rem % 50 == 0) {  // Print every 50th call
-                                auto alloc_name = [](sycl::usm::alloc a) -> const char * {
-                                    switch (a) {
-                                        case sycl::usm::alloc::host:
-                                            return "HOST";
-                                        case sycl::usm::alloc::device:
-                                            return "DEVICE";
-                                        case sycl::usm::alloc::shared:
-                                            return "SHARED";
-                                        default:
-                                            return "UNKNOWN";
-                                    }
-                                };
-                                if (src0_data) {
-                                    auto sycl_queue   = *(ctx.stream());
-                                    auto sycl_context = sycl_queue.get_context();
-                                    auto src0_alloc   = sycl::get_pointer_type(src0_data, sycl_context);
-                                    auto src1_alloc   = src1_data ? sycl::get_pointer_type(src1_data, sycl_context) :
-                                                                    sycl::usm::alloc::unknown;
-                                    auto dst_alloc    = dst_data ? sycl::get_pointer_type(dst_data, sycl_context) :
-                                                                   sycl::usm::alloc::unknown;
-                                    fprintf(stderr, "[USM-DIAG] %s M=%ld: src0=%s(%s) src1=%s dst=%s\n", src0->name,
-                                            (long) M, alloc_name(src0_alloc), src0_ptr_source ? src0_ptr_source : "?",
-                                            alloc_name(src1_alloc), alloc_name(dst_alloc));
-                                } else {
-                                    fprintf(stderr, "[USM-DIAG] %s M=%ld: src0=NULL(%s) src1=%p dst=%p\n", src0->name,
-                                            (long) M, src0_ptr_source ? src0_ptr_source : "?", (void *) src1_data,
-                                            (void *) dst_data);
-                                }
-                            }
-                        }
-
                         if (!src0_data || !src1_data || !dst_data) {
                             GGML_SYCL_DEBUG("[UNIFIED] Skipping - null pointer(s): src0=%p (%s) src1=%p dst=%p\n",
                                             src0_data, src0_ptr_source ? src0_ptr_source : "?", src1_data, dst_data);
@@ -25736,6 +25700,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         ggml_sycl_host_task_mode_set(false);
                         for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
                             ggml_tensor * n = cpu_batch[bi];
+
                             // Try fusion with next node in batch
                             if (bi + 1 < cpu_batch.size()) {
                                 ggml_tensor * next = cpu_batch[bi + 1];
@@ -25754,7 +25719,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                                     }
                                 }
                             }
-                            bool ok = ggml_sycl_compute_forward(sctx, n);
+
+                            // Call CPU dispatch directly — these nodes are already
+                            // pre-classified as CPU.  Do NOT call ggml_sycl_compute_forward()
+                            // because should_dispatch_to_cpu() uses thread_local state
+                            // that isn't set on the host_task thread, causing fallthrough
+                            // to GPU dispatch → deadlock on the in-order queue.
+                            bool ok = ggml_sycl_compute_forward_cpu(sctx, n);
                             GGML_ASSERT(ok);
                         }
                         ggml_sycl_batched_mode_set(false);
