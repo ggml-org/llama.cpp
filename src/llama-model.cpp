@@ -130,7 +130,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     split_state.axis = get_split_axis();
     if (split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS) {
         const int64_t ne_full = tensor->ne[split_state.axis];
-        const int64_t granularity = get_split_granularity();
+        const int64_t granularity = get_split_granularity(split_state.axis);
         GGML_ASSERT(ne_full % granularity == 0);
         const float * tensor_split = ud->model->tensor_split();
         std::vector<float> tensor_split_scan;
