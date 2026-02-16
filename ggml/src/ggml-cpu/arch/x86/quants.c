@@ -2377,16 +2377,18 @@ static inline __m256i unpack_ksigns(const uint32_t packed) {
     const __m128i shifts = _mm_setr_epi32(0, 7, 14, 21);
     x = _mm_srlv_epi32(x, shifts);
 
-    // plut has 0x80 at locations that have odd bitcount, 0x00 at even bitcount
-    const __m128i mask = _mm_set1_epi32(0x0F);
-    const __m128i plut = _mm_setr_epi32(0x00808000, 0x80000080, 0x80000080, 0x00808000);
+    // popc_odd has 0x80 at locations that have odd bitcount, 0x00 at even bitcount
+    const __m128i mask_nib = _mm_set1_epi32(0x0F);
+    const __m128i popc_odd = _mm_setr_epi32(0x00808000, 0x80000080, 0x80000080, 0x00808000);
 
-    const __m128i p_l = _mm_shuffle_epi8(plut, _mm_and_si128(x, mask));
-    const __m128i p_h = _mm_shuffle_epi8(plut, _mm_and_si128(_mm_srli_epi32(x, 4), mask));
+    // xor bit 4-7 into the lower bit 0-3. this does not change if the set bit count is odd
+    __m128i p = _mm_srli_epi32(x, 4);
+    p = _mm_xor_si128(p, x);
+    p = _mm_and_si128(p, mask_nib);
+    p = _mm_shuffle_epi8(popc_odd, p);
 
     // correct bit 7 via xor. bits 0-7 now ok, 8-31 still garbage
-    x = _mm_xor_si128(x, p_l);
-    x = _mm_xor_si128(x, p_h);
+    x = _mm_xor_si128(x, p);
 
     // expand to __m256i, broadcast bytes 0, 4, 8, 12
     const __m256i shf = _mm256_setr_epi64x(0x0000000000000000LL, 0x0404040404040404LL,
