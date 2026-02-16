@@ -241,6 +241,17 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_engram_hash::set_input(const llama_ubatch * ubatch) {
+    if (ubatch->token && hash_ids) {
+        const int32_t n_tokens = (int32_t) ubatch->n_tokens;
+        const int32_t n_heads  = hash_map.n_hash_heads();
+        std::vector<int32_t> buf(n_heads * n_tokens);
+        // compute_hash fills buf in token-major order: buf[t * n_heads + h]
+        hash_map.compute_hash((const int32_t *) ubatch->token, n_tokens, layer_id, buf.data());
+        ggml_backend_tensor_set(hash_ids, buf.data(), 0, buf.size() * sizeof(int32_t));
+    }
+}
+
 void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     GGML_UNUSED(ubatch);
 

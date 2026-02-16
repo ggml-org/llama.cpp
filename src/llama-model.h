@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-arch.h"
+#include "llama-engram.h"
 #include "llama-graph.h"
 #include "llama-hparams.h"
 #include "llama-memory.h"
@@ -418,6 +419,17 @@ struct llama_layer {
     struct ggml_tensor * ffn_act_beta    = nullptr;
     struct ggml_tensor * ffn_act_eps     = nullptr;
 
+    // Engram
+    struct ggml_tensor * engram_mhe       = nullptr;
+    struct ggml_tensor * engram_sc_conv   = nullptr;
+    struct ggml_tensor * engram_sc_norm   = nullptr;
+    struct ggml_tensor * engram_val_proj  = nullptr;
+    struct ggml_tensor * engram_val_bias  = nullptr;
+    struct ggml_tensor * engram_key_proj  = nullptr;
+    struct ggml_tensor * engram_key_bias  = nullptr;
+    struct ggml_tensor * engram_norm1     = nullptr;
+    struct ggml_tensor * engram_norm2     = nullptr;
+
     // Kimi Linear KDA (using ssm_ prefix for consistency)
     // Note: ssm_dt_b already exists above (mamba bias), reused for Kimi dt_bias
     struct ggml_tensor * ssm_q_conv = nullptr;
@@ -487,6 +499,9 @@ struct llama_model {
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
     std::vector<llama_layer> layers;
+
+    // Engram n-gram hash mapping (host-side preprocessing)
+    engram_hash_mapping engram_hash;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see

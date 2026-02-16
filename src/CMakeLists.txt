@@ -15,6 +15,7 @@ add_library(llama
             llama-chat.cpp
             llama-context.cpp
             llama-cparams.cpp
+            llama-engram.cpp
             llama-grammar.cpp
             llama-graph.cpp
             llama-hparams.cpp
@@ -59,6 +60,7 @@ add_library(llama
             models/deepseek2.cpp
             models/dots1.cpp
             models/dream.cpp
+            models/engram.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
             models/exaone.cpp

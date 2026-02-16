@@ -2,6 +2,7 @@
 
 #include "llama-arch.h"
 #include "llama-batch.h"
+#include "llama-engram.h"
 #include "llama-hparams.h"
 #include "llama-adapter.h"
 
@@ -621,6 +622,22 @@ struct llm_graph_params {
             loras == other.loras &&
             cross == other.cross;
     }
+};
+
+// Engram n-gram hash input: precomputes hash IDs from token IDs on the host
+class llm_graph_input_engram_hash : public llm_graph_input_i {
+public:
+    llm_graph_input_engram_hash(
+            const engram_hash_mapping & hash_map,
+            int32_t layer_id) : hash_map(hash_map), layer_id(layer_id) {}
+    virtual ~llm_graph_input_engram_hash() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * hash_ids = nullptr;
+
+    const engram_hash_mapping & hash_map;
+    const int32_t layer_id;
 };
 
 class llm_graph_result {

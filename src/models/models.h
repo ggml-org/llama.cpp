@@ -347,6 +347,10 @@ struct llm_build_maincoder : public llm_graph_context {
     llm_build_maincoder(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_engram : public llm_graph_context {
+    llm_build_engram(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_mamba : public llm_graph_context_mamba {
     llm_build_mamba(const llama_model & model, const llm_graph_params & params);
 };

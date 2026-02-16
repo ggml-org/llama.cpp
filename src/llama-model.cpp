@@ -1136,6 +1136,57 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_ENGRAM:
+            {
+                ml.get_key(LLM_KV_ENGRAM_HC_MULT, hparams.n_hc_mult);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false);
+
+                // MLA attention params
+                ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,  hparams.n_lora_q,  false);
+                ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK, hparams.n_lora_kv, false);
+
+                // MoE params
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp,           false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared,    false);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func,   false);
+                if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_NONE) {
+                    hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+                }
+
+                ml.get_key(LLM_KV_ENGRAM_CONV_RMS_NORM_EPS,         hparams.f_conv_rms_norm_eps,      false);
+
+                // Engram hash mapping params
+                ml.get_key(LLM_KV_ENGRAM_HASH_MAX_NGRAM_SIZE,       hparams.engram_max_ngram_size,    false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_N_HEAD_PER_NGRAM,     hparams.engram_n_head_per_ngram,  false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_N_EMBED_PER_NGRAM,    hparams.engram_n_embed_per_ngram, false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_SEED,                 hparams.engram_hash_seed,         false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_PAD_ID,               hparams.engram_pad_id,            false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_TOKENIZER_VOCAB_SIZE, hparams.engram_tok_vocab_size,    false);
+                ml.get_key(LLM_KV_ENGRAM_HASH_N_ENGRAM_LAYERS,      hparams.engram_n_layer_ids,       false);
+
+                GGML_ASSERT(hparams.engram_max_ngram_size > 1);
+                GGML_ASSERT(hparams.engram_n_layer_ids > 0);
+
+                engram_hash_params ehp;
+                ml.get_arr(LLM_KV_ENGRAM_HASH_ENGRAM_VOCAB_SIZE, ehp.engram_vocab_size, false);
+                ml.get_arr(LLM_KV_ENGRAM_HASH_LAYER_IDS, ehp.layer_ids, false);
+                ml.get_arr(LLM_KV_ENGRAM_HASH_LAYER_MULTIPLIERS, ehp.layer_multipliers, false);
+                ml.get_arr(LLM_KV_ENGRAM_HASH_LAYER_VOCAB_SIZES, ehp.layer_vocab_sizes, false);
+                ml.get_arr(LLM_KV_ENGRAM_HASH_COMPRESSED_LOOKUP, ehp.compressed_lookup, false);
+                
+                // Initialize Engram hash mapping if params are present
+                ehp.max_ngram_size    = hparams.engram_max_ngram_size;
+                ehp.n_head_per_ngram  = hparams.engram_n_head_per_ngram;
+                ehp.n_embed_per_ngram = hparams.engram_n_embed_per_ngram;
+                ehp.seed              = hparams.engram_hash_seed;
+                ehp.pad_id            = hparams.engram_pad_id;
+                ehp.tokenizer_vocab_size = hparams.engram_tok_vocab_size;
+
+                engram_hash.init(ehp);
+                type = LLM_TYPE_UNKNOWN;
+            } break;        
         case LLM_ARCH_QWEN3VL:
             {
                 ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.n_deepstack_layers, false);
@@ -2938,6 +2989,120 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         // TODO: move to a separate function
         const auto tn = LLM_TN(arch);
         switch (arch) {
+            case LLM_ARCH_ENGRAM:
+                {
+                    const int64_t n_embd_head_qk_rope = hparams.n_rot;
+                    const int64_t q_lora_rank  = hparams.n_lora_q;
+                    const int64_t kv_lora_rank = hparams.n_lora_kv;
+                    const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
+                    const int64_t n_embd_head_v_mla = hparams.n_embd_head_v_mla();
+                    const int64_t n_embd_head_qk_nope = n_embd_head_k_mla - n_embd_head_qk_rope;
+                    const int64_t n_ff_exp        = hparams.n_ff_exp;
+                    const int64_t n_expert_shared = hparams.n_expert_shared;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd},          TENSOR_NOT_REQUIRED);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+                    output_b    = create_tensor(tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab},         TENSOR_NOT_REQUIRED);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        // Attention (MLA)
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        if (q_lora_rank > 0) {
+                            layer.wq_a          = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, 0);
+                            layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, 0);
+                            layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k_mla}, 0);
+                        } else {
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_head * n_embd_head_k_mla}, 0);
+                        }
+
+                        // KV projection (compressed MLA)
+                        layer.wkv_a_mqa     = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA,  "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, 0);
+                        layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, 0);
+                        layer.wkv_b          = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v_mla)}, 0);
+
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_head * n_embd_head_v_mla, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        if (i < (int) hparams.n_layer_dense_lead) {
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        } else {
+                            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, TENSOR_NOT_REQUIRED);
+
+                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+
+                            if (n_expert_shared > 0) {
+                                layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+                                layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
+                                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+                            }
+                        }
+
+                        // Engram module
+                        {
+                            const auto * mhe_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ENGRAM_MULTI_HEAD_EMBED, "weight", i).str().c_str());
+                            if (mhe_meta) {
+                                const int64_t hc = (int64_t)hparams.n_hc_mult;
+
+                                // MultiHeadEmbedding
+                                layer.engram_mhe = create_tensor(tn(LLM_TENSOR_ENGRAM_MULTI_HEAD_EMBED, "weight", i),
+                                    {mhe_meta->ne[0], mhe_meta->ne[1]}, 0);
+
+                                // ShortConv
+                                {
+                                    const auto * sc_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ENGRAM_SHORT_CONV, "weight", i).str().c_str());
+                                    if (sc_meta) {
+                                        layer.engram_sc_conv = create_tensor(tn(LLM_TENSOR_ENGRAM_SHORT_CONV, "weight", i),
+                                            {sc_meta->ne[0], sc_meta->ne[1]}, 0);
+                                    }
+                                }
+
+                                // ShortConv norms
+                                layer.engram_sc_norm = create_tensor(tn(LLM_TENSOR_ENGRAM_SHORT_CONV_NORM, "weight", i),
+                                    {n_embd, hc}, TENSOR_NOT_REQUIRED);
+
+                                // value_proj
+                                {
+                                    const auto * vp_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ENGRAM_VALUE_PROJ, "weight", i).str().c_str());
+                                    if (vp_meta) {
+                                        layer.engram_val_proj = create_tensor(tn(LLM_TENSOR_ENGRAM_VALUE_PROJ, "weight", i),
+                                            {vp_meta->ne[0], vp_meta->ne[1]}, 0);
+                                        layer.engram_val_bias = create_tensor(tn(LLM_TENSOR_ENGRAM_VALUE_PROJ, "bias", i),
+                                            {vp_meta->ne[1]}, TENSOR_NOT_REQUIRED);
+                                    }
+                                }
+
+                                // key_projs (concatenated)
+                                {
+                                    const auto * kp_meta = ml.get_tensor_meta(tn(LLM_TENSOR_ENGRAM_KEY_PROJ, "weight", i).str().c_str());
+                                    if (kp_meta) {
+                                        layer.engram_key_proj = create_tensor(tn(LLM_TENSOR_ENGRAM_KEY_PROJ, "weight", i),
+                                            {kp_meta->ne[0], kp_meta->ne[1]}, 0);
+                                        layer.engram_key_bias = create_tensor(tn(LLM_TENSOR_ENGRAM_KEY_PROJ, "bias", i),
+                                            {kp_meta->ne[1]}, 0);
+                                    }
+                                }
+
+                                // norm1, norm2
+                                layer.engram_norm1 = create_tensor(tn(LLM_TENSOR_ENGRAM_NORM1, "weight", i),
+                                    {n_embd, hc}, TENSOR_NOT_REQUIRED);
+                                layer.engram_norm2 = create_tensor(tn(LLM_TENSOR_ENGRAM_NORM2, "weight", i),
+                                    {n_embd, hc}, TENSOR_NOT_REQUIRED);
+                            }
+                        }
+                    }
+                } break;
             case LLM_ARCH_LLAMA:
             case LLM_ARCH_REFACT:
             case LLM_ARCH_MINICPM:
@@ -8245,6 +8410,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_maincoder>(*this, params);
             } break;
+        case LLM_ARCH_ENGRAM:
+            {
+                llm = std::make_unique<llm_build_engram>(*this, params);
+            } break;
         case LLM_ARCH_DECI:
             {
                 llm = std::make_unique<llm_build_deci>(*this, params);
@@ -8871,6 +9040,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCTIC:
         case LLM_ARCH_DEEPSEEK:
         case LLM_ARCH_DEEPSEEK2:
+        case LLM_ARCH_ENGRAM:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:

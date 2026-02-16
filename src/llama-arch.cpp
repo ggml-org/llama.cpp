@@ -125,6 +125,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_ENGRAM,           "engram"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -260,6 +261,20 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_KDA_HEAD_DIM, "%s.kda.head_dim" },
 
     { LLM_KV_WKV_HEAD_SIZE, "%s.wkv.head_size" },
+    { LLM_KV_ENGRAM_HC_MULT,                    "%s.hc_mult"                      },
+    { LLM_KV_ENGRAM_CONV_RMS_NORM_EPS,          "%s.shortconv.rms_norm_epsilon"   },
+    { LLM_KV_ENGRAM_HASH_MAX_NGRAM_SIZE,        "%s.hash.max_ngram_size"          },
+    { LLM_KV_ENGRAM_HASH_N_HEAD_PER_NGRAM,      "%s.hash.n_head_per_ngram"        },
+    { LLM_KV_ENGRAM_HASH_N_EMBED_PER_NGRAM,     "%s.hash.n_embed_per_ngram"       },
+    { LLM_KV_ENGRAM_HASH_SEED,                  "%s.hash.seed"                    },
+    { LLM_KV_ENGRAM_HASH_PAD_ID,                "%s.hash.pad_id"                  },
+    { LLM_KV_ENGRAM_HASH_TOKENIZER_VOCAB_SIZE,  "%s.hash.tokenizer_vocab_size"    },
+    { LLM_KV_ENGRAM_HASH_N_ENGRAM_LAYERS,       "%s.hash.n_engram_layers"         },
+    { LLM_KV_ENGRAM_HASH_ENGRAM_VOCAB_SIZE,     "%s.hash.engram_vocab_size"       },
+    { LLM_KV_ENGRAM_HASH_LAYER_IDS,             "%s.hash.layer_ids"               },
+    { LLM_KV_ENGRAM_HASH_LAYER_MULTIPLIERS,     "%s.hash.layer_multipliers"       },
+    { LLM_KV_ENGRAM_HASH_LAYER_VOCAB_SIZES,     "%s.hash.layer_vocab_sizes"       },
+    { LLM_KV_ENGRAM_HASH_COMPRESSED_LOOKUP,     "%s.hash.compressed_lookup"       },   
 
     { LLM_KV_POSNET_EMBEDDING_LENGTH, "%s.posnet.embedding_length" },
     { LLM_KV_POSNET_BLOCK_COUNT,      "%s.posnet.block_count"      },
@@ -524,12 +539,58 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_PROJ,                           "blk.%d.indexer.proj" },
     { LLM_TENSOR_INDEXER_ATTN_K,                         "blk.%d.indexer.attn_k" },
     { LLM_TENSOR_INDEXER_ATTN_Q_B,                       "blk.%d.indexer.attn_q_b" },
+
+    { LLM_TENSOR_ENGRAM_MULTI_HEAD_EMBED,                "blk.%d.engram.multi_head_embed" },
+    { LLM_TENSOR_ENGRAM_SHORT_CONV,                      "blk.%d.engram.short_conv.conv" },
+    { LLM_TENSOR_ENGRAM_SHORT_CONV_NORM,                 "blk.%d.engram.short_conv.norm" },
+    { LLM_TENSOR_ENGRAM_VALUE_PROJ,                      "blk.%d.engram.value_proj" },
+    { LLM_TENSOR_ENGRAM_KEY_PROJ,                        "blk.%d.engram.key_proj" },
+    { LLM_TENSOR_ENGRAM_NORM1,                           "blk.%d.engram.norm1" },
+    { LLM_TENSOR_ENGRAM_NORM2,                           "blk.%d.engram.norm2" },
 };
 
 static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_CLIP:
             return {};
+        case LLM_ARCH_ENGRAM:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                // MLA attention
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_Q_A,
+                LLM_TENSOR_ATTN_Q_B,
+                LLM_TENSOR_ATTN_Q_A_NORM,
+                LLM_TENSOR_ATTN_KV_A_MQA,
+                LLM_TENSOR_ATTN_KV_A_NORM,
+                LLM_TENSOR_ATTN_KV_B,
+                LLM_TENSOR_ATTN_OUT,
+                // Dense FFN
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
+                // MoE
+                LLM_TENSOR_FFN_GATE_INP,
+                LLM_TENSOR_FFN_EXP_PROBS_B,
+                LLM_TENSOR_FFN_GATE_EXPS,
+                LLM_TENSOR_FFN_DOWN_EXPS,
+                LLM_TENSOR_FFN_UP_EXPS,
+                LLM_TENSOR_FFN_GATE_SHEXP,
+                LLM_TENSOR_FFN_DOWN_SHEXP,
+                LLM_TENSOR_FFN_UP_SHEXP,
+                // Engram
+                LLM_TENSOR_ENGRAM_MULTI_HEAD_EMBED,
+                LLM_TENSOR_ENGRAM_SHORT_CONV,
+                LLM_TENSOR_ENGRAM_SHORT_CONV_NORM,
+                LLM_TENSOR_ENGRAM_VALUE_PROJ,
+                LLM_TENSOR_ENGRAM_KEY_PROJ,
+                LLM_TENSOR_ENGRAM_NORM1,
+                LLM_TENSOR_ENGRAM_NORM2,
+            };  
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_DECI:
         case LLM_ARCH_MISTRAL3:
@@ -2703,6 +2764,14 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    // engram
+    {LLM_TENSOR_ENGRAM_MULTI_HEAD_EMBED,    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ENGRAM_SHORT_CONV,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
+    {LLM_TENSOR_ENGRAM_SHORT_CONV_NORM,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ENGRAM_VALUE_PROJ,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ENGRAM_KEY_PROJ,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ENGRAM_NORM1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_ENGRAM_NORM2,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

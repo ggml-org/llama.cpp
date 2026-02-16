@@ -103,6 +103,18 @@ struct llama_hparams {
     uint32_t n_lora_value_res_mix   = 0;
     uint32_t n_lora_gate            = 0;
 
+    // Engram ShortConv epsilon
+    float f_conv_rms_norm_eps = 1e-5f;
+    // Engram hash mapping params
+    uint32_t n_hc_mult                = 0;
+    uint32_t engram_max_ngram_size    = 0;
+    uint32_t engram_n_head_per_ngram  = 0;
+    uint32_t engram_n_embed_per_ngram = 0;
+    uint32_t engram_hash_seed         = 0;
+    uint32_t engram_pad_id            = 0;
+    uint32_t engram_tok_vocab_size    = 0;  
+    uint32_t engram_n_layer_ids       = 0;  
+
     float    rope_attn_factor = 1.0f;
     float    rope_freq_base_train;
     float    rope_freq_base_train_swa  = 10000.0f;
