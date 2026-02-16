@@ -257,6 +257,145 @@ class EvalState:
         with open(self.output_file, "w") as f:
             json.dump(data, f, indent=2)
 
+        self.dump_html(tasks_to_save, all_cases)
+
+    def dump_html(self, tasks_to_save: List[Tuple[int, str]], all_cases: Dict[str, Any]):
+        html_file = Path(str(self.output_file) + ".html")
+
+        cases = all_cases
+        completed = {tid: c for tid, c in cases.items() if c.get("status") == "ok"}
+        correct_count = sum(1 for c in completed.values() if c.get("correct", False))
+        incorrect_count = len(completed) - correct_count
+        pending_count = len(tasks_to_save) - len(completed)
+        accuracy = correct_count / len(completed) * 100 if completed else 0.0
+
+        sampling_parts = []
+        for k, v in self.sampling_config.items():
+            if v is not None:
+                sampling_parts.append(f"{k}={v}")
+        sampling_str = ", ".join(sampling_parts) if sampling_parts else "default"
+
+        rows = []
+        for i, task_id in tasks_to_save:
+            case = cases.get(task_id, {})
+            status = case.get("status", "pending")
+            gold = case.get("gold", "")
+            extracted = case.get("extracted", "") if status == "ok" else ""
+            is_correct = case.get("correct", False) if status == "ok" else False
+            pred = case.get("pred", "") or ""
+            prompt = case.get("prompt", "") or ""
+            grader_log = case.get("grader_log", {})
+
+            if status == "ok":
+                status_class = "correct" if is_correct else "incorrect"
+                status_text = "✓ Correct" if is_correct else "✗ Incorrect"
+            elif status == "pending":
+                status_class = "pending"
+                status_text = "Pending"
+            else:
+                status_class = "error"
+                status_text = f"Error: {status}"
+
+            pred_escaped = self._escape_html(pred)
+            prompt_escaped = self._escape_html(prompt)
+            grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
+
+            rows.append(f"""<tr class="task-row" onclick="toggleDetails('{task_id}')">
+                <td>{task_id}</td>
+                <td class="{status_class}">{status_text}</td>
+                <td>{self._escape_html(gold)}</td>
+                <td>{self._escape_html(extracted)}</td>
+            </tr>
+            <tr id="details-{task_id}" class="details-row">
+                <td colspan="4">
+                    <div class="details-content">
+                        <h4>Prompt</h4>
+                        <pre>{prompt_escaped}</pre>
+                        <h4>Prediction</h4>
+                        <pre>{pred_escaped}</pre>
+                        <h4>Grader Log</h4>
+                        <pre>{grader_log_str}</pre>
+                    </div>
+                </td>
+            </tr>""")
+
+        rows_html = "\n".join(rows)
+
+        html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eval State - {self.dataset_type}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 20px; background: #f5f5f5; }}
+        h1 {{ color: #333; }}
+        .summary {{ background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .summary-table {{ width: 100%; border-collapse: collapse; }}
+        .summary-table td {{ padding: 8px; border-bottom: 1px solid #eee; }}
+        .summary-table td:first-child {{ font-weight: bold; width: 200px; }}
+        .tasks-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        .tasks-table th {{ background: #333; color: white; padding: 12px; text-align: left; }}
+        .tasks-table td {{ padding: 10px; border-bottom: 1px solid #eee; }}
+        .task-row {{ cursor: pointer; }}
+        .task-row:hover {{ background: #f9f9f9; }}
+        .correct {{ color: #28a745; font-weight: bold; }}
+        .incorrect {{ color: #dc3545; font-weight: bold; }}
+        .pending {{ color: #6c757d; }}
+        .error {{ color: #ffc107; }}
+        .details-row {{ display: none; }}
+        .details-row.open {{ display: table-row; }}
+        .details-content {{ padding: 15px; background: #fafafa; }}
+        .details-content h4 {{ margin: 10px 0 5px; color: #555; }}
+        .details-content pre {{ background: #f0f0f0; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; margin: 0; }}
+    </style>
+</head>
+<body>
+    <h1>Eval State: {self.dataset_type.upper()}</h1>
+    <div class="summary">
+        <table class="summary-table">
+            <tr><td>Dataset</td><td>{self.dataset_type}</td></tr>
+            <tr><td>Total Tasks</td><td>{len(tasks_to_save)}</td></tr>
+            <tr><td>Completed</td><td>{len(completed)}</td></tr>
+            <tr><td>Correct</td><td class="correct">{correct_count}</td></tr>
+            <tr><td>Incorrect</td><td class="incorrect">{incorrect_count}</td></tr>
+            <tr><td>Pending</td><td class="pending">{pending_count}</td></tr>
+            <tr><td>Accuracy</td><td>{accuracy:.1f}%</td></tr>
+            <tr><td>Sampling</td><td>{sampling_str}</td></tr>
+        </table>
+    </div>
+    <table class="tasks-table">
+        <thead>
+            <tr>
+                <th>Task ID</th>
+                <th>Status</th>
+                <th>Gold</th>
+                <th>Extracted</th>
+            </tr>
+        </thead>
+        <tbody>
+            {rows_html}
+        </tbody>
+    </table>
+    <script>
+        function toggleDetails(taskId) {{
+            var row = document.getElementById('details-' + taskId);
+            row.classList.toggle('open');
+        }}
+    </script>
+</body>
+</html>"""
+
+        with open(html_file, "w") as f:
+            f.write(html_content)
+
+    def _escape_html(self, s: str) -> str:
+        return (s.replace("&", "&amp;")
+                   .replace("<", "&lt;")
+                   .replace(">", "&gt;")
+                   .replace('"', "&quot;")
+                   .replace("'", "&#39;"))
+
     @classmethod
     def load(cls, path: Path) -> "EvalState":
         with open(path, "r") as f:
