@@ -44,11 +44,13 @@
 #if __has_include(<oneapi/tbb/blocked_range.h>) && __has_include(<oneapi/tbb/parallel_for.h>)
 #    include <oneapi/tbb/blocked_range.h>
 #    include <oneapi/tbb/parallel_for.h>
+#    include <oneapi/tbb/task_arena.h>
 #    define GGML_SYCL_HAS_TBB 1
 namespace ggml_sycl_tbb = oneapi::tbb;
 #elif __has_include(<tbb/blocked_range.h>) && __has_include(<tbb/parallel_for.h>)
 #    include <tbb/blocked_range.h>
 #    include <tbb/parallel_for.h>
+#    include <tbb/task_arena.h>
 #    define GGML_SYCL_HAS_TBB 1
 namespace ggml_sycl_tbb = tbb;
 #else
@@ -1041,6 +1043,16 @@ static int ggml_sycl_cpu_threads_hint() {
     return n_threads;
 }
 
+#if GGML_SYCL_HAS_TBB
+// Persistent task arena: keeps TBB worker threads alive between parallel_for
+// calls, eliminating the ~12% overhead from repeated wake/sleep cycles across
+// the ~90 MUL_MAT ops per TG token.
+static ggml_sycl_tbb::task_arena & ggml_sycl_cpu_arena() {
+    static ggml_sycl_tbb::task_arena arena(ggml_sycl_cpu_threads_hint());
+    return arena;
+}
+#endif
+
 // Minimum output work (N*M) before enabling TBB in vec_dot path.
 // Keeps tiny TG workloads on the serial fast path to avoid scheduler overhead.
 static int ggml_sycl_cpu_vecdot_min_parallel_work() {
@@ -1227,19 +1239,21 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                         // so TBB worker threads would see their own empty instances.
                         // Capturing the raw pointer ensures all workers use the populated buffer.
                         uint8_t * src1_q_data = src1_q_buf.data();
-                        ggml_sycl_tbb::parallel_for(
-                            ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
-                            [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
-                                for (int n = r.begin(); n < r.end(); n++) {
-                                    const void * weight_row = src0_batch + n * nb01;
-                                    for (dnnl_dim_t m = 0; m < M; m++) {
-                                        float dot_result = 0.0f;
-                                        cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row,
-                                                            0, src1_q_data + m * q_row_size, 0, 1);
-                                        dst_batch[m * ldc + n] = dot_result;
+                        ggml_sycl_cpu_arena().execute([&] {
+                            ggml_sycl_tbb::parallel_for(
+                                ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
+                                [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
+                                    for (int n = r.begin(); n < r.end(); n++) {
+                                        const void * weight_row = src0_batch + n * nb01;
+                                        for (dnnl_dim_t m = 0; m < M; m++) {
+                                            float dot_result = 0.0f;
+                                            cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float),
+                                                                weight_row, 0, src1_q_data + m * q_row_size, 0, 1);
+                                            dst_batch[m * ldc + n] = dot_result;
+                                        }
                                     }
-                                }
-                            });
+                                });
+                        });
 #    else
                         for (int n = 0; n < N_int; n++) {
                             const void * weight_row = src0_batch + static_cast<dnnl_dim_t>(n) * nb01;
