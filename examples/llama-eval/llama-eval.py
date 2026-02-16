@@ -24,10 +24,6 @@ GRADER_PATTERNS = {
     "aime": r'\boxed{(\d+)}|\b(\d+)\b',
     "aime2025": r'\boxed{(\d+)}|\b(\d+)\b',
     "gsm8k": r'\b(\d+)\b',
-    "mmlu": r'[A-D]',
-    "hellaswag": r'[A-D]',
-    "arc": r'[A-D]',
-    "winogrande": r'[A-D]',
 }
 
 SAMPLE_ANSWERS = {
