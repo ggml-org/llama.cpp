@@ -12549,12 +12549,6 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
     if (!src0 || !src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
         return;
     }
-    // During SYCL graph recording, weight pointers must already be stable
-    // (set during warmup pass).  Layer streaming and cache lookups can call
-    // queue.wait() which is illegal on a recording queue.
-    if (g_ggml_sycl_graph_recording) {
-        return;
-    }
 
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
     if (!extra) {
@@ -26165,10 +26159,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // End-of-graph CPU-offload fence.
     // Ensures async CPU staging/compute completion is visible before the next
     // graph invocation can recycle temporary buffers.
-    // Skip during SYCL graph recording — .wait() calls are illegal on a
-    // recording queue.  The GPU prefix contains no CPU ops, so no staging
-    // events need draining.
-    if (cpu_offload_active && !g_ggml_sycl_graph_recording) {
+    if (cpu_offload_active) {
         ggml_sycl_cpu_staging_drain();
     }
 
@@ -31475,12 +31466,20 @@ normal_dispatch:
         }
     } suffix_guard(cgraph, sycl_ctx, total_n_nodes, gpu_prefix_end);
 
-    // HOST_COMPUTE host_tasks are incompatible with SYCL graph recording, but
-    // graph replay is safe for the GPU-only prefix. The existing prefix/suffix
-    // infrastructure (above) already detects HOST_COMPUTE CPU nodes via
-    // should_dispatch_to_cpu() and truncates the graph to the GPU prefix.
-    // The HOST_COMPUTE suffix is dispatched via compute_impl after graph replay.
-
+    // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
+    // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
+    // check_graph_compatibility() validates that cache can hold all layer experts.
+    // HOST_COMPUTE batched host_task is incompatible with SYCL graph recording
+    // (host_task not supported in recorded graphs). Disable graph replay entirely.
+    {
+        static const bool host_compute_on = [] {
+            const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
+            return env && (std::string(env) == "1" || std::string(env) == "true");
+        }();
+        if (host_compute_on && !g_ggml_sycl_disable_graph) {
+            g_ggml_sycl_disable_graph = 1;
+        }
+    }
     // Fast path: skip O(n_nodes) check_graph_compatibility scans when replaying cached graph.
     // If exec_graph is valid, we already verified compatibility during recording.
     bool use_sycl_graph;

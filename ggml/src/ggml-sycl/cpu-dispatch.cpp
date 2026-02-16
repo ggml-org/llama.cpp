@@ -1093,6 +1093,24 @@ static int ggml_sycl_cpu_vecdot_tasks_per_thread() {
     return tasks;
 }
 
+// Activation quantization cache: Q/K/V projections share the same src1
+// tensor (hidden state), so we can skip re-quantizing when the tensor
+// identity and dimensions haven't changed.  Saves ~3x quantization per
+// layer.  Keyed on tensor pointer + graph generation to prevent stale
+// hits across tokens (graph replay reuses tensor pointers with new data).
+struct quant_cache_key {
+    const ggml_tensor * tensor     = nullptr;
+    uint64_t            generation = 0;
+    dnnl_dim_t          M          = 0;
+    dnnl_dim_t          K          = 0;
+    ggml_from_float_t   fn         = nullptr;
+
+    bool matches(const ggml_tensor * t, uint64_t gen, dnnl_dim_t m, dnnl_dim_t k,
+                 ggml_from_float_t f) const {
+        return tensor == t && generation == gen && M == m && K == k && fn == f;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // MUL_MAT  (oneDNN on host, async host_task when enabled)
 // ---------------------------------------------------------------------------
@@ -1199,23 +1217,6 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         size_t               q_row_size    = 0;
         static thread_local std::vector<uint8_t> src1_q_buf;
 
-        // Activation quantization cache: Q/K/V projections share the same src1
-        // tensor (hidden state), so we can skip re-quantizing when the tensor
-        // identity and dimensions haven't changed.  Saves ~3x quantization per
-        // layer.  Keyed on tensor pointer + graph generation to prevent stale
-        // hits across tokens (graph replay reuses tensor pointers with new data).
-        struct quant_cache_key {
-            const ggml_tensor * tensor     = nullptr;
-            uint64_t            generation = 0;
-            dnnl_dim_t          M          = 0;
-            dnnl_dim_t          K          = 0;
-            ggml_from_float_t   fn         = nullptr;
-
-            bool matches(const ggml_tensor * t, uint64_t gen, dnnl_dim_t m, dnnl_dim_t k,
-                         ggml_from_float_t f) const {
-                return tensor == t && generation == gen && M == m && K == k && fn == f;
-            }
-        };
         static thread_local quant_cache_key src1_q_cache;
 
         if (use_vec_dot) {
@@ -1247,12 +1248,18 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 if (use_vec_dot && from_float_fn) {
                     // Quantized dot product path: quantize activations, then vec_dot
                     // per output element.  No weight dequantization needed.
-                    const uint64_t gen = g_quant_cache_generation.load(std::memory_order_relaxed);
-                    if (!src1_q_cache.matches(src1, gen, M, K, from_float_fn)) {
+                    // Cache only for single-batch (ne12*ne13==1): multi-batch
+                    // iterates different src1_batch offsets with the same tensor
+                    // pointer, so the cache key can't distinguish them.
+                    const bool     can_use_cache = (ne12 * ne13 == 1);
+                    const uint64_t gen           = g_quant_cache_generation.load(std::memory_order_relaxed);
+                    if (!can_use_cache || !src1_q_cache.matches(src1, gen, M, K, from_float_fn)) {
                         for (dnnl_dim_t m = 0; m < M; m++) {
                             from_float_fn(src1_batch + m * K, src1_q_buf.data() + m * q_row_size, K);
                         }
-                        src1_q_cache = { src1, gen, M, K, from_float_fn };
+                        if (can_use_cache) {
+                            src1_q_cache = { src1, gen, M, K, from_float_fn };
+                        }
                     }
 
                     // Parallel vec_dot over N (output rows).
