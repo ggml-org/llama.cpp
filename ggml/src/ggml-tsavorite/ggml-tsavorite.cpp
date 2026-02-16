@@ -536,7 +536,7 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
       case GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT:
           {
               // IMPORTANT:
-              // Real TMU blob entrypoint is selected at runtime in
+              // Real TMU blob entrypoint is selected at sub graph compute time in
               // ggml_tsavorite_run_tmu_mul_mat() based on K.
               // This pointer must be non-null only to pass support checks.
               kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] =
@@ -859,7 +859,7 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
 
   case GGML_OP_RMS_NORM:
 
-#ifdef GGML_TARGET_POSIX_DEBUG1
+#ifdef GGML_TARGET_POSIX_DEBUG
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
     break;
@@ -2505,7 +2505,7 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
   case GGML_OP_TRANSPOSE:
   case GGML_OP_RMS_NORM:
 
-#ifdef GGML_TARGET_POSIX_DEBUG1
+#ifdef GGML_TARGET_POSIX_DEBUG
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
     break;
