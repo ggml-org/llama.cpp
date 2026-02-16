@@ -25717,48 +25717,48 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         j++;
                     }
 
-                    // Execute CPU batch directly on the main thread.
-                    // Previously used host_task which ran on a SYCL worker thread,
-                    // but that caused a race condition on g_batched_mode/g_host_task_mode
-                    // globals (not thread_local). Direct execution is safe because:
-                    // 1. stream->wait() drains pending GPU work (results available)
-                    // 2. All flag access is single-threaded (no race)
-                    // 3. Compute buffers are host-pinned USM (CPU-accessible)
-                    sycl_ctx->stream()->wait();
+                    // Submit CPU batch as a single host_task on the GPU queue.
+                    // The in-order queue guarantees: prior GPU ops complete before
+                    // the host_task runs, and subsequent GPU ops wait for it.
+                    // This gives us GPU-CPU async overlap on the main thread.
+                    // Flags are thread_local so no race between worker and main thread.
+                    sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
+                        cgh.host_task([sycl_ctx, cpu_batch]() {
+                            ggml_sycl_batched_mode_set(true);
+                            ggml_sycl_host_task_mode_set(false);
+                            for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
+                                ggml_tensor * n = cpu_batch[bi];
 
-                    ggml_sycl_batched_mode_set(true);
-                    ggml_sycl_host_task_mode_set(false);
-                    for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
-                        ggml_tensor * n = cpu_batch[bi];
-
-                        // Try fusion with next node in batch
-                        if (bi + 1 < cpu_batch.size()) {
-                            ggml_tensor * next = cpu_batch[bi + 1];
-                            if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
-                                && next->src[0] == n) {
-                                if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, n, next)) {
-                                    bi++;
-                                    continue;
+                                // Try fusion with next node in batch
+                                if (bi + 1 < cpu_batch.size()) {
+                                    ggml_tensor * next = cpu_batch[bi + 1];
+                                    if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
+                                        && next->src[0] == n) {
+                                        if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, n, next)) {
+                                            bi++;
+                                            continue;
+                                        }
+                                    }
+                                    if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
+                                        && next->src[0] == n) {
+                                        if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, n, next)) {
+                                            bi++;
+                                            continue;
+                                        }
+                                    }
                                 }
-                            }
-                            if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
-                                && next->src[0] == n) {
-                                if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, n, next)) {
-                                    bi++;
-                                    continue;
-                                }
-                            }
-                        }
 
-                        bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, n);
-                        if (!ok) {
-                            fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
-                                    ggml_op_name(n->op), n->name ? n->name : "?");
-                        }
-                        GGML_ASSERT(ok);
-                    }
-                    ggml_sycl_batched_mode_set(false);
-                    ggml_sycl_host_task_mode_set(true);
+                                bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, n);
+                                if (!ok) {
+                                    fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
+                                            ggml_op_name(n->op), n->name ? n->name : "?");
+                                }
+                                GGML_ASSERT(ok);
+                            }
+                            ggml_sycl_batched_mode_set(false);
+                            ggml_sycl_host_task_mode_set(true);
+                        });
+                    });
 
                     // Advance loop index past the batch
                     i = j - 1;  // -1 because loop will i++

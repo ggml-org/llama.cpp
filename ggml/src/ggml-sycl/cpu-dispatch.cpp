@@ -563,12 +563,14 @@ static bool        g_staging_compute_pending[STAGING_BANKS] = { false, false };
 // get_host_ptr() returns t->data directly for these buffers.
 // ---------------------------------------------------------------------------
 
-static bool g_host_task_mode = false;
+static thread_local bool g_host_task_mode = false;
 
 // BATCHED host_task mode: when active, CPU ops run as direct function calls
 // inside a single batched host_task, not individual submissions.
 // Activated by graph_compute_impl when collecting CPU segments.
-static bool g_batched_mode = false;
+// thread_local: host_task runs on a SYCL worker thread — each thread
+// needs its own copy to avoid data races with the main submission thread.
+static thread_local bool g_batched_mode = false;
 
 static inline bool batched_mode_active() {
     return g_batched_mode;
