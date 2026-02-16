@@ -1270,7 +1270,7 @@ class TextModel(ModelBase):
             res = "qwen35"
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
-            res = "joyai_llm"
+            res = "joyai-llm"
 
         if res is None:
             logger.warning("\n")
