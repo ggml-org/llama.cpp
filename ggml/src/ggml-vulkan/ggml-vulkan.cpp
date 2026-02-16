@@ -4484,7 +4484,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
 
+#if defined(GGML_VULKAN_RUN_TESTS)
 static void ggml_vk_test_single_device_buffer_from_host_ptr(vk_device& device);
+#endif
 
 static vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
@@ -12101,6 +12103,89 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     free(d);
     free(d_chk);
 }
+
+static void ggml_vk_test_single_device_buffer_from_host_ptr(vk_device& device) {
+    static std::vector<vk_device> tested_devices;
+    if (std::find(tested_devices.begin(), tested_devices.end(), device) == tested_devices.end()) {
+        tested_devices.push_back(device);
+    } else{
+        return; // Already tested this device, skip
+    }
+
+    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(" << device->name << ") - Single-device external host memory test");
+
+    const size_t test_buffer_size = 1024 * 1024; // 1 MB
+    const size_t test_buffer_ne = test_buffer_size / sizeof(float);
+
+    // Get required alignment for external memory
+    const vk::DeviceSize min_alignment = device->physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().minImportedHostPointerAlignment;
+
+    // Allocate aligned host memory using aligned_alloc (C11/POSIX)
+    // Note: aligned_alloc requires size to be a multiple of alignment
+    const size_t aligned_size = ((test_buffer_size + min_alignment - 1) / min_alignment) * min_alignment;
+
+    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory: min_alignment = " << min_alignment << ", aligned_size = " << aligned_size);
+
+    // Initialize host memory, which we will use as input to the device
+    auto input_deleter = [](float* p) { free(p); };
+    std::unique_ptr<float[], decltype(input_deleter)> input_host_memory(
+        static_cast<float*>(aligned_alloc(min_alignment, aligned_size)),
+        input_deleter
+    );
+    for (size_t i = 0; i < test_buffer_ne; i++) {
+        input_host_memory[i] = static_cast<float>(i);
+    }
+
+    // Initialize destination host memory, which we will use to verify results
+    auto result_deleter = [](float* p) { free(p); };
+    std::unique_ptr<float[], decltype(result_deleter)> result_host_memory(
+        static_cast<float*>(aligned_alloc(min_alignment, aligned_size)),
+        result_deleter
+    );
+    for (size_t i = 0; i < test_buffer_ne; i++) {
+        result_host_memory[i] = 0.0f; // Ensure we know the original contents
+    }
+
+    // Allocate an operation on-device destination buffer
+    vk_buffer device_dst_buffer = ggml_vk_create_buffer_device(device, test_buffer_size);
+
+    // Allocate an external memory buffer on device, importing the host memory
+    vk_buffer external_source_buffer = ggml_vk_buffer_from_host_ptr(device, input_host_memory.get(), test_buffer_size);
+
+    // Allocate an external memory buffer on device for the result
+    vk_buffer external_result_buffer = ggml_vk_buffer_from_host_ptr(device, result_host_memory.get(), test_buffer_size);
+
+    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+    ggml_vk_ctx_begin(device, subctx);
+
+    // Submit an operation which we can observe accessing data from the source and moving to dst.
+    // For simplicity, we use a copy operation here, but this could be any compute operation (SUM, MUL_MAT, etc.).
+    ggml_vk_buffer_copy_async(subctx, device_dst_buffer, 0, external_source_buffer, 0, test_buffer_size);
+
+    // Copy from on-device dst to host memory
+    // This is really intended to be a copy, as if we had done some compute on the device and now want to read back the results.
+    ggml_vk_buffer_copy_async(subctx, external_result_buffer, 0, device_dst_buffer, 0, test_buffer_size);
+
+    // Submit and wait for completion
+    ggml_vk_ctx_end(subctx);
+    vk::Fence fence = device->device.createFence({});
+    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(): Submitting and waiting for device.");
+    ggml_vk_submit(subctx, fence);
+    VK_CHECK(device->device.waitForFences(fence, VK_TRUE, UINT64_MAX), "Failed to wait for fence");
+    device->device.destroyFence(fence);
+
+    for (size_t i = 0; i < test_buffer_ne; i++) {
+        if (result_host_memory[i] != input_host_memory[i]) {
+            VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(): External host memory test failed at index " << std::dec << i << ": expected " << input_host_memory[i] << ", got " << result_host_memory[i]);
+            GGML_ABORT("External host memory test failed");
+        }
+    }
+
+    ggml_vk_destroy_buffer(device_dst_buffer);
+    ggml_vk_destroy_buffer(external_source_buffer);
+    ggml_vk_destroy_buffer(external_result_buffer);
+    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory() - Passed single-device, single-buffer external host memory test.");
+}
 #endif
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx) {
@@ -15072,89 +15157,6 @@ static vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, si
     }
 
     return buf;
-}
-
-static void ggml_vk_test_single_device_buffer_from_host_ptr(vk_device& device) {
-    static std::vector<vk_device> tested_devices;
-    if (std::find(tested_devices.begin(), tested_devices.end(), device) == tested_devices.end()) {
-        tested_devices.push_back(device);
-    } else{
-        return; // Already tested this device, skip
-    }
-
-    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(" << device->name << ") - Single-device external host memory test");
-
-    const size_t test_buffer_size = 1024 * 1024; // 1 MB
-    const size_t test_buffer_ne = test_buffer_size / sizeof(float);
-
-    // Get required alignment for external memory
-    const vk::DeviceSize min_alignment = device->physical_device.getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>().minImportedHostPointerAlignment;
-
-    // Allocate aligned host memory using aligned_alloc (C11/POSIX)
-    // Note: aligned_alloc requires size to be a multiple of alignment
-    const size_t aligned_size = ((test_buffer_size + min_alignment - 1) / min_alignment) * min_alignment;
-
-    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory: min_alignment = " << min_alignment << ", aligned_size = " << aligned_size);
-
-    // Initialize host memory, which we will use as input to the device
-    auto input_deleter = [](float* p) { free(p); };
-    std::unique_ptr<float[], decltype(input_deleter)> input_host_memory(
-        static_cast<float*>(aligned_alloc(min_alignment, aligned_size)),
-        input_deleter
-    );
-    for (size_t i = 0; i < test_buffer_ne; i++) {
-        input_host_memory[i] = static_cast<float>(i);
-    }
-
-    // Initialize destination host memory, which we will use to verify results
-    auto result_deleter = [](float* p) { free(p); };
-    std::unique_ptr<float[], decltype(result_deleter)> result_host_memory(
-        static_cast<float*>(aligned_alloc(min_alignment, aligned_size)),
-        result_deleter
-    );
-    for (size_t i = 0; i < test_buffer_ne; i++) {
-        result_host_memory[i] = 0.0f; // Ensure we know the original contents
-    }
-
-    // Allocate an operation on-device destination buffer
-    vk_buffer device_dst_buffer = ggml_vk_create_buffer_device(device, test_buffer_size);
-
-    // Allocate an external memory buffer on device, importing the host memory
-    vk_buffer external_source_buffer = ggml_vk_buffer_from_host_ptr(device, input_host_memory.get(), test_buffer_size);
-
-    // Allocate an external memory buffer on device for the result
-    vk_buffer external_result_buffer = ggml_vk_buffer_from_host_ptr(device, result_host_memory.get(), test_buffer_size);
-
-    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
-    ggml_vk_ctx_begin(device, subctx);
-
-    // Submit an operation which we can observe accessing data from the source and moving to dst.
-    // For simplicity, we use a copy operation here, but this could be any compute operation (SUM, MUL_MAT, etc.).
-    ggml_vk_buffer_copy_async(subctx, device_dst_buffer, 0, external_source_buffer, 0, test_buffer_size);
-
-    // Copy from on-device dst to host memory
-    // This is really intended to be a copy, as if we had done some compute on the device and now want to read back the results.
-    ggml_vk_buffer_copy_async(subctx, external_result_buffer, 0, device_dst_buffer, 0, test_buffer_size);
-
-    // Submit and wait for completion
-    ggml_vk_ctx_end(subctx);
-    vk::Fence fence = device->device.createFence({});
-    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(): Submitting and waiting for device.");
-    ggml_vk_submit(subctx, fence);
-    VK_CHECK(device->device.waitForFences(fence, VK_TRUE, UINT64_MAX), "Failed to wait for fence");
-    device->device.destroyFence(fence);
-
-    for (size_t i = 0; i < test_buffer_ne; i++) {
-        if (result_host_memory[i] != input_host_memory[i]) {
-            VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory(): External host memory test failed at index " << std::dec << i << ": expected " << input_host_memory[i] << ", got " << result_host_memory[i]);
-            GGML_ABORT("External host memory test failed");
-        }
-    }
-
-    ggml_vk_destroy_buffer(device_dst_buffer);
-    ggml_vk_destroy_buffer(external_source_buffer);
-    ggml_vk_destroy_buffer(external_result_buffer);
-    VK_LOG_DEBUG("ggml_vk_test_single_device_external_memory() - Passed single-device, single-buffer external host memory test.");
 }
 
 static ggml_backend_buffer_t ggml_backend_vk_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
