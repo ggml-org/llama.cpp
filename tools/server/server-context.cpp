@@ -2134,6 +2134,10 @@ private:
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
 
+                        if (params_base.verbose_prompt) {
+                            SLT_INF(slot, "prompt: '%s'\n", slot.task->tokens.detokenize(ctx, true).c_str());
+                        }
+
                         // print prompt tokens (for debugging)
                         /*if (1) {
                             // first 16 tokens (avoid flooding logs)
