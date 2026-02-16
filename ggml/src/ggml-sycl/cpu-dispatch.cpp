@@ -72,6 +72,15 @@ static std::mutex                                    g_host_ptr_mutex;
 static std::unordered_map<std::string, const void *> g_host_ptr_map;
 static bool                                          g_host_ptr_owns_memory = false;
 
+// Generation counter for activation quantization cache invalidation.
+// Bumped at the start of each graph compute to prevent stale cache hits
+// across tokens (same tensor pointer, different data due to buffer reuse).
+static std::atomic<uint64_t> g_quant_cache_generation{0};
+
+void ggml_sycl_cpu_quant_cache_new_graph() {
+    g_quant_cache_generation.fetch_add(1, std::memory_order_relaxed);
+}
+
 enum class offload_wait_reason : uint8_t {
     FORCED   = 0,
     FALLBACK = 1,
@@ -1190,6 +1199,25 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         size_t               q_row_size    = 0;
         static thread_local std::vector<uint8_t> src1_q_buf;
 
+        // Activation quantization cache: Q/K/V projections share the same src1
+        // tensor (hidden state), so we can skip re-quantizing when the tensor
+        // identity and dimensions haven't changed.  Saves ~3x quantization per
+        // layer.  Keyed on tensor pointer + graph generation to prevent stale
+        // hits across tokens (graph replay reuses tensor pointers with new data).
+        struct quant_cache_key {
+            const ggml_tensor * tensor     = nullptr;
+            uint64_t            generation = 0;
+            dnnl_dim_t          M          = 0;
+            dnnl_dim_t          K          = 0;
+            ggml_from_float_t   fn         = nullptr;
+
+            bool matches(const ggml_tensor * t, uint64_t gen, dnnl_dim_t m, dnnl_dim_t k,
+                         ggml_from_float_t f) const {
+                return tensor == t && generation == gen && M == m && K == k && fn == f;
+            }
+        };
+        static thread_local quant_cache_key src1_q_cache;
+
         if (use_vec_dot) {
             const ggml_type vec_dot_type   = cpu_traits->vec_dot_type;
             const auto *    vdt_cpu_traits = ggml_get_type_traits_cpu(vec_dot_type);
@@ -1219,8 +1247,12 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 if (use_vec_dot && from_float_fn) {
                     // Quantized dot product path: quantize activations, then vec_dot
                     // per output element.  No weight dequantization needed.
-                    for (dnnl_dim_t m = 0; m < M; m++) {
-                        from_float_fn(src1_batch + m * K, src1_q_buf.data() + m * q_row_size, K);
+                    const uint64_t gen = g_quant_cache_generation.load(std::memory_order_relaxed);
+                    if (!src1_q_cache.matches(src1, gen, M, K, from_float_fn)) {
+                        for (dnnl_dim_t m = 0; m < M; m++) {
+                            from_float_fn(src1_batch + m * K, src1_q_buf.data() + m * q_row_size, K);
+                        }
+                        src1_q_cache = { src1, gen, M, K, from_float_fn };
                     }
 
                     // Parallel vec_dot over N (output rows).

@@ -25039,8 +25039,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     init_sycl_tg_trace();
 
-    // Invalidate per-graph pointer resolution cache.
+    // Invalidate per-graph caches.
     ggml_sycl_data_ptr_cache_new_graph();
+    ggml_sycl_cpu_quant_cache_new_graph();
     static std::unordered_map<int, int> g_sycl_rms_seen_per_layer;
     if (g_sycl_tg_dump_rms) {
         g_sycl_rms_seen_per_layer.clear();

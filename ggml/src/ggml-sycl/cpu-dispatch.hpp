@@ -17,6 +17,10 @@
 // Returns true if handled, false if the op is unsupported on CPU.
 bool ggml_sycl_compute_forward_cpu(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst);
 
+// Invalidate the activation quantization cache.  Call at the start of each
+// graph compute to prevent stale cache hits across tokens.
+void ggml_sycl_cpu_quant_cache_new_graph();
+
 // Drain any pending async staging events (call at boundary sync points).
 void ggml_sycl_cpu_staging_drain();
 
