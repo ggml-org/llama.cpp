@@ -79,7 +79,7 @@ Returns exit code 0 if correct, non-zero if incorrect.
 ### LLM Grader
 Uses LLM to extract and compare answers:
 - Configurable server and model
-- Includes problem context in prompt
+- Includes few-shot examples from sample answers
 - Case-insensitive comparison
 
 ## Output
