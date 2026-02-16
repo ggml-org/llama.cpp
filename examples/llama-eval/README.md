@@ -30,7 +30,7 @@ python llama-eval.py \
 - `--model`: Model name for evaluation (default: llama)
 - `--judge-model`: Model name for LLM judge (default: same as main model)
 - `--judge-server`: Server URL for LLM judge (default: same as main server)
-- `--dataset`: Dataset type (aime, gsm8k, gpqa)
+- `--dataset`: Dataset type (aime, aime2025, gsm8k, gpqa)
 - `--n_cases`: Number of cases to evaluate (default: all)
 - `--n_predict`: Max tokens to predict per prompt (default: -1, infinite)
 - `--temperature`: Sampling temperature (default: not passed)
@@ -51,6 +51,11 @@ python llama-eval.py \
 - Answers in boxed format: `\boxed{answer}`
 - Requires regex grader or LLM grader
 
+### AIME2025
+- 30 questions from 2025 AIME I & II competitions
+- Answers in boxed format: `\boxed{answer}`
+- Supports regex, CLI, or LLM grader
+
 ### GSM8K
 - 7473 math word problems
 - Answers are numeric values
@@ -66,6 +71,7 @@ python llama-eval.py \
 ### Regex Grader
 Built-in patterns for different datasets:
 - AIME: `\boxed{(\d+)}|\b(\d+)\b`
+- AIME2025: `\boxed{(\d+)}|\b(\d+)\b`
 - GSM8K: `\b(\d+)\b`
 - GPQA: Letter extraction (A, B, C, D)
 
@@ -81,6 +87,7 @@ Uses LLM to extract and compare answers:
 - Configurable server and model
 - Includes few-shot examples from sample answers
 - Case-insensitive comparison
+- Required for GPQA dataset
 
 ## Output
 

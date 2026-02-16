@@ -39,6 +39,7 @@ class EvalState:
 
 ### Datasets
 - `AimeDataset`: 90 AIME 2025 questions
+- `Aime2025Dataset`: 30 AIME 2025 I & II questions
 - `Gsm8kDataset`: 7473 math word problems
 - `GpqaDataset`: 198 GPQA Diamond questions with shuffling
 
@@ -55,6 +56,12 @@ class EvalState:
 - **regex**: Built-in patterns for each dataset
 - **cli**: External script with `--answer` and `--expected` args
 - **llm**: LLM-based extraction with few-shot examples and configurable server/model
+
+### Dataset Requirements
+- **AIME**: Supports regex, CLI, or LLM grader
+- **AIME2025**: Supports regex, CLI, or LLM grader
+- **GSM8K**: Supports regex, CLI, or LLM grader
+- **GPQA**: Requires LLM grader
 
 ## Output Format
 
