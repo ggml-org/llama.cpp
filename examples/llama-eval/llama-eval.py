@@ -105,7 +105,7 @@ class TaskState:
     case_id: str
     prompt: str
     gold: str
-    pred: Optional[str] = None
+    result: Optional[str] = None
     extracted: Optional[str] = None
     grader_log: Dict[str, Any] = field(default_factory=dict)
     correct: bool = False
@@ -179,7 +179,7 @@ class EvalState:
         task_id: str,
         prompt: str,
         gold: str,
-        pred: Optional[str],
+        result: Optional[str],
         extracted: Optional[str],
         grader_log: Dict[str, Any],
         correct: bool,
@@ -192,7 +192,7 @@ class EvalState:
             "case_id": task_id,
             "prompt": prompt,
             "gold": gold,
-            "pred": pred,
+            "result": result,
             "extracted": extracted,
             "grader_log": grader_log,
             "correct": correct,
@@ -237,7 +237,7 @@ class EvalState:
                     "case_id": task_id,
                     "prompt": prompt,
                     "gold": gold,
-                    "pred": None,
+                    "result": None,
                     "extracted": None,
                     "grader_log": {},
                     "correct": False,
@@ -282,7 +282,7 @@ class EvalState:
             gold = case.get("gold", "")
             extracted = case.get("extracted", "") if status == "ok" else ""
             is_correct = case.get("correct", False) if status == "ok" else False
-            pred = case.get("pred", "") or ""
+            result = case.get("result", "") or ""
             prompt = case.get("prompt", "") or ""
             grader_log = case.get("grader_log", {})
 
@@ -296,7 +296,7 @@ class EvalState:
                 status_class = "error"
                 status_text = f"Error: {status}"
 
-            pred_escaped = self._escape_html(pred)
+            result_escaped = self._escape_html(result)
             prompt_escaped = self._escape_html(prompt)
             grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
 
@@ -311,8 +311,8 @@ class EvalState:
                     <div class="details-content">
                         <h4>Prompt</h4>
                         <pre>{prompt_escaped}</pre>
-                        <h4>Prediction</h4>
-                        <pre>{pred_escaped}</pre>
+                        <h4>Result</h4>
+                        <pre>{result_escaped}</pre>
                         <h4>Grader Log</h4>
                         <pre>{grader_log_str}</pre>
                     </div>
@@ -910,14 +910,14 @@ class Processor:
 
         try:
             response = self._make_request(eval_state, prompt)
-            pred = response["choices"][0]["message"]["content"]
-            task_state.pred = pred
+            result = response["choices"][0]["message"]["content"]
+            task_state.result = result
 
-            pred_truncated = self.grader._truncate_response(pred, max_lines=10)
-            is_correct, extracted = self.grader.grade(gold, pred_truncated, prompt)
+            result_truncated = self.grader._truncate_response(result, max_lines=10)
+            is_correct, extracted = self.grader.grade(gold, result_truncated, prompt)
 
             grader_log = {
-                "pred": pred_truncated,
+                "pred": result_truncated,
                 "grader_type": self.grader.grader_type
             }
             if self.grader.grader_type == "regex" and self.grader.pattern:
@@ -928,7 +928,7 @@ class Processor:
             task_state.grader_log = grader_log
             task_state.status = "ok"
 
-            eval_state.add_result(task_id, prompt, gold, pred, extracted, grader_log, is_correct, "ok")
+            eval_state.add_result(task_id, prompt, gold, result, extracted, grader_log, is_correct, "ok")
 
             eval_state.dump()
 
@@ -967,8 +967,8 @@ class Processor:
                 if verbose:
                     print(f"\nCase {eval_state.processed}: {task_state.correct}")
                     print(f"  Gold: {task_state.gold}")
-                    if task_state.pred:
-                        print(f"  Pred: {task_state.pred}")
+                    if task_state.result:
+                        print(f"  Result: {task_state.result}")
                     if task_state.extracted:
                         print(f"  Extracted: {task_state.extracted}")
                     print(f"  Status: {task_state.status}")
