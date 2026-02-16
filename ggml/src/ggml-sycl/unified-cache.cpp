@@ -42,6 +42,7 @@ static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_reserved_baseline{};
 static std::atomic<size_t> g_runtime_cat_bytes[GGML_SYCL_MAX_DEVICES][static_cast<int>(runtime_category::COUNT)]{};
 static std::atomic<size_t> g_runtime_reserved_host_bytes{};
+static std::atomic<size_t> g_runtime_host_cat_bytes[static_cast<int>(runtime_category::COUNT)]{};
 static std::array<std::atomic<size_t>, GGML_SYCL_MAX_DEVICES> g_runtime_managed_reserved_bytes{};
 static std::atomic<size_t>                                    g_runtime_managed_reserved_host_bytes{};
 static std::atomic<bool>     g_atexit_registered{ false };  // Ensure atexit handler registered once

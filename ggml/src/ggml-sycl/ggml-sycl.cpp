@@ -25158,26 +25158,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Overhead: one ext_oneapi_submit_barrier() per GPU op (~1-2us each).
     // This is amortized by avoiding the heavier full-queue wait at transitions.
     const bool          cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
-    // Compute buffer mirror: opt-in via GGML_SYCL_HOST_COMPUTE=1.
-    // The per-op staging path is the default (proven correct).  The mirror has
-    // a boundary-sync bug with recycled compute buffer offsets.
+    // HOST_COMPUTE: opt-in via GGML_SYCL_HOST_COMPUTE=1.
+    // Allocates compute buffers as host-pinned USM and runs CPU ops as
+    // host_tasks on gpu_q, eliminating all per-op staging overhead.
     static const bool host_compute_enabled = [] {
         const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
         return env && (std::string(env) == "1" || std::string(env) == "true");
     }();
-    if (cpu_offload_active && host_compute_enabled && !ggml_sycl_compute_mirror_active()) {
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            ggml_tensor * node = cgraph->nodes[i];
-            if (node && node->buffer && node->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device)) {
-                void * base = ggml_backend_buffer_get_base(node->buffer);
-                size_t bsz  = ggml_backend_buffer_get_size(node->buffer);
-                if (base && bsz > 0) {
-                    ggml_sycl_compute_mirror_init(base, bsz, sycl_ctx->stream());
-                    break;
-                }
-            }
-        }
-    }
     // Enable host_task mode when HOST_COMPUTE is active.
     // Compute buffers are host-pinned USM — CPU ops access t->data directly.
     // host_task on gpu_q eliminates cross-queue sync overhead (~10x faster per op).
@@ -25593,22 +25580,13 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
             if (node_is_island) {
                 // GPU island: run on GPU without full boundary transition.
-                // Drain pending async staging copies so island inputs (Q from
-                // CPU MUL_MAT) are available on device.  Don't flush retained
-                // activations — island inputs (K, V) come from device-resident
-                // KV cache, not from CPU intermediates.
-                ggml_sycl_cpu_staging_drain();
-                // Compute buffer mirror: island inputs may have been written to
-                // the host mirror by preceding CPU ops.  Sync mirror→VRAM so
-                // GPU island kernels read correct data.
-                if (ggml_sycl_compute_mirror_active()) {
-                    for (int s = 0; s < GGML_MAX_SRC && node->src[s]; s++) {
-                        if (ggml_sycl_tensor_is_weight(node->src[s])) {
-                            continue;
-                        }
-                        ggml_sycl_compute_mirror_sync_to_device(node->src[s], sycl_ctx->stream());
-                    }
-                    sycl_ctx->stream()->wait();
+                // HOST_COMPUTE: in-order gpu_q — no staging drain needed.
+                if (!host_compute_enabled) {
+                    // Drain pending async staging copies so island inputs (Q from
+                    // CPU MUL_MAT) are available on device.  Don't flush retained
+                    // activations — island inputs (K, V) come from device-resident
+                    // KV cache, not from CPU intermediates.
+                    ggml_sycl_cpu_staging_drain();
                 }
                 GGML_SYCL_DEBUG("[GPU-ISLAND] node %d (%s) - inline GPU op\n", i, node->name ? node->name : "(null)");
                 // Don't change prev_on_cpu — island is transparent to CPU state.
@@ -25678,21 +25656,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] GPU→CPU per-tensor sync at node %d (%s)\n", i,
                                     node->name ? node->name : "(null)");
 
-                    // Compute buffer mirror: sync VRAM→mirror for the CPU node's
-                    // non-weight input tensors.  After this, get_host_ptr() returns
-                    // the mirror pointer without any per-op D2H copy.
-                    if (ggml_sycl_compute_mirror_active()) {
-                        for (int s = 0; s < GGML_MAX_SRC && node->src[s]; s++) {
-                            if (ggml_sycl_tensor_is_weight(node->src[s])) {
-                                continue;
-                            }
-                            ggml_sycl_compute_mirror_sync_to_host(node->src[s], sycl_ctx->stream());
-                        }
-                        sycl_ctx->stream()->wait();
-                        GGML_SYCL_DEBUG("[COMPUTE-MIRROR] GPU→CPU sync at node %d (%s)\n", i,
-                                        node->name ? node->name : "(null)");
-                    }
-
                     // Experimental retained activation mode: keep CPU-produced
                     // intermediates in host scratch across CPU op chains to avoid
                     // per-op D2H/H2D staging. Guarded behind GGML_SYCL_CPU_RETAINED=1.
@@ -25703,8 +25666,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         GGML_SYCL_DEBUG("[RETAINED] Activated at GPU→CPU boundary (node %d)\n", i);
                     }
                 } else {
-                    // CPU→GPU: drain pending async staging flushes before GPU reads
-                    ggml_sycl_cpu_staging_drain();
+                    // CPU→GPU: drain pending async staging flushes before GPU reads.
+                    // HOST_COMPUTE: no staging — in-order gpu_q handles ordering.
+                    if (!host_compute_enabled) {
+                        ggml_sycl_cpu_staging_drain();
+                    }
 
                     // Look-ahead: collect ALL consecutive GPU/island nodes before
                     // next CPU node. flush_selective needs them all so it can flush
@@ -25727,20 +25693,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         // Don't deactivate — just flush. Scratch offset resets on next
                         // GPU→CPU entry via retained_init(). This avoids re-allocating
                         // the 32MB scratch buffer for each CPU layer.
-                    }
-
-                    // Compute buffer mirror: sync mirror→VRAM for the GPU node's
-                    // non-weight input tensors so GPU kernels read up-to-date data.
-                    if (ggml_sycl_compute_mirror_active()) {
-                        for (int s = 0; s < GGML_MAX_SRC && node->src[s]; s++) {
-                            if (ggml_sycl_tensor_is_weight(node->src[s])) {
-                                continue;
-                            }
-                            ggml_sycl_compute_mirror_sync_to_device(node->src[s], sycl_ctx->stream());
-                        }
-                        sycl_ctx->stream()->wait();
-                        GGML_SYCL_DEBUG("[COMPUTE-MIRROR] CPU→GPU sync at node %d (%s)\n", i,
-                                        node->name ? node->name : "(null)");
                     }
 
                     GGML_SYCL_DEBUG("[CPU-OFFLOAD] CPU→GPU transition at node %d (%s)\n", i,
@@ -25808,24 +25760,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
         GGML_ASSERT(ok);
 
-        // Compute buffer mirror: after GPU island execution, sync the island's
-        // output (dst) from VRAM back to the host mirror so subsequent CPU ops
-        // can read the up-to-date result via get_host_ptr().
-        if (cpu_offload_active && ggml_sycl_compute_mirror_active()) {
-            int8_t nflag = (!node_cpu_flags.empty() && i < (int) node_cpu_flags.size()) ? node_cpu_flags[i] : FLAG_GPU;
-            if (nflag == FLAG_GPU_ISLAND) {
-                sycl_ctx->stream()->wait();
-                ggml_sycl_compute_mirror_sync_to_host(node, sycl_ctx->stream());
-                sycl_ctx->stream()->wait();
-                GGML_SYCL_DEBUG("[COMPUTE-MIRROR] Island output sync for node %d (%s)\n", i,
-                                node->name ? node->name : "(null)");
-            }
-        }
-
         // Per-tensor event tracking: after each GPU op, record a barrier event
         // for dst so that GPU→CPU transitions can wait on specific tensors.
-        // Skip for CPU-dispatched nodes (they are synchronous).
-        if (cpu_offload_active && !prev_on_cpu && !g_ggml_sycl_graph_recording) {
+        // Skip for CPU-dispatched and HOST_COMPUTE nodes (in-order gpu_q serializes).
+        if (cpu_offload_active && !host_compute_enabled && !prev_on_cpu && !g_ggml_sycl_graph_recording) {
             if (ggml_sycl_cpu_offload_async_enabled()) {
                 // Marker only: async path does one queue drain per GPU->CPU segment.
                 // This avoids per-op barrier submission overhead and runtime hangs.
