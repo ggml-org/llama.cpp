@@ -22,6 +22,7 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 
 GRADER_PATTERNS = {
     "aime": r'\boxed{(\d+)}|\b(\d+)\b',
+    "aime2025": r'\boxed{(\d+)}|\b(\d+)\b',
     "gsm8k": r'\b(\d+)\b',
     "mmlu": r'[A-D]',
     "hellaswag": r'[A-D]',
@@ -31,6 +32,11 @@ GRADER_PATTERNS = {
 
 SAMPLE_ANSWERS = {
     "aime": [
+        "42",
+        "-123",
+        "999"
+    ],
+    "aime2025": [
         "42",
         "-123",
         "999"
@@ -377,15 +383,17 @@ class Grader:
             f"Example {i+1}: {ans}" for i, ans in enumerate(sample_answers)
         ])
 
-        prompt = f"""Extract the answer from the following response. Here are some extracted answers to demonstrate what you are supposed to output:
+        system_prompt = f"""You are an answer extraction system. Your task is to extract the answer from the model's response.
+
+Here are some examples of extracted answers to demonstrate what you are supposed to output:
 
 {sample_examples}
 
-===
+When extracting the answer, provide only the extracted answer itself, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
 
-Response: {pred}
+        user_prompt = f"""Extract the answer from the following response:
 
-===
+"{pred}"
 
 Please provide only the extracted answer, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
 
@@ -393,7 +401,10 @@ Please provide only the extracted answer, nothing else. If there is no clear ans
         headers = {"Content-Type": "application/json"}
         data = {
             "model": self.judge_model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
             "temperature": 0,
         }
 
