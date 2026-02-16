@@ -12268,6 +12268,14 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         }
     }
 
+    for (size_t device_idx = 0; device_idx < GGML_VK_MAX_DEVICES; device_idx++) {
+        vk_device device = vk_instance.devices[device_idx];
+        if (device == nullptr) {
+            continue;
+        }
+        ggml_vk_test_single_device_buffer_from_host_ptr(device);
+    }
+
     GGML_ABORT("fatal error");
 #endif
 
@@ -15128,10 +15136,6 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
 }
 
 static vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {
-    #if defined(GGML_VULKAN_RUN_TESTS)
-    ggml_vk_test_single_device_buffer_from_host_ptr(vk_instance.devices[idx]);
-    #endif
-
     if (!device->external_memory_host) {
         return {};
     }
