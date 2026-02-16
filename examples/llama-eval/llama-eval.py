@@ -32,17 +32,17 @@ GRADER_PATTERNS = {
 SAMPLE_ANSWERS = {
     "aime": [
         "42",
-        "123",
+        "-123",
         "999"
     ],
     "gsm8k": [
         "42",
-        "123",
+        "-123",
         "999"
     ],
     "gpqa": [
         "A",
-        "B",
+        "D",
         "C"
     ],
 }
@@ -331,9 +331,8 @@ class Grader:
             f"Example {i+1}: {ans}" for i, ans in enumerate(sample_answers)
         ])
 
-        prompt = f"""Extract the answer from this response:
+        prompt = f"""Extract the answer from the following response. Here are some extracted answers to demonstrate what you are supposed to output:
 
-Here are some example answers:
 {sample_examples}
 
 ===
@@ -342,7 +341,7 @@ Response: {pred}
 
 ===
 
-Please provide only the extracted answer, nothing else. If there is no clear answer in the response, reply with 'no answer'."""
+Please provide only the extracted answer, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
         url = f"{self.judge_server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
