@@ -50,15 +50,6 @@ void   ggml_sycl_cpu_retained_flush_selective(int device, sycl::queue * gpu_q,
                                                int n_gpu_nodes);
 void   ggml_sycl_cpu_retained_deactivate();
 
-// Compute buffer mirror: host-pinned copy of the VRAM compute buffer.
-// Enables zero-staging CPU offload — CPU ops read/write the mirror directly,
-// with boundary memcpys at GPU↔CPU transitions instead of per-op staging.
-void   ggml_sycl_compute_mirror_init(void * vram_base, size_t size, sycl::queue * q);
-void   ggml_sycl_compute_mirror_teardown(sycl::queue * q);
-bool   ggml_sycl_compute_mirror_active();
-void   ggml_sycl_compute_mirror_sync_to_host(const ggml_tensor * t, sycl::queue * q);
-void   ggml_sycl_compute_mirror_sync_to_device(const ggml_tensor * t, sycl::queue * q);
-
 // HOST_COMPUTE host_task mode: when active, CPU ops run as host_task
 // callbacks on gpu_q instead of parallel_for on cpu_q.  Activated when
 // GGML_SYCL_HOST_COMPUTE=1 + CPU offload is active.
