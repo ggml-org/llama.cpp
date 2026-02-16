@@ -12549,6 +12549,12 @@ static void ggml_sycl_ensure_weight_on_device(const ggml_tensor * src0, int devi
     if (!src0 || !src0->name || !g_model_exceeds_vram.load(std::memory_order_acquire)) {
         return;
     }
+    // During SYCL graph recording, weight pointers must already be stable
+    // (set during warmup pass).  Layer streaming and cache lookups can call
+    // queue.wait() which is illegal on a recording queue.
+    if (g_ggml_sycl_graph_recording) {
+        return;
+    }
 
     auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
     if (!extra) {
@@ -26159,7 +26165,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // End-of-graph CPU-offload fence.
     // Ensures async CPU staging/compute completion is visible before the next
     // graph invocation can recycle temporary buffers.
-    if (cpu_offload_active) {
+    // Skip during SYCL graph recording — .wait() calls are illegal on a
+    // recording queue.  The GPU prefix contains no CPU ops, so no staging
+    // events need draining.
+    if (cpu_offload_active && !g_ggml_sycl_graph_recording) {
         ggml_sycl_cpu_staging_drain();
     }
 
@@ -31400,6 +31409,11 @@ normal_dispatch:
     // layers whose pointers are stable (host-streamed layers are in the CPU suffix).
     const bool exceeds   = g_model_exceeds_vram.load(std::memory_order_acquire);
     const bool evictions = ggml_sycl::unified_cache_has_evictions();
+    // In GPU-only mode (no prefix/suffix split), graph REPLAY uses baked-in
+    // pointers from the original recording.  If weights were evicted, those
+    // pointers are stale → fall back to compute_impl.
+    // Prefix mode disables graph entirely (see below), so this gate only
+    // matters for GPU-only mode where gpu_prefix_end < 0.
     if ((exceeds || evictions) && gpu_prefix_end < 0) {
         GGML_SYCL_DEBUG("[SYCL-GRAPH] Disabled: weight pointers may be stale (exceeds=%d, evictions=%d)\n",
                         (int) exceeds, (int) evictions);
@@ -31407,7 +31421,6 @@ normal_dispatch:
         record_completion(false);
         return GGML_STATUS_SUCCESS;
     }
-
     // RAII guard: in prefix mode, always restore cgraph->n_nodes and dispatch
     // the CPU suffix on scope exit.  This handles all early return paths.
     struct prefix_suffix_guard {
@@ -31466,24 +31479,21 @@ normal_dispatch:
         }
     } suffix_guard(cgraph, sycl_ctx, total_n_nodes, gpu_prefix_end);
 
-    // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
-    // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
-    // check_graph_compatibility() validates that cache can hold all layer experts.
-    // HOST_COMPUTE batched host_task is incompatible with SYCL graph recording
-    // (host_task not supported in recorded graphs). Disable graph replay entirely.
-    {
-        static const bool host_compute_on = [] {
-            const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
-            return env && (std::string(env) == "1" || std::string(env) == "true");
-        }();
-        if (host_compute_on && !g_ggml_sycl_disable_graph) {
-            g_ggml_sycl_disable_graph = 1;
-        }
-    }
+    // SYCL graph recording for partial graphs (prefix mode) is not supported:
+    // graph execution of a subset of the compute graph produces incorrect KV cache
+    // state, likely because the SYCL runtime cannot see cross-graph data dependencies.
+    // The prefix/suffix split still provides value by enabling the fast compute_impl
+    // path for GPU nodes while HOST_COMPUTE CPU nodes run in the suffix.
+    //
+    // Graph replay remains enabled for GPU-only mode (full graph, gpu_prefix_end < 0).
     // Fast path: skip O(n_nodes) check_graph_compatibility scans when replaying cached graph.
     // If exec_graph is valid, we already verified compatibility during recording.
     bool use_sycl_graph;
-    if (sycl_ctx->exec_graph) {
+    if (gpu_prefix_end >= 0) {
+        // Prefix mode: graph execution of partial graphs is broken.
+        // Use compute_impl for both prefix and suffix.
+        use_sycl_graph = false;
+    } else if (sycl_ctx->exec_graph) {
         use_sycl_graph = !g_ggml_sycl_disable_graph && !g_sycl_graph_multithreaded.load(std::memory_order_relaxed) &&
                          !sycl_ctx->graphs_disabled && !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
     } else {
