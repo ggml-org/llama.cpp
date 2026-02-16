@@ -4484,10 +4484,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
 
-#if defined(GGML_VULKAN_RUN_TESTS)
-static void ggml_vk_test_single_device_buffer_from_host_ptr(vk_device& device);
-#endif
-
 static vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -5246,10 +5242,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         return device;
     }
-
-    #if defined(GGML_VULKAN_RUN_TESTS)
-    ggml_vk_test_single_device_buffer_from_host_ptr(vk_instance.devices[idx]);
-    #endif
 
     return vk_instance.devices[idx];
 }
@@ -15135,6 +15127,10 @@ static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggm
 }
 
 static vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {
+    #if defined(GGML_VULKAN_RUN_TESTS)
+    ggml_vk_test_single_device_buffer_from_host_ptr(vk_instance.devices[idx]);
+    #endif
+
     if (!device->external_memory_host) {
         return {};
     }
