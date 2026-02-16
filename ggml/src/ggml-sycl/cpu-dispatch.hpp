@@ -55,4 +55,9 @@ void   ggml_sycl_cpu_retained_deactivate();
 // GGML_SYCL_HOST_COMPUTE=1 + CPU offload is active.
 void   ggml_sycl_host_task_mode_set(bool active);
 
+// BATCHED host_task mode: when active, CPU ops run as direct function calls
+// inside a single batched host_task, not individual submissions.
+void   ggml_sycl_batched_mode_set(bool active);
+bool   ggml_sycl_batched_mode_active();
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP

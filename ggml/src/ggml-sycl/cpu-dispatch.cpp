@@ -565,6 +565,15 @@ static bool        g_staging_compute_pending[STAGING_BANKS] = { false, false };
 
 static bool g_host_task_mode = false;
 
+// BATCHED host_task mode: when active, CPU ops run as direct function calls
+// inside a single batched host_task, not individual submissions.
+// Activated by graph_compute_impl when collecting CPU segments.
+static bool g_batched_mode = false;
+
+static inline bool batched_mode_active() {
+    return g_batched_mode;
+}
+
 static inline bool host_task_mode_active() {
     return g_host_task_mode;
 }
@@ -572,6 +581,14 @@ static inline bool host_task_mode_active() {
 // Called from graph_compute_impl when HOST_COMPUTE + CPU offload is active.
 void ggml_sycl_host_task_mode_set(bool active) {
     g_host_task_mode = active;
+}
+
+void ggml_sycl_batched_mode_set(bool active) {
+    g_batched_mode = active;
+}
+
+bool ggml_sycl_batched_mode_active() {
+    return g_batched_mode;
 }
 
 static void staging_track_cpu_event(const sycl::event & evt) {
@@ -663,6 +680,10 @@ static void * staging_ensure(int bank, int slot, size_t nbytes, sycl::queue * gp
 // staging buffers for the bank we're about to use were last touched 2 ops ago
 // and are already safe (waited on by the intervening op).
 static void staging_begin_op() {
+    // Batched mode in HOST_COMPUTE: no staging buffers used.
+    if (g_batched_mode) {
+        return;
+    }
     const int next_bank = 1 - g_staging_bank;
     if (ggml_sycl_cpu_offload_async_enabled()) {
         // Async mode: wait only when reusing the target bank.
@@ -700,6 +721,24 @@ static void staging_begin_op() {
 // out_event: if non-null, set to the memcpy event that must complete before
 //            reading from the returned pointer.  If no staging was needed,
 //            the event is left unchanged.
+// Shared helper: check if a pointer is host-accessible via USM type.
+// Caches results per base pointer to avoid repeated runtime queries.
+static bool is_host_accessible_usm(void * ptr, int device) {
+    static std::unordered_map<void *, bool> cache;
+    auto it = cache.find(ptr);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    bool is_host = true;  // assume host unless proven device
+    try {
+        sycl::context    ctx = ggml_sycl_get_device(device).default_queue().get_context();
+        sycl::usm::alloc pt  = sycl::get_pointer_type(ptr, ctx);
+        is_host              = (pt != sycl::usm::alloc::device);
+    } catch (...) {}
+    cache[ptr] = is_host;
+    return is_host;
+}
+
 static void * get_host_ptr(const ggml_tensor * t,
                            int                 device,
                            int                 slot,
@@ -798,39 +837,19 @@ static void * get_host_ptr(const ggml_tensor * t,
     // may be host memory (e.g. KV cache when VRAM is constrained) but
     // ggml_backend_buffer_is_host() returns false for SYCL buffer types.
     // Detect this by checking the USM pointer type of the base tensor's data.
-    // Cache results per base-pointer to avoid repeated get_pointer_type calls.
     {
-        static std::unordered_map<void *, bool> host_ptr_cache;
-        const ggml_tensor *                     base = t;
+        const ggml_tensor * base = t;
         while (base->view_src) {
             base = base->view_src;
         }
         void * base_data = base->data;
-        if (base_data) {
-            auto it = host_ptr_cache.find(base_data);
-            bool is_host;
-            if (it != host_ptr_cache.end()) {
-                is_host = it->second;
-            } else {
-                // Query USM pointer type — regular malloc returns 'unknown',
-                // which is also host-accessible by CPU.
-                is_host = true;  // assume host unless proven device
-                try {
-                    sycl::context    ctx = ggml_sycl_get_device(device).default_queue().get_context();
-                    sycl::usm::alloc pt  = sycl::get_pointer_type(base_data, ctx);
-                    is_host              = (pt != sycl::usm::alloc::device);
-                } catch (...) {
-                }
-                host_ptr_cache[base_data] = is_host;
+        if (base_data && is_host_accessible_usm(base_data, device)) {
+            if (out_event) {
+                *out_event = sycl::event{};
             }
-            if (is_host) {
-                if (out_event) {
-                    *out_event = sycl::event{};
-                }
-                GGML_SYCL_DEBUG("[CPU-STAGE] Host-accessible %s (base=%p) — no staging\n", t->name ? t->name : "(null)",
-                                base_data);
-                return t->data;
-            }
+            GGML_SYCL_DEBUG("[CPU-STAGE] Host-accessible %s (base=%p) — no staging\n", t->name ? t->name : "(null)",
+                            base_data);
+            return t->data;
         }
     }
 
@@ -906,6 +925,10 @@ static void flush_output(ggml_tensor *       t,
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return;
     }
+    // HOST_COMPUTE: host-pinned buffers don't need staging flush.
+    if (t->data && is_host_accessible_usm(t->data, device)) {
+        return;
+    }
     // When retained mode is active, outputs stay in host scratch.
     // flush_all at CPU→GPU boundary handles the final copy.
     if (g_retained_active && g_retained_map.count(t)) {
@@ -948,6 +971,12 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
     if (!t->buffer || ggml_backend_buffer_is_host(t->buffer)) {
         return t->data;
     }
+    // HOST_COMPUTE: SYCL-allocated host-pinned USM buffers are host-accessible
+    // but ggml_backend_buffer_is_host() returns false for SYCL buffer types.
+    // Check USM pointer type to detect host-accessible compute buffers.
+    if (t->data && is_host_accessible_usm(t->data, device)) {
+        return t->data;
+    }
     // Device-resident: allocate staging but don't copy (will be written by kernel)
     size_t nbytes = ggml_nbytes(t);
     return staging_ensure(g_staging_bank, 2, nbytes, gpu_q);
@@ -956,6 +985,11 @@ static void * get_host_output_ptr(ggml_tensor * t, int device, sycl::queue * gpu
 // Helper: get output pointer from retained scratch or staging fallback.
 // Sets *retained to true if output goes to scratch, false for staging.
 static void * get_retained_or_staging_output(ggml_tensor * dst, int device, sycl::queue * gpu_q, bool * retained) {
+    // Batched mode: output directly to host-pinned t->data
+    if (g_batched_mode && dst->data && is_host_accessible_usm(dst->data, device)) {
+        *retained = false;
+        return dst->data;
+    }
     void * scratch_ptr = ggml_sycl_cpu_retained_alloc_output(dst);
     if (scratch_ptr) {
         *retained = true;
@@ -1236,6 +1270,15 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
     };
 
+    if (batched_mode_active()) {
+        // Direct execution inside batched host_task — no submission, no events.
+        // In HOST_COMPUTE mode: src0 from mmap, src1/dst from host-pinned t->data.
+        run_mul_mat();
+        // No flush_output: dst_data already points to host-pinned t->data
+        // (after Change 4 fixes get_host_output_ptr).
+        return true;
+    }
+
     if (async_mode) {
         // Async path: submit host compute on the GPU queue so completion is
         // naturally visible to graph scheduling and downstream GPU kernels.
@@ -1266,10 +1309,11 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1305,7 +1349,24 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t row = 0; row < nrows; row++) {
+            const float * src_row = src_data + row * ne00;
+            float *       dst_row = dst_data + row * ne00;
+
+            float sum_sq = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                sum_sq += src_row[j] * src_row[j];
+            }
+
+            const float scale = 1.0f / std::sqrt(sum_sq / static_cast<float>(ne00) + eps);
+
+            for (int64_t j = 0; j < ne00; j++) {
+                dst_row[j] = src_row[j] * scale;
+            }
+        }
+    } else if (host_task) {
         // host_task on gpu_q: in-order queue serializes with GPU kernels.
         // No cross-queue sync needed.  std:: math is faster than sycl:: on host.
         gpu_q->submit([&](sycl::handler & cgh) {
@@ -1369,10 +1430,11 @@ static bool cpu_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 enum class binary_op_type { OP_ADD, OP_MUL };
 
 static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, binary_op_type op) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1432,7 +1494,36 @@ static bool cpu_binary_op(ggml_backend_sycl_context & ctx, ggml_tensor * dst, bi
     // Total rows = ne01 * ne02 * ne03
     const int64_t total_rows = ne01 * ne02 * ne03;
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t ir = 0; ir < total_rows; ir++) {
+            const int64_t i03 = ir / (ne02 * ne01);
+            const int64_t i02 = (ir - i03 * ne02 * ne01) / ne01;
+            const int64_t i01 = ir - i03 * ne02 * ne01 - i02 * ne01;
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+
+            const float * src1_row = src1_data + i13 * s13 + i12 * s12 + i11 * s11;
+            const float * sp0      = src0_data + ir * ne00;
+            float *       dp       = dst_data + ir * ne00;
+
+            if (op == binary_op_type::OP_ADD) {
+                for (int64_t r = 0; r < nr0; r++) {
+                    for (int64_t j = 0; j < ne10; j++) {
+                        dp[r * ne10 + j] = sp0[r * ne10 + j] + src1_row[j];
+                    }
+                }
+            } else {
+                for (int64_t r = 0; r < nr0; r++) {
+                    for (int64_t j = 0; j < ne10; j++) {
+                        dp[r * ne10 + j] = sp0[r * ne10 + j] * src1_row[j];
+                    }
+                }
+            }
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t ir = 0; ir < total_rows; ir++) {
@@ -1521,10 +1612,11 @@ static bool cpu_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1556,7 +1648,13 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int64_t n = ggml_nelements(dst);
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t i = 0; i < n; i++) {
+            const float x = src_data[i];
+            dst_data[i]   = x / (1.0f + std::exp(-x));
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t i = 0; i < n; i++) {
@@ -1587,10 +1685,11 @@ static bool cpu_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1662,7 +1761,27 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
     };
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t row = 0; row < nrows; row++) {
+            for (int64_t col = 0; col < nc; col++) {
+                float gate_val, up_val;
+                if (has_src1) {
+                    gate_val = src0_data[row * src0_row_stride + col];
+                    up_val   = src1_data[row * src1_row_stride + col];
+                } else {
+                    gate_val = src0_data[row * src0_row_stride + gate_offset + col];
+                    up_val   = src0_data[row * src0_row_stride + up_offset + col];
+                }
+
+                float activated = glu_activate(
+                    gate_val, glu_op, [](float x) { return std::exp(x); },
+                    [](float x) { return std::erf(x); });
+
+                dst_data[row * dst_row_stride + col] = activated * up_val;
+            }
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t row = 0; row < nrows; row++) {
@@ -1723,10 +1842,11 @@ static bool cpu_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1809,7 +1929,24 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
     };
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t row = 0; row < nrows; row++) {
+            const float * sp = src_data + row * ne00;
+            float *       dp = dst_data + row * ne00;
+
+            const float * mp = nullptr;
+            if (mask_data) {
+                const int64_t i01 = row % ne01;
+                const int64_t i02 = (row / ne01) % ne02;
+                const int64_t i03 = row / (ne01 * ne02);
+                mp = mask_data + (i01 * mask_nb11) + (i02 % mask_ne12) * mask_nb12 +
+                     (i03 % mask_ne13) * mask_nb13;
+            }
+
+            softmax_row(sp, dp, mp, ne00, scale, [](float x) { return std::exp(x); });
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t row = 0; row < nrows; row++) {
@@ -1864,10 +2001,11 @@ static bool cpu_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -1903,7 +2041,32 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t row = 0; row < nrows; row++) {
+            const float * src_row = src_data + row * ne00;
+            float *       dst_row = dst_data + row * ne00;
+
+            float sum = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                sum += src_row[j];
+            }
+            const float mean = sum / static_cast<float>(ne00);
+
+            float var = 0.0f;
+            for (int64_t j = 0; j < ne00; j++) {
+                float d    = src_row[j] - mean;
+                dst_row[j] = d;
+                var += d * d;
+            }
+            var /= static_cast<float>(ne00);
+
+            const float sc = 1.0f / std::sqrt(var + eps);
+            for (int64_t j = 0; j < ne00; j++) {
+                dst_row[j] *= sc;
+            }
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t row = 0; row < nrows; row++) {
@@ -1973,10 +2136,11 @@ static bool cpu_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -2011,7 +2175,12 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const int64_t n = ggml_nelements(dst);
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t i = 0; i < n; i++) {
+            dst_data[i] = src_data[i] * scale;
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t i = 0; i < n; i++) {
@@ -2039,10 +2208,11 @@ static bool cpu_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -2076,7 +2246,10 @@ static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     const size_t nbytes = ggml_nbytes(dst);
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        memcpy(dst_data, src_data, nbytes);
+    } else if (host_task) {
         // host_task on gpu_q: in-order queue ensures prior GPU writes complete.
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() { memcpy(dst_data, src_data, nbytes); });
@@ -2099,10 +2272,11 @@ static bool cpu_cpy(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 // ---------------------------------------------------------------------------
 
 static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const bool host_task = host_task_mode_active();
+    const bool batched   = batched_mode_active();
+    const bool host_task = !batched && host_task_mode_active();
 
-    sycl::queue * cpu_q = host_task ? nullptr : ggml_sycl_get_cpu_queue();
-    if (!host_task && !cpu_q) {
+    sycl::queue * cpu_q = (host_task || batched) ? nullptr : ggml_sycl_get_cpu_queue();
+    if (!host_task && !batched && !cpu_q) {
         return false;
     }
 
@@ -2234,7 +2408,23 @@ static bool cpu_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
     };
 
-    if (host_task) {
+    if (batched) {
+        // Direct synchronous execution inside batched host_task — no queue submission
+        for (int64_t idx = 0; idx < total_rows; idx++) {
+            const int64_t i3 = idx / (ne2 * ne1);
+            const int64_t i2 = (idx / ne1) % ne2;
+            const int64_t i1 = idx % ne1;
+
+            const float * src_row = src_data + i3 * s03 + i2 * s02 + i1 * s01;
+            float *       dst_row = dst_data + i3 * d03 + i2 * d02 + i1 * d01;
+
+            rope_row(
+                src_row, dst_row, pos_data[i2], n_dims, ne0, is_normal, freq_scale, ext_factor, attn_factor,
+                theta_scale, freq_factors_data, cd0, cd1, [](float x) { return std::cos(x); },
+                [](float x) { return std::sin(x); }, [](float a, float b) { return std::fmax(a, b); },
+                [](float a, float b) { return std::fmin(a, b); }, [](float x) { return std::log(x); });
+        }
+    } else if (host_task) {
         gpu_q->submit([&](sycl::handler & cgh) {
             cgh.host_task([=]() {
                 for (int64_t idx = 0; idx < total_rows; idx++) {
@@ -2374,6 +2564,11 @@ bool ggml_sycl_compute_fused_rms_norm_mul(ggml_backend_sycl_context & ctx,
         }
     };
 
+    if (batched_mode_active()) {
+        run_fused();
+        return true;
+    }
+
     if (ggml_sycl_cpu_offload_async_enabled()) {
         std::vector<sycl::event> deps = cpu_collect_deps(&e0, &e1, gpu_q);
         sycl::event              cpu_evt =
@@ -2508,6 +2703,11 @@ bool ggml_sycl_compute_fused_add_rms_norm(ggml_backend_sycl_context & ctx,
             }
         }
     };
+
+    if (batched_mode_active()) {
+        run_fused();
+        return true;
+    }
 
     const bool  async_mode = ggml_sycl_cpu_offload_async_enabled();
     sycl::event cpu_evt{};

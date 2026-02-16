@@ -25703,10 +25703,72 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 prev_on_cpu = node_on_cpu;
             }
 
-            // CPU op fusion: fuse consecutive element-wise ops to eliminate
-            // intermediate staging round-trips (saves 2-3 transfers/layer).
-            // Skip for GPU islands (they run on GPU, not CPU).
-            if (node_on_cpu) {
+            // HOST_COMPUTE batching: collect consecutive CPU nodes into batches
+            // and submit a single host_task per CPU segment instead of one per op.
+            if (node_on_cpu && host_compute_enabled) {
+                // Collect this node and all subsequent CPU nodes until
+                // a GPU node, GPU island, or end of graph.
+                std::vector<ggml_tensor *> cpu_batch;
+                cpu_batch.push_back(node);
+
+                int j = i + 1;
+                while (j < cgraph->n_nodes) {
+                    ggml_tensor * next = cgraph->nodes[j];
+                    if (!next || ggml_sycl_is_noop(next)) {
+                        j++;
+                        continue;
+                    }
+                    int8_t jflag = (j < (int)node_cpu_flags.size()) ? node_cpu_flags[j] : FLAG_UNKNOWN;
+                    if (jflag != FLAG_CPU) {
+                        break;  // hit GPU node or island → end of batch
+                    }
+                    cpu_batch.push_back(next);
+                    j++;
+                }
+
+                // Submit ONE host_task for the entire CPU batch.
+                // Inside: set batched_mode=true so kernels run synchronously
+                // without individual queue submissions.
+                auto & sctx = *sycl_ctx;
+                sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
+                    cgh.host_task([&sctx, cpu_batch]() {
+                        ggml_sycl_batched_mode_set(true);
+                        ggml_sycl_host_task_mode_set(false);
+                        for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
+                            ggml_tensor * n = cpu_batch[bi];
+                            // Try fusion with next node in batch
+                            if (bi + 1 < cpu_batch.size()) {
+                                ggml_tensor * next = cpu_batch[bi + 1];
+                                if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
+                                    && next->src[0] == n) {
+                                    if (ggml_sycl_compute_fused_rms_norm_mul(sctx, n, next)) {
+                                        bi++;
+                                        continue;
+                                    }
+                                }
+                                if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
+                                    && next->src[0] == n) {
+                                    if (ggml_sycl_compute_fused_add_rms_norm(sctx, n, next)) {
+                                        bi++;
+                                        continue;
+                                    }
+                                }
+                            }
+                            bool ok = ggml_sycl_compute_forward(sctx, n);
+                            GGML_ASSERT(ok);
+                        }
+                        ggml_sycl_batched_mode_set(false);
+                        ggml_sycl_host_task_mode_set(true);
+                    });
+                });
+
+                // Advance loop index past the batch
+                i = j - 1;  // -1 because loop will i++
+                continue;
+            }
+
+            // Non-HOST_COMPUTE CPU fusion (legacy per-op host_task path)
+            if (node_on_cpu && !host_compute_enabled) {
                 auto is_cpu_dispatched = [&](int node_idx) -> bool {
                     if (node_idx < 0 || node_idx >= cgraph->n_nodes) {
                         return false;
