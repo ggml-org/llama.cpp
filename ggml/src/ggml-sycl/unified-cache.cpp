@@ -5929,6 +5929,21 @@ bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes) {
         return false;
     }
 
+    // HOST_COMPUTE mode: auto-offload KV to host-pinned memory.
+    // When CPU offload runs with host-pinned compute buffers, KV on host
+    // eliminates GPU islands (SET_ROWS writes + FLASH_ATTN reads go through
+    // PCIe zero-copy instead of requiring CPU↔GPU transitions).
+    static std::atomic<int> cached_hc{ -1 };
+    int hc_val = cached_hc.load(std::memory_order_acquire);
+    if (hc_val == -1) {
+        const char * env_hc = std::getenv("GGML_SYCL_HOST_COMPUTE");
+        hc_val              = (env_hc && std::atoi(env_hc) != 0) ? 1 : 0;
+        cached_hc.store(hc_val, std::memory_order_release);
+    }
+    if (hc_val == 1) {
+        return true;
+    }
+
     auto info = unified_cache_get_budget_info(device);
 
     // If model already exceeds VRAM, definitely offload KV

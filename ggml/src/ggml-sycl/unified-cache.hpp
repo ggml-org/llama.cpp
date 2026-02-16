@@ -1321,7 +1321,8 @@ unified_budget_info unified_cache_get_budget_info(int device);
 size_t unified_cache_get_margin_bytes(int device);
 
 // Check if KV cache should be offloaded to host pinned memory.
-// Returns true when VRAM is too tight to hold both weights and KV cache.
+// Returns true when VRAM is too tight to hold both weights and KV cache,
+// or when GGML_SYCL_HOST_COMPUTE=1 (KV on host avoids GPU island transitions).
 // Override: GGML_SYCL_KV_HOST=1 forces host, GGML_SYCL_KV_HOST=0 forces device.
 // kv_estimate_bytes: estimated KV cache size (0 = skip margin check, use model_exceeds_vram only)
 bool unified_cache_should_offload_kv(int device, size_t kv_estimate_bytes = 0);
