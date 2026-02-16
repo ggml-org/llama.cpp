@@ -3566,14 +3566,13 @@ Hey there!<|im_end|>
             common_chat_templates_inputs inputs;
             inputs.messages = { message_user };
             inputs.tools = { special_function_tool };
-            inputs.enable_thinking = true;
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
             assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params.format);
             assert_equals(true, params.thinking_forced_open);
             assert_equals(false, params.grammar.empty());
             assert_equals(false, params.parser.empty());
             auto grammar = build_grammar(params.grammar);
-            GGML_ASSERT(grammar && "Failed to build Step-3.5-Flash grammar with thinking_forced_open");
+            GGML_ASSERT(grammar && "Failed to build Step-3.5-Flash grammar");
         }
     }
 }

@@ -1884,18 +1884,7 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_QWEN3_CODER_XML;
 
-    // Handle thinking tags (e.g. Step-3.5-Flash unconditionally emits <think>)
-    if (string_ends_with(data.prompt, "<think>\n")) {
-        if (!params.enable_thinking) {
-            data.prompt += "</think>";
-        } else {
-            data.thinking_forced_open = true;
-        }
-    }
-
     data.preserved_tokens = {
-        "<think>",
-        "</think>",
         "<tool_call>",
         "</tool_call>",
         "<function=",

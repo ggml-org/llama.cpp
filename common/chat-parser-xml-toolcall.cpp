@@ -279,7 +279,6 @@ void build_grammar_xml_tool_call(common_chat_params & data, const json & tools, 
             auto call_end = builder.add_rule("root-call-end", form.last_tool_end ? gbnf_format_literal(*form.last_tool_end) : gbnf_format_literal(form.tool_end));
             auto tool_call_multiple_with_end = builder.add_rule("root-tool-call-multiple-with-end", tool_call_once + " " + tool_call_more + "* " + call_end);
             builder.add_rule("root",
-                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
                 (form.scope_start.empty() ? "" : gbnf_format_literal(form.scope_start) + " ") +
                 tool_call_multiple_with_end  + "?" +
                 (form.scope_end.empty() ? "" : " " + gbnf_format_literal(form.scope_end))
