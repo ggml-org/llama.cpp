@@ -54,7 +54,7 @@ class EvalState:
 ### Grading Types
 - **regex**: Built-in patterns for each dataset
 - **cli**: External script with `--answer` and `--expected` args
-- **llm**: LLM-based extraction with configurable server/model
+- **llm**: LLM-based extraction with few-shot examples and configurable server/model
 
 ## Output Format
 
@@ -81,5 +81,7 @@ Complete eval state with task IDs, correctness, prompts, extracted answers, and 
 - Default seed: 1234
 - Default threads: 32
 - Prompt truncation: First 43 chars + padding + "..."
+- Response truncation: Last 10 lines for grading
 - GPQA requires LLM grader (returns letter A/B/C/D)
 - Judge model defaults to evaluated model if not specified
+- Sample answers defined in SAMPLE_ANSWERS dict for few-shot learning
