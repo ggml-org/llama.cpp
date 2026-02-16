@@ -141,6 +141,8 @@ static ggml_backend_t ggml_backend_meta_device_init_backend(ggml_backend_dev_t d
 
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_backend_dev_t dev);
 
+static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
+
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
@@ -175,7 +177,7 @@ static const ggml_backend_device_i ggml_backend_meta_device_iface = {
     /* .get_props            = */ ggml_backend_meta_device_get_props,
     /* .init_backend         = */ ggml_backend_meta_device_init_backend,
     /* .get_buffer_type      = */ ggml_backend_meta_device_get_buffer_type,
-    /* .get_host_buffer_type = */ nullptr,
+    /* .get_host_buffer_type = */ ggml_backend_meta_device_get_host_buffer_type,
     /* .buffer_from_host_ptr = */ nullptr,
     /* .supports_op          = */ ggml_backend_meta_device_supports_op,
     /* .supports_buft        = */ ggml_backend_meta_device_supports_buft,
@@ -344,6 +346,27 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
     };
     auto result = meta_bufts.emplace(dev, meta_buft);
     return &result.first->second;
+}
+
+static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+    GGML_ASSERT(ggml_backend_dev_is_meta(dev));
+    const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
+
+    ggml_backend_buffer_type_t host_buft = nullptr;
+    for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
+        ggml_backend_buffer_type_t simple_host_buft = ggml_backend_dev_host_buffer_type(simple_dev);
+        if (simple_host_buft == nullptr) {
+            return nullptr;
+        }
+        if (host_buft == nullptr) {
+            host_buft = simple_host_buft;
+        } else if (host_buft != simple_host_buft) {
+            // if different simple devices have different host buffer types, 
+            // we cannot provide a single host buffer type for the meta device
+            return nullptr;
+        }
+    }
+    return host_buft;
 }
 
 size_t ggml_backend_meta_buft_n_bufts(ggml_backend_buffer_type_t meta_buft) {
