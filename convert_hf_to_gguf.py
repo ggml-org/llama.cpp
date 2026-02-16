@@ -1124,6 +1124,9 @@ class TextModel(ModelBase):
         if chkhsh == "9c2227e4dd922002fb81bde4fc02b0483ca4f12911410dee2255e4987644e3f8":
             # ref: https://huggingface.co/CohereForAI/c4ai-command-r-v01
             res = "command-r"
+        if chkhsh == "d772b220ace2baec124bed8cfafce0ead7d6c38a4b65ef11261cf9d5d62246d1":
+            # ref: https://huggingface.co/CohereLabs/tiny-aya-base
+            res = "tiny_aya"
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
@@ -7359,6 +7362,17 @@ class Cohere2Model(TextModel):
         num_attention_heads = self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rotary_pct * (hidden_size // num_attention_heads)))
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Cohere2 runtime in llama.cpp expects no bias tensors;
+        # the actual weight only contains 0-value tensors as bias, we can skip them
+        if name.endswith(".bias"):
+            if torch.any(data_torch != 0):
+                raise ValueError(f"Bias tensor {name!r} is not zero.")
+            logger.debug(f"Skipping bias tensor {name!r} for Cohere2 conversion.")
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("OlmoForCausalLM")
