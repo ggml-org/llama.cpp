@@ -98,7 +98,7 @@ static bool ggml_op_is_empty(enum ggml_op op) {
     }
 }
 
-static inline bool ggml_aux_is_view(const struct ggml_tensor * t) {
+static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
     return t->view_src != NULL;
 }
 

@@ -1497,7 +1497,7 @@ bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tenso
 }
 
 bool ggml_is_view(const struct ggml_tensor * t) {
-    return ggml_aux_is_view(t);
+    return ggml_impl_is_view(t);
 }
 
 // check if t1 can be represented as a repetition of t0
