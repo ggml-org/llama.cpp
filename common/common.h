@@ -332,7 +332,7 @@ struct common_params {
     int32_t n_gpu_layers       = 99;               // number of layers to store in VRAM (99 - offload all, unified cache handles memory)
     int32_t main_gpu           = 0;                // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};              // how split tensors should be distributed across GPUs
-    bool    fit_params         = true;             // auto-fit model to VRAM via llama_params_fit
+    bool    fit_params         = false;            // auto-fit model to VRAM via llama_params_fit (use -fit on to enable)
     size_t  fit_params_target  = 1024 * 1024*1024; // margin per device in bytes for fitting parameters to free memory
     int32_t fit_params_min_ctx = 4096;             // minimum context size to set when trying to reduce memory use
     float   gpu_memory_pct     = 0.0f;             // percentage of GPU memory to use (0 = use fit_params_target instead)

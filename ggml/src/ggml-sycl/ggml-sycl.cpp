@@ -25158,10 +25158,14 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Overhead: one ext_oneapi_submit_barrier() per GPU op (~1-2us each).
     // This is amortized by avoiding the heavier full-queue wait at transitions.
     const bool          cpu_offload_active = ggml_sycl_cpu_offload_enabled() && ggml_sycl_info().has_cpu_device;
-    // Compute buffer mirror: allocate host-pinned mirror of VRAM compute buffer (once).
-    // Enables zero-staging for CPU ops: get_host_ptr returns mirror pointer, boundary
-    // memcpys replace per-op D2H/H2D staging (~200+ copies → ~5-7 per token).
-    if (cpu_offload_active && !ggml_sycl_compute_mirror_active()) {
+    // Compute buffer mirror: opt-in via GGML_SYCL_HOST_COMPUTE=1.
+    // The per-op staging path is the default (proven correct).  The mirror has
+    // a boundary-sync bug with recycled compute buffer offsets.
+    static const bool host_compute_enabled = [] {
+        const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
+        return env && (std::string(env) == "1" || std::string(env) == "true");
+    }();
+    if (cpu_offload_active && host_compute_enabled && !ggml_sycl_compute_mirror_active()) {
         for (int i = 0; i < cgraph->n_nodes; i++) {
             ggml_tensor * node = cgraph->nodes[i];
             if (node && node->buffer && node->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device)) {
