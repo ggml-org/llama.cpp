@@ -111,6 +111,7 @@ class TaskState:
     correct: bool = False
     status: str = "pending"
     tokens: Optional[int] = None
+    reasoning_content: Optional[str] = None
 
 
 class EvalState:
@@ -185,7 +186,8 @@ class EvalState:
         grader_log: Dict[str, Any],
         correct: bool,
         status: str,
-        tokens: Optional[int] = None
+        tokens: Optional[int] = None,
+        reasoning_content: Optional[str] = None
     ):
         if "cases" not in self.task_states:
             self.task_states["cases"] = {}
@@ -199,7 +201,8 @@ class EvalState:
             "grader_log": grader_log,
             "correct": correct,
             "status": status,
-            "tokens": tokens
+            "tokens": tokens,
+            "reasoning_content": reasoning_content
         }
 
         if correct:
@@ -246,7 +249,8 @@ class EvalState:
                     "grader_log": {},
                     "correct": False,
                     "status": "pending",
-                    "tokens": None
+                    "tokens": None,
+                    "reasoning_content": None
                 }
 
         data = {
@@ -303,9 +307,11 @@ class EvalState:
 
             tokens = case.get("tokens")
             tokens_str = str(tokens) if tokens is not None else ""
+            reasoning_content = case.get("reasoning_content", "") or ""
 
             result_escaped = self._escape_html(result)
             prompt_escaped = self._escape_html(prompt)
+            reasoning_escaped = self._escape_html(reasoning_content)
             grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
 
             rows.append(f"""<tr class="task-row" onclick="toggleDetails('{task_id}')">
@@ -320,6 +326,8 @@ class EvalState:
                     <div class="details-content">
                         <h4>Prompt</h4>
                         <pre>{prompt_escaped}</pre>
+                        <h4 onclick="toggleReasoning('{task_id}')" style="cursor:pointer">Reasoning &#9654;</h4>
+                        <pre id="reasoning-{task_id}" style="display:none">{reasoning_escaped}</pre>
                         <h4>Result</h4>
                         <pre>{result_escaped}</pre>
                         <h4>Grader Log</h4>
@@ -392,6 +400,14 @@ class EvalState:
             var row = document.getElementById('details-' + taskId);
             row.classList.toggle('open');
         }}
+        function toggleReasoning(taskId) {{
+            var el = document.getElementById('reasoning-' + taskId);
+            if (el.style.display === 'none') {{
+                el.style.display = 'block';
+            }} else {{
+                el.style.display = 'none';
+            }}
+        }}
     </script>
 </body>
 </html>"""
@@ -452,7 +468,8 @@ class EvalState:
         cases = self.task_states.get("cases", {})
         pending = []
         for i, task_id in self.all_tasks:
-            if cases.get(task_id, {}).get("status") != "ok":
+            status = cases.get(task_id, {}).get("status", "pending")
+            if status != "ok":
                 pending.append((i, task_id))
         return pending
 
@@ -883,20 +900,22 @@ class Processor:
         server_url: str,
         grader: Grader,
         model_name: Optional[str] = None,
-        threads: int = 32
+        threads: int = 32,
+        n_predict: int = -1
     ):
         self.server_url = server_url
         self.grader = grader
         self.model_name = model_name
         self.threads = threads
+        self.n_predict = n_predict
 
-    def _make_request(self, eval_state: EvalState, prompt: str) -> Tuple[Dict[str, Any], int]:
+    def _make_request(self, eval_state: EvalState, prompt: str) -> Tuple[Dict[str, Any], int, str]:
         url = f"{self.server_url}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
-            "n_predict": eval_state.sampling_config.get("n_predict", -1)
+            "n_predict": self.n_predict
         }
         if eval_state.sampling_config.get("temperature") is not None:
             data["temperature"] = eval_state.sampling_config["temperature"]
@@ -911,7 +930,8 @@ class Processor:
         response.raise_for_status()
         result = response.json()
         tokens = result.get("usage", {}).get("completion_tokens", 0)
-        return result, tokens
+        finish_reason = result.get("choices", [{}])[0].get("finish_reason", "stop")
+        return result, tokens, finish_reason
 
     def _process_single_case(self, eval_state: EvalState, i: int, task_id: str) -> TaskState:
         question, prompt, gold = eval_state.get_case(i)
@@ -923,10 +943,18 @@ class Processor:
         )
 
         try:
-            response, tokens = self._make_request(eval_state, prompt)
+            response, tokens, finish_reason = self._make_request(eval_state, prompt)
             result = response["choices"][0]["message"]["content"]
+            reasoning_content = response["choices"][0].get("message", {}).get("reasoning_content")
             task_state.result = result
             task_state.tokens = tokens
+            task_state.reasoning_content = reasoning_content
+
+            if finish_reason != "stop":
+                task_state.status = f"error: finish_reason={finish_reason}"
+                eval_state.add_result(task_id, prompt, gold, result, None, {"finish_reason": finish_reason}, False, task_state.status, tokens, reasoning_content)
+                eval_state.dump()
+                return task_state
 
             result_truncated = self.grader._truncate_response(result, max_lines=10)
             is_correct, extracted = self.grader.grade(gold, result_truncated, prompt)
@@ -943,7 +971,7 @@ class Processor:
             task_state.grader_log = grader_log
             task_state.status = "ok"
 
-            eval_state.add_result(task_id, prompt, gold, result, extracted, grader_log, is_correct, "ok", tokens)
+            eval_state.add_result(task_id, prompt, gold, result, extracted, grader_log, is_correct, "ok", tokens, reasoning_content)
 
             eval_state.dump()
 
@@ -1164,7 +1192,7 @@ def main():
         if args.grader_type == "llm" and not args.judge_server:
             print("Warning: Using same server for LLM judge (no --judge-server specified)")
 
-        sampling_config = {"n_predict": args.n_predict}
+        sampling_config = {}
         if args.temperature is not None:
             sampling_config["temperature"] = args.temperature
         if args.top_k is not None:
@@ -1190,7 +1218,8 @@ def main():
         server_url=args.server,
         grader=grader,
         model_name=args.model,
-        threads=args.threads
+        threads=args.threads,
+        n_predict=args.n_predict
     )
 
     processor.evaluate(eval_state, verbose=args.verbose, resume=resume)
