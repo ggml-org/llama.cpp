@@ -59,4 +59,9 @@ bool   ggml_sycl_compute_mirror_active();
 void   ggml_sycl_compute_mirror_sync_to_host(const ggml_tensor * t, sycl::queue * q);
 void   ggml_sycl_compute_mirror_sync_to_device(const ggml_tensor * t, sycl::queue * q);
 
+// HOST_COMPUTE host_task mode: when active, CPU ops run as host_task
+// callbacks on gpu_q instead of parallel_for on cpu_q.  Activated when
+// GGML_SYCL_HOST_COMPUTE=1 + CPU offload is active.
+void   ggml_sycl_host_task_mode_set(bool active);
+
 #endif // GGML_SYCL_CPU_DISPATCH_HPP

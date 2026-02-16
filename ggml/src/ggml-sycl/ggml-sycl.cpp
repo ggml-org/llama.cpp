@@ -25178,6 +25178,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
     }
+    // Enable host_task mode when HOST_COMPUTE is active.
+    // Compute buffers are host-pinned USM — CPU ops access t->data directly.
+    // host_task on gpu_q eliminates cross-queue sync overhead (~10x faster per op).
+    ggml_sycl_host_task_mode_set(cpu_offload_active && host_compute_enabled);
     // IMPORTANT: node_cpu_flags MUST remain in scope for the entire function
     // because g_preclassified_cpu_flags holds a raw pointer to its data.
     std::vector<int8_t> node_cpu_flags;
