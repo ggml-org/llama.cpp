@@ -1127,7 +1127,7 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     auto run_mul_mat = [=]() {
         ggml_from_float_t    from_float_fn = nullptr;
         size_t               q_row_size    = 0;
-        std::vector<uint8_t> src1_q_buf;
+        static thread_local std::vector<uint8_t> src1_q_buf;
 
         if (use_vec_dot) {
             const ggml_type vec_dot_type   = cpu_traits->vec_dot_type;
@@ -1140,7 +1140,7 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         }
 
         // Dequant/conversion buffer for non-F32 weights (only for GEMM fallback path)
-        std::vector<float> src0_f32_buf;
+        static thread_local std::vector<float> src0_f32_buf;
         if (src0_quantized && !use_vec_dot) {
             src0_f32_buf.resize(static_cast<size_t>(N) * K);
         }
@@ -1174,15 +1174,19 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                         const int target_tasks = std::max(1, n_threads_hint * ggml_sycl_cpu_vecdot_tasks_per_thread());
                         const int grain_from_target = std::max(1, (N_int + target_tasks - 1) / target_tasks);
                         const int grain = std::max(grain_from_target, ggml_sycl_cpu_vecdot_min_rows_per_task());
+                        // Extract pointer before parallel_for: src1_q_buf is static thread_local,
+                        // so TBB worker threads would see their own empty instances.
+                        // Capturing the raw pointer ensures all workers use the populated buffer.
+                        uint8_t * src1_q_data = src1_q_buf.data();
                         ggml_sycl_tbb::parallel_for(
                             ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
-                            [&](const ggml_sycl_tbb::blocked_range<int> & r) {
+                            [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
                                 for (int n = r.begin(); n < r.end(); n++) {
                                     const void * weight_row = src0_batch + n * nb01;
                                     for (dnnl_dim_t m = 0; m < M; m++) {
                                         float dot_result = 0.0f;
                                         cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row,
-                                                            0, src1_q_buf.data() + m * q_row_size, 0, 1);
+                                                            0, src1_q_data + m * q_row_size, 0, 1);
                                         dst_batch[m * ldc + n] = dot_result;
                                     }
                                 }
