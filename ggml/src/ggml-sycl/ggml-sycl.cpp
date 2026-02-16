@@ -25682,9 +25682,10 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         const ggml_tensor * src = t->src[s];
                         if (!src->buffer) continue;
                         if (ggml_backend_buffer_is_host(src->buffer)) continue;
-                        // MUL_MAT src[0] = weights: cpu_mul_mat gets data from
-                        // host cache, not from src->data directly. Allow these.
-                        if (t->op == GGML_OP_MUL_MAT && s == 0) continue;
+                        // Weight tensors (norm weights, MUL_MAT weights) are
+                        // CPU-accessible via host cache / direct host pointer.
+                        // KV cache and other device-only tensors are NOT.
+                        if (ggml_sycl_tensor_is_weight(src)) continue;
                         // Non-host, non-weight buffer → device memory, can't access
                         return false;
                     }
@@ -25716,50 +25717,48 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         j++;
                     }
 
-                    // Submit ONE host_task for the entire CPU batch.
-                    auto & sctx = *sycl_ctx;
-                    sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
-                        cgh.host_task([&sctx, cpu_batch]() {
-                            ggml_sycl_batched_mode_set(true);
-                            ggml_sycl_host_task_mode_set(false);
-                            for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
-                                ggml_tensor * n = cpu_batch[bi];
+                    // Execute CPU batch directly on the main thread.
+                    // Previously used host_task which ran on a SYCL worker thread,
+                    // but that caused a race condition on g_batched_mode/g_host_task_mode
+                    // globals (not thread_local). Direct execution is safe because:
+                    // 1. stream->wait() drains pending GPU work (results available)
+                    // 2. All flag access is single-threaded (no race)
+                    // 3. Compute buffers are host-pinned USM (CPU-accessible)
+                    sycl_ctx->stream()->wait();
 
-                                // Try fusion with next node in batch
-                                if (bi + 1 < cpu_batch.size()) {
-                                    ggml_tensor * next = cpu_batch[bi + 1];
-                                    if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
-                                        && next->src[0] == n) {
-                                        if (ggml_sycl_compute_fused_rms_norm_mul(sctx, n, next)) {
-                                            bi++;
-                                            continue;
-                                        }
-                                    }
-                                    if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
-                                        && next->src[0] == n) {
-                                        if (ggml_sycl_compute_fused_add_rms_norm(sctx, n, next)) {
-                                            bi++;
-                                            continue;
-                                        }
-                                    }
-                                }
+                    ggml_sycl_batched_mode_set(true);
+                    ggml_sycl_host_task_mode_set(false);
+                    for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
+                        ggml_tensor * n = cpu_batch[bi];
 
-                                // Call CPU dispatch directly — these nodes are already
-                                // pre-classified as CPU.  Do NOT call ggml_sycl_compute_forward()
-                                // because should_dispatch_to_cpu() uses thread_local state
-                                // that isn't set on the host_task thread, causing fallthrough
-                                // to GPU dispatch → deadlock on the in-order queue.
-                                bool ok = ggml_sycl_compute_forward_cpu(sctx, n);
-                                if (!ok) {
-                                    fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
-                                            ggml_op_name(n->op), n->name ? n->name : "?");
+                        // Try fusion with next node in batch
+                        if (bi + 1 < cpu_batch.size()) {
+                            ggml_tensor * next = cpu_batch[bi + 1];
+                            if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
+                                && next->src[0] == n) {
+                                if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, n, next)) {
+                                    bi++;
+                                    continue;
                                 }
-                                GGML_ASSERT(ok);
                             }
-                            ggml_sycl_batched_mode_set(false);
-                            ggml_sycl_host_task_mode_set(true);
-                        });
-                    });
+                            if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
+                                && next->src[0] == n) {
+                                if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, n, next)) {
+                                    bi++;
+                                    continue;
+                                }
+                            }
+                        }
+
+                        bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, n);
+                        if (!ok) {
+                            fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
+                                    ggml_op_name(n->op), n->name ? n->name : "?");
+                        }
+                        GGML_ASSERT(ok);
+                    }
+                    ggml_sycl_batched_mode_set(false);
+                    ggml_sycl_host_task_mode_set(true);
 
                     // Advance loop index past the batch
                     i = j - 1;  // -1 because loop will i++
