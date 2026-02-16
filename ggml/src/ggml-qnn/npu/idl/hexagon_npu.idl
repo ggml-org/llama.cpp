@@ -1,0 +1,161 @@
+#include "AEEStdDef.idl"
+#include "AEEStdErr.idl"
+#include "remote.idl"
+
+const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
+const uint32_t DEVICE_TENSOR_MAX_SRC = 5;
+const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 16;
+const uint32_t QUANT_BLOCK_SIZE = 32;
+const uint32_t QUANT_K_BLOCK_SIZE = 256;
+const uint32_t QUANT_K_SCALE_SIZE = 12;
+
+const uint32_t NPU_ROPE_TYPE_NEOX = 2;
+const uint32_t NPU_ROPE_TYPE_MROPE = 8;
+const uint32_t NPU_ROPE_TYPE_VISION = 24;
+
+const uint32_t NPU_THREAD_STACK_SIZE = 64 * 1024;
+
+interface npu_device : remote_handle64{
+
+    typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];
+    typedef uint64_t nb_type[DEVICE_TENSOR_MAX_DIMS];
+    typedef int32_t param_type[DEVICE_TENSOR_MAX_OP_PARAMS];
+    typedef uint64_t tensor_handle_t;
+    typedef uint64_t graph_handle_t;
+
+    const graph_handle_t INVALID_DEVICE_GRAPH_HANDLE = 0;
+    const tensor_handle_t INVALID_DEVICE_TENSOR_HANDLE = 0;
+
+    typedef uint16_t fp16_t;
+
+    struct block_q4_0 {
+        fp16_t d;
+        uint8_t qs[QUANT_BLOCK_SIZE / 2];
+    };
+
+    struct block_q4_k {
+        fp16_t d;
+        fp16_t dmin;
+        uint8_t scales[QUANT_K_SCALE_SIZE];
+        uint8_t qs[QUANT_K_BLOCK_SIZE / 2];
+    };
+
+    struct block_q8_0 {
+        fp16_t d;
+        int8_t qs[QUANT_BLOCK_SIZE];
+    };
+
+    enum tensor_op {
+        NPU_OP_MUL_MAT,
+        NPU_OP_ADD,
+        NPU_OP_SUB,
+        NPU_OP_MUL,
+        NPU_OP_RMS_NORM,
+        NPU_OP_FLASH_ATTN,
+        NPU_OP_ROPE,
+        NPU_OP_GLU,
+        NPU_OP_GET_ROWS,
+        NPU_OP_SET_ROWS,
+        NPU_OP_CPY,
+        NPU_OP_COUNT
+    };
+
+    enum glu_op {
+        NPU_GLU_OP_REGLU,
+        NPU_GLU_OP_GEGLU,
+        NPU_GLU_OP_SWIGLU,
+        NPU_GLU_OP_GEGLU_ERF,
+        NPU_GLU_OP_GEGLU_QUICK,
+        NPU_GLU_OP_COUNT
+    };
+
+    enum tensor_data_type {
+        NPU_DATA_TYPE_F32,
+        NPU_DATA_TYPE_F16,
+        NPU_DATA_TYPE_I32,
+        NPU_DATA_TYPE_I64,
+        NPU_DATA_TYPE_Q8_0,
+        NPU_DATA_TYPE_Q4_0,
+        NPU_DATA_TYPE_Q4_K,
+        NPU_DATA_TYPE_COUNT
+    };
+
+    struct tensor_spec {
+        ne_type ne;
+        nb_type nb;
+        tensor_data_type type;
+    };
+
+    struct tensor_op_spec {
+        tensor_op op;
+        param_type params;
+    };
+
+    struct tensor_update_config {
+        tensor_op op;
+        param_type params;
+        tensor_handle_t src_handles[DEVICE_TENSOR_MAX_SRC];
+    };
+
+    struct tensor_config {
+        ne_type ne;
+        nb_type nb;
+        long buffer_fd;
+        uint64_t offset;
+        uint64_t size;
+        tensor_data_type type;
+        boolean is_constant;
+    };
+
+    AEEResult device_get_alignment(
+        rout uint32_t alignment
+    );
+
+    AEEResult device_support_op(
+        in tensor_op_spec op_spec,
+        in tensor_spec dst,
+        in sequence<tensor_spec> srcs,
+        rout boolean is_supported
+    );
+
+    AEEResult tensor_init(
+        in tensor_config info,
+        rout tensor_handle_t tensor_handle
+    );
+
+    AEEResult tensor_update_params(
+        in tensor_handle_t tensor_handle,
+        in tensor_update_config config
+    );
+
+    AEEResult tensor_free(
+        in tensor_handle_t tensor_handle
+    );
+
+    AEEResult tensors_free(
+        in sequence<tensor_handle_t> tensor_handles
+    );
+
+    AEEResult graph_init(
+        rout graph_handle_t graph_handle
+    );
+
+    AEEResult graph_set_tensor(
+        in graph_handle_t graph_handle,
+        in sequence<tensor_handle_t> tensor_handles
+    );
+
+    AEEResult graph_set_tensor_with_param(
+        in graph_handle_t graph_handle,
+        in sequence<tensor_handle_t> tensor_handles,
+        in sequence<tensor_update_config> tensor_params
+    );
+
+    AEEResult graph_compute(
+        in graph_handle_t graph_handle
+    );
+
+    AEEResult graph_free(
+        in graph_handle_t graph_handle
+    );
+};
