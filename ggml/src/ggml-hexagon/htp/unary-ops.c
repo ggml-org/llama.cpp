@@ -113,7 +113,7 @@ static void scale_f32(const float * restrict src,
         const uint8_t * restrict src_local = (const uint8_t *)src + (ir * row_size);
         uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * row_size);
 
-        hvx_scale_offset_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
+        hvx_scale_offset_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
     }
 }
 
@@ -215,7 +215,6 @@ static void unary_job_f32_per_thread(unsigned int nth, unsigned int ith, void * 
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
 
-    // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
         const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
