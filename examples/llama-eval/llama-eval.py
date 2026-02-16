@@ -460,15 +460,15 @@ class Processor:
 
         print(f"\nProcessing {n_cases} {self.dataset_type.upper()} questions...")
         print(f"Server: {self.server_url} (model: {self.model_name})")
-        print(f"Threads: {self.threads}")
-        print(f"Max tokens: {self.n_predict}")
-        print(f"Seed: {self.seed}")
-        print(f"Sampling: temp={self.sampling_config.get('temperature', 'skip')}, top-k={self.sampling_config.get('top_k', 'skip')}, top-p={self.sampling_config.get('top_p', 'skip')}, min-p={self.sampling_config.get('min_p', 'skip')}")
         print(f"Grader: {self.grader.grader_type}", end="")
         if self.grader.grader_type == "llm":
             judge_model = self.judge_model_name if self.judge_model_name else self.model_name
             print(f" (judge server: {self.judge_server_url}, model: {judge_model})", end="")
         print()
+        print(f"Threads: {self.threads}")
+        print(f"Max tokens: {self.n_predict}")
+        print(f"Seed: {self.seed}")
+        print(f"Sampling: temp={self.sampling_config.get('temperature', 'skip')}, top-k={self.sampling_config.get('top_k', 'skip')}, top-p={self.sampling_config.get('top_p', 'skip')}, min-p={self.sampling_config.get('min_p', 'skip')}")
         print()
 
         dataset_size = len(self.dataset.questions)

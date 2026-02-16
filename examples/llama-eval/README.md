@@ -14,7 +14,7 @@ Simple evaluation tool for llama.cpp with support for multiple datasets.
 ## Usage
 
 ```bash
-python llama-eval-new.py \
+python llama-eval.py \
   --server http://127.0.0.1:8013 \
   --model gpt-oss-20b-hf-low \
   --judge-model gpt-oss-20b-hf-medium \
