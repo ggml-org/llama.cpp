@@ -27,11 +27,13 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		initialMessage?: string;
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
+		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
@@ -39,11 +41,13 @@
 	let {
 		class: className,
 		disabled = false,
+		initialMessage = '',
 		isLoading = false,
 		onFileRemove,
 		onFileUpload,
 		onSend,
 		onStop,
+		onSystemPromptAdd,
 		showHelperText = true,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
@@ -53,14 +57,27 @@
 	let currentConfig = $derived(config());
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
-	let message = $state('');
+	let message = $derived(initialMessage);
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
-	let previousIsLoading = $state(isLoading);
+	let previousIsLoading = $derived(isLoading);
+	let previousInitialMessage = $derived(initialMessage);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
+
+	// Sync message when initialMessage prop changes (e.g., after draft restoration)
+	$effect(() => {
+		if (initialMessage !== previousInitialMessage) {
+			message = initialMessage;
+			previousInitialMessage = initialMessage;
+		}
+	});
+
+	function handleSystemPromptClick() {
+		onSystemPromptAdd?.({ message, files: uploadedFiles });
+	}
 
 	// Check if model is selected (in ROUTER mode)
 	let conversationModel = $derived(
@@ -272,7 +289,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
+	class="relative {INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
 		? 'cursor-not-allowed opacity-60'
 		: ''} {className}"
 	data-slot="chat-form"
@@ -287,10 +304,11 @@
 	/>
 
 	<div
-		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
+		class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
 		onpaste={handlePaste}
 	>
 		<ChatFormTextarea
+			class="px-5 py-1.5 md:pt-0"
 			bind:this={textareaRef}
 			bind:value={message}
 			onKeydown={handleKeydown}
@@ -298,6 +316,7 @@
 		/>
 
 		<ChatFormActions
+			class="px-3"
 			bind:this={chatFormActionsRef}
 			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
 			hasText={message.trim().length > 0}
@@ -308,6 +327,7 @@
 			onFileUpload={handleFileUpload}
 			onMicClick={handleMicClick}
 			onStop={handleStop}
+			onSystemPromptClick={handleSystemPromptClick}
 		/>
 	</div>
 </form>

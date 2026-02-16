@@ -90,6 +90,9 @@
 
 	const processingState = useProcessingState();
 
+	// Local state for raw output toggle (per message)
+	let showRawOutput = $state(false);
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
@@ -102,7 +105,7 @@
 
 	const { handleModelChange } = useModelChangeValidation({
 		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
-		onSuccess: (modelName) => onRegenerate(modelName)
+		onSuccess: (modelName: string) => onRegenerate(modelName)
 	});
 
 	function handleCopyModel() {
@@ -238,7 +241,7 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		{#if config().disableReasoningFormat}
+		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
@@ -352,6 +355,9 @@
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
+			rawOutputEnabled={showRawOutput}
+			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 		/>
 	{/if}
 </div>

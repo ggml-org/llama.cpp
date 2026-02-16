@@ -3,10 +3,8 @@
  * Handles text file detection, reading, and validation
  */
 
-import {
-	DEFAULT_BINARY_DETECTION_OPTIONS,
-	type BinaryDetectionOptions
-} from '$lib/constants/binary-detection';
+import { DEFAULT_BINARY_DETECTION_OPTIONS } from '$lib/constants/binary-detection';
+import type { BinaryDetectionOptions } from '$lib/types';
 import { FileExtensionText } from '$lib/enums';
 
 /**

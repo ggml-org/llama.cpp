@@ -132,6 +132,56 @@ static void rms_norm_htp_f32(const float * restrict src,
     }
 }
 
+static void sqr_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
+        }
+
+        if (1 == opt_path) {
+            hvx_sqr_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        } else {
+            hvx_sqr_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        }
+    }
+}
+
+static void sqrt_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
+        }
+
+        if (1 == opt_path) {
+            hvx_sqrt_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        } else {
+            hvx_sqrt_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        }
+    }
+}
+
 static void unary_job_f32_per_thread(const struct htp_tensor * src,
                                      struct htp_tensor *       dst,
                                      uint8_t *                 spad,
@@ -181,6 +231,12 @@ static void unary_job_f32_per_thread(const struct htp_tensor * src,
         case HTP_OP_SCALE:
             scale_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
             break;
+        case HTP_OP_SQR:
+            sqr_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
+        case HTP_OP_SQRT:
+            sqrt_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
 
         default:
             break;
@@ -217,6 +273,14 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_SCALE:
             unary_op_func = unary_job_dispatcher_f32;
             op_type       = "scale-f32";
+            break;
+        case HTP_OP_SQR:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "sqr-f32";
+            break;
+        case HTP_OP_SQRT:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "sqrt-f32";
             break;
 
         default:
