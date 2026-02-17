@@ -1,16 +1,17 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout (constant_id = 0) const uint32_t WorkGroupSize = 128;
-layout (constant_id = 1) const uint32_t Br = 1;
-layout (constant_id = 2) const uint32_t Bc = 32;
-layout (constant_id = 3) const uint32_t HSK = 32;
-layout (constant_id = 4) const uint32_t HSV = 32;
-layout (constant_id = 5) const uint32_t Clamp = 0;
-layout (constant_id = 6) const uint32_t D_split = 16;
-layout (constant_id = 7) const uint32_t SubGroupSize = 32;
-layout (constant_id = 8) const uint32_t SHMEM_STAGING = 0;
-layout (constant_id = 9) const uint32_t Flags = 0;
+layout (constant_id =  0) const uint32_t WorkGroupSize = 128;
+layout (constant_id =  1) const uint32_t Br = 1;
+layout (constant_id =  2) const uint32_t Bc = 32;
+layout (constant_id =  3) const uint32_t HSK = 32;
+layout (constant_id =  4) const uint32_t HSV = 32;
+layout (constant_id =  5) const uint32_t Clamp = 0;
+layout (constant_id =  6) const uint32_t D_split = 16;
+layout (constant_id =  7) const uint32_t row_split = 1;
+layout (constant_id =  8) const uint32_t SubGroupSize = 32;
+layout (constant_id =  9) const uint32_t SHMEM_STAGING = 0;
+layout (constant_id = 10) const uint32_t Flags = 0;
 
 const bool USE_MASK_OPT  = (Flags & 1) != 0;
 const bool MASK_ENABLE   = (Flags & 2) != 0;
@@ -65,8 +66,6 @@ layout (push_constant) uniform parameter {
 
 #define SINK_ENABLE_BIT (1<<24)
 #define N_LOG2_MASK 0xFFFF
-
-#define SUBGROUPS_DISABLED 0xFFFFFFFF
 
 layout (binding = 4) readonly buffer S {float data_s[];};
 

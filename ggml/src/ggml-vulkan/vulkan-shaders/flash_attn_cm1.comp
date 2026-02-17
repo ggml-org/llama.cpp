@@ -19,7 +19,6 @@
 const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
 
-const uint32_t row_split = Bc / MatBc;
 const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = gl_WorkGroupSize.x / row_split;
 const uint32_t cols_per_thread = Bc / cols_per_iter;
