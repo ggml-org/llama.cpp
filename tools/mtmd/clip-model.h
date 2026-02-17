@@ -383,7 +383,12 @@ struct clip_model {
 
     bool audio_has_stack_frames() const {
         return proj_type == PROJECTOR_TYPE_ULTRAVOX
-            || proj_type == PROJECTOR_TYPE_VOXTRAL;
+            || proj_type == PROJECTOR_TYPE_VOXTRAL
+            || proj_type == PROJECTOR_TYPE_VOXTRAL_REALTIME;
+    }
+
+    bool audio_is_causal() const {
+        return proj_type == PROJECTOR_TYPE_VOXTRAL_REALTIME;
     }
 };
 

@@ -108,6 +108,16 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
+            // Voxtral Realtime: adaptive RMSNorm (ada_rms_norm_t_cond)
+            // Uses precomputed ada_scale per layer (stored as ada_norm_up tensor
+            // which has been precomputed as: scale = 1 + up(GELU(down(t_cond)))
+            // where t_cond is the sinusoidal time embedding for the default delay)
+            if (model.layers[il].ffn_ada_norm_up) {
+                // ffn_ada_norm_up stores the precomputed (1 + ada_scale) vector [n_embd]
+                cur = ggml_mul(ctx0, cur, model.layers[il].ffn_ada_norm_up);
+                cb(cur, "ffn_ada_norm", il);
+            }
+
             cur = build_ffn(cur,
                     model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,

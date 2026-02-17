@@ -29,6 +29,7 @@ add_library(mtmd
             models/qwen3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
+            models/voxtral-realtime-enc.cpp
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             )
@@ -94,4 +95,15 @@ if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
 target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# Voxtral Realtime streaming tool
+set(TARGET llama-voxtral-stream)
+add_executable         (${TARGET} voxtral-stream-cli.cpp voxtral-stream.cpp)
+set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-voxtral-stream)
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
+target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
+target_include_directories(${TARGET} PRIVATE ../../vendor)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

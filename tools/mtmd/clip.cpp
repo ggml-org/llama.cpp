@@ -832,6 +832,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_whisper_enc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+            {
+                builder = std::make_unique<clip_graph_voxtral_realtime_enc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_KIMIVL:
             {
                 builder = std::make_unique<clip_graph_kimivl>(ctx, img);
@@ -1246,6 +1250,20 @@ struct clip_model_loader {
 
                         // audio preprocessing params
                         hparams.audio_chunk_len    = 30; // in seconds
+                        hparams.audio_sample_rate  = 16000;
+                        hparams.audio_n_fft        = 400;
+                        hparams.audio_window_len   = 400;
+                        hparams.audio_hop_len      = 160;
+                    } break;
+                case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+                    {
+                        get_u32(KEY_A_PROJ_STACK_FACTOR, hparams.proj_stack_factor, true);
+                        hparams.ffn_op = FFN_SILU; // SwiGLU = SiLU with gate
+                        log_ffn_op = "silu (swiglu with gate)";
+
+                        // audio preprocessing params (same as Whisper)
+                        // Use 30s chunks for now (same as Whisper); streaming will be added later
+                        hparams.audio_chunk_len    = 30;
                         hparams.audio_sample_rate  = 16000;
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
@@ -1757,6 +1775,15 @@ struct clip_model_loader {
                     model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+                {
+                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
+                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
                 } break;
             case PROJECTOR_TYPE_MUSIC_FLAMINGO:
                 {
@@ -3473,6 +3500,23 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     n_patches /= 2;
                 }
             } break;
+        case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+            {
+                int64_t conv0_out = img->nx;  // causal conv0: stride=1, same length
+
+                // causal conv1: kernel=3, stride=2
+                int64_t ks = 3, stride = 2, pad_total = 1;
+                double n_out_f = (double)(conv0_out + pad_total - ks) / stride + 1.0;
+                n_patches = (int64_t)ceil(n_out_f);
+
+                // left-truncate to multiple of stack_factor
+                const int proj_stack_factor = ctx->model.hparams.proj_stack_factor;
+                GGML_ASSERT(proj_stack_factor > 0);
+                n_patches = (n_patches / proj_stack_factor) * proj_stack_factor;
+
+                // stack frames (4x downsample)
+                n_patches /= proj_stack_factor;
+            } break;
         case PROJECTOR_TYPE_GLMA:
             {
                 n_patches = img->nx;
@@ -3556,7 +3600,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_F32);
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
+        if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+            LOG_INF("SET_INPUT_F32: %s shape=[%lld,%lld,%lld] nbytes=%zu values_size=%zu\n",
+                    name, (long long)cur->ne[0], (long long)cur->ne[1], (long long)cur->ne[2],
+                    ggml_nbytes(cur), values.size() * sizeof(float));
+        }
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
+        // Verify immediately after setting
+        if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+            const int check_n = std::min((int64_t)8, ggml_nelements(cur));
+            std::vector<float> verify(check_n);
+            ggml_backend_tensor_get(cur, verify.data(), 0, check_n * sizeof(float));
+            LOG_INF("SET_INPUT_F32 VERIFY %s: ", name);
+            for (int i = 0; i < check_n; i++) {
+                LOG_INF("%.4f ", verify[i]);
+            }
+            LOG_INF("\n");
+        }
     };
 
     auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
@@ -3613,6 +3673,28 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         const int n_mel  = mel_inp->ny;
         std::vector<float> inp_raw(n_step * n_mel);
         std::memcpy(inp_raw.data(), mel_inp->buf.data(), n_step * n_mel * sizeof(float));
+
+        // Debug: check mel data
+        if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+            float mel_min = inp_raw[0], mel_max = inp_raw[0];
+            int nan_count = 0;
+            for (size_t i = 0; i < inp_raw.size(); i++) {
+                if (std::isnan(inp_raw[i])) nan_count++;
+                else {
+                    mel_min = std::min(mel_min, inp_raw[i]);
+                    mel_max = std::max(mel_max, inp_raw[i]);
+                }
+            }
+            LOG_INF("MEL DEBUG: n_step=%d, n_mel=%d, buf_size=%zu, inp_raw_size=%zu\n",
+                    n_step, n_mel, mel_inp->buf.size(), inp_raw.size());
+            LOG_INF("MEL DEBUG: range=[%.4f, %.4f], nan_count=%d\n", mel_min, mel_max, nan_count);
+            LOG_INF("MEL DEBUG: first 8 values: ");
+            for (int i = 0; i < std::min(8, (int)inp_raw.size()); i++) {
+                LOG_INF("%.4f ", inp_raw[i]);
+            }
+            LOG_INF("\n");
+        }
+
         set_input_f32("inp_raw", inp_raw);
     }
 
@@ -3874,6 +3956,51 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 set_input_f32("pos_emb", pos_emb);
             } break;
+        case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+            {
+                // Compute the encoder sequence length after causal conv1d
+                GGML_ASSERT(imgs.entries.size() == 1);
+                const auto & mel_inp = imgs.entries[0];
+                const int n_mel_frames = mel_inp->nx;
+
+                // After causal conv0 (kernel=3, stride=1, left-pad=2): same length
+                int64_t conv0_out = n_mel_frames;
+
+                // After causal conv1 (kernel=3, stride=2, left-pad=1):
+                // Python: n_out = ceil((conv0_out + pad_total - ks) / stride + 1)
+                //   pad_total = 3 - 2 = 1
+                //   n_out = ceil((conv0_out + 1 - 3) / 2 + 1) = ceil((conv0_out - 2) / 2 + 1)
+                int64_t ks = 3, stride = 2, pad_total = 1;
+                double n_out_f = (double)(conv0_out + pad_total - ks) / stride + 1.0;
+                int64_t enc_seq_len = (int64_t)ceil(n_out_f);
+
+                // Left-truncate to multiple of stack_factor
+                const int sf = hparams.proj_stack_factor;
+                enc_seq_len = (enc_seq_len / sf) * sf;
+
+                // Fill position IDs: [0, 1, 2, ..., enc_seq_len-1]
+                std::vector<int32_t> pos_ids(enc_seq_len);
+                for (int64_t i = 0; i < enc_seq_len; i++) {
+                    pos_ids[i] = (int32_t)i;
+                }
+                set_input_i32("positions", pos_ids);
+
+                // Fill sliding window + causal attention mask
+                // mask[i][j] = 0.0   if j <= i AND j >= i - (window - 1)
+                // mask[i][j] = -inf  otherwise
+                const int sliding_window = 750;
+                std::vector<float> mask_data(enc_seq_len * enc_seq_len);
+                for (int64_t i = 0; i < enc_seq_len; i++) {
+                    for (int64_t j = 0; j < enc_seq_len; j++) {
+                        if (j <= i && j >= i - (sliding_window - 1)) {
+                            mask_data[i * enc_seq_len + j] = 0.0f;
+                        } else {
+                            mask_data[i * enc_seq_len + j] = -INFINITY;
+                        }
+                    }
+                }
+                set_input_f32("kq_mask", mask_data);
+            } break;
         default:
             GGML_ABORT("Unknown projector type");
     }
@@ -3908,6 +4035,70 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // copy the embeddings to the location passed by the user
     if (vec != nullptr) {
         ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
+    }
+
+    // Debug: verify inp_raw tensor data after graph compute
+    if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+        ggml_tensor * inp_raw_t = ggml_graph_get_tensor(gf, "inp_raw");
+        if (inp_raw_t) {
+            const int64_t nel = ggml_nelements(inp_raw_t);
+            const int check_n = std::min(nel, (int64_t)16);
+            std::vector<float> raw_buf(check_n);
+            ggml_backend_tensor_get(inp_raw_t, raw_buf.data(), 0, check_n * sizeof(float));
+            LOG_INF("INP_RAW VERIFY: shape=[%lld,%lld,%lld], first %d values: ",
+                    (long long)inp_raw_t->ne[0], (long long)inp_raw_t->ne[1], (long long)inp_raw_t->ne[2], check_n);
+            for (int i = 0; i < check_n; i++) {
+                LOG_INF("%.4f ", raw_buf[i]);
+            }
+            LOG_INF("\n");
+        } else {
+            LOG_INF("INP_RAW VERIFY: tensor not found in graph!\n");
+        }
+    }
+
+    // Debug: dump all named intermediate tensors to trace NaN propagation
+    if (std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr) {
+        LOG_INF("\n=== MTMD_DEBUG_GRAPH_TRACE ===\n");
+        const int n_nodes = ggml_graph_n_nodes(gf);
+        for (int ni = 0; ni < n_nodes; ni++) {
+            ggml_tensor * node = ggml_graph_node(gf, ni);
+            if (node->name[0] == '\0') continue; // skip unnamed nodes
+            const int64_t nel = ggml_nelements(node);
+            if (nel == 0) continue;
+            // Only check a sample of values to keep output manageable
+            const int64_t check_n = std::min(nel, (int64_t)64);
+            std::vector<float> buf(check_n);
+            if (node->type == GGML_TYPE_F32) {
+                ggml_backend_tensor_get(node, buf.data(), 0, check_n * sizeof(float));
+            } else if (node->type == GGML_TYPE_F16) {
+                std::vector<uint16_t> buf16(check_n);
+                ggml_backend_tensor_get(node, buf16.data(), 0, check_n * sizeof(uint16_t));
+                for (int64_t i = 0; i < check_n; i++) {
+                    buf[i] = ggml_fp16_to_fp32(buf16[i]);
+                }
+            } else {
+                continue; // skip non-float types
+            }
+            bool has_nan = false, has_inf = false;
+            float vmin = buf[0], vmax = buf[0];
+            for (int64_t i = 0; i < check_n; i++) {
+                if (std::isnan(buf[i])) has_nan = true;
+                if (std::isinf(buf[i])) has_inf = true;
+                if (!std::isnan(buf[i])) {
+                    vmin = std::min(vmin, buf[i]);
+                    vmax = std::max(vmax, buf[i]);
+                }
+            }
+            LOG_INF("  [%3d] %-30s shape=[%lld,%lld,%lld,%lld] %s range=[%.4f,%.4f] %s%s\n",
+                ni, node->name,
+                (long long)node->ne[0], (long long)node->ne[1],
+                (long long)node->ne[2], (long long)node->ne[3],
+                ggml_type_name(node->type),
+                vmin, vmax,
+                has_nan ? "NAN! " : "",
+                has_inf ? "INF! " : "");
+        }
+        LOG_INF("=== END MTMD_DEBUG_GRAPH_TRACE ===\n\n");
     }
 
     // Debug: dump final embeddings if MTMD_DEBUG_EMBEDDINGS is set
@@ -3985,6 +4176,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.projection->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
+        case PROJECTOR_TYPE_VOXTRAL_REALTIME:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_INTERNVL:
@@ -4042,6 +4234,7 @@ bool clip_has_whisper_encoder(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_VOXTRAL:
+        case PROJECTOR_TYPE_VOXTRAL_REALTIME:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
             return true;
         default:

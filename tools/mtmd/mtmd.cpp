@@ -345,6 +345,9 @@ struct mtmd_context {
             case PROJECTOR_TYPE_MUSIC_FLAMINGO:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 break;
+            case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_voxtral_rt>(ctx_a);
+                break;
             case PROJECTOR_TYPE_LFM2A:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;

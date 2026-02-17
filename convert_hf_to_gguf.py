@@ -1866,7 +1866,7 @@ class MmprojModel(ModelBase):
             text_config = {
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
-            self.n_embd_text = text_config.get("hidden_dim", 0)
+            self.n_embd_text = text_config.get("hidden_dim", text_config.get("dim", 0))
 
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
@@ -2538,8 +2538,12 @@ class LlamaModel(TextModel):
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
-        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+        try:
+            hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
+            self.origin_hf_arch = hparams.get('architectures', [None])[0]
+        except Exception:
+            # Mistral-format models may not have config.json
+            self.origin_hf_arch = None
 
     def set_vocab(self):
         if self.origin_hf_arch == "GlmasrModel":
@@ -2605,6 +2609,20 @@ class LlamaModel(TextModel):
                 .reshape(weights.shape))
 
     _experts: list[dict[str, Tensor]] | None = None
+    _ada_norm_down: dict[int, Tensor] = {}  # layer_id -> down projection tensor
+    _ada_time_embd: Tensor | None = None    # precomputed time embedding
+
+    def _get_ada_time_embedding(self, dim: int) -> Tensor:
+        """Compute sinusoidal time embedding for ada_rms_norm_t_cond.
+        Uses default delay of 480ms = 6 delay tokens."""
+        if self._ada_time_embd is None:
+            n_delay_tokens = 6  # 480ms / 80ms per token
+            t_value = float(n_delay_tokens)
+            half_dim = dim // 2
+            inv_freq = torch.exp(-math.log(10000.0) * torch.arange(half_dim).float() / half_dim)
+            emb = t_value * inv_freq
+            self._ada_time_embd = torch.cat([emb.cos(), emb.sin()])
+        return self._ada_time_embd
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
@@ -2618,19 +2636,60 @@ class LlamaModel(TextModel):
             "audio_encoder.",
         ]
 
-        is_multimodal_tensor = "vision_tower" in name \
-            or "vision_model" in name \
-            or "audio_tower" in name \
-            or "model.connector" in name \
-            or "multi_modal_projector" in name \
-            or any(
-                name.startswith(prefix)
-                for prefix in vision_prefixes
-            )
+        # For Voxtral Realtime: tok_embeddings.weight lives inside mm_streams_embeddings
+        # but is needed for the text model (tied embeddings). Extract it.
+        if name == "mm_streams_embeddings.embedding_module.tok_embeddings.weight":
+            name = "tok_embeddings.weight"
+            # Fall through to normal text model processing below
+        else:
+            is_multimodal_tensor = "vision_tower" in name \
+                or "vision_model" in name \
+                or "audio_tower" in name \
+                or "model.connector" in name \
+                or "multi_modal_projector" in name \
+                or "mm_streams_embeddings" in name \
+                or any(
+                    name.startswith(prefix)
+                    for prefix in vision_prefixes
+                )
 
-        if is_multimodal_tensor:
-            return  # skip vision tensors
-        elif self.hf_arch == "LlamaModel":
+            if is_multimodal_tensor:
+                return  # skip vision tensors
+
+        # Voxtral Realtime: handle ada_rms_norm_t_cond tensors
+        # Precompute the adaptive scale per layer and emit as a single tensor
+        if "ada_rms_norm_t_cond" in name:
+            # Extract layer index
+            m = re.search(r'layers\.(\d+)\.ada_rms_norm_t_cond\.(\d+)\.weight', name)
+            if m:
+                layer_id = int(m.group(1))
+                sub_id = int(m.group(2))
+                if sub_id == 0:
+                    # Down projection [ada_dim, n_embd] - store for later
+                    self._ada_norm_down[layer_id] = data_torch.float()
+                    return  # don't emit yet
+                elif sub_id == 2:
+                    # Up projection [n_embd, ada_dim] - compute precomputed scale
+                    ada_up = data_torch.float()
+                    if layer_id in self._ada_norm_down:
+                        ada_down = self._ada_norm_down[layer_id]
+                        n_embd = ada_up.shape[0]
+                        t_cond = self._get_ada_time_embedding(n_embd)
+                        # ada_hidden = GELU(t_cond @ ada_down.T)
+                        ada_hidden = torch.nn.functional.gelu(torch.nn.functional.linear(t_cond, ada_down))
+                        # ada_scale = ada_hidden @ ada_up.T
+                        ada_scale = torch.nn.functional.linear(ada_hidden, ada_up)
+                        # Precomputed: (1 + ada_scale)
+                        precomputed = (1.0 + ada_scale).half()
+                        gguf_name = f"blk.{layer_id}.ffn_ada_norm_up.weight"
+                        logger.info(f"Precomputed ada_norm scale for layer {layer_id}: shape={list(precomputed.shape)}")
+                        yield (gguf_name, precomputed)
+                    else:
+                        logger.warning(f"ada_rms_norm_t_cond up projection for layer {layer_id} without matching down projection")
+                    return
+            return  # skip unrecognized ada tensors
+
+        if self.hf_arch == "LlamaModel":
             name = "model." + name
         elif name.startswith("model.text_model"):
             name = name.replace("text_model.", "") # for SmolVLM
@@ -10154,6 +10213,98 @@ class VoxtralWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_audio_stack_factor(4) # == intermediate_size // hidden_size
 
 
+@ModelBase.register("VoxtralRealtimeForConditionalGeneration")
+class VoxtralRealtimeEncoderModel(MmprojModel):
+    """Audio encoder converter for Voxtral Realtime 4B.
+
+    This model uses a causal transformer encoder (not Whisper bidirectional).
+    Key differences from standard Voxtral:
+    - Causal attention with sliding window (750)
+    - RoPE position encoding (interleaved)
+    - SwiGLU FFN
+    - RMSNorm (not LayerNorm)
+    - Custom bias pattern (wq/wv/wo/w2 have bias, wk has NO bias)
+    - No AvgPool in adapter
+    - Adaptive RMSNorm in decoder (ada_rms_norm_t_cond)
+    """
+    has_vision_encoder = False
+    has_audio_encoder = True
+    is_mistral_format = True
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        # Voxtral Realtime stores audio config under multimodal.whisper_model_args.encoder_args
+        multimodal = self.global_config.get("multimodal", {})
+        whisper_args = multimodal.get("whisper_model_args", {})
+        encoder_args = whisper_args.get("encoder_args", {})
+        if encoder_args:
+            # Map Mistral param names to standard HF-style names for MmprojModel
+            audio_encoding = encoder_args.get("audio_encoding_args", {})
+            return {
+                "hidden_size": encoder_args.get("dim", 1280),
+                "intermediate_size": encoder_args.get("hidden_dim", 5120),
+                "num_hidden_layers": encoder_args.get("n_layers", 32),
+                "num_attention_heads": encoder_args.get("n_heads", 32),
+                "num_mel_bins": audio_encoding.get("num_mel_bins", 128),
+                "layer_norm_eps": encoder_args.get("norm_eps", 1e-5),
+                # Realtime-specific params
+                "causal": encoder_args.get("causal", True),
+                "sliding_window": encoder_args.get("sliding_window", 750),
+                "pos_embed": encoder_args.get("pos_embed", "rope"),
+                "ffn_type": encoder_args.get("ffn_type", "swiglu"),
+                "norm_type": encoder_args.get("norm_type", "rms_norm"),
+                "rope_theta": encoder_args.get("rope_theta", 1000000.0),
+                "head_dim": encoder_args.get("head_dim", 64),
+                "n_kv_heads": encoder_args.get("n_kv_heads", 32),
+                "use_biases": encoder_args.get("use_biases", True),
+            }
+        return None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VOXTRAL_REALTIME)
+        # Downsample factor from config
+        multimodal = self.global_config.get("multimodal", {})
+        whisper_args = multimodal.get("whisper_model_args", {})
+        downsample_factor = whisper_args.get("downsample_args", {}).get("downsample_factor", 4)
+        self.gguf_writer.add_audio_stack_factor(downsample_factor)
+        # Audio mel bins and norm eps
+        audio_config = self.hparams_audio or {}
+        self.gguf_writer.add_audio_num_mel_bins(audio_config.get("num_mel_bins", 128))
+        self.gguf_writer.add_audio_attention_layernorm_eps(audio_config.get("layer_norm_eps", 1e-5))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip language model / decoder tensors (handled by text model converter)
+        if name.startswith("layers.") or name == "norm.weight":
+            return
+        if name == "mm_streams_embeddings.embedding_module.tok_embeddings.weight":
+            return
+
+        # Strip the long prefix for tensor mapping
+        # "mm_streams_embeddings.embedding_module." -> ""
+        name = name.replace("mm_streams_embeddings.embedding_module.", "")
+
+        # Conv bias needs unsqueeze for ggml conv1d
+        if "conv_layers" in name and name.endswith(".bias"):
+            data_torch = data_torch.unsqueeze(-1)
+
+        # Remap conv_layers: 0->1, 1->2 (GGUF uses 1-indexed conv IDs)
+        if "conv_layers.0" in name:
+            name = name.replace("conv_layers.0", "conv_layers.1")
+        elif "conv_layers.1" in name:
+            name = name.replace("conv_layers.1", "conv_layers.2")
+
+        # Remap adapter: audio_language_projection.0->0, .2->1 (sequential for GGUF)
+        if "audio_language_projection.2" in name:
+            name = name.replace("audio_language_projection.2", "audio_language_projection.1")
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("AudioFlamingo3ForConditionalGeneration")
 class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
     def set_gguf_parameters(self):
@@ -11918,8 +12069,13 @@ def main() -> None:
                 logger.error(f"Model {model_architecture} is not supported")
                 sys.exit(1)
         elif args.mmproj:
-            assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
-            model_class = PixtralModel
+            if hparams.get("vision_encoder") is not None:
+                model_class = PixtralModel
+            elif hparams.get("multimodal") is not None:
+                # Voxtral Realtime audio encoder (Mistral format with multimodal config)
+                model_class = VoxtralRealtimeEncoderModel
+            else:
+                raise ValueError("This model does not support multimodal (no vision_encoder or multimodal config found)")
         elif "moe" in hparams:
             model_class = MistralMoeModel
         else:
