@@ -10895,6 +10895,9 @@ class LFM2AudioModel(ConformerAudioModel):
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 
+    def set_vocab(self):
+        self._set_vocab_none()
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
