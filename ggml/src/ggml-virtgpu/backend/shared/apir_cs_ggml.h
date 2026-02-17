@@ -105,6 +105,18 @@ static inline ggml_backend_buffer_t apir_decode_ggml_buffer(apir_decoder * dec) 
 
     apir_decoder_read(dec, buffer_ptr_size, &buffer, buffer_ptr_size);
 
+    // SECURITY: Validate buffer handle against tracked buffers to prevent
+    // guest VM from providing arbitrary host memory addresses
+    if (buffer) {
+        extern std::unordered_set<ggml_backend_buffer_t> backend_buffers;
+        if (backend_buffers.find(buffer) == backend_buffers.end()) {
+            GGML_LOG_WARN("ggml-virtgpu-backend: %s: Invalid buffer handle from guest: %p\n", __func__, (void*)buffer);
+            // Set fatal flag to prevent further processing with invalid handle
+            apir_decoder_set_fatal(dec);
+            return NULL;
+        }
+    }
+
     return buffer;
 }
 
