@@ -1,23 +1,12 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
 import { config } from '$lib/stores/settings.svelte';
-
-export interface LiveProcessingStats {
-	tokensProcessed: number;
-	totalTokens: number;
-	timeMs: number;
-	tokensPerSecond: number;
-	etaSecs?: number;
-}
-
-export interface LiveGenerationStats {
-	tokensGenerated: number;
-	timeMs: number;
-	tokensPerSecond: number;
-}
+import { STATS_UNITS } from '$lib/constants/processing-info';
+import type { ApiProcessingState, LiveProcessingStats, LiveGenerationStats } from '$lib/types';
 
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
 	getProcessingDetails(): string[];
+	getTechnicalDetails(): string[];
 	getProcessingMessage(): string;
 	getPromptProgressText(): string | null;
 	getLiveProcessingStats(): LiveProcessingStats | null;
@@ -138,8 +127,31 @@ export function useProcessingState(): UseProcessingStateReturn {
 
 		const details: string[] = [];
 
+		// Show prompt processing progress with ETA during preparation phase
+		if (stateToUse.promptProgress) {
+			const { processed, total, time_ms, cache } = stateToUse.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed < actualTotal && actualProcessed > 0) {
+				const percent = Math.round((actualProcessed / actualTotal) * 100);
+				const eta = getETASecs(actualProcessed, actualTotal, time_ms);
+
+				if (eta !== undefined) {
+					const etaSecs = Math.ceil(eta);
+					details.push(`Processing ${percent}% (ETA: ${etaSecs}s)`);
+				} else {
+					details.push(`Processing ${percent}%`);
+				}
+			}
+		}
+
 		// Always show context info when we have valid data
-		if (stateToUse.contextUsed >= 0 && stateToUse.contextTotal > 0) {
+		if (
+			typeof stateToUse.contextTotal === 'number' &&
+			stateToUse.contextUsed >= 0 &&
+			stateToUse.contextTotal > 0
+		) {
 			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
 
 			details.push(
@@ -163,7 +175,57 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} tokens/sec`);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
+		}
+
+		if (stateToUse.speculative) {
+			details.push('Speculative decoding enabled');
+		}
+
+		return details;
+	}
+
+	/**
+	 * Returns technical details without the progress message (for bottom bar)
+	 */
+	function getTechnicalDetails(): string[] {
+		const stateToUse = processingState || lastKnownState;
+		if (!stateToUse) {
+			return [];
+		}
+
+		const details: string[] = [];
+
+		// Always show context info when we have valid data
+		if (
+			typeof stateToUse.contextTotal === 'number' &&
+			stateToUse.contextUsed >= 0 &&
+			stateToUse.contextTotal > 0
+		) {
+			const contextPercent = Math.round((stateToUse.contextUsed / stateToUse.contextTotal) * 100);
+
+			details.push(
+				`Context: ${stateToUse.contextUsed}/${stateToUse.contextTotal} (${contextPercent}%)`
+			);
+		}
+
+		if (stateToUse.outputTokensUsed > 0) {
+			// Handle infinite max_tokens (-1) case
+			if (stateToUse.outputTokensMax <= 0) {
+				details.push(`Output: ${stateToUse.outputTokensUsed}/∞`);
+			} else {
+				const outputPercent = Math.round(
+					(stateToUse.outputTokensUsed / stateToUse.outputTokensMax) * 100
+				);
+
+				details.push(
+					`Output: ${stateToUse.outputTokensUsed}/${stateToUse.outputTokensMax} (${outputPercent}%)`
+				);
+			}
+		}
+
+		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} ${STATS_UNITS.TOKENS_PER_SECOND}`);
 		}
 
 		if (stateToUse.speculative) {
@@ -251,6 +313,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 			return processingState;
 		},
 		getProcessingDetails,
+		getTechnicalDetails,
 		getProcessingMessage,
 		getPromptProgressText,
 		getLiveProcessingStats,

@@ -61,6 +61,8 @@ void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+void ggml_sycl_softplus(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 void ggml_sycl_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst);

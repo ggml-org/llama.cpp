@@ -88,12 +88,12 @@ void common_ngram_cache_draft(
 // Save an ngram cache to a file.
 // ngram_cache: the ngram cache to save.
 // filename:    the path under which to save the ngram cache.
-void common_ngram_cache_save(common_ngram_cache & ngram_cache, std::string & filename);
+void common_ngram_cache_save(common_ngram_cache & ngram_cache, const std::string & filename);
 
 // Load an ngram cache saved with common_ngram_cache_save.
 // filename: the path from which to load the ngram cache.
 // returns:  an ngram cache containing the information saved to filename.
-common_ngram_cache common_ngram_cache_load(std::string & filename);
+common_ngram_cache common_ngram_cache_load(const std::string & filename);
 
 // Merge two ngram caches.
 // ngram_cache_target: the ngram cache to which to add the information from ngram_cache_add.

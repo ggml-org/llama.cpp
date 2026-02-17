@@ -1036,7 +1036,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
 #if 1
     // spectral operations
-    const int n_embd = llama_model_n_embd(model_cts);
+    const int n_embd = llama_model_n_embd_out(model_cts);
     const float * embd = llama_get_embeddings(ctx_cts);
 
     auto audio = embd_to_audio(embd, n_codes, n_embd, params.cpuparams.n_threads);

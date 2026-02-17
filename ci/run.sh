@@ -635,6 +635,29 @@ function gg_check_build_requirements {
     fi
 }
 
+function gg_run_test_backend_ops_cpu {
+    cd ${SRC}
+
+    cd build-ci-release
+
+    set -e
+
+    (time ./bin/test-backend-ops -b CPU ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops-cpu.log
+
+    set +e
+}
+
+function gg_sum_test_backend_ops_cpu {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-backend-ops for CPU backend\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}-test-backend-ops-cpu.log)"
+    gg_printf '```\n'
+    gg_printf '\n'
+}
+
 ## main
 
 export LLAMA_LOG_PREFIX=1
@@ -662,6 +685,10 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
+    test $ret -eq 0 && gg_run test_backend_ops_cpu
+fi
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small

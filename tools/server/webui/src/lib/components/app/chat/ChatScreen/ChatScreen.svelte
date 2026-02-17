@@ -21,6 +21,7 @@
 		chatStore,
 		errorDialog,
 		isLoading,
+		isChatStreaming,
 		isEditing,
 		getAddFilesHandler
 	} from '$lib/stores/chat.svelte';
@@ -34,6 +35,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
@@ -71,6 +73,8 @@
 
 	let emptyFileNames = $state<string[]>([]);
 
+	let initialMessage = $state('');
+
 	let isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
@@ -79,7 +83,7 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 
-	let isCurrentConversationLoading = $derived(isLoading());
+	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
 
 	let isRouter = $derived(isRouterMode());
 
@@ -221,6 +225,14 @@
 		}
 	}
 
+	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
+		if (draft.message || draft.files.length > 0) {
+			chatStore.savePendingDraft(draft.message, draft.files);
+		}
+
+		await chatStore.addSystemPrompt();
+	}
+
 	function handleScroll() {
 		if (disableAutoScroll || !chatScrollContainer) return;
 
@@ -343,6 +355,12 @@
 		if (!disableAutoScroll) {
 			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
+
+		const pendingDraft = chatStore.consumePendingDraft();
+		if (pendingDraft) {
+			initialMessage = pendingDraft.message;
+			uploadedFiles = pendingDraft.files;
+		}
 	});
 
 	$effect(() => {
@@ -428,11 +446,13 @@
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
 					disabled={hasPropsError || isEditing()}
+					{initialMessage}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={false}
 					bind:uploadedFiles
 				/>
@@ -486,11 +506,13 @@
 			<div in:fly={{ y: 10, duration: 250, delay: hasPropsError ? 0 : 300 }}>
 				<ChatForm
 					disabled={hasPropsError}
+					{initialMessage}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => chatStore.stopGeneration()}
+					onSystemPromptAdd={handleSystemPromptAdd}
 					showHelperText={true}
 					bind:uploadedFiles
 				/>
@@ -595,7 +617,7 @@
 	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? 'server'}
+	type={(activeErrorDialog?.type as ErrorDialogType) ?? ErrorDialogType.SERVER}
 />
 
 <style>

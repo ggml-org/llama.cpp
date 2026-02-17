@@ -7,7 +7,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	theme: 'system',
 	showThoughtInProgress: false,
 	showToolCalls: false,
-	disableReasoningFormat: false,
+	disableReasoningParsing: false,
+	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
@@ -92,8 +93,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	showToolCalls:
 		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
-	disableReasoningFormat:
-		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
+	disableReasoningParsing:
+		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	showRawOutputSwitch:
+		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',

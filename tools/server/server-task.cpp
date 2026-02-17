@@ -5,6 +5,7 @@
 #include "llama.h"
 #include "chat.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "json-schema-to-grammar.h"
 #include "base64.hpp"
 
@@ -77,6 +78,10 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.n_max",         speculative.n_max},
             {"speculative.n_min",         speculative.n_min},
             {"speculative.p_min",         speculative.p_min},
+            {"speculative.type",          common_speculative_type_to_str(speculative.type)},
+            {"speculative.ngram_size_n",  speculative.ngram_size_n},
+            {"speculative.ngram_size_m",  speculative.ngram_size_m},
+            {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -136,11 +141,37 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.n_max",         speculative.n_max},
         {"speculative.n_min",         speculative.n_min},
         {"speculative.p_min",         speculative.p_min},
+        {"speculative.type",          common_speculative_type_to_str(speculative.type)},
+        {"speculative.ngram_size_n",  speculative.ngram_size_n},
+        {"speculative.ngram_size_m",  speculative.ngram_size_m},
+        {"speculative.ngram_m_hits",  speculative.ngram_min_hits},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
         {"lora",                      lora},
     };
+}
+
+//
+// task_result_state
+//
+common_chat_msg task_result_state::update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs) {
+    generated_text += text_added;
+    auto msg_prv_copy = chat_msg;
+    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    auto new_msg = common_chat_parse(
+        generated_text,
+        is_partial,
+        chat_parser_params);
+    if (!new_msg.empty()) {
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
+        chat_msg = new_msg;
+        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
+    }
+    return chat_msg;
 }
 
 //
@@ -220,6 +251,16 @@ task_params server_task::params_from_json_cmpl(
     params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
     params.speculative.n_min = std::max(params.speculative.n_min, 0);
     params.speculative.n_max = std::max(params.speculative.n_max, 0);
+
+    params.speculative.type = common_speculative_type_from_name(json_value(data, "speculative.type", common_speculative_type_to_str(defaults.speculative.type)));
+
+    params.speculative.ngram_size_n     = json_value(data, "speculative.ngram_size_n", defaults.speculative.ngram_size_n);
+    params.speculative.ngram_size_m     = json_value(data, "speculative.ngram_size_m", defaults.speculative.ngram_size_m);
+    params.speculative.ngram_min_hits   = json_value(data, "speculative.ngram_m_hits", defaults.speculative.ngram_min_hits);
+
+    params.speculative.ngram_size_n     = std::max(std::min(1, (int) params.speculative.ngram_size_n),     1024);
+    params.speculative.ngram_size_m     = std::max(std::min(1, (int) params.speculative.ngram_size_m),     1024);
+    params.speculative.ngram_min_hits   = std::max(std::min(1, (int) params.speculative.ngram_min_hits),   1024);
 
     // Use OpenAI API logprobs only if n_probs wasn't provided
     if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
@@ -683,7 +724,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     json choice {
         {"finish_reason", finish_reason},
         {"index", index},
-        {"message", msg.to_json_oaicompat<json>()},
+        {"message", msg.to_json_oaicompat()},
     };
 
     if (!stream && probs_output.size() > 0) {
@@ -719,25 +760,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     return res;
 }
 
-common_chat_msg task_result_state::update_chat_msg(
-        const std::string & text_added,
-        bool is_partial,
-        std::vector<common_chat_msg_diff> & diffs) {
-    generated_text += text_added;
-    auto msg_prv_copy = chat_msg;
-    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
-    auto new_msg = common_chat_parse(
-        generated_text,
-        is_partial,
-        chat_parser_params);
-    if (!new_msg.empty()) {
-        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
-        chat_msg = new_msg;
-        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
-    }
-    return chat_msg;
-}
-
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::time_t t = std::time(0);
     std::string finish_reason = "length";
@@ -752,7 +774,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
                 json {
                     {"finish_reason", nullptr},
                     {"index", 0},
-                    {"delta", common_chat_msg_diff_to_json_oaicompat<json>(diff)},
+                    {"delta", common_chat_msg_diff_to_json_oaicompat(diff)},
                 },
             })},
             {"created", t},
@@ -1385,7 +1407,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
     }
 
     for (const auto & diff : oaicompat_msg_diffs) {
-        add_delta(common_chat_msg_diff_to_json_oaicompat<json>(diff));
+        add_delta(common_chat_msg_diff_to_json_oaicompat(diff));
     }
 
     // add audio chunk if present
@@ -1549,41 +1571,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     return events;
 }
 
-//
-// server_task_result_embd
-//
-json server_task_result_embd::to_json() {
-    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
-        ? to_json_oaicompat()
-        : to_json_non_oaicompat();
-}
-
-json server_task_result_embd::to_json_non_oaicompat() {
-    return json {
-        {"index",     index},
-        {"embedding", embedding},
-    };
-}
-
-json server_task_result_embd::to_json_oaicompat() {
-    return json {
-        {"index",            index},
-        {"embedding",        embedding[0]},
-        {"tokens_evaluated", n_tokens},
-    };
-}
-
-//
-// server_task_result_rerank
-//
-json server_task_result_rerank::to_json() {
-    return json {
-        {"index",            index},
-        {"score",            score},
-        {"tokens_evaluated", n_tokens},
-    };
-}
-
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
@@ -1720,6 +1707,41 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
     }
 
     return events;
+}
+
+//
+// server_task_result_embd
+//
+json server_task_result_embd::to_json() {
+    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
+        ? to_json_oaicompat()
+        : to_json_non_oaicompat();
+}
+
+json server_task_result_embd::to_json_non_oaicompat() {
+    return json {
+        {"index",     index},
+        {"embedding", embedding},
+    };
+}
+
+json server_task_result_embd::to_json_oaicompat() {
+    return json {
+        {"index",            index},
+        {"embedding",        embedding[0]},
+        {"tokens_evaluated", n_tokens},
+    };
+}
+
+//
+// server_task_result_rerank
+//
+json server_task_result_rerank::to_json() {
+    return json {
+        {"index",            index},
+        {"score",            score},
+        {"tokens_evaluated", n_tokens},
+    };
 }
 
 //

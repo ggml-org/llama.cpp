@@ -11,7 +11,9 @@ function(llama_build source)
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
     target_link_libraries(${TEST_TARGET} PRIVATE common)
-    install(TARGETS ${TEST_TARGET} RUNTIME)
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS ${TEST_TARGET} RUNTIME)
+    endif()
 endfunction()
 
 function(llama_test target)
@@ -100,7 +102,9 @@ function(llama_build_and_test source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    install(TARGETS ${TEST_TARGET} RUNTIME)
+    if (LLAMA_TESTS_INSTALL)
+        install(TARGETS ${TEST_TARGET} RUNTIME)
+    endif()
     target_link_libraries(${TEST_TARGET} PRIVATE common)
 
     add_test(

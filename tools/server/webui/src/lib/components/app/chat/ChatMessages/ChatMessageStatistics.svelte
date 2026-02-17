@@ -3,6 +3,7 @@
 	import { BadgeChatStatistic } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
+	import { formatPerformanceTime } from '$lib/utils/formatters';
 
 	interface Props {
 		predictedTokens?: number;
@@ -27,7 +28,7 @@
 		initialView = ChatMessageStatsView.GENERATION
 	}: Props = $props();
 
-	let activeView: ChatMessageStatsView = $state(initialView);
+	let activeView: ChatMessageStatsView = $derived(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
 
 	// In live mode: auto-switch to GENERATION tab when prompt processing completes
@@ -57,8 +58,8 @@
 	);
 
 	let tokensPerSecond = $derived(hasGenerationStats ? (predictedTokens! / predictedMs!) * 1000 : 0);
-	let timeInSeconds = $derived(
-		predictedMs !== undefined ? (predictedMs / 1000).toFixed(2) : '0.00'
+	let formattedTime = $derived(
+		predictedMs !== undefined ? formatPerformanceTime(predictedMs) : '0s'
 	);
 
 	let promptTokensPerSecond = $derived(
@@ -67,15 +68,15 @@
 			: undefined
 	);
 
-	let promptTimeInSeconds = $derived(
-		promptMs !== undefined ? (promptMs / 1000).toFixed(2) : undefined
+	let formattedPromptTime = $derived(
+		promptMs !== undefined ? formatPerformanceTime(promptMs) : undefined
 	);
 
 	let hasPromptStats = $derived(
 		promptTokens !== undefined &&
 			promptMs !== undefined &&
 			promptTokensPerSecond !== undefined &&
-			promptTimeInSeconds !== undefined
+			formattedPromptTime !== undefined
 	);
 
 	// In live mode, generation tab is disabled until we have generation stats
@@ -142,7 +143,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{timeInSeconds}s"
+				value={formattedTime}
 				tooltipLabel="Generation time"
 			/>
 			<BadgeChatStatistic
@@ -161,7 +162,7 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Clock}
-				value="{promptTimeInSeconds}s"
+				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
 			/>
 			<BadgeChatStatistic

@@ -192,12 +192,12 @@ void common_ngram_cache_draft(
             break;
         }
 
-        LOG(" - draft candidate: token=%d\n", drafted_token);
+        LOG_DBG(" - draft candidate: token=%d\n", drafted_token);
         draft.push_back(drafted_token);
     }
 }
 
-void common_ngram_cache_save(common_ngram_cache & ngram_cache, std::string & filename) {
+void common_ngram_cache_save(common_ngram_cache & ngram_cache, const std::string & filename) {
     std::ofstream file_out(filename, std::ios::binary);
     for (std::pair<common_ngram, common_ngram_cache_part> item : ngram_cache) {
         const common_ngram      ngram        = item.first;
@@ -217,10 +217,9 @@ void common_ngram_cache_save(common_ngram_cache & ngram_cache, std::string & fil
             file_out.write(reinterpret_cast<const char *>(&count), sizeof(int32_t));
         }
     }
-
 }
 
-common_ngram_cache common_ngram_cache_load(std::string & filename) {
+common_ngram_cache common_ngram_cache_load(const std::string & filename) {
     std::ifstream hashmap_file(filename, std::ios::binary);
     if (!hashmap_file) {
         throw std::ifstream::failure("Unable to open file " + filename);

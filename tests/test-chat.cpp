@@ -462,9 +462,9 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
     for (size_t i = 1; i <= raw_message.size(); ++i) {
         auto curr_msg = parse_msg(std::string(utf8_truncate_safe_view(std::string_view(raw_message).substr(0, i))));
         if (curr_msg == simple_assist_msg("")) continue;
-        LOG_INF("Streaming msg: %s\n", common_chat_msgs_to_json_oaicompat<json>({curr_msg}).dump().c_str());
+        LOG_INF("Streaming msg: %s\n", common_chat_msgs_to_json_oaicompat({curr_msg}).dump().c_str());
         for (auto diff: common_chat_msg_diff::compute_diffs(last_msg, curr_msg)) {
-            LOG_INF("Streaming diff: %s\n", common_chat_msg_diff_to_json_oaicompat<json>(diff).dump().c_str());
+            LOG_INF("Streaming diff: %s\n", common_chat_msg_diff_to_json_oaicompat(diff).dump().c_str());
             if (!diff.reasoning_content_delta.empty()) {
                 merged.reasoning_content += diff.reasoning_content_delta;
             }
@@ -480,7 +480,7 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
                     merged.tool_calls.back().arguments += diff.tool_call_delta.arguments;
                 }
             }
-            LOG_INF("Streaming merged: %s\n", common_chat_msgs_to_json_oaicompat<json>({merged}).dump().c_str());
+            LOG_INF("Streaming merged: %s\n", common_chat_msgs_to_json_oaicompat({merged}).dump().c_str());
         }
         assert_msg_equals(curr_msg, merged, true);
         last_msg = curr_msg;
@@ -592,7 +592,7 @@ static void test_peg_parser(common_chat_templates * tmpls, const std::function<v
             }
             if (diff.tool_call_index != std::string::npos) {
                 if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", diff.tool_call_delta.id});
                 }
                 if (!diff.tool_call_delta.arguments.empty()) {
                     msg_accum.tool_calls.back().arguments += diff.tool_call_delta.arguments;
@@ -622,7 +622,7 @@ static void test_msgs_oaicompat_json_conversion() {
         message_assist_call_code_interpreter,
     };
     for (const auto & msg : msgs) {
-        auto oai_json = common_chat_msgs_to_json_oaicompat<json>({msg});
+        auto oai_json = common_chat_msgs_to_json_oaicompat({msg});
         auto msgs2 = common_chat_msgs_parse_oaicompat(oai_json);
         assert_equals((size_t) 1, msgs2.size());
         auto msg2 = msgs2[0];
@@ -646,7 +646,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "  }\n"
             "]"
         ),
-        common_chat_msgs_to_json_oaicompat<json>({message_user_parts}).dump(2));
+        common_chat_msgs_to_json_oaicompat({message_user_parts}).dump(2));
 
     assert_equals(
         std::string(
@@ -666,7 +666,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "  }\n"
             "]"
         ),
-        common_chat_msgs_to_json_oaicompat<json>({message_assist_call_python}).dump(2));
+        common_chat_msgs_to_json_oaicompat({message_assist_call_python}).dump(2));
 
     auto res = common_chat_msgs_parse_oaicompat(json::parse("[{\"role\": \"assistant\", \"tool_calls\": []}]"));
     assert_equals<size_t>(1, res.size());
@@ -693,7 +693,7 @@ static void test_tools_oaicompat_json_conversion() {
     };
 
     for (const auto & tool : tools) {
-        auto oai_json = common_chat_tools_to_json_oaicompat<json>({tool});
+        auto oai_json = common_chat_tools_to_json_oaicompat({tool});
         auto tools2 = common_chat_tools_parse_oaicompat(oai_json);
         assert_equals((size_t) 1, tools2.size());
         auto tool2 = tools2[0];
@@ -726,7 +726,7 @@ static void test_tools_oaicompat_json_conversion() {
             "  }\n"
             "]"
         ),
-        common_chat_tools_to_json_oaicompat<json>({special_function_tool}).dump(2));
+        common_chat_tools_to_json_oaicompat({special_function_tool}).dump(2));
 
     {
         auto tools_no_params = common_chat_tools_parse_oaicompat(json::parse(
@@ -3799,6 +3799,134 @@ static void test_template_output_peg_parsers() {
         });
     }
 
+    {
+        // Solar-Open-100B
+        auto tmpls = read_templates("models/templates/upstage-Solar-Open-100B.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|><|begin|>assistant<|content|>Hello, world!\nWhat's up?";
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test basic message and reasoning_effort = low
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>Hello, world!\nWhat's up?";
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.expect = message_assist;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|tool_calls|>"
+                      "<|tool_call:begin|>123456789"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_call_id;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_thoughts_call_idx;
+        });
+
+        // Test tool call with reasoning and tool_choice = required
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.params.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            t.expect = message_assist_thoughts_call_idx;
+        });
+
+        // Test tool call without reasoning and tool_choice = required
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>";
+
+            t.params.tools = {special_function_tool};
+            t.params.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.expect = message_assist_call_idx;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I'm\nthinking<|end|>"
+                      "<|begin|>assistant<|tool_calls|>"
+                      "<|tool_call:begin|>0"
+                      "<|tool_call:name|>special_function"
+                      "<|tool_call:args|>{\"arg1\":1}"
+                      "<|tool_call:end|>"
+                      "<|tool_call:begin|>1"
+                      "<|tool_call:name|>special_function_with_opt"
+                      "<|tool_call:args|>{\"arg1\": 1, \"arg2\": 2}"
+                      "<|tool_call:end|>";
+
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.reasoning_content = "I'm\nthinking";
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        "0",
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        "1",
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|think|>I need to output the invoice details in JSON<|end|>"
+                      "<|begin|>assistant<|content|>"
+                      R"({"amount": 123.45, "date": "2025-12-03"})";
+
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+
+        // Test response format no reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "<|content|>"
+                      R"({"amount": 123.45, "date": "2025-12-03"})";
+
+            t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
+            t.params.json_schema = invoice_schema;
+
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
 }
 
 static void test_msg_diffs_compute() {

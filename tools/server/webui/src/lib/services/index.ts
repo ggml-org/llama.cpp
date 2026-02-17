@@ -1,5 +1,5 @@
 export { ChatService } from './chat';
-export { DatabaseService } from './database';
-export { ModelsService } from './models';
-export { PropsService } from './props';
-export { ParameterSyncService } from './parameter-sync';
+export { DatabaseService } from './database.service';
+export { ModelsService } from './models.service';
+export { PropsService } from './props.service';
+export { ParameterSyncService, SYNCABLE_PARAMETERS } from './parameter-sync.service';

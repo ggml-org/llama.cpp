@@ -22,6 +22,7 @@ struct server_context_meta {
 
     // chat params
     server_chat_params & chat_params;
+    std::map<std::string, bool> chat_template_caps;
 
     // tokens
     std::string bos_token_str;
