@@ -571,7 +571,7 @@
 	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={(activeErrorDialog?.type as ErrorDialogType) ?? ErrorDialogType.SERVER}
+	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
 
 <style>
