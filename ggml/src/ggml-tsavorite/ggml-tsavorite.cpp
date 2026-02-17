@@ -15,6 +15,10 @@
  * Description:
  * ***************************************************************************/
 
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "ggml-tsavorite.h"
 #include <unistd.h>
 #include <inttypes.h>
@@ -26,6 +30,10 @@
 #include "ggml.h"
 #include "HostShimCAPI.h"
 #include "tsi-rt/utils/Profiler.h"
+
+
+enum ggml_tsavorite_kernel_mode ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
+enum ggml_tsavorite_log_type ggml_tsavorite_log_type_val        = GGML_TSAVORITE_LOG_ALL;
 
 using namespace std;
 namespace tsirt = ::tsi::runtime;
@@ -278,6 +286,7 @@ static bool tsi_log_setup() {
   return true;
 }
 
+
 void ggml_tsi_log_tensor_data(tensor_log log_data) {
   if (!log_data.log_file) {
     GGML_TSAVORITE_LOG_ERROR("%s: error: log file Cant be NULL\n", __func__);
@@ -524,6 +533,18 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           flag = true;
           break;
 	  }
+      case GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT:
+          {
+              // IMPORTANT:
+              // Real TMU blob entrypoint is selected at sub graph compute time in
+              // ggml_tsavorite_run_tmu_mul_mat() based on K.
+              // This pointer must be non-null only to pass support checks.
+              kernel_pipeline->_mlir_fptr_2_input[DATA_TYPE_F32_INDEX] =
+                  (void (*)(void*,void*,void*))1; // dummy non-null
+              kernel_pipeline->kernel_name = "TXE_MUL_MAT";
+              flag = true;
+              break;
+          }
       default:
           break;
   }
@@ -678,6 +699,7 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_RMS_NORM,           true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SWIGLU,             true);
     GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX,           true);
+    GGML_TSAVORITE_KERNEL(GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT,            true);
   }
   glob_buf = create_mlir_buf<Rank>(96);
   if (!glob_buf) {
@@ -799,6 +821,16 @@ static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
   return true;
 }
 
+
+static bool mul_mat_supported_size(const struct ggml_tensor *op) {
+   // As a result of FIR-1401, support for K size 2048 is temporarily disabled.
+   //if (op->src[0]->ne[0] == TMU_K_576 || op->src[0]->ne[0] == TMU_K_1536 || op->src[0]->ne[0] == TMU_K_2048)
+   if (op->src[0]->ne[0] == TMU_K_576 || op->src[0]->ne[0] == TMU_K_1536)
+       return true;
+   return false;
+
+}
+
 static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_device_context *ctx_dev,
                                        const struct ggml_tensor *op) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
@@ -831,6 +863,12 @@ static bool ggml_tsavorite_supports_op(const struct ggml_backend_tsavorite_devic
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
     break;
+#ifdef GGML_TARGET_POSIX_DEBUG
+  case GGML_OP_MUL_MAT:
+	  if (!mul_mat_supported_size(op))
+		  return false;
+    break;
+#endif /* GGML_TARGET_POSIX_DEBUG */
   case GGML_OP_GLU:
     {
         const ggml_glu_op op_ext = ggml_get_glu_op(op);
@@ -915,6 +953,307 @@ static enum ggml_tsavorite_kernel_type tsi_glu_kernel_type(struct ggml_tensor *n
     }
     return kernel_type;
 }
+
+
+// TMU CODE
+
+// ============================================================================
+// TMU TILE-BLOB APPLICATION SUPPORT (STATIC AOT TILE ABI)
+//
+//   A_tile: [1,1,TMU_M_TILE_MAX, TMU_BLOB_K]   (FP32)
+//   B_tile: [1,1,TMU_N_BLOCK,    TMU_BLOB_K]   (FP32, padded to 32 cols)
+//   C_tile: [1,1,TMU_M_TILE_MAX, TMU_N_BLOCK]  (FP32, padded output)
+//
+// Blob loops over all 64 rows and all 32 cols internally, so app must:
+//   - zero-pad A rows beyond m_tile
+//   - zero-pad B cols beyond n_tile
+//   - copy only valid (m_tile x n_valid) back to node->data
+// ============================================================================
+
+
+// Default nb if missing (bytes stride)
+static inline int64_t nb_or_default(const struct ggml_tensor *t, int i) {
+    if (t->nb[i] != 0) return t->nb[i];
+    if (i == 0) return (int64_t) ggml_type_size(t->type);
+    return nb_or_default(t, i - 1) * t->ne[i - 1];
+}
+
+// Broadcast/repeat mapping: out_idx -> in_idx
+static inline int64_t map_repeat_i64(int64_t out_idx, int64_t in_dim) {
+    if (in_dim <= 1) return 0;
+    int64_t r = out_idx % in_dim;
+    return (r < 0) ? (r + in_dim) : r;
+}
+
+// Make a contiguous memref<4> header for our packed tiles.
+// Our packed tiles are plain contiguous FP32 arrays.
+static inline void init_contig_memref_4d(
+    MemRefDescriptor<4> *md,
+    void *data_ptr,
+    int64_t d0, int64_t d1, int64_t d2, int64_t d3
+) {
+    md->base = md->data = data_ptr;
+    md->offset = 0;
+
+    md->shape[0] = d0;
+    md->shape[1] = d1;
+    md->shape[2] = d2;
+    md->shape[3] = d3;
+
+    // row-major contiguous strides in ELEMENTS
+    md->strides[3] = 1;
+    md->strides[2] = d3;
+    md->strides[1] = d2 * d3;
+    md->strides[0] = d1 * d2 * d3;
+}
+
+// Copy from packed C_tile [64][32] into GGML node at (m_base, n0, od2, od3).
+// We copy only valid columns (n_end) and valid rows (m_tile).
+static inline void copy_tileC_to_ggml_f32(
+    const float *c_tile,        // [TMU_M_TILE_MAX][TMU_N_BLOCK]
+    int64_t m_tile,             // <= TMU_M_TILE_MAX
+    int64_t N,                  // actual output N
+    struct ggml_tensor *node,   // output tensor
+    int64_t m_base,
+    int64_t n0,
+    int64_t od2,
+    int64_t od3
+) {
+    const int64_t nb0 = node->nb[0];
+    const int64_t nb1 = node->nb[1];
+    const int64_t nb2 = node->nb[2];
+    const int64_t nb3 = node->nb[3];
+    char *dst_base = (char *) node->data;
+
+    const int64_t n_end = ((n0 + TMU_N_BLOCK) < N) ? (n0 + TMU_N_BLOCK) : N;
+
+    for (int64_t r = 0; r < m_tile; ++r) {
+        const int64_t m = m_base + r;
+        const float *src_row = c_tile + r * TMU_N_BLOCK;
+
+        for (int64_t n = n0; n < n_end; ++n) {
+            const int64_t local_n = n - n0;
+            float *dst = (float *)(dst_base + m * nb0 + n * nb1 + od2 * nb2 + od3 * nb3);
+            *dst = src_row[local_n];
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Persistent packed tiles (header + data) to avoid allocating every tile call.
+// Layout: [MemRefDescriptor<4>][float data...]
+// -----------------------------------------------------------------------------
+static char   *g_tileA_raw = NULL;
+static size_t  g_tileA_cap = 0;
+
+static char   *g_tileB_raw = NULL;
+static size_t  g_tileB_cap = 0;
+
+static char   *g_tileC_raw = NULL;
+static size_t  g_tileC_cap = 0;
+
+static inline MemRefDescriptor<4> *alloc_tile(char **raw, size_t *cap, size_t data_bytes) {
+    const size_t total = sizeof(MemRefDescriptor<4>) + data_bytes;
+    if (*raw && *cap >= total) {
+        return (MemRefDescriptor<4> *)(*raw);
+    }
+    *raw = (char *) tsi_alloc(total);
+    *cap = (*raw) ? total : 0;
+    return (*raw) ? (MemRefDescriptor<4> *)(*raw) : NULL;
+}
+
+// ============================================================================
+// FINAL TMU runner for STATIC TILE BLOB
+// This Func does tiling + padding + repack.
+// That requires:
+//    persistent tile buffers
+//    packing loops
+//    repack loops
+
+// ============================================================================
+static enum ggml_status ggml_tsavorite_run_tmu_mul_mat(
+    struct ggml_backend_tsavorite_context *ctx,
+    txe_device_s device,
+    struct ggml_tensor *node,
+    enum ggml_tsavorite_kernel_type kernel_type,
+    int kernel_sub_type
+) {
+    // -------------------------------------------------------------------------
+    // 0) Input tensors
+    // -------------------------------------------------------------------------
+    struct ggml_tensor *src0 = node->src[0]; // A
+    struct ggml_tensor *src1 = node->src[1]; // B
+    TSAVORITE_GGML_ASSERT(src0 && src1);
+
+    // This blob is FP32 only (per your blob script)
+    TSAVORITE_GGML_ASSERT(node->type == GGML_TYPE_F32);
+    TSAVORITE_GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    TSAVORITE_GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    TSAVORITE_GGML_ASSERT(kernel_sub_type == DATA_TYPE_F32_INDEX);
+
+    // GGML logical dims for MUL_MAT:
+    // A: [K, M, A2, A3]
+    // B: [K, N, B2, B3]
+    const int64_t K  = src0->ne[0];
+    const int64_t M  = src0->ne[1];
+    const int64_t A2 = src0->ne[2] ? src0->ne[2] : 1;
+    const int64_t A3 = src0->ne[3] ? src0->ne[3] : 1;
+
+    const int64_t N  = src1->ne[1];
+    const int64_t B2 = src1->ne[2] ? src1->ne[2] : 1;
+    const int64_t B3 = src1->ne[3] ? src1->ne[3] : 1;
+
+    const int64_t D2 = (A2 > B2) ? A2 : B2;
+    const int64_t D3 = (A3 > B3) ? A3 : B3;
+
+    // -------------------------------------------------------------------------
+    // 1) Validate blob constraints (static-AOT tile ABI)
+    // -------------------------------------------------------------------------
+    TSAVORITE_GGML_ASSERT((K % TMU_K_MULTIPLE) == 0);
+
+    // Select which static blob to use based on runtime K
+    auto f2 = (void (*)(void*, void*, void*)) nullptr;
+    int64_t K_blob = 0;
+
+    if (K == TMU_K_576) {
+        f2 = (void (*)(void*, void*, void*)) _mlir_ciface_txe_mul_mat_tile_f32_k576_host;
+        K_blob = TMU_K_576;
+    } else if (K == TMU_K_1536) {
+        f2 = (void (*)(void*, void*, void*)) _mlir_ciface_txe_mul_mat_tile_f32_k1536_host;
+        K_blob = TMU_K_1536;
+    } else if (K == TMU_K_2048) {
+        f2 = (void (*)(void*, void*, void*)) _mlir_ciface_txe_mul_mat_tile_f32_k2048_host;
+        K_blob = TMU_K_2048;
+    } else {
+        GGML_TSAVORITE_LOG_ERROR("Unsupported TMU static K=%ld (supported: 576,1536)\n", (long)K);
+        return GGML_STATUS_ABORTED;
+    }
+
+    TSAVORITE_GGML_ASSERT(f2 != nullptr);
+    TSAVORITE_GGML_ASSERT(TMU_M_TILE_MAX == 64);
+    TSAVORITE_GGML_ASSERT(TMU_N_BLOCK == 32);
+
+    // Broadcast legality checks
+    TSAVORITE_GGML_ASSERT((A2 == 1) || ((D2 % A2) == 0));
+    TSAVORITE_GGML_ASSERT((B2 == 1) || ((D2 % B2) == 0));
+    TSAVORITE_GGML_ASSERT((A3 == 1) || ((D3 % A3) == 0));
+    TSAVORITE_GGML_ASSERT((B3 == 1) || ((D3 % B3) == 0));
+
+    // -------------------------------------------------------------------------
+    // 3) Strides and base pointers for slicing GGML tensors
+    // -------------------------------------------------------------------------
+    const int64_t a_nb0 = nb_or_default(src0, 0);
+    const int64_t a_nb1 = nb_or_default(src0, 1);
+    const int64_t a_nb2 = nb_or_default(src0, 2);
+    const int64_t a_nb3 = nb_or_default(src0, 3);
+
+    const int64_t b_nb0 = nb_or_default(src1, 0);
+    const int64_t b_nb1 = nb_or_default(src1, 1);
+    const int64_t b_nb2 = nb_or_default(src1, 2);
+    const int64_t b_nb3 = nb_or_default(src1, 3);
+
+    TSAVORITE_GGML_ASSERT(a_nb0 == (int64_t)sizeof(float));
+    TSAVORITE_GGML_ASSERT(b_nb0 == (int64_t)sizeof(float));
+
+    // -------------------------------------------------------------------------
+    // 4) Allocate persistent packed tiles (A,B,C) in Tsavorite memory
+    // -------------------------------------------------------------------------
+    const size_t A_bytes = (size_t)TMU_M_TILE_MAX * (size_t)K_blob * sizeof(float);
+    const size_t B_bytes = (size_t)TMU_N_BLOCK    * (size_t)K_blob * sizeof(float);
+    const size_t C_bytes = (size_t)TMU_M_TILE_MAX * (size_t)TMU_N_BLOCK * sizeof(float);
+
+    MemRefDescriptor<4> *A_hdr = alloc_tile(&g_tileA_raw, &g_tileA_cap, A_bytes);
+    MemRefDescriptor<4> *B_hdr = alloc_tile(&g_tileB_raw, &g_tileB_cap, B_bytes);
+    MemRefDescriptor<4> *C_hdr = alloc_tile(&g_tileC_raw, &g_tileC_cap, C_bytes);
+
+    if (!A_hdr || !B_hdr || !C_hdr) return GGML_STATUS_ALLOC_FAILED;
+
+    float *A_data = (float *)(A_hdr + 1);
+    float *B_data = (float *)(B_hdr + 1);
+    float *C_data = (float *)(C_hdr + 1);
+
+    // Initialize memref headers once (data pointers remain stable)
+    init_contig_memref_4d(A_hdr, A_data, 1, 1, TMU_M_TILE_MAX, K_blob);
+    init_contig_memref_4d(B_hdr, B_data, 1, 1, TMU_N_BLOCK,    K_blob);
+    init_contig_memref_4d(C_hdr, C_data, 1, 1, TMU_M_TILE_MAX, TMU_N_BLOCK);
+
+    // -------------------------------------------------------------------------
+    // 5) Outer loops owned by application:
+    //    broadcast dims + m_base + n0
+    // -------------------------------------------------------------------------
+    for (int64_t od3 = 0; od3 < D3; ++od3) {
+        const int64_t ad3 = map_repeat_i64(od3, A3);
+        const int64_t bd3 = map_repeat_i64(od3, B3);
+
+        for (int64_t od2 = 0; od2 < D2; ++od2) {
+            const int64_t ad2 = map_repeat_i64(od2, A2);
+            const int64_t bd2 = map_repeat_i64(od2, B2);
+
+            // Base pointers for this broadcast plane
+            const char *a_plane = (const char *)src0->data + ad2 * a_nb2 + ad3 * a_nb3;
+            const char *b_plane = (const char *)src1->data + bd2 * b_nb2 + bd3 * b_nb3;
+
+            // Tile over M
+            for (int64_t m_base = 0; m_base < M; m_base += TMU_M_TILE_MAX) {
+                const int64_t m_tile = ((M - m_base) > TMU_M_TILE_MAX) ? TMU_M_TILE_MAX : (M - m_base);
+
+                // Tile over N in blocks of 32
+                for (int64_t n0 = 0; n0 < N; n0 += TMU_N_BLOCK) {
+                    const int64_t n_end = ((n0 + TMU_N_BLOCK) < N) ? (n0 + TMU_N_BLOCK) : N;
+                    const int64_t n_tile = n_end - n0; // <= 32
+
+                    // ---------------------------------------------------------
+                    // Pack/pad A_tile: [64][K]
+                    // Only fill m_tile rows; rest remain zeros.
+                    // ---------------------------------------------------------
+                    memset(A_data, 0, A_bytes);
+                    for (int64_t r = 0; r < m_tile; ++r) {
+                        const char *src_row = a_plane + (m_base + r) * a_nb1; // k=0
+                        memcpy((char *)(A_data + r * K_blob),
+                               src_row,
+                               (size_t)K_blob * sizeof(float));
+                    }
+
+                    // ---------------------------------------------------------
+                    // Pack/pad B_tile: [32][K]
+                    // Only fill n_tile columns; rest remain zeros.
+                    // Each column in GGML B is contiguous across K and strided by nb1 in N.
+                    // ---------------------------------------------------------
+                    memset(B_data, 0, B_bytes);
+                    for (int64_t ccol = 0; ccol < n_tile; ++ccol) {
+                        const int64_t col = n0 + ccol;
+                        const char *src_col = b_plane + col * b_nb1; // k=0
+                        memcpy((char *)(B_data + ccol * K_blob),
+                               src_col,
+                               (size_t)K_blob * sizeof(float));
+                    }
+
+                    // Clear output tile
+                    memset(C_data, 0, C_bytes);
+
+                    // ---------------------------------------------------------
+                    // Run blob once for this tile
+                    // ---------------------------------------------------------
+                    f2((void *)A_hdr, (void *)B_hdr, (void *)C_hdr);
+
+                    ++device->stats.op_run_count[GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT].num_of_kernel_call;
+                    ++node->tsi_kernel_runs;
+
+                    // ---------------------------------------------------------
+                    // Repack tile output into GGML node->data
+                    // C_data is [64][32], but only [m_tile][n_tile] is valid.
+                    // copy_tileC_to_ggml_f32() automatically truncates to N.
+                    // ---------------------------------------------------------
+                    copy_tileC_to_ggml_f32(C_data, m_tile, N, node, m_base, n0, od2, od3);
+                }
+            }
+        }
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+
 
 // nodes are intermediate which has multiple src tensors & operation
 // Here we create multiple thread
@@ -1058,6 +1397,10 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
       break;
     case GGML_OP_SOFT_MAX:
       kernel_type = GGML_TSAVORITE_KERNEL_TYPE_SOFT_MAX;
+      num_of_input_tensors = TSAVORITE_TWO_INPUT_TENSORS;
+      break;
+    case GGML_OP_MUL_MAT:
+      kernel_type = GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT;
       num_of_input_tensors = TSAVORITE_TWO_INPUT_TENSORS;
       break;
     case GGML_OP_GLU:
@@ -1275,6 +1618,12 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 	        }
 	    }
         } else {
+            if( kernel_type == GGML_TSAVORITE_KERNEL_TYPE_MUL_MAT) {
+                if (ggml_tsavorite_run_tmu_mul_mat(ctx, device, node, kernel_type, kernel_sub_type)  != GGML_STATUS_SUCCESS)
+                    return GGML_STATUS_FAILED;
+
+	    } else {
+
             GGML_TENSOR_BINARY_OP_LOCALS
 
             for (int ir = 0; ir < nr; ++ir) {
@@ -1307,6 +1656,7 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
                     ++node->tsi_kernel_runs;
                 }
             }
+        }
         }
 
         if (ggml_tsavorite_log_type_val == GGML_TSAVORITE_LOG_DEBUG) {
@@ -2158,8 +2508,14 @@ static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
 #ifdef GGML_TARGET_POSIX_DEBUG
   case GGML_OP_SOFT_MAX:
 #endif /* GGML_TARGET_POSIX_DEBUG */
+    break;
+#ifdef GGML_TARGET_POSIX_DEBUG
+  case GGML_OP_MUL_MAT:
+	  if (!mul_mat_supported_size(op))
+		  return false;
 
     break;
+#endif /* GGML_TARGET_POSIX_DEBUG */
   case GGML_OP_GLU:
     {
         const ggml_glu_op op_ext = ggml_get_glu_op(op);
