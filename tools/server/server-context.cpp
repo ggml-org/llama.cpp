@@ -1445,7 +1445,9 @@ private:
         res->index           = slot.task->index;
 
         // keep copy of last generated text for debugging purposes
-        slot.debug_generated_text = slot.generated_text;
+        if (slots_debug > 0) {
+            slot.debug_generated_text = slot.generated_text;
+        }
 
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
