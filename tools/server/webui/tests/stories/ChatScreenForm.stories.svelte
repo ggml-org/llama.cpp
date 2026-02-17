@@ -1,14 +1,14 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatForm from '$lib/components/app/chat/ChatForm/ChatForm.svelte';
+	import ChatScreenForm from '$lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
 	import { expect } from 'storybook/test';
 	import jpgAsset from './fixtures/assets/1.jpg?url';
 	import svgAsset from './fixtures/assets/hf-logo.svg?url';
 	import pdfAsset from './fixtures/assets/example.pdf?raw';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatScreen/ChatForm',
-		component: ChatForm,
+		title: 'Components/ChatScreen/ChatScreenForm',
+		component: ChatScreenForm,
 		parameters: {
 			layout: 'centered'
 		}

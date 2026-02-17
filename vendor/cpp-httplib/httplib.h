@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.31.0"
-#define CPPHTTPLIB_VERSION_NUM "0x001F00"
+#define CPPHTTPLIB_VERSION "0.32.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002000"
 
 /*
  * Platform compatibility check
@@ -3334,7 +3334,6 @@ private:
 };
 
 } // namespace sse
-
 
 
 } // namespace httplib
