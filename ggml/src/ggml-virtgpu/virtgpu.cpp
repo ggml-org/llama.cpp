@@ -169,7 +169,7 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
     } else {
         uint32_t lib_ret = apir_ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX;
         GGML_ABORT(GGML_VIRTGPU
-                   "%s: the API Remoting backend library initialize its backend library: apir code=%d)", __func__,
+                   "%s: the API Remoting backend library failed to initialize its backend library: apir code=%d)", __func__,
                    lib_ret);
     }
     return ret;
