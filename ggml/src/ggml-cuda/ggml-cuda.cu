@@ -1307,7 +1307,10 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
 
-        if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+#ifndef GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
+        if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc))
+#endif
+        {
             const float alpha = 1.0f;
             const float beta = 0.0f;
             CUBLAS_CHECK(
@@ -1318,7 +1321,9 @@ static void ggml_cuda_op_mul_mat_cublas(
                         &beta,   dst_dd_i, CUDA_R_32F, ldc,
                         CUBLAS_COMPUTE_32F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
-        } else {
+        }
+#ifndef GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
+        else {
             ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
 
             const half alpha_f16 = 1.0f;
@@ -1336,6 +1341,7 @@ static void ggml_cuda_op_mul_mat_cublas(
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
             to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
         }
+#endif
     } else {
         ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
         ggml_cuda_pool_alloc<float> src1_ddq_as_f32(ctx.pool(id));
@@ -1909,6 +1915,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     const float alpha_f32 = 1.0f;
     const float beta_f32 = 0.0f;
 
+#ifndef GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
     if (dst->op_params[0] == GGML_PREC_DEFAULT) {
         if constexpr (src0_type == GGML_TYPE_F32) {
             dst_t = (char *) dst_ddf;  // Direct F32 output
@@ -1917,7 +1924,9 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
             nbd2 /= sizeof(float) / sizeof(cuda_t);
             nbd3 /= sizeof(float) / sizeof(cuda_t);
         }
-    } else {
+    } else
+#endif
+    {
         dst_t = (char *) dst_ddf;
         cu_compute_type = CUBLAS_COMPUTE_32F;
         cu_data_type = CUDA_R_32F;
@@ -1997,11 +2006,13 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
 
+#ifndef GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
     // Convert output back to F32 if needed
     if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
         to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
     }
+#endif
 }
 
 static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4963,6 +4974,10 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 
     #ifdef GGML_CUDA_FORCE_CUBLAS
         features.push_back({ "FORCE_CUBLAS", "1" });
+    #endif
+
+    #ifdef GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
+        features.push_back({ "FORCE_CUBLAS_COMPUTE_32F", "1" });
     #endif
 
     #ifndef GGML_USE_VMM
