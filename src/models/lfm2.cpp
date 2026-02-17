@@ -1,25 +1,23 @@
 #include "models.h"
 
-//
 #include "../llama-memory-hybrid-iswa.h"
 #include "../llama-memory-hybrid.h"
-
 
 template <bool iswa>
 llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
     model(model) {
+    ggml_tensor * cur = build_inp_embd(model.tok_embd);
+    cb(cur, "model.embed_tokens", -1);
+
+    ggml_build_forward_expand(gf, cur);
+
     inp_hybrid_type * inp_hybrid = nullptr;
     if constexpr (iswa) {
         inp_hybrid = build_inp_mem_hybrid_iswa();
     } else {
         inp_hybrid = build_inp_mem_hybrid();
     }
-
-    ggml_tensor * cur = build_inp_embd(model.tok_embd);
-    cb(cur, "model.embed_tokens", -1);
-
-    ggml_build_forward_expand(gf, cur);
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
