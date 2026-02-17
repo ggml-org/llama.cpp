@@ -17,7 +17,7 @@ jobs:
 
       - name: Install komac
         run: |
-          cargo binstall komac@2.11.2 -y
+          cargo binstall komac@2.15.0 -y
 
       - name: Find latest release
         id: find_latest_release
