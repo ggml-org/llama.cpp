@@ -43,8 +43,8 @@ def load_model_and_tokenizer(model_path, device="auto"):
         multimodal = True
 
     def print_if_exists(label, obj, attr, default="N/A"):
-        if (val := getattr(obj, attr, None)) is not None:
-            print(f"{label}", val)
+        val = getattr(obj, attr) if hasattr(obj, attr) else default
+        print(f"{label}", val)
 
     print_if_exists("Vocab size:       ", config, "vocab_size")
     print_if_exists("Hidden size:      ", config, "hidden_size")
