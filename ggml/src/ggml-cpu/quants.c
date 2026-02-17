@@ -50,6 +50,10 @@ void quantize_row_mxfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
     quantize_row_mxfp4_ref(x, y, k);
 }
 
+void quantize_row_nvfp4(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_nvfp4_ref(x, y, k);
+}
+
 //
 // 2-6 bit quantization in super-blocks
 //
@@ -212,6 +216,48 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             sumi2 += y[ib].qs[j + QK_MXFP4/2] * kvalues_mxfp4[x[ib].qs[j] >>  4];
         }
         sumf += d * (sumi1 + sumi2);
+    }
+    *s = sumf;
+}
+
+// NVFP4 has block_size=16, q8_0 has block_size=32, so 2 NVFP4 blocks per 1 q8_0 block
+void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK8_0 == 0);
+
+    const block_nvfp4 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK8_0; // number of q8_0 blocks
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        // First NVFP4 block (first 16 elements of q8_0 block)
+        const block_nvfp4 * x0 = &x[2*ib + 0];
+        const block_nvfp4 * x1 = &x[2*ib + 1];
+
+        const float d0 = GGML_CPU_FP16_TO_FP32(x0->d);
+        const float d1 = GGML_CPU_FP16_TO_FP32(x1->d);
+        const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
+
+        int sumi0_lo = 0, sumi0_hi = 0;
+        for (int j = 0; j < QK_NVFP4/2; ++j) {
+            sumi0_lo += y[ib].qs[j +           0] * kvalues_mxfp4[x0->qs[j] & 0xf];
+            sumi0_hi += y[ib].qs[j + QK_NVFP4/2 ] * kvalues_mxfp4[x0->qs[j] >>  4];
+        }
+
+        int sumi1_lo = 0, sumi1_hi = 0;
+        for (int j = 0; j < QK_NVFP4/2; ++j) {
+            sumi1_lo += y[ib].qs[QK_NVFP4 + j +           0] * kvalues_mxfp4[x1->qs[j] & 0xf];
+            sumi1_hi += y[ib].qs[QK_NVFP4 + j + QK_NVFP4/2 ] * kvalues_mxfp4[x1->qs[j] >>  4];
+        }
+
+        sumf += dy * (d0 * (sumi0_lo + sumi0_hi) + d1 * (sumi1_lo + sumi1_hi));
     }
     *s = sumf;
 }

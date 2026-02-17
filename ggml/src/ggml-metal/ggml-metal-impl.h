@@ -26,6 +26,9 @@
 #define N_R0_MXFP4 2
 #define N_SG_MXFP4 2
 
+#define N_R0_NVFP4 2
+#define N_SG_NVFP4 2
+
 #define N_R0_Q2_K 4
 #define N_SG_Q2_K 2
 
