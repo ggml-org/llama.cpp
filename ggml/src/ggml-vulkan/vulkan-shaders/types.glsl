@@ -1696,6 +1696,22 @@ struct block_mxfp4
 #define A_TYPE block_mxfp4
 #endif
 
+#define QUANT_K_NVFP4 16
+#define QUANT_R_NVFP4 2
+
+struct block_nvfp4
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_NVFP4/2];
+};
+
+#if defined(DATA_A_NVFP4)
+#define QUANT_K QUANT_K_NVFP4
+#define QUANT_R QUANT_R_NVFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_nvfp4
+#endif
+
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),

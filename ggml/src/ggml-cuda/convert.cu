@@ -617,6 +617,30 @@ static void dequantize_row_mxfp4_cuda(const void * vx, dst_t * y, const int64_t 
     dequantize_block_mxfp4<<<nb, 32, 0, stream>>>(vx, y);
 }
 
+template<typename dst_t>
+static __global__ void dequantize_block_nvfp4(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
+    const block_nvfp4 * x = (const block_nvfp4 *) vx + i*(QK_K/QK_NVFP4);
+
+    const int64_t tid = threadIdx.x; // 0..31
+    // QK_K/QK_NVFP4 = 16 blocks per super-block, but we have 32 threads
+    // Each thread handles 8 elements (half a block)
+    const int64_t ib = tid / 2;  // block index: 0..15
+    const int64_t il = tid % 2;  // lo or hi nibbles
+    dst_t * y = yy + i*QK_K + QK_NVFP4*ib + il*(QK_NVFP4/2);
+    const float d = __half2float(x[ib].d);
+    for (int j = 0; j < QK_NVFP4/2; ++j) {
+        const uint8_t q = il ? (x[ib].qs[j] >> 4) : (x[ib].qs[j] & 0xf);
+        y[j] = d * kvalues_mxfp4[q];
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_nvfp4_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
+    const int nb = (k + QK_K - 1) / QK_K;
+    dequantize_block_nvfp4<<<nb, 32, 0, stream>>>(vx, y);
+}
+
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01,
@@ -715,6 +739,8 @@ to_fp16_cuda_t ggml_get_to_fp16_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_F32:
             return convert_unary_cont_cuda<float>;
         case GGML_TYPE_BF16:
@@ -766,6 +792,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_MXFP4:
             return dequantize_row_mxfp4_cuda;
+        case GGML_TYPE_NVFP4:
+            return dequantize_row_nvfp4_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cont_cuda<half>;
         case GGML_TYPE_BF16:
