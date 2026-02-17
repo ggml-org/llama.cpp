@@ -1,6 +1,8 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
 
+// Most devices have max workgroup size of 1024, so this is enough for subgroup
+// sizes of 16, 32, 64 and 128. Increase this value for smaller subgroups sizes
 #define MAX_SUBGROUPS 64
 kernel void kernel_mean_f32(
     global char *  src0,
