@@ -10898,7 +10898,7 @@ class LFM25AudioTokenizer(LFM2Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
-        self.gguf_writer.add_embedding_length_out(self.hparams.get("output_size"))
+        self.gguf_writer.add_embedding_length_out(self.hparams["output_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "istft.window" or name.startswith("emb.emb"):
