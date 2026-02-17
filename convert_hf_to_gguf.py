@@ -10902,7 +10902,7 @@ class LFM25AudioTokenizer(LFM2Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "istft.window" or name.startswith("emb.emb"):
-            return []
+            return
 
         if name.startswith("lin"):
             name = name.replace("lin", "dense_2_out")
