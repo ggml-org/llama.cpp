@@ -68,14 +68,22 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
             bool last_was_media_marker = false;
             // join parts with newline, do not add newline before or after media markers
             for (const auto & part : content_parts) {
-                if (part.type != "text" && part.type != "media_marker") {
+                bool add_new_line = true;
+                if (part.type == "text") {
+                    add_new_line = !last_was_media_marker && !text.empty();
+                    last_was_media_marker = false;
+                } else if (part.type == "media_marker") {
+                    add_new_line = false;
+                    last_was_media_marker = true;
+                } else {
                     LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
                     continue;
                 }
-                if (part.type != "media_marker" && !last_was_media_marker && !text.empty()) {
+
+                if (add_new_line) {
                     text += '\n';
                 }
-                last_was_media_marker  = (part.type == "media_marker");
+
                 text           += part.text;
             }
             jmsg["content"] = text;
