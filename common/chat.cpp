@@ -84,7 +84,7 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                     text += '\n';
                 }
 
-                text           += part.text;
+                text += part.text;
             }
             jmsg["content"] = text;
         } else {
