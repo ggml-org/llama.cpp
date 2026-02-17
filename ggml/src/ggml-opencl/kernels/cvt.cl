@@ -567,7 +567,7 @@ kernel void kernel_convert_block_q6_K_nonshuffle(
     }
 }
 
-kernel void kernel_restore_block_q6_K_nonshuffle(
+kernel void kernel_restore_block_q6_K_noshuffle(
     global uchar * src_ql,
     global uchar * src_qh,
     global char  * src_s,
