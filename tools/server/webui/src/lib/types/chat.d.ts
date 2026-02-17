@@ -1,8 +1,5 @@
 import type { ErrorDialogType } from '$lib/enums';
-import type { DatabaseMessage, DatabaseMessageExtra } from './database';
-
-export type ChatMessageType = 'root' | 'text' | 'think' | 'system';
-export type ChatRole = 'user' | 'assistant' | 'system';
+import type { DatabaseMessageExtra } from './database';
 
 export interface ChatUploadedFile {
 	id: string;
@@ -12,6 +9,11 @@ export interface ChatUploadedFile {
 	file: File;
 	preview?: string;
 	textContent?: string;
+	mcpPrompt?: {
+		serverName: string;
+		promptName: string;
+		arguments?: Record<string, string>;
+	};
 	isLoading?: boolean;
 	loadError?: string;
 }
@@ -22,6 +24,8 @@ export interface ChatAttachmentDisplayItem {
 	size?: number;
 	preview?: string;
 	isImage: boolean;
+	isMcpPrompt?: boolean;
+	isMcpResource?: boolean;
 	isLoading?: boolean;
 	loadError?: string;
 	uploadedFile?: ChatUploadedFile;
@@ -59,8 +63,44 @@ export interface ChatMessageTimings {
 	predicted_n?: number;
 	prompt_ms?: number;
 	prompt_n?: number;
+	agentic?: ChatMessageAgenticTimings;
 }
 
+export interface ChatMessageAgenticTimings {
+	turns: number;
+	toolCallsCount: number;
+	toolsMs: number;
+	toolCalls?: ChatMessageToolCallTiming[];
+	perTurn?: ChatMessageAgenticTurnStats[];
+	llm: {
+		predicted_n: number;
+		predicted_ms: number;
+		prompt_n: number;
+		prompt_ms: number;
+	};
+}
+
+export interface ChatMessageAgenticTurnStats {
+	turn: number;
+	llm: {
+		predicted_n: number;
+		predicted_ms: number;
+		prompt_n: number;
+		prompt_ms: number;
+	};
+	toolCalls: ChatMessageToolCallTiming[];
+	toolsMs: number;
+}
+
+export interface ChatMessageToolCallTiming {
+	name: string;
+	duration_ms: number;
+	success: boolean;
+}
+
+/**
+ * Callbacks for streaming chat responses
+ */
 export interface ChatStreamCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
@@ -77,12 +117,18 @@ export interface ChatStreamCallbacks {
 	onError?: (error: Error) => void;
 }
 
+/**
+ * Error dialog state for displaying server/timeout errors
+ */
 export interface ErrorDialogState {
 	type: ErrorDialogType;
 	message: string;
 	contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 }
 
+/**
+ * Live processing stats during prompt evaluation
+ */
 export interface LiveProcessingStats {
 	tokensProcessed: number;
 	totalTokens: number;
@@ -91,17 +137,26 @@ export interface LiveProcessingStats {
 	etaSecs?: number;
 }
 
+/**
+ * Live generation stats during token generation
+ */
 export interface LiveGenerationStats {
 	tokensGenerated: number;
 	timeMs: number;
 	tokensPerSecond: number;
 }
 
+/**
+ * Options for getting attachment display items
+ */
 export interface AttachmentDisplayItemsOptions {
 	uploadedFiles?: ChatUploadedFile[];
 	attachments?: DatabaseMessageExtra[];
 }
 
+/**
+ * Result of file processing operation
+ */
 export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
 	emptyFiles: string[];
