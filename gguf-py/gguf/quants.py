@@ -704,6 +704,44 @@ class MXFP4(__Quant, qtype=GGMLQuantizationType.MXFP4):
         return (d * qs.astype(np.float32))
 
 
+class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
+    kvalues = (0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12)
+
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        amax = np.abs(blocks).max(axis=-1, keepdims=True)
+        d = (amax / 6.0).astype(np.float16)
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape((1, 1, 16))
+        d_f32 = d.astype(np.float32)
+
+        errs = np.abs(d_f32.reshape((n_blocks, 1, 1)) * kvalues.astype(np.float32) - blocks.reshape((n_blocks, cls.block_size, 1)))
+        best = np.argmin(errs, axis=-1, keepdims=True)
+
+        qs = best.reshape(n_blocks, 2, cls.block_size // 2).astype(np.uint8)
+        qs = qs[:, 0] | (qs[:, 1] << np.uint8(4))
+        qs = qs.reshape((n_blocks, cls.block_size // 2))
+
+        return np.concatenate([d.view(np.uint8), qs], axis=-1)
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        n_blocks = blocks.shape[0]
+
+        d_bytes, qs = np.hsplit(blocks, [2])
+        d = d_bytes.view(np.float16).astype(np.float32)
+
+        qs = qs.reshape((n_blocks, 1, cls.block_size // 2)) >> np.array([0, 4], dtype=np.uint8).reshape((1, 2, 1))
+        qs = (qs & np.uint8(0x0F)).view(np.int8)
+
+        kvalues = np.array(cls.kvalues, dtype=np.int8).reshape(1, 1, 16)
+        qs = np.take_along_axis(kvalues, qs, axis=-1).reshape((n_blocks, cls.block_size))
+
+        return (d * qs.astype(np.float32))
+
+
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
     ksigns: bytes = (
         b"\x00\x81\x82\x03\x84\x05\x06\x87\x88\x09\x0a\x8b\x0c\x8d\x8e\x0f"
