@@ -1,11 +1,3 @@
-import {
-	MS_PER_SECOND,
-	SECONDS_PER_MINUTE,
-	SECONDS_PER_HOUR,
-	SHORT_DURATION_THRESHOLD,
-	MEDIUM_DURATION_THRESHOLD
-} from '$lib/constants/formatters';
-
 /**
  * Formats file size in bytes to human readable format
  * Supports Bytes, KB, MB, and GB
@@ -101,19 +93,19 @@ export function formatTime(date: Date): string {
 export function formatPerformanceTime(ms: number): string {
 	if (ms < 0) return '0s';
 
-	const totalSeconds = ms / MS_PER_SECOND;
+	const totalSeconds = ms / 1000;
 
-	if (totalSeconds < SHORT_DURATION_THRESHOLD) {
+	if (totalSeconds < 1) {
 		return `${totalSeconds.toFixed(1)}s`;
 	}
 
-	if (totalSeconds < MEDIUM_DURATION_THRESHOLD) {
+	if (totalSeconds < 10) {
 		return `${totalSeconds.toFixed(1)}s`;
 	}
 
-	const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
-	const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
-	const seconds = Math.floor(totalSeconds % SECONDS_PER_MINUTE);
+	const hours = Math.floor(totalSeconds / 3600);
+	const minutes = Math.floor((totalSeconds % 3600) / 60);
+	const seconds = Math.floor(totalSeconds % 60);
 
 	const parts: string[] = [];
 
@@ -130,24 +122,4 @@ export function formatPerformanceTime(ms: number): string {
 	}
 
 	return parts.join(' ');
-}
-
-/**
- * Formats attachment content for API requests with consistent header style.
- * Used when converting message attachments to text content parts.
- *
- * @param label - Type label (e.g., 'File', 'PDF File', 'MCP Prompt')
- * @param name - File or attachment name
- * @param content - The actual content to include
- * @param extra - Optional extra info to append to name (e.g., server name for MCP)
- * @returns Formatted string with header and content
- */
-export function formatAttachmentText(
-	label: string,
-	name: string,
-	content: string,
-	extra?: string
-): string {
-	const header = extra ? `${name} (${extra})` : name;
-	return `\n\n--- ${label}: ${header} ---\n${content}`;
 }

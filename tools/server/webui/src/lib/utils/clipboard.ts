@@ -3,14 +3,8 @@ import { AttachmentType } from '$lib/enums';
 import type {
 	DatabaseMessageExtra,
 	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraLegacyContext,
-	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource,
-	ClipboardTextAttachment,
-	ClipboardMcpPromptAttachment,
-	ClipboardAttachment,
-	ParsedClipboardContent
-} from '$lib/types';
+	DatabaseMessageExtraLegacyContext
+} from '$lib/types/database';
 
 /**
  * Copy text to clipboard with toast notification
@@ -75,6 +69,23 @@ export async function copyCodeToClipboard(
 }
 
 /**
+ * Format for text attachments when copied to clipboard
+ */
+export interface ClipboardTextAttachment {
+	type: typeof AttachmentType.TEXT;
+	name: string;
+	content: string;
+}
+
+/**
+ * Parsed result from clipboard content
+ */
+export interface ParsedClipboardContent {
+	message: string;
+	textAttachments: ClipboardTextAttachment[];
+}
+
+/**
  * Formats a message with text attachments for clipboard copying.
  *
  * Default format (asPlainText = false):
@@ -105,20 +116,11 @@ export function formatMessageForClipboard(
 	extras?: DatabaseMessageExtra[],
 	asPlainText: boolean = false
 ): string {
-	// Filter text-like attachments (TEXT, LEGACY_CONTEXT, MCP_PROMPT, and MCP_RESOURCE types)
+	// Filter only text attachments (TEXT type and legacy CONTEXT type)
 	const textAttachments =
 		extras?.filter(
-			(
-				extra
-			): extra is
-				| DatabaseMessageExtraTextFile
-				| DatabaseMessageExtraLegacyContext
-				| DatabaseMessageExtraMcpPrompt
-				| DatabaseMessageExtraMcpResource =>
-				extra.type === AttachmentType.TEXT ||
-				extra.type === AttachmentType.LEGACY_CONTEXT ||
-				extra.type === AttachmentType.MCP_PROMPT ||
-				extra.type === AttachmentType.MCP_RESOURCE
+			(extra): extra is DatabaseMessageExtraTextFile | DatabaseMessageExtraLegacyContext =>
+				extra.type === AttachmentType.TEXT || extra.type === AttachmentType.LEGACY_CONTEXT
 		) ?? [];
 
 	if (textAttachments.length === 0) {
@@ -133,24 +135,11 @@ export function formatMessageForClipboard(
 		return parts.join('\n\n');
 	}
 
-	const clipboardAttachments: ClipboardAttachment[] = textAttachments.map((att) => {
-		if (att.type === AttachmentType.MCP_PROMPT) {
-			const mcpAtt = att as DatabaseMessageExtraMcpPrompt;
-			return {
-				type: AttachmentType.MCP_PROMPT,
-				name: mcpAtt.name,
-				serverName: mcpAtt.serverName,
-				promptName: mcpAtt.promptName,
-				content: mcpAtt.content,
-				arguments: mcpAtt.arguments
-			} as ClipboardMcpPromptAttachment;
-		}
-		return {
-			type: AttachmentType.TEXT,
-			name: att.name,
-			content: att.content
-		} as ClipboardTextAttachment;
-	});
+	const clipboardAttachments: ClipboardTextAttachment[] = textAttachments.map((att) => ({
+		type: AttachmentType.TEXT,
+		name: att.name,
+		content: att.content
+	}));
 
 	return `${JSON.stringify(content)}\n${JSON.stringify(clipboardAttachments, null, 2)}`;
 }
@@ -165,8 +154,7 @@ export function formatMessageForClipboard(
 export function parseClipboardContent(clipboardText: string): ParsedClipboardContent {
 	const defaultResult: ParsedClipboardContent = {
 		message: clipboardText,
-		textAttachments: [],
-		mcpPromptAttachments: []
+		textAttachments: []
 	};
 
 	if (!clipboardText.startsWith('"')) {
@@ -208,28 +196,17 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 		if (!remainingPart || !remainingPart.startsWith('[')) {
 			return {
 				message,
-				textAttachments: [],
-				mcpPromptAttachments: []
+				textAttachments: []
 			};
 		}
 
 		const attachments = JSON.parse(remainingPart) as unknown[];
 
-		const validTextAttachments: ClipboardTextAttachment[] = [];
-		const validMcpPromptAttachments: ClipboardMcpPromptAttachment[] = [];
+		const validAttachments: ClipboardTextAttachment[] = [];
 
 		for (const att of attachments) {
-			if (isValidMcpPromptAttachment(att)) {
-				validMcpPromptAttachments.push({
-					type: AttachmentType.MCP_PROMPT,
-					name: att.name,
-					serverName: att.serverName,
-					promptName: att.promptName,
-					content: att.content,
-					arguments: att.arguments
-				});
-			} else if (isValidTextAttachment(att)) {
-				validTextAttachments.push({
+			if (isValidTextAttachment(att)) {
+				validAttachments.push({
 					type: AttachmentType.TEXT,
 					name: att.name,
 					content: att.content
@@ -239,40 +216,11 @@ export function parseClipboardContent(clipboardText: string): ParsedClipboardCon
 
 		return {
 			message,
-			textAttachments: validTextAttachments,
-			mcpPromptAttachments: validMcpPromptAttachments
+			textAttachments: validAttachments
 		};
 	} catch {
 		return defaultResult;
 	}
-}
-
-/**
- * Type guard to validate an MCP prompt attachment object
- * @param obj The object to validate
- * @returns true if the object is a valid MCP prompt attachment
- */
-function isValidMcpPromptAttachment(obj: unknown): obj is {
-	type: string;
-	name: string;
-	serverName: string;
-	promptName: string;
-	content: string;
-	arguments?: Record<string, string>;
-} {
-	if (typeof obj !== 'object' || obj === null) {
-		return false;
-	}
-
-	const record = obj as Record<string, unknown>;
-
-	return (
-		(record.type === AttachmentType.MCP_PROMPT || record.type === 'MCP_PROMPT') &&
-		typeof record.name === 'string' &&
-		typeof record.serverName === 'string' &&
-		typeof record.promptName === 'string' &&
-		typeof record.content === 'string'
-	);
 }
 
 /**
@@ -307,5 +255,5 @@ export function hasClipboardAttachments(clipboardText: string): boolean {
 	}
 
 	const parsed = parseClipboardContent(clipboardText);
-	return parsed.textAttachments.length > 0 || parsed.mcpPromptAttachments.length > 0;
+	return parsed.textAttachments.length > 0;
 }

@@ -1,17 +1,11 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType } from '$lib/enums';
 
-export interface McpServerOverride {
-	serverId: string;
-	enabled: boolean;
-}
-
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
 	lastModified: number;
 	name: string;
-	mcpServerOverrides?: McpServerOverride[];
 }
 
 export interface DatabaseMessageExtraAudioFile {
@@ -41,9 +35,9 @@ export interface DatabaseMessageExtraPdfFile {
 	type: AttachmentType.PDF;
 	base64Data: string;
 	name: string;
-	content: string;
-	images?: string[];
-	processedAsImages: boolean;
+	content: string; // Text content extracted from PDF
+	images?: string[]; // Optional: PDF pages as base64 images
+	processedAsImages: boolean; // Whether PDF was processed as images
 }
 
 export interface DatabaseMessageExtraTextFile {
@@ -52,31 +46,11 @@ export interface DatabaseMessageExtraTextFile {
 	content: string;
 }
 
-export interface DatabaseMessageExtraMcpPrompt {
-	type: AttachmentType.MCP_PROMPT;
-	name: string;
-	serverName: string;
-	promptName: string;
-	content: string;
-	arguments?: Record<string, string>;
-}
-
-export interface DatabaseMessageExtraMcpResource {
-	type: AttachmentType.MCP_RESOURCE;
-	name: string;
-	uri: string;
-	serverName: string;
-	content: string;
-	mimeType?: string;
-}
-
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
 	| DatabaseMessageExtraPdfFile
-	| DatabaseMessageExtraMcpPrompt
-	| DatabaseMessageExtraMcpResource
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {
@@ -86,24 +60,26 @@ export interface DatabaseMessage {
 	timestamp: number;
 	role: ChatRole;
 	content: string;
-	parent: string | null;
-	/**
-	 * @deprecated - left for backward compatibility
-	 */
-	thinking?: string;
-	/** Serialized JSON array of tool calls made by assistant messages */
+	parent: string;
+	thinking: string;
 	toolCalls?: string;
-	/** Tool call ID for tool result messages (role: 'tool') */
-	toolCallId?: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
 	model?: string;
 }
 
+/**
+ * Represents a single conversation with its associated messages,
+ * typically used for import/export operations.
+ */
 export type ExportedConversation = {
 	conv: DatabaseConversation;
 	messages: DatabaseMessage[];
 };
 
+/**
+ * Type representing one or more exported conversations.
+ * Can be a single conversation object or an array of them.
+ */
 export type ExportedConversations = ExportedConversation | ExportedConversation[];

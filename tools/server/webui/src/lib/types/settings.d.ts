@@ -1,8 +1,7 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
-import type { OpenAIToolDefinition } from './mcp';
-import type { DatabaseMessageExtra } from './database';
 import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type { DatabaseMessageExtra } from './database';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -23,7 +22,6 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
 	disableReasoningParsing?: boolean;
-	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
@@ -71,18 +69,14 @@ export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
 	[key: string]: SettingsConfigValue;
 };
 
-/**
- * Parameter synchronization types for server defaults and user overrides
- * Note: ParameterSource and SyncableParameterType enums are imported from '$lib/enums'
- */
 export type ParameterValue = string | number | boolean;
 export type ParameterRecord = Record<string, ParameterValue>;
 
 export interface ParameterInfo {
-	value: string | number | boolean;
+	value: ParameterValue;
 	source: ParameterSource;
-	serverDefault?: string | number | boolean;
-	userOverride?: string | number | boolean;
+	serverDefault?: ParameterValue;
+	userOverride?: ParameterValue;
 }
 
 export interface SyncableParameter {

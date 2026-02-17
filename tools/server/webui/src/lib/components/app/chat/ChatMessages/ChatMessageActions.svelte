@@ -1,15 +1,14 @@
 <script lang="ts">
 	import { Edit, Copy, RefreshCw, Trash2, ArrowRight } from '@lucide/svelte';
 	import {
-		ActionIcon,
+		ActionButton,
 		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import { Switch } from '$lib/components/ui/switch';
-	import { MessageRole } from '$lib/enums';
 
 	interface Props {
-		role: MessageRole.USER | MessageRole.ASSISTANT;
+		role: 'user' | 'assistant';
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
 		siblingInfo?: ChatMessageSiblingInfo | null;
@@ -72,21 +71,21 @@
 		<div
 			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150"
 		>
-			<ActionIcon icon={Copy} tooltip="Copy" onclick={onCopy} />
+			<ActionButton icon={Copy} tooltip="Copy" onclick={onCopy} />
 
 			{#if onEdit}
-				<ActionIcon icon={Edit} tooltip="Edit" onclick={onEdit} />
+				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
 			{/if}
 
-			{#if role === MessageRole.ASSISTANT && onRegenerate}
-				<ActionIcon icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
+			{#if role === 'assistant' && onRegenerate}
+				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
-			{#if role === MessageRole.ASSISTANT && onContinue}
-				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+			{#if role === 'assistant' && onContinue}
+				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 
-			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
+			<ActionButton icon={Trash2} tooltip="Delete" onclick={onDelete} />
 		</div>
 	</div>
 

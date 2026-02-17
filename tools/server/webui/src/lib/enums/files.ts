@@ -11,13 +11,6 @@ export enum FileTypeCategory {
 	TEXT = 'text'
 }
 
-/**
- * Special file types for internal use (not MIME types)
- */
-export enum SpecialFileType {
-	MCP_PROMPT = 'mcp-prompt'
-}
-
 // Specific file type enums for each category
 export enum FileTypeImage {
 	JPEG = 'jpeg',
@@ -143,28 +136,9 @@ export enum FileExtensionText {
 	CS = '.cs'
 }
 
-// MIME type prefixes and includes for content detection
-export enum MimeTypePrefix {
-	IMAGE = 'image/',
-	TEXT = 'text'
-}
-
-export enum MimeTypeIncludes {
-	JSON = 'json',
-	JAVASCRIPT = 'javascript',
-	TYPESCRIPT = 'typescript'
-}
-
-// URI patterns for content detection
-export enum UriPattern {
-	DATABASE_KEYWORD = 'database',
-	DATABASE_SCHEME = 'db://'
-}
-
 // MIME type enums
 export enum MimeTypeApplication {
-	PDF = 'application/pdf',
-	OCTET_STREAM = 'application/octet-stream'
+	PDF = 'application/pdf'
 }
 
 export enum MimeTypeAudio {
@@ -178,7 +152,6 @@ export enum MimeTypeAudio {
 
 export enum MimeTypeImage {
 	JPEG = 'image/jpeg',
-	JPG = 'image/jpg',
 	PNG = 'image/png',
 	GIF = 'image/gif',
 	WEBP = 'image/webp',

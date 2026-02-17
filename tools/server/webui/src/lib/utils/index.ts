@@ -13,7 +13,10 @@ export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './a
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export { getAttachmentDisplayItems } from './attachment-display';
+export {
+	getAttachmentDisplayItems,
+	type AttachmentDisplayItemsOptions
+} from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -43,7 +46,9 @@ export {
 	copyCodeToClipboard,
 	formatMessageForClipboard,
 	parseClipboardContent,
-	hasClipboardAttachments
+	hasClipboardAttachments,
+	type ClipboardTextAttachment,
+	type ParsedClipboardContent
 } from './clipboard';
 
 // File preview utilities
@@ -59,15 +64,7 @@ export {
 } from './file-type';
 
 // Formatting utilities
-export {
-	formatFileSize,
-	formatParameters,
-	formatNumber,
-	formatJsonPretty,
-	formatTime,
-	formatPerformanceTime,
-	formatAttachmentText
-} from './formatters';
+export { formatFileSize, formatParameters, formatNumber } from './formatters';
 
 // IME utilities
 export { isIMEComposing } from './is-ime-composing';
@@ -97,50 +94,11 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
 
-// Debounce utilities
-export { debounce } from './debounce';
-
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
-
-// MCP utilities
-export {
-	detectMcpTransportFromUrl,
-	parseMcpServerSettings,
-	getMcpLogLevelIcon,
-	getMcpLogLevelClass,
-	isImageMimeType,
-	parseResourcePath,
-	getDisplayName,
-	getResourceDisplayName,
-	isCodeResource,
-	isImageResource,
-	getResourceIcon,
-	getResourceTextContent,
-	getResourceBlobContent,
-	downloadResourceContent
-} from './mcp';
-
-// Data URL utilities
-export { createBase64DataUrl } from './data-url';
-
-// Header utilities
-export { parseHeadersToArray, serializeHeaders } from './headers';
-
-// Favicon utilities
-export { getFaviconUrl } from './favicon';
-
-// Agentic content parsing utilities
-export { parseAgenticContent, type AgenticSection } from './agentic';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 
-// Abort signal utilities
-export {
-	throwIfAborted,
-	isAbortError,
-	createLinkedController,
-	createTimeoutSignal,
-	withAbortSignal
-} from './abort';
+// Data URL utilities
+export { createBase64DataUrl } from './data-url';

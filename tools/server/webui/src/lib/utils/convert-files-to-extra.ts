@@ -1,13 +1,12 @@
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory, AttachmentType, SpecialFileType } from '$lib/enums';
+import { FileTypeCategory, AttachmentType } from '$lib/enums';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
 import { readFileAsText, isLikelyTextFile } from './text-files';
 import { toast } from 'svelte-sonner';
-import type { FileProcessingResult, ChatUploadedFile, DatabaseMessageExtra } from '$lib/types';
 
 function readFileAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -26,6 +25,11 @@ function readFileAsBase64(file: File): Promise<string> {
 	});
 }
 
+export interface FileProcessingResult {
+	extras: DatabaseMessageExtra[];
+	emptyFiles: string[];
+}
+
 export async function parseFilesToMessageExtras(
 	files: ChatUploadedFile[],
 	activeModelId?: string
@@ -34,18 +38,6 @@ export async function parseFilesToMessageExtras(
 	const emptyFiles: string[] = [];
 
 	for (const file of files) {
-		if (file.type === SpecialFileType.MCP_PROMPT && file.mcpPrompt) {
-			extras.push({
-				type: AttachmentType.MCP_PROMPT,
-				name: file.name,
-				serverName: file.mcpPrompt.serverName,
-				promptName: file.mcpPrompt.promptName,
-				content: file.textContent ?? '',
-				arguments: file.mcpPrompt.arguments
-			});
-			continue;
-		}
-
 		if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
 			if (file.preview) {
 				let base64Url = file.preview;
