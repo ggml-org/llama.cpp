@@ -2370,18 +2370,26 @@ static const int8_t keven_signs_q2xs[1024] = {
 #endif
 
 #if defined(__AVX2__)
-// shifts to 7 bit signs in xxs quantizations
-static const uint32_t ksigns_shift_xxs[4] = {0, 7, 14, 21};
-// for _mm256_shuffle_epi8, has 0x80 at indices that are encoded with odd bit counts
-static const uint32_t ksigns_popc_odd[4] = {0x00808000, 0x80000080, 0x80000080, 0x00808000,};
+// for _mm_srlv_epi32, shifts to 7 bit signs in xxs quantizations
+static const __attribute__((aligned(16))) uint32_t ksigns_shift_xxs[4] = {0, 7, 14, 21};
+// for _mm(256)_shuffle_epi8, has 0x80 at indices that are encoded with odd bit counts
+static const __attribute__((aligned(32))) uint32_t ksigns_popc_odd[8] = {
+    0x00808000, 0x80000080, 0x80000080, 0x00808000,
+    0x00808000, 0x80000080, 0x80000080, 0x00808000,
+};
 // for _mm256_shuffle_epi8, broadcasts bytes 0, 2, 4, 6 / 8, 10, 12, 14
-static const uint64_t ksigns_bcast_1[4] = {
+static const __attribute__((aligned(32))) uint64_t ksigns_bcast_1[4] = {
     0x0000000000000000ULL, 0x0202020202020202ULL,
     0x0404040404040404ULL, 0x0606060606060606ULL,
 };
-static const uint64_t ksigns_bcast_2[4] = {
+static const __attribute__((aligned(32))) uint64_t ksigns_bcast_2[4] = {
     0x0808080808080808ULL, 0x0A0A0A0A0A0A0A0AULL,
     0x0C0C0C0C0C0C0C0CULL, 0x0E0E0E0E0E0E0E0EULL,
+};
+// for _mm256_cmpeq_epi8 / _mm256_and_si256 to check bits after broadcast
+static const __attribute__((aligned(32))) uint8_t  ksigns_bitsel[32] = {
+    0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+    0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
 };
 #endif
 
@@ -2403,12 +2411,12 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
     uint32_t aux32[4];
     const uint8_t * aux8 = (const uint8_t *)aux32;
 
-    const __m128i ks_shift = _mm_loadu_si128((const __m128i *)ksigns_shift_xxs);
+    const __m128i ks_shift = _mm_load_si128((const __m128i *)ksigns_shift_xxs);
     const __m128i ks_mask  = _mm_set1_epi32(0x7F);
-    const __m128i popc_odd = _mm_loadu_si128((const __m128i *)ksigns_popc_odd);
-    const __m256i ks_bc_1 = _mm256_loadu_si256((const __m256i *)ksigns_bcast_1);
-    const __m256i ks_bc_2 = _mm256_loadu_si256((const __m256i *)ksigns_bcast_2);
-    const __m256i ks_bsel  = _mm256_set1_epi64x(0x8040201008040201LL);
+    const __m128i popc_odd = _mm_load_si128((const __m128i *)ksigns_popc_odd);
+    const __m256i ks_bc_1  = _mm256_load_si256((const __m256i *)ksigns_bcast_1);
+    const __m256i ks_bc_2  = _mm256_load_si256((const __m256i *)ksigns_bcast_2);
+    const __m256i ks_bsel  = _mm256_load_si256((const __m256i *)ksigns_bitsel);
 
     __m256 accumf = _mm256_setzero_ps();
     for (int i = 0; i < nb; ++i) {
