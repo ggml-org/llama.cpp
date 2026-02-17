@@ -17,7 +17,7 @@ endif()
 target_link_libraries(${TARGET} PRIVATE Threads::Threads)
 
 if (WIN32 AND NOT MSVC)
-    target_link_libraries(${TARGET} PRIVATE ws2_32)
+    target_link_libraries(${TARGET} PUBLIC ws2_32)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
