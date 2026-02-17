@@ -98,6 +98,10 @@ if (GGML_CUDA_FORCE_CUBLAS)
     add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
 endif()
 
+if (GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F)
+    add_compile_definitions(GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F)
+endif()
+
 if (GGML_CUDA_NO_PEER_COPY)
     add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
 endif()
