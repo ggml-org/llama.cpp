@@ -3131,7 +3131,7 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q6_K) {
-        if (ggml_cpu_has_avx2()) {
+        if (ggml_cpu_has_avx512()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q6_K_8x8_q8_K;
             }
