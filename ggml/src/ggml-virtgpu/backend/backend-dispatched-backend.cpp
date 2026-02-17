@@ -89,7 +89,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
 #endif
     status = bck->iface.graph_compute(bck, cgraph);
 
-    if (async_backend) {
+    if (async_backend && bck->iface.synchronize) {
         bck->iface.synchronize(bck);
     }
 

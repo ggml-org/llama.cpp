@@ -85,7 +85,12 @@ uint32_t backend_buffer_type_get_alloc_size(apir_encoder * enc, apir_decoder * d
 
     const ggml_tensor * op = apir_decode_ggml_tensor_inplace(dec);
 
-    size_t value = buft->iface.get_alloc_size(buft, op);
+    size_t value;
+    if (buft->iface.get_alloc_size) {
+        value = buft->iface.get_alloc_size(buft, op);
+    } else {
+        value = ggml_nbytes(op);  // Default fallback
+    }
 
     apir_encode_size_t(enc, &value);
 
