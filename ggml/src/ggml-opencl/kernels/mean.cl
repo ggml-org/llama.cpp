@@ -112,7 +112,7 @@ kernel void kernel_mean_f32_4(
     }
 
     global float4 * src_row = (global float4 *) (src0 + i1*nb01 + i2*nb02 + i3*nb03);
-    global float * dst_row = (global float *) (dst  + i1*nb1  + i2*nb2  + i3*nb3);
+    global float  * dst_row = (global float  *) (dst  + i1*nb1  + i2*nb2  + i3*nb3);
 
     float4 sum_vec = (float4)0.0f;
 
