@@ -824,8 +824,8 @@ static bool is_op_dtype_consistent_with_src(const struct ggml_tensor *op) {
 
 static bool mul_mat_supported_size(const struct ggml_tensor *op) {
    // As a result of FIR-1401, support for K size 2048 is temporarily disabled.
-   //if (op->src[0]->ne[0] == 576 || op->src[0]->ne[0] == 1536 || op->src[0]->ne[0] == 2048)
-   if (op->src[0]->ne[0] == 576 || op->src[0]->ne[0] == 1536)
+   //if (op->src[0]->ne[0] == TMU_K_576 || op->src[0]->ne[0] == TMU_K_1536 || op->src[0]->ne[0] == TMU_K_2048)
+   if (op->src[0]->ne[0] == TMU_K_576 || op->src[0]->ne[0] == TMU_K_1536)
        return true;
    return false;
 
