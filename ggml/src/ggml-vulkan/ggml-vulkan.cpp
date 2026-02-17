@@ -2797,18 +2797,18 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         result.subgroup_size = device->subgroup_size;
     }
 
-    if (result.subgroup_size > 32 && (n_rows == 1 || hsk < 64)) {
-        result.workgroup_size = result.subgroup_size * 2;
-    } else {
-        result.workgroup_size = result.subgroup_size * 4;
-    }
-
     // Row split splits the workgroup so that synchronization only has to happen within subgroups, which avoids barriers
     uint32_t row_split_max_hsk = 64;
     if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
         row_split_max_hsk = 256;
     }
     result.row_split = (n_rows == 1 || hsk <= row_split_max_hsk) ? 1 : 4;
+
+    if (result.subgroup_size > 32 && (n_rows == 1 || hsk < (result.row_split == 1 ? 128 : 64))) {
+        result.workgroup_size = result.subgroup_size * 2;
+    } else {
+        result.workgroup_size = result.subgroup_size * 4;
+    }
 
     const uint32_t D = hsk | hsv;
 
