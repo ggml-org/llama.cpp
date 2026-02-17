@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { base } from '$app/paths';
+	import { browser } from '$app/environment';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
@@ -14,7 +15,9 @@
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
+	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
 	let { children } = $props();
@@ -43,7 +46,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (isCtrlOrCmd && event.key === 'k') {
+		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
 			event.preventDefault();
 			if (chatSidebar?.activateSearchMode) {
 				chatSidebar.activateSearchMode();
@@ -51,12 +54,12 @@
 			}
 		}
 
-		if (isCtrlOrCmd && event.shiftKey && event.key === 'O') {
+		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
 			event.preventDefault();
 			goto('?new_chat=true#/');
 		}
 
-		if (event.shiftKey && isCtrlOrCmd && event.key === 'E') {
+		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 
 			if (chatSidebar?.editActiveConversation) {
@@ -137,6 +140,26 @@
 			routerModelsFetched = true;
 			untrack(() => {
 				modelsStore.fetchRouterModels();
+			});
+		}
+	});
+
+	// Background MCP server health checks on app load
+	// Fetch enabled servers from settings and run health checks in background
+	$effect(() => {
+		if (!browser) return;
+
+		const mcpServers = mcpStore.getServers();
+
+		// Only run health checks if we have enabled servers with URLs
+		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
+
+		if (enabledServers.length > 0) {
+			untrack(() => {
+				// Run health checks in background (don't await)
+				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+					console.warn('[layout] MCP health checks failed:', error);
+				});
 			});
 		}
 	});
