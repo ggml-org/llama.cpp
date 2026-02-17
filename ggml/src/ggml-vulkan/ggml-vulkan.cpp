@@ -2808,7 +2808,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     const uint32_t D = hsk | hsv;
 
-    const bool reduce_block_rows = hsv >= 192 || D & 8 || n_kv < 1024 ||
+    const bool reduce_block_rows = n_rows <= 8 || hsv >= 192 || D & 8 || n_kv < 1024 ||
                                    (device->architecture == AMD_GCN && hsk <= 64) ||
                                    device->vendor_id == VK_VENDOR_ID_INTEL;
 
