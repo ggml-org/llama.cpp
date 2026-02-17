@@ -42,11 +42,15 @@ def load_model_and_tokenizer(model_path, device="auto"):
         config = config.text_config
         multimodal = True
 
-    print("Vocab size:       ", config.vocab_size)
-    print("Hidden size:      ", config.hidden_size)
-    print("Number of layers: ", config.num_hidden_layers)
-    print("BOS token id:     ", config.bos_token_id)
-    print("EOS token id:     ", config.eos_token_id)
+    def print_if_exists(label, obj, attr, default="N/A"):
+        val = getattr(obj, attr) if hasattr(obj, attr) else default
+        print(f"{label}", val)
+
+    print_if_exists("Vocab size:       ", config, "vocab_size")
+    print_if_exists("Hidden size:      ", config, "hidden_size")
+    print_if_exists("Number of layers: ", config, "num_hidden_layers")
+    print_if_exists("BOS token id:     ", config, "bos_token_id")
+    print_if_exists("EOS token id:     ", config, "eos_token_id")
 
     unreleased_model_name = os.getenv("UNRELEASED_MODEL_NAME")
     if unreleased_model_name:
