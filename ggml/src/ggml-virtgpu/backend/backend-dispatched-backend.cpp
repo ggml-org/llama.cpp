@@ -79,7 +79,8 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
         if (dev->iface.supports_op(dev, op)) {
             continue;
         }
-        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Graph node %d (%s) not supported by the backend\n", idx, ggml_op_desc(op));
+        GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Graph node %d (%s) not supported by the backend\n",
+                       __func__, idx, ggml_op_desc(op));
 
         status = GGML_STATUS_ABORTED;
         apir_encode_ggml_status(enc, &status);
