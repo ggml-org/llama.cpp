@@ -19,11 +19,10 @@
 const uint32_t HSK_per_thread = HSK / D_split;
 const uint32_t HSV_per_thread = HSV / D_split;
 
-const uint32_t row_split = (Br < 4 || HSK <= 64) ? 1 : 4;
 const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = WorkGroupSize / D_split / row_split;
 const uint32_t cols_per_thread = Bc / cols_per_iter;
-const uint32_t num_subgroups = WorkGroupSize / SubGroupSize;
+const uint32_t num_subgroups = SubGroupSize == 0 ? 0 : WorkGroupSize / SubGroupSize;
 
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
@@ -34,8 +33,8 @@ layout (binding = 2) readonly buffer V {float16_t data_v[];};
 layout (binding = 2) readonly buffer VV4 {f16vec4 data_vv4[];};
 layout (binding = 3) readonly buffer M {float16_t data_m[];};
 
-// If SubGroupSize is set to 0xFFFFFFFF then only use shmem reductions
-const uint32_t tmpsh_size = (SubGroupSize != SUBGROUPS_DISABLED) ? (row_split == 1 ? num_subgroups * D_split : num_subgroups) : WorkGroupSize;
+// If SubGroupSize is set to 0 then only use shmem reductions
+const uint32_t tmpsh_size = (SubGroupSize > 0) ? (row_split == 1 ? num_subgroups * D_split : num_subgroups) : WorkGroupSize;
 shared float tmpsh[tmpsh_size];
 shared ACC_TYPEV4 tmpsh_accv4[tmpsh_size];
 
@@ -381,7 +380,7 @@ void main() {
         float rowmaxf = Mf[r];
 
         // Compute max across the row
-        if (SubGroupSize != SUBGROUPS_DISABLED) {
+        if (SubGroupSize > 0) {
             [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
                 rowmaxf = max(rowmaxf, subgroupShuffleXor(rowmaxf, s));
             }
@@ -420,7 +419,7 @@ void main() {
         Lf[r] = eMf*Lf[r];
 
         // Compute sum across the row
-        if (SubGroupSize != SUBGROUPS_DISABLED) {
+        if (SubGroupSize > 0) {
             [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
                 Lf[r] += subgroupShuffleXor(Lf[r], s);
             }
@@ -451,7 +450,7 @@ void main() {
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
             Of[r][d] = ACC_TYPE(eMf) * Of[r][d];
 
-            if (SubGroupSize != SUBGROUPS_DISABLED) {
+            if (SubGroupSize > 0) {
                 [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
                     Of[r][d] += subgroupShuffleXor(Of[r][d], s);
                 }
