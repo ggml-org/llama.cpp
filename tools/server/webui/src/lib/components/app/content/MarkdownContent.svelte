@@ -616,7 +616,7 @@
 					code={incompleteCodeBlock.code}
 					language={incompleteCodeBlock.language || 'text'}
 					disabled={true}
-					onPreview={(code: string, lang: string) => {
+					onPreview={(code, lang) => {
 						previewCode = code;
 						previewLanguage = lang;
 						previewDialogOpen = true;
