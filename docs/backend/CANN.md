@@ -246,7 +246,7 @@ cmake --build build --config release
 
 1. **Retrieve and prepare model**
 
-    You can refer to the general [*Prepare and Quantize*](../../README.md#prepare-and-quantize) guide for model prepration.
+    You can refer to the general [*Obtaining and quantizing models*](../../README.md#obtaining-and-quantizing-models) guide for model prepration.
 
     **Notes**:
 
