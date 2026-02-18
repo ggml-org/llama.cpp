@@ -25216,7 +25216,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     bool                                           prev_on_cpu          = false;
     bool                                           retained_mode_active = false;
-    bool                                           gpu_queue_dirty      = false;  // D+: track pending GPU submissions
+    bool                                           gpu_queue_dirty      = false;  // D+: read at ~25691, set by fusions + line ~25805
     std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
 
     g_preclassified_cpu_flags = cpu_offload_active && !node_cpu_flags.empty() ? node_cpu_flags.data() : nullptr;
@@ -25305,7 +25305,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 ggml_tensor * mul_node = cgraph->nodes[i + 1];
                 ggml_tensor * add_node = cgraph->nodes[i + 2];
                 ggml_sycl_op_rms_norm_fused_add(*sycl_ctx, node, mul_node, add_node);
-
+                gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                 i += 2;  // Skip the MUL and ADD nodes
                 continue;
             }
@@ -25330,6 +25330,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                         float         eps;
                         memcpy(&eps, node->op_params, sizeof(float));
                         execute_per_projection_fusion(*sycl_ctx, x, gamma, eps, consumers);
+                        gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                         // Mark MUL and all MUL_MAT consumers as fused (to skip later)
                         fused_nodes.insert(mul_node);
                         for (const auto & [idx, mulmat] : consumers) {
@@ -25361,6 +25362,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     memcpy(&eps, node->op_params, sizeof(float));
                     // Call fused dispatch
                     ggml_sycl_mul_mat_with_rmsnorm(*sycl_ctx, x, gamma, W, mulmat_node, eps);
+                    gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                     i += 2;  // Skip MUL and MUL_MAT nodes
                     continue;
                 }
@@ -25370,6 +25372,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 ggml_sycl_check_fusion_types(cgraph, i, 2)) {
                 ggml_tensor * mul_node = cgraph->nodes[i + 1];
                 ggml_sycl_op_rms_norm_fused(*sycl_ctx, node, mul_node);
+                gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                 i++;  // Skip the MUL node
                 continue;
             }
@@ -25385,6 +25388,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 if (next->op == GGML_OP_RMS_NORM && next->src[0] == node &&
                     ggml_sycl_check_fusion_types(cgraph, i, 2) && ggml_is_contiguous(next)) {
                     ggml_sycl_op_add_rms_norm_fused(*sycl_ctx, node, next);
+                    gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                     i++;  // Skip the RMS_NORM node
                     continue;
                 }
@@ -25431,7 +25435,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     }
                     if (mul_only_used_by_add && scale_ok && bias_ok) {
                         ggml_sycl_op_mul_add_fused(*sycl_ctx, node, next);
-
+                        gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                         i++;  // Skip the ADD node
                         continue;
                     }
@@ -25506,6 +25510,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                                         glu_info.idx);
                         // Execute fused FFN kernel
                         if (execute_ffn_fusion(*sycl_ctx, gate_mm, up_mm, glu)) {
+                            gpu_queue_dirty = true;  // D+: GPU fusion submitted work
                             // Mark up MUL_MAT and GLU as fused (to skip later)
                             fused_nodes.insert(other_mulmat);
                             fused_nodes.insert(glu);
@@ -25679,11 +25684,17 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             // synchronous for-loop execution in cpu-dispatch.cpp kernels.
             // GPU islands are dispatched to the queue and waited on explicitly.
             if (node_on_cpu && host_compute_enabled) {
-                // D+: Drain any in-flight GPU ops before CPU direct dispatch.
-                // With direct inline dispatch, the calling thread must ensure
-                // prior GPU submissions have completed so that host-pinned
-                // output is visible to the CPU kernel.
-                sycl_ctx->stream()->wait();
+                // D+: Selective wait — only drain GPU queue if there are
+                // pending GPU submissions since the last drain.  Consecutive
+                // CPU nodes skip the wait entirely, eliminating ~200 redundant
+                // stream->wait() calls per token in all-CPU (HC30%) configs.
+                if (gpu_queue_dirty) {
+                    sycl_ctx->stream()->wait();
+                    gpu_queue_dirty = false;
+                } else {
+                    GGML_SYCL_DEBUG("[D+] skip wait for CPU node %d (%s) — queue clean\n",
+                                    i, node->name ? node->name : "(null)");
+                }
 
                 // Check if node sources are host-accessible
                 auto can_batch_cpu = [&](const ggml_tensor * t) -> bool {
@@ -25793,6 +25804,8 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
         // D+: Mark queue as dirty after any GPU submission.  The next CPU
         // direct-dispatch node will drain it before reading host-pinned output.
+        // Guard includes cpu_offload_active because node_on_cpu (the reader) is
+        // only true when cpu_offload_active populates node_cpu_flags.
         if (host_compute_enabled && cpu_offload_active) {
             gpu_queue_dirty = true;
         }
