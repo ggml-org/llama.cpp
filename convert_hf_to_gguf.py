@@ -563,8 +563,6 @@ class ModelBase:
 
     # some models need extra generated tensors (like rope_freqs)
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        if self._is_nvfp4:
-            return self._generate_nvfp4_tensors()
         return ()
 
     def _repack_nvfp4(self, new_name: str, weight: Tensor, scale: Tensor, scale2: Tensor):
@@ -654,6 +652,10 @@ class ModelBase:
 
     def prepare_tensors(self):
         self.dequant_model()
+
+        # NVFP4 weights are repacked and written directly to gguf_writer
+        if self._is_nvfp4:
+            self._generate_nvfp4_tensors()
 
         # Handle empty tensor_map for models with block_count=0 (like MobileNetV5)
         if self.tensor_map.mapping:

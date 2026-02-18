@@ -865,7 +865,7 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const __m256i mone = _mm256_set1_epi16(1);
 
 #if defined __AVX512F__ && defined __AVX512BW__
-    // Process 2 q8_0 blocks (= 4 NVFP4 blocks) per iteration using 512-bit registers
+    // Process 2 q8_0 blocks (= 4 NVFP4 blocks) per iteration using 512-bit FMA
     __m512 accum512 = _mm512_setzero_ps();
 
     for (; ib + 1 < nb; ib += 2) {
@@ -874,45 +874,39 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const block_nvfp4 * x2 = &x[2*ib + 2];
         const block_nvfp4 * x3 = &x[2*ib + 3];
 
-        // Load 8 bytes from each of 4 NVFP4 blocks into two 128-bit registers
+        // Load and lookup for first q8_0 block (2 NVFP4 blocks)
         const __m128i q4bits_0 = _mm_set_epi64x(*(const int64_t *)x1->qs, *(const int64_t *)x0->qs);
-        const __m128i q4bits_1 = _mm_set_epi64x(*(const int64_t *)x3->qs, *(const int64_t *)x2->qs);
-
-        // Table lookup
         const __m128i q4_lo_0 = _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_0, m4b));
         const __m128i q4_hi_0 = _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_0, 4), m4b));
-        const __m128i q4_lo_1 = _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b));
-        const __m128i q4_hi_1 = _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_1, 4), m4b));
-
-        // Construct 256-bit vectors matching q8 layout per q8_0 block
         const __m256i q4b_0 = MM256_SET_M128I(_mm_unpackhi_epi64(q4_lo_0, q4_hi_0),
                                               _mm_unpacklo_epi64(q4_lo_0, q4_hi_0));
+
+        // Load and lookup for second q8_0 block (2 NVFP4 blocks)
+        const __m128i q4bits_1 = _mm_set_epi64x(*(const int64_t *)x3->qs, *(const int64_t *)x2->qs);
+        const __m128i q4_lo_1 = _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b));
+        const __m128i q4_hi_1 = _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_1, 4), m4b));
         const __m256i q4b_1 = MM256_SET_M128I(_mm_unpackhi_epi64(q4_lo_1, q4_hi_1),
                                               _mm_unpacklo_epi64(q4_lo_1, q4_hi_1));
 
-        // Load q8_0 blocks separately (struct has 2-byte d prefix, qs not contiguous across blocks)
-        const __m256i q8b_0 = _mm256_loadu_si256((const __m256i *)y[ib + 0].qs);
-        const __m256i q8b_1 = _mm256_loadu_si256((const __m256i *)y[ib + 1].qs);
-
-        // Signed int8 multiply-add using 256-bit operations (no _mm512_sign_epi8)
-        const __m256i p16_0 = mul_add_epi8(q4b_0, q8b_0);
-        const __m256i p16_1 = mul_add_epi8(q4b_1, q8b_1);
-        const __m256i p32_0 = _mm256_madd_epi16(p16_0, mone);
-        const __m256i p32_1 = _mm256_madd_epi16(p16_1, mone);
+        // Multiply-add and widen to 32-bit
+        const __m256i p32_0 = _mm256_madd_epi16(mul_add_epi8(q4b_0, _mm256_loadu_si256((const __m256i *)y[ib + 0].qs)), mone);
+        const __m256i p32_1 = _mm256_madd_epi16(mul_add_epi8(q4b_1, _mm256_loadu_si256((const __m256i *)y[ib + 1].qs)), mone);
 
         // Combine into 512-bit for FMA
         const __m512i p32 = _mm512_inserti64x4(_mm512_castsi256_si512(p32_0), p32_1, 1);
 
-        // Per-block scales: 4 NVFP4 blocks × 4 lanes each = 16 floats
+        // Per-block scales
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
-        const float d0 = dy0 * GGML_CPU_FP16_TO_FP32(x0->d);
-        const float d1 = dy0 * GGML_CPU_FP16_TO_FP32(x1->d);
-        const float d2 = dy1 * GGML_CPU_FP16_TO_FP32(x2->d);
-        const float d3 = dy1 * GGML_CPU_FP16_TO_FP32(x3->d);
         const __m512 scale = _mm512_set_ps(
-            d3, d3, d3, d3, d2, d2, d2, d2,
-            d1, d1, d1, d1, d0, d0, d0, d0);
+            dy1 * GGML_CPU_FP16_TO_FP32(x3->d), dy1 * GGML_CPU_FP16_TO_FP32(x3->d),
+            dy1 * GGML_CPU_FP16_TO_FP32(x3->d), dy1 * GGML_CPU_FP16_TO_FP32(x3->d),
+            dy1 * GGML_CPU_FP16_TO_FP32(x2->d), dy1 * GGML_CPU_FP16_TO_FP32(x2->d),
+            dy1 * GGML_CPU_FP16_TO_FP32(x2->d), dy1 * GGML_CPU_FP16_TO_FP32(x2->d),
+            dy0 * GGML_CPU_FP16_TO_FP32(x1->d), dy0 * GGML_CPU_FP16_TO_FP32(x1->d),
+            dy0 * GGML_CPU_FP16_TO_FP32(x1->d), dy0 * GGML_CPU_FP16_TO_FP32(x1->d),
+            dy0 * GGML_CPU_FP16_TO_FP32(x0->d), dy0 * GGML_CPU_FP16_TO_FP32(x0->d),
+            dy0 * GGML_CPU_FP16_TO_FP32(x0->d), dy0 * GGML_CPU_FP16_TO_FP32(x0->d));
 
         accum512 = _mm512_fmadd_ps(scale, _mm512_cvtepi32_ps(p32), accum512);
     }
@@ -920,7 +914,9 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     sumf = _mm512_reduce_add_ps(accum512);
 #endif // __AVX512F__ && __AVX512BW__
 
-    __m256 accum = _mm256_setzero_ps();
+    __m256 accum = _mm256_set1_ps(0.0f);
+    // NOTE: when AVX512 path runs, sumf already has a partial result and ib > 0,
+    // so the AVX2 loop below only handles the remainder.
 
     for (; ib < nb; ++ib) {
         const block_nvfp4 * x0 = &x[2*ib + 0];
@@ -952,7 +948,7 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         accum = _mm256_fmadd_ps(scale, _mm256_cvtepi32_ps(p32), accum);
     }
 
-    sumf = hsum_float_8(accum);
+    sumf += hsum_float_8(accum);
 
 #endif
     for (; ib < nb; ++ib) {
