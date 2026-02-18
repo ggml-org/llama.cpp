@@ -6,7 +6,6 @@
 
 #include <cstdint>
 
-// SECURITY: Essential validation for buffer operations
 static uint32_t validate_buffer_operation(size_t offset, size_t size, const char* operation) {
     // Only check for critical integer overflow - no arbitrary size limits
     if (offset > SIZE_MAX - size) {
@@ -23,7 +22,6 @@ uint32_t backend_buffer_get_base(apir_encoder * enc, apir_decoder * dec, virgl_a
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
@@ -42,7 +40,6 @@ uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
@@ -61,7 +58,6 @@ uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     size_t size;
     apir_decode_size_t(dec, &size);
 
-    // SECURITY: Validate buffer operation parameters
     if (validate_buffer_operation(offset, size, __func__) != 0) {
         return 1;
     }
@@ -85,7 +81,6 @@ uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
@@ -104,7 +99,6 @@ uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     size_t size;
     apir_decode_size_t(dec, &size);
 
-    // SECURITY: Validate buffer operation parameters
     if (validate_buffer_operation(offset, size, __func__) != 0) {
         return 1;
     }
@@ -126,7 +120,6 @@ uint32_t backend_buffer_cpy_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
@@ -151,7 +144,6 @@ uint32_t backend_buffer_clear(apir_encoder * enc, apir_decoder * dec, virgl_apir
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
@@ -172,7 +164,6 @@ uint32_t backend_buffer_free_buffer(apir_encoder * enc, apir_decoder * dec, virg
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
 
-    // SECURITY: Check if buffer validation failed
     if (!buffer || apir_decoder_get_fatal(dec)) {
         GGML_LOG_ERROR(GGML_VIRTGPU_BCK "%s: Invalid buffer handle from guest\n", __func__);
         return 1;
