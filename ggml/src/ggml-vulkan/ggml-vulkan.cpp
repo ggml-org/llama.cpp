@@ -2799,10 +2799,10 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     // Row split splits the workgroup so that synchronization only has to happen within subgroups, which avoids barriers
     uint32_t row_split_max_hsk = 64;
-    if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
-        row_split_max_hsk = 256;
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN && !device->uma) {
+        row_split_max_hsk = n_rows <= 8 ? 64 : 128;
     }
-    result.row_split = (n_rows == 1 || hsk <= row_split_max_hsk) ? 1 : 4;
+    result.row_split = (n_rows < 4 || hsk <= row_split_max_hsk) ? 1 : 4;
 
     if (result.subgroup_size > 32 && (n_rows == 1 || hsk < (result.row_split == 1 ? 128 : 64))) {
         result.workgroup_size = result.subgroup_size * 2;
@@ -2812,7 +2812,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     const uint32_t D = hsk | hsv;
 
-    const bool reduce_block_rows = n_rows <= 8 || hsv >= 192 || D & 8 || n_kv < 1024 ||
+    const bool reduce_block_rows = hsv > 256 || D & 8 || n_kv < 1024 ||
                                    device->vendor_id == VK_VENDOR_ID_INTEL;
 
     if (n_rows == 1) {
@@ -2821,9 +2821,9 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
     } else {
         // row_split 1 means higher register use per row, so block size has to be adjusted
         if (result.row_split == 1) {
-            result.block_rows = reduce_block_rows ? 4 : 8;
+            result.block_rows = n_rows == 2 ? 2 : ((n_rows <= 4 || reduce_block_rows) ? 4 : 8);
         } else {
-            result.block_rows = reduce_block_rows ? 8 : 16;
+            result.block_rows = n_rows <= 4 ? 4 : ((n_rows <= 8 || reduce_block_rows) ? 8 : 16);
         }
 
         result.block_cols = (D & 8) ? 64 : 32;
@@ -2848,7 +2848,7 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     GGML_UNUSED(kv_type);
     GGML_UNUSED(f32acc);
 
-    vk_fa_tuning_params result;
+    vk_fa_tuning_params result{};
     result.path = FA_COOPMAT1;
 
     const uint32_t D = hsk | hsv;
@@ -2876,7 +2876,7 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device
     GGML_UNUSED(n_kv);
     GGML_UNUSED(f32acc);
 
-    vk_fa_tuning_params result;
+    vk_fa_tuning_params result{};
     result.path = FA_COOPMAT2;
 
     const uint32_t D = hsk | hsv;
