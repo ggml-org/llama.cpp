@@ -154,7 +154,7 @@ void simple_flash_attn_f16_core(int kv_head_idx, uint8_t *vtcm, uint8_t *vtcm_li
   const int G = n_heads / n_kv_heads;  // GQA factor
   const int D = head_dim;
 
-  const bool   qo_fp32_element = true;  // whether Q/O has fp32 elements
+  const bool   qo_fp32_element = false;  // Q/O are fp16 in the llama.cpp integration
   const size_t qo_element_size = qo_fp32_element ? sizeof(float) : sizeof(__fp16);
 
   // NOTE(hzx): confirmed that non-constant `has_qk_mask` affects softmax performance, disable it for now
