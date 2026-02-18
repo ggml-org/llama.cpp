@@ -1,5 +1,11 @@
+export enum ColorMode {
+	LIGHT = 'light',
+	DARK = 'dark',
+	SYSTEM = 'system'
+}
+
 /**
- * URL prefixes for protocol detection.
+ * URL prefixes for protocol detection
  */
 export enum UrlPrefix {
 	DATA = 'data:',

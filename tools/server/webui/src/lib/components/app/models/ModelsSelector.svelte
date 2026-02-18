@@ -31,8 +31,6 @@
 		forceForegroundText?: boolean;
 		/** When true, user's global selection takes priority over currentModel (for form selector) */
 		useGlobalSelection?: boolean;
-		/** Optional compatibility prop for context-aware selectors. */
-		upToMessageId?: string;
 	}
 
 	let {
@@ -41,9 +39,7 @@
 		onModelChange,
 		disabled = false,
 		forceForegroundText = false,
-		useGlobalSelection = false,
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		upToMessageId: _upToMessageId = undefined
+		useGlobalSelection = false
 	}: Props = $props();
 
 	let options = $derived(modelOptions());
