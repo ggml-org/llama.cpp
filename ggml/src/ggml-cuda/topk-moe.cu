@@ -259,52 +259,52 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
     dim3         grid_dims((n_rows + rows_per_block - 1) / rows_per_block, 1, 1);
     dim3         block_dims(WARP_SIZE, rows_per_block, 1);
     cudaStream_t stream = ctx.stream();
-    auto pdl_cfg = ggml_cuda_pdl_config(grid_dims, block_dims, 0, stream);
+    auto launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, stream);
 
     switch (n_expert) {
         case 1:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<1, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<1, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 2:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<2, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<2, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 4:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<4, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<4, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 8:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<8, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<8, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 16:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<16, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<16, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 32:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<32, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<32, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 64:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<64, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<64, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 128:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<128, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<128, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 256:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<256, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<256, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 512:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<512, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<512, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         case 576:
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, topk_moe_cuda<576, has_bias>,
-                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config));
+            ggml_cuda_kernel_launch(topk_moe_cuda<576, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
         default:
             GGML_ASSERT(false && "fatal error");

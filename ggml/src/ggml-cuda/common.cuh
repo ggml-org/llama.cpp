@@ -106,44 +106,21 @@
 #    define GGML_CUDA_USE_CUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ <= GGML_CUDA_CC_HOPPER
-#   define GGML_CUDA_PDL_SYNC()  // no-op on HIP/MUSA
-#else
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+#   define GGML_CUDA_USE_PDL
+#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+
+#if defined(GGML_CUDA_USE_PDL)
 #   define GGML_CUDA_PDL_SYNC() cudaGridDependencySynchronize()
-#endif
-
-#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA) || __CUDA_ARCH__ <= GGML_CUDA_CC_HOPPER
-#   define GGML_CUDA_PDL_LC()  // no-op on HIP/MUSA
 #else
-#   define GGML_CUDA_PDL_LC() cudaTriggerProgrammaticLaunchCompletion()
+#   define GGML_CUDA_PDL_SYNC()  // no-op on HIP/MUSA
 #endif
 
-struct ggml_cuda_pdl_config {
-    cudaLaunchAttribute attr;
-    cudaLaunchConfig_t  cfg;
-
-    ggml_cuda_pdl_config(dim3 grid, dim3 block, size_t shmem, cudaStream_t s) {
-        attr.id = cudaLaunchAttributeProgrammaticStreamSerialization;
-        attr.val.programmaticStreamSerializationAllowed = 1;
-
-        cfg = {};
-        cfg.gridDim          = grid;
-        cfg.blockDim         = block;
-        cfg.dynamicSmemBytes = shmem;
-        cfg.stream           = s;
-        cfg.attrs            = &attr;
-        cfg.numAttrs         = 1;
-    }
-
-    // Delete due to &attr
-    ggml_cuda_pdl_config(const ggml_cuda_pdl_config&) = delete;
-    ggml_cuda_pdl_config& operator=(const ggml_cuda_pdl_config&) = delete;
-    ggml_cuda_pdl_config& operator=(ggml_cuda_pdl_config&&) = delete;
-
-    ggml_cuda_pdl_config(ggml_cuda_pdl_config&& o) noexcept : attr(o.attr), cfg(o.cfg) {
-        cfg.attrs = &attr;
-    }
-};
+#if defined(GGML_CUDA_USE_PDL)
+#   define GGML_CUDA_PDL_LC() cudaTriggerProgrammaticLaunchCompletion()
+#else
+#   define GGML_CUDA_PDL_LC()  // no-op on HIP/MUSA
+#endif
 
 #ifdef __CUDA_ARCH_LIST__
 constexpr bool ggml_cuda_has_arch_impl(int) {
@@ -202,6 +179,58 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     } while (0)
 
 #define CUDA_CHECK(err) CUDA_CHECK_GEN(err, cudaSuccess, cudaGetErrorString)
+
+struct ggml_cuda_kernel_launch_params {
+    dim3 block_nums;
+    dim3 block_dims;
+    size_t shmem;
+    cudaStream_t stream;
+
+    // size_t shmem
+    ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, size_t shmem_, cudaStream_t stream_)
+        : block_nums(block_nums_), block_dims(block_dims_), shmem(shmem_), stream(stream_) {}
+
+    // int shmem
+    ggml_cuda_kernel_launch_params(const dim3& block_nums_, const dim3& block_dims_, const int shmem_, cudaStream_t stream_)
+        : block_nums(block_nums_), block_dims(block_dims_), shmem((size_t)shmem_), stream(stream_) {}
+};
+
+#if defined(GGML_CUDA_USE_PDL)
+struct ggml_cuda_pdl_config {
+    cudaLaunchAttribute attr;
+    cudaLaunchConfig_t  cfg;
+
+    ggml_cuda_pdl_config(const ggml_cuda_kernel_launch_params & params) {
+        attr.id = cudaLaunchAttributeProgrammaticStreamSerialization;
+        attr.val.programmaticStreamSerializationAllowed = 1;
+
+        cfg = {};
+        cfg.gridDim          = params.block_nums;
+        cfg.blockDim         = params.block_dims;
+        cfg.dynamicSmemBytes = params.shmem;
+        cfg.stream           = params.stream;
+        cfg.attrs            = &attr;
+        cfg.numAttrs         = 1;
+    }
+
+    // Delete due to &attr
+    ggml_cuda_pdl_config(const ggml_cuda_pdl_config&) = delete;
+    ggml_cuda_pdl_config& operator=(const ggml_cuda_pdl_config&) = delete;
+    ggml_cuda_pdl_config& operator=(ggml_cuda_pdl_config&&) = delete;
+
+};
+#endif //defined(GGML_CUDA_USE_PDL)
+
+
+template<typename Kernel, typename... Args>
+void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args... args) {
+#if defined(GGML_CUDA_USE_PDL)
+        auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
+        CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, args... ));
+#else
+        kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(args... );
+#endif //defined(GGML_CUDA_USE_PDL)
+}
 
 #if CUDART_VERSION >= 12000 || defined(GGML_USE_MUSA)
     static const char * cublas_get_error_str(const cublasStatus_t err) {

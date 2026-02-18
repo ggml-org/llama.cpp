@@ -385,24 +385,25 @@ static void mul_mat_vec_f_switch_fusion(
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const dim3 & block_dims, const dim3 & block_nums, const int nbytes_shared, const int ids_stride, const cudaStream_t stream) {
 
-    auto pdl_cfg = ggml_cuda_pdl_config(block_nums, block_dims, nbytes_shared, stream);
+    ggml_cuda_kernel_launch_params launch_params = {block_nums, block_dims, nbytes_shared, stream};
+
     const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr || fusion.gate_bias != nullptr;
     if constexpr (ncols_dst == 1) {
         if (has_fusion) {
-            CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, mul_mat_vec_f<T, type_acc, ncols_dst, block_size, true, is_multi_token_id>,
+            ggml_cuda_kernel_launch(mul_mat_vec_f<T, type_acc, ncols_dst, block_size, true, is_multi_token_id>, launch_params,
                 x, y, ids, fusion, dst, ncols, nchannels_y, stride_row, stride_col_y, stride_col_dst,
                 channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride));
+                sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
             return;
        }
     }
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, mul_mat_vec_f<T, type_acc, ncols_dst, block_size, false, is_multi_token_id>,
+    ggml_cuda_kernel_launch(mul_mat_vec_f<T, type_acc, ncols_dst, block_size, false, is_multi_token_id>, launch_params,
         x, y, ids, fusion, dst, ncols, nchannels_y, stride_row, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
-        sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride));
+        sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
 
 }
 
