@@ -691,6 +691,48 @@ static void test_filters(testing & t) {
         "{\n  \"a\": 1,\n  \"b\": [\n    1,\n    2\n  ]\n}"
     );
 
+    test_template(t, "indent",
+        "{{ data|indent(2) }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n  bar"
+    );
+
+    test_template(t, "indent first only",
+        "{{ data|indent(width=3,first=true) }}",
+        {{ "data", "foo\nbar" }},
+        "   foo\n   bar"
+    );
+
+    test_template(t, "indent blank lines and first line",
+        "{{ data|indent(width=5,blank=true,first=true) }}",
+        {{ "data", "foo\n\nbar" }},
+        "     foo\n     \n     bar"
+    );
+
+    test_template(t, "indent with default width",
+        "{{ data|indent() }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n    bar"
+    );
+
+    test_template(t, "indent with no newline",
+        "{{ data|indent }}",
+        {{ "data", "foo" }},
+        "foo"
+    );
+
+    test_template(t, "indent with trailing newline",
+        "{{ data|indent(blank=true) }}",
+        {{ "data", "foo\n" }},
+        "foo\n    "
+    );
+
+    test_template(t, "indent with string",
+        "{{ data|indent(width='>>>>') }}",
+        {{ "data", "foo\nbar" }},
+        "foo\n>>>>bar"
+    );
+
     test_template(t, "chained filters",
         "{{ '  HELLO  '|trim|lower }}",
         json::object(),
