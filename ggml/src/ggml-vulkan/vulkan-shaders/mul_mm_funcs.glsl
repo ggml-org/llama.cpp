@@ -1,3 +1,7 @@
+#if defined(DATA_A_TQ2_0)
+#include "tq_utils.comp"
+#endif
+
 void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uint idx_m, const uint block, const uint end_k) {
 #if defined(DATA_A_F32) || defined(DATA_A_F16)
 #if LOAD_VEC_A == 8
@@ -130,6 +134,24 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             buf_a[buf_idx    ] = FLOAT_TYPE_VEC2(v.xy);
             buf_a[buf_idx + 1] = FLOAT_TYPE_VEC2(v.zw);
+#elif defined(DATA_A_TQ2_0)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+            const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
+
+            const uint ib = idx / 128;
+            const uint iqs = idx % 128;
+
+            const FLOAT_TYPE d = FLOAT_TYPE(data_a[ib].d);
+
+            const uint e0 = 2 * iqs;
+            const uint e1 = e0 + 1;
+
+            FLOAT_TYPE v0 = FLOAT_TYPE(tq2_dequantize(ib, e0)) * d;
+            FLOAT_TYPE v1 = FLOAT_TYPE(tq2_dequantize(ib, e1)) * d;
+
+            const vec2 v = vec2(v0, v1);
+
+            buf_a[buf_idx    ] = FLOAT_TYPE_VEC2(v.xy);
 #elif defined(DATA_A_Q2_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
