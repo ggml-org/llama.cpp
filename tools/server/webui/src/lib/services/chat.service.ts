@@ -1,5 +1,15 @@
-import { getJsonHeaders } from '$lib/utils';
-import { AttachmentType } from '$lib/enums';
+import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
+import { ATTACHMENT_LABEL_PDF_FILE } from '$lib/constants/attachment-labels';
+import {
+	AttachmentType,
+	ContentPartType,
+	MessageRole,
+	ReasoningFormat,
+	UrlPrefix
+} from '$lib/enums';
+import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import { modelsStore } from '$lib/stores/models.svelte';
+import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatCompletionResponse,
@@ -10,42 +20,42 @@ import type {
 	ApiChatMessageData
 } from '$lib/types/api';
 
-/**
- * ChatService - Low-level API communication layer for Chat Completions
- *
- * **Terminology - Chat vs Conversation:**
- * - **Chat**: The active interaction space with the Chat Completions API. This service
- *   handles the real-time communication with the AI backend - sending messages, receiving
- *   streaming responses, and managing request lifecycles. "Chat" is ephemeral and runtime-focused.
- * - **Conversation**: The persistent database entity storing all messages and metadata.
- *   Managed by ConversationsService/Store, conversations persist across sessions.
- *
- * This service handles direct communication with the llama-server's Chat Completions API.
- * It provides the network layer abstraction for AI model interactions while remaining
- * stateless and focused purely on API communication.
- *
- * **Architecture & Relationships:**
- * - **ChatService** (this class): Stateless API communication layer
- *   - Handles HTTP requests/responses with the llama-server
- *   - Manages streaming and non-streaming response parsing
- *   - Provides per-conversation request abortion capabilities
- *   - Converts database messages to API format
- *   - Handles error translation for server responses
- *
- * - **chatStore**: Uses ChatService for all AI model communication
- * - **conversationsStore**: Provides message context for API requests
- *
- * **Key Responsibilities:**
- * - Message format conversion (DatabaseMessage → API format)
- * - Streaming response handling with real-time callbacks
- * - Reasoning content extraction and processing
- * - File attachment processing (images, PDFs, audio, text)
- * - Request lifecycle management (abort via AbortSignal)
- */
 export class ChatService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Messaging
-	// ─────────────────────────────────────────────────────────────────────────────
+	private static stripReasoningContent(
+		content: ApiChatMessageData['content'] | null | undefined
+	): ApiChatMessageData['content'] | null | undefined {
+		if (!content) {
+			return content;
+		}
+
+		if (typeof content === 'string') {
+			return content
+				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '');
+		}
+
+		if (!Array.isArray(content)) {
+			return content;
+		}
+
+		return content.map((part: ApiChatMessageContentPart) => {
+			if (part.type !== ContentPartType.TEXT || !part.text) return part;
+			return {
+				...part,
+				text: part.text
+					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+			};
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Messaging
+	 *
+	 *
+	 */
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -72,6 +82,8 @@ export class ChatService {
 			onToolCallChunk,
 			onModel,
 			onTimings,
+			// Tools for function calling
+			tools,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -106,6 +118,7 @@ export class ChatService {
 			.map((msg) => {
 				if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 					const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+
 					return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
 				} else {
 					return msg as ApiChatMessageData;
@@ -113,7 +126,7 @@ export class ChatService {
 			})
 			.filter((msg) => {
 				// Filter out empty system messages
-				if (msg.role === 'system') {
+				if (msg.role === MessageRole.SYSTEM) {
 					const content = typeof msg.content === 'string' ? msg.content : '';
 
 					return content.trim().length > 0;
@@ -122,13 +135,41 @@ export class ChatService {
 				return true;
 			});
 
+		// Filter out image attachments if the model doesn't support vision
+		if (options.model && !modelsStore.modelSupportsVision(options.model)) {
+			normalizedMessages.forEach((msg) => {
+				if (Array.isArray(msg.content)) {
+					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
+						if (part.type === ContentPartType.IMAGE_URL) {
+							console.info(
+								`[ChatService] Skipping image attachment in message history (model "${options.model}" does not support vision)`
+							);
+
+							return false;
+						}
+
+						return true;
+					});
+					// If only text remains and it's a single part, simplify to string
+					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
+						msg.content = msg.content[0].text;
+					}
+				}
+			});
+		}
+
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content
+				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
+				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
+				content: ChatService.stripReasoningContent(msg.content),
+				tool_calls: msg.tool_calls,
+				tool_call_id: msg.tool_call_id
 			})),
 			stream,
-			return_progress: stream ? true : undefined
+			return_progress: stream ? true : undefined,
+			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
 		// Include model in request if provided (required in ROUTER mode)
@@ -136,7 +177,9 @@ export class ChatService {
 			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = disableReasoningParsing ? 'none' : 'auto';
+		requestBody.reasoning_format = disableReasoningParsing
+			? ReasoningFormat.NONE
+			: ReasoningFormat.AUTO;
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
@@ -192,9 +235,11 @@ export class ChatService {
 
 			if (!response.ok) {
 				const error = await ChatService.parseErrorResponse(response);
+
 				if (onError) {
 					onError(error);
 				}
+
 				throw error;
 			}
 
@@ -211,6 +256,7 @@ export class ChatService {
 					conversationId,
 					signal
 				);
+
 				return;
 			} else {
 				return ChatService.handleNonStreamResponse(
@@ -222,7 +268,7 @@ export class ChatService {
 				);
 			}
 		} catch (error) {
-			if (error instanceof Error && error.name === 'AbortError') {
+			if (isAbortError(error)) {
 				console.log('Chat completion request was aborted');
 				return;
 			}
@@ -249,16 +295,22 @@ export class ChatService {
 			}
 
 			console.error('Error in sendMessage:', error);
+
 			if (onError) {
 				onError(userFriendlyError);
 			}
+
 			throw userFriendlyError;
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Streaming
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Streaming
+	 *
+	 *
+	 */
 
 	/**
 	 * Handles streaming response from the chat completion API
@@ -332,6 +384,10 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
+			if (import.meta.env.DEV) {
+				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
+			}
+
 			if (!serializedToolCalls) {
 				return;
 			}
@@ -358,10 +414,11 @@ export class ChatService {
 				for (const line of lines) {
 					if (abortSignal?.aborted) break;
 
-					if (line.startsWith('data: ')) {
+					if (line.startsWith(UrlPrefix.DATA)) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
 							streamFinished = true;
+
 							continue;
 						}
 
@@ -467,6 +524,7 @@ export class ChatService {
 
 			if (!responseText.trim()) {
 				const noResponseError = new Error('No response received from server. Please try again.');
+
 				throw noResponseError;
 			}
 
@@ -480,10 +538,6 @@ export class ChatService {
 			const content = data.choices[0]?.message?.content || '';
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 			const toolCalls = data.choices[0]?.message?.tool_calls;
-
-			if (reasoningContent) {
-				console.log('Full reasoning content:', reasoningContent);
-			}
 
 			let serializedToolCalls: string | undefined;
 
@@ -500,6 +554,7 @@ export class ChatService {
 
 			if (!content.trim() && !serializedToolCalls) {
 				const noResponseError = new Error('No response received from server. Please try again.');
+
 				throw noResponseError;
 			}
 
@@ -572,9 +627,13 @@ export class ChatService {
 		return result;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Conversion
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Conversion
+	 *
+	 *
+	 */
 
 	/**
 	 * Converts a database message with attachments to API chat message format.
@@ -591,22 +650,48 @@ export class ChatService {
 	static convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): ApiChatMessageData {
-		if (!message.extra || message.extra.length === 0) {
+		// Handle tool result messages (role: 'tool')
+		if (message.role === MessageRole.TOOL && message.toolCallId) {
 			return {
-				role: message.role as 'user' | 'assistant' | 'system',
+				role: MessageRole.TOOL,
+				content: message.content,
+				tool_call_id: message.toolCallId
+			};
+		}
+
+		// Parse tool calls for assistant messages
+		let toolCalls: ApiChatCompletionToolCall[] | undefined;
+		if (message.toolCalls) {
+			try {
+				toolCalls = JSON.parse(message.toolCalls);
+			} catch {
+				// Ignore parse errors for malformed tool calls
+			}
+		}
+
+		if (!message.extra || message.extra.length === 0) {
+			const result: ApiChatMessageData = {
+				role: message.role as MessageRole,
 				content: message.content
 			};
+
+			if (toolCalls && toolCalls.length > 0) {
+				result.tool_calls = toolCalls;
+			}
+
+			return result;
 		}
 
 		const contentParts: ApiChatMessageContentPart[] = [];
 
 		if (message.content) {
 			contentParts.push({
-				type: 'text',
+				type: ContentPartType.TEXT,
 				text: message.content
 			});
 		}
 
+		// Include images from all messages
 		const imageFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
 				extra.type === AttachmentType.IMAGE
@@ -614,7 +699,7 @@ export class ChatService {
 
 		for (const image of imageFiles) {
 			contentParts.push({
-				type: 'image_url',
+				type: ContentPartType.IMAGE_URL,
 				image_url: { url: image.base64Url }
 			});
 		}
@@ -626,8 +711,8 @@ export class ChatService {
 
 		for (const textFile of textFiles) {
 			contentParts.push({
-				type: 'text',
-				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText('File', textFile.name, textFile.content)
 			});
 		}
 
@@ -639,8 +724,8 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				type: 'text',
-				text: `\n\n--- File: ${legacyContextFile.name} ---\n${legacyContextFile.content}`
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
 			});
 		}
 
@@ -651,7 +736,7 @@ export class ChatService {
 
 		for (const audio of audioFiles) {
 			contentParts.push({
-				type: 'input_audio',
+				type: ContentPartType.INPUT_AUDIO,
 				input_audio: {
 					data: audio.base64Data,
 					format: audio.mimeType.includes('wav') ? 'wav' : 'mp3'
@@ -668,27 +753,33 @@ export class ChatService {
 			if (pdfFile.processedAsImages && pdfFile.images) {
 				for (let i = 0; i < pdfFile.images.length; i++) {
 					contentParts.push({
-						type: 'image_url',
+						type: ContentPartType.IMAGE_URL,
 						image_url: { url: pdfFile.images[i] }
 					});
 				}
 			} else {
 				contentParts.push({
-					type: 'text',
-					text: `\n\n--- PDF File: ${pdfFile.name} ---\n${pdfFile.content}`
+					type: ContentPartType.TEXT,
+					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
 				});
 			}
 		}
 
-		return {
-			role: message.role as 'user' | 'assistant' | 'system',
+		const result: ApiChatMessageData = {
+			role: message.role as MessageRole,
 			content: contentParts
 		};
+
+		return result;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	/**
 	 * Parses error response and creates appropriate error with context information
@@ -723,6 +814,7 @@ export class ChatService {
 				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 			};
 			fallback.name = 'HttpError';
+
 			return fallback;
 		}
 	}
@@ -754,18 +846,26 @@ export class ChatService {
 
 		// 1) root (some implementations provide `model` at the top level)
 		const rootModel = getTrimmedString(root.model);
-		if (rootModel) return rootModel;
+		if (rootModel) {
+			return rootModel;
+		}
 
 		// 2) streaming choice (delta) or final response (message)
 		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
-		if (!firstChoice) return undefined;
+		if (!firstChoice) {
+			return undefined;
+		}
 
 		// priority: delta.model (first chunk) else message.model (final response)
 		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
-		if (deltaModel) return deltaModel;
+		if (deltaModel) {
+			return deltaModel;
+		}
 
 		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
-		if (messageModel) return messageModel;
+		if (messageModel) {
+			return messageModel;
+		}
 
 		// avoid guessing from non-standard locations (metadata, etc.)
 		return undefined;

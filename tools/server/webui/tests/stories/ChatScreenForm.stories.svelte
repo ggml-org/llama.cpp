@@ -44,8 +44,7 @@
 <Story
 	name="Default"
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
-	play={async (context) => {
-		const { canvas, userEvent } = context;
+	play={async ({ canvas, userEvent }) => {
 		const textarea = await canvas.findByRole('textbox');
 		const submitButton = await canvas.findByRole('button', { name: 'Send' });
 
@@ -75,8 +74,7 @@
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		uploadedFiles: fileAttachments
 	}}
-	play={async (context) => {
-		const { canvas } = context;
+	play={async ({ canvas }) => {
 		const jpgAttachment = canvas.getByAltText('1.jpg');
 		const svgAttachment = canvas.getByAltText('hf-logo.svg');
 		const pdfFileExtension = canvas.getByText('PDF');

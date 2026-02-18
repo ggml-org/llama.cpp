@@ -1,5 +1,5 @@
 import { getJsonHeaders } from '$lib/utils';
-import { ChatService } from '$lib/services/chat';
+import { ChatService } from '$lib/services/chat.service';
 
 import type { ApiCompletionRequest, ApiCompletionStreamChunk } from '$lib/types/api';
 import type { ChatMessageTimings } from '$lib/types/chat';

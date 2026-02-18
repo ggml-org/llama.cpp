@@ -1,6 +1,6 @@
-import { CompletionService } from '$lib/services/completion';
+import { CompletionService } from '$lib/services/completion.service';
 import { config } from '$lib/stores/settings.svelte';
-import { tokenize } from '$lib/services/tokenize';
+import { tokenize } from '$lib/services/tokenize.service';
 
 export class NotebookStore {
 	content = $state('');
