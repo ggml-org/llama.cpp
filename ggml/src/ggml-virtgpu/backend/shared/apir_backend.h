@@ -14,6 +14,7 @@
 #define APIR_BACKEND_INITIALIZE_BACKEND_REG_FAILED          6
 #define APIR_BACKEND_INITIALIZE_ALREADY_INITED              7
 #define APIR_BACKEND_INITIALIZE_NO_DEVICE                   8
+#define APIR_BACKEND_INITIALIZE_BACKEND_INIT_FAILED         9
 
 
 // new entries here need to be added to the apir_backend_initialize_error function below
