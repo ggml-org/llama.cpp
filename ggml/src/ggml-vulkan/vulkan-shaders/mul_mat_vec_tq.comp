@@ -30,7 +30,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 const FLOAT_TYPE d = FLOAT_TYPE(data_a[ib0 + i].d);
                 
                 [[unroll]] for (uint e = tid % 8; e < 256; e += 8) {
-#if defined(DATA_A_TQ2_0)
+#if defined(DATA_A_TQ1_0)
+                    const FLOAT_TYPE dequant_val = FLOAT_TYPE(tq1_dequantize(ib0 + i, e)) * d;
+#elif defined(DATA_A_TQ2_0)
                     const FLOAT_TYPE dequant_val = FLOAT_TYPE(tq2_dequantize(ib0 + i, e)) * d;
 #endif
                     const uint b_idx = i * QUANT_K + e;
