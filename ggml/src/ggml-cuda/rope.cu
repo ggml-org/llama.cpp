@@ -358,15 +358,16 @@ static void rope_neox_cuda(const T *            x,
     const dim3 block_nums(nr, n_blocks_x, 1);
 
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
+    auto pdl_cfg = ggml_cuda_pdl_config(block_nums, block_dims, 0, stream);
 
     if (freq_factors == nullptr) {
-        rope_neox<forward, false><<<block_nums, block_dims, 0, stream>>>(
+        CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, rope_neox<forward, false, T, D>,
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor, attn_factor, corr_dims, theta_scale,
-            freq_factors, row_indices, set_rows_stride);
+            freq_factors, row_indices, set_rows_stride));
     } else {
-        rope_neox<forward, true><<<block_nums, block_dims, 0, stream>>>(
+        CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, rope_neox<forward, true, T, D>,
             x, dst, ne0, ne1, s1, s2, n_dims, pos, freq_scale, ext_factor, attn_factor, corr_dims, theta_scale,
-            freq_factors, row_indices, set_rows_stride);
+            freq_factors, row_indices, set_rows_stride));
     }
 }
 
