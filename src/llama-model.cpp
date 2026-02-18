@@ -887,7 +887,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-                    hparams.set_swa_pattern(swa_period);
+                    hparams.set_swa_pattern(swa_period, true);
                 } else {
                     hparams.swa_type = LLAMA_SWA_TYPE_NONE;
                 }
