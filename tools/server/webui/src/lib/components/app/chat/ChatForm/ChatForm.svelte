@@ -182,14 +182,6 @@
 	 *
 	 */
 
-	/**
-	 *
-	 *
-	 * EVENT HANDLERS - File Management
-	 *
-	 *
-	 */
-
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
 	}
