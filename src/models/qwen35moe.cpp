@@ -219,6 +219,8 @@ ggml_tensor * llm_build_qwen35moe ::build_layer_attn_linear(
     beta  = ggml_reshape_4d(ctx0, beta, num_v_heads, 1, n_seq_tokens, n_seqs);
     cb(beta, "beta", il);
 
+    beta = ggml_sigmoid(ctx0, beta);
+
     ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur);
     alpha = ggml_cont_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
