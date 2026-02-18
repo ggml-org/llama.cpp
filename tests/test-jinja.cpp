@@ -715,6 +715,18 @@ static void test_filters(testing & t) {
         "foo\n    bar"
     );
 
+    test_template(t, "indent with no newline",
+        "{{ data|indent }}",
+        {{ "data", "foo" }},
+        "foo"
+    );
+
+    test_template(t, "indent with trailing newline",
+        "{{ data|indent(blank=true) }}",
+        {{ "data", "foo\n" }},
+        "foo\n    "
+    );
+
     test_template(t, "indent with string",
         "{{ data|indent(width='>>>>') }}",
         {{ "data", "foo\nbar" }},
