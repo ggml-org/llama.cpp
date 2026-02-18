@@ -68,8 +68,8 @@ jobs:
 
     env:
       # Make sure this is in sync with build.yml
-      OPENVINO_VERSION_MAJOR: "2025.3"
-      OPENVINO_VERSION_FULL: "2025.3.0.19807.44526285f24"
+      OPENVINO_VERSION_MAJOR: "2026.0.1"  
+      OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"  
 
     steps:
       - name: Clone

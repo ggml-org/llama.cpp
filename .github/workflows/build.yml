@@ -748,8 +748,8 @@ jobs:
 
       env:
         # Make sure this is in sync with build-cache.yml
-        OPENVINO_VERSION_MAJOR: "2025.3"
-        OPENVINO_VERSION_FULL: "2025.3.0.19807.44526285f24"
+        OPENVINO_VERSION_MAJOR: "2026.0.1"  
+        OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"  
 
       steps:
         - name: Clone
@@ -767,6 +767,7 @@ jobs:
           run: |
             sudo apt-get update
             sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip
+            sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
         - name: Use OpenVINO Toolkit Cache
           uses: actions/cache@v4
@@ -797,6 +798,12 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release \
               -DGGML_OPENVINO=ON
             cmake --build build/ReleaseOV --config Release -j $(nproc)
+
+        - name: Test  
+          id: cmake_test  
+          run: |  
+            cd ${{ github.workspace }}  
+            ctest --test-dir build/ReleaseOV -L main --verbose --timeout 2000
 
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
