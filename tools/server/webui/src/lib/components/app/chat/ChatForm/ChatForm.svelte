@@ -5,6 +5,7 @@
 		ChatFormActions,
 		ChatFormFileInputInvisible,
 		ChatFormPromptPicker,
+		ChatFormResourcePicker,
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { DialogMcpResources } from '$lib/components/app/dialogs';
@@ -89,6 +90,7 @@
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let promptPickerRef: ChatFormPromptPicker | undefined = $state(undefined);
+	let resourcePickerRef: ChatFormResourcePicker | undefined = $state(undefined);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
 	// Audio Recording State
@@ -99,8 +101,12 @@
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
 
-	// Resource Picker State
-	let isResourcePickerOpen = $state(false);
+	// Inline Resource Picker State (triggered by @)
+	let isInlineResourcePickerOpen = $state(false);
+	let resourceSearchQuery = $state('');
+
+	// Resource Dialog State
+	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
 	/**
@@ -247,9 +253,22 @@
 		if (value.startsWith('/') && hasServers) {
 			isPromptPickerOpen = true;
 			promptSearchQuery = value.slice(1);
+			isInlineResourcePickerOpen = false;
+			resourceSearchQuery = '';
+		} else if (
+			value.startsWith('@') &&
+			hasServers &&
+			mcpStore.hasResourcesCapability(perChatOverrides)
+		) {
+			isInlineResourcePickerOpen = true;
+			resourceSearchQuery = value.slice(1);
+			isPromptPickerOpen = false;
+			promptSearchQuery = '';
 		} else {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
+			isInlineResourcePickerOpen = false;
+			resourceSearchQuery = '';
 		}
 	}
 
@@ -258,9 +277,19 @@
 			return;
 		}
 
+		if (isInlineResourcePickerOpen && resourcePickerRef?.handleKeydown(event)) {
+			return;
+		}
+
 		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
+			return;
+		}
+
+		if (event.key === KeyboardKey.ESCAPE && isInlineResourcePickerOpen) {
+			isInlineResourcePickerOpen = false;
+			resourceSearchQuery = '';
 			return;
 		}
 
@@ -399,9 +428,11 @@
 				if (typeof msg.content === 'string') {
 					return msg.content;
 				}
+
 				if (msg.content.type === ContentPartType.TEXT) {
 					return msg.content.text;
 				}
+
 				return '';
 			})
 			.filter(Boolean)
@@ -432,6 +463,44 @@
 		isPromptPickerOpen = false;
 		promptSearchQuery = '';
 		textareaRef?.focus();
+	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Inline Resource Picker
+	 *
+	 *
+	 */
+
+	function handleInlineResourcePickerClose() {
+		isInlineResourcePickerOpen = false;
+		resourceSearchQuery = '';
+		textareaRef?.focus();
+	}
+
+	function handleInlineResourceSelect() {
+		// Clear the @query from input after resource is attached
+		if (value.startsWith('@')) {
+			value = '';
+			onValueChange?.('');
+		}
+
+		isInlineResourcePickerOpen = false;
+		resourceSearchQuery = '';
+		textareaRef?.focus();
+	}
+
+	function handleBrowseResources() {
+		isInlineResourcePickerOpen = false;
+		resourceSearchQuery = '';
+
+		if (value.startsWith('@')) {
+			value = '';
+			onValueChange?.('');
+		}
+
+		isResourceDialogOpen = true;
 	}
 
 	/**
@@ -491,6 +560,15 @@
 		onPromptLoadError={handlePromptLoadError}
 	/>
 
+	<ChatFormResourcePicker
+		bind:this={resourcePickerRef}
+		isOpen={isInlineResourcePickerOpen}
+		searchQuery={resourceSearchQuery}
+		onClose={handleInlineResourcePickerClose}
+		onResourceSelect={handleInlineResourceSelect}
+		onBrowse={handleBrowseResources}
+	/>
+
 	<div
 		class="{INPUT_CLASSES} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
@@ -529,7 +607,7 @@
 					class="mb-3"
 					onResourceClick={(uri) => {
 						preSelectedResourceUri = uri;
-						isResourcePickerOpen = true;
+						isResourceDialogOpen = true;
 					}}
 				/>
 			{/if}
@@ -548,14 +626,14 @@
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
 				onMcpPromptClick={showMcpPromptButton ? () => (isPromptPickerOpen = true) : undefined}
-				onMcpResourcesClick={() => (isResourcePickerOpen = true)}
+				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
 		</div>
 	</div>
 </form>
 
 <DialogMcpResources
-	bind:open={isResourcePickerOpen}
+	bind:open={isResourceDialogOpen}
 	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource) => {
 		mcpStore.attachResource(resource.uri);
