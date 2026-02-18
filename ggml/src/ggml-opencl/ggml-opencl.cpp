@@ -2506,7 +2506,7 @@ static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_r
 
     cl_platform_id platform_ids[NPLAT];
     if (clGetPlatformIDs(NPLAT, platform_ids, &n_platforms) != CL_SUCCESS) {
-        GGML_LOG_ERROR("ggml_opencl: plaform IDs not available.\n");
+        GGML_LOG_ERROR("ggml_opencl: platform IDs are not available.\n");
         return found_devices;
     }
 
