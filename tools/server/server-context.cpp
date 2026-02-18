@@ -426,7 +426,7 @@ struct server_slot {
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx, true);
-                res["generated"] = generated_text.empty()?debug_generated_text:generated_text;
+                res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
             }
         }
 
@@ -1445,7 +1445,7 @@ private:
         res->index           = slot.task->index;
 
         // keep copy of last generated text for debugging purposes
-        if (slots_debug > 0) {
+        if (slots_debug) {
             slot.debug_generated_text = slot.generated_text;
         }
 
