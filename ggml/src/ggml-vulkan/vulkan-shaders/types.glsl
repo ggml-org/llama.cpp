@@ -1731,7 +1731,7 @@ void init_iq_shmem(uvec3 wgsize)
 }
 #endif
 
-#if defined(DATA_A_MXFP4)
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
