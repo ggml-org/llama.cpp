@@ -50,6 +50,10 @@ constexpr constant static float kvalues_mxfp4_f[16] = {
     0, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f
 };
 
+constexpr constant static float kvalues_nvfp4_f[16] = {
+    0, 1.f, 2.f, 3.f, 4.f, 6.f, 8.f, 12.f, -0, -1.f, -2.f, -3.f, -4.f, -6.f, -8.f, -12.f
+};
+
 static inline int best_index_int8(int n, constant float * val, float x) {
     if (x <= val[0]) return 0;
     if (x >= val[n-1]) return n-1;
@@ -565,10 +569,10 @@ void dequantize_nvfp4(device const block_nvfp4 * xb, short il, thread type4x4 & 
     const uint8_t shr = il >= 1 ? 4 : 0;
 
     for (int i = 0; i < 4; ++i) {
-        reg[i][0] = d * kvalues_mxfp4_f[(q2[4*i + 0] >> shr) & 0x0F];
-        reg[i][1] = d * kvalues_mxfp4_f[(q2[4*i + 1] >> shr) & 0x0F];
-        reg[i][2] = d * kvalues_mxfp4_f[(q2[4*i + 2] >> shr) & 0x0F];
-        reg[i][3] = d * kvalues_mxfp4_f[(q2[4*i + 3] >> shr) & 0x0F];
+        reg[i][0] = d * kvalues_nvfp4_f[(q2[4*i + 0] >> shr) & 0x0F];
+        reg[i][1] = d * kvalues_nvfp4_f[(q2[4*i + 1] >> shr) & 0x0F];
+        reg[i][2] = d * kvalues_nvfp4_f[(q2[4*i + 2] >> shr) & 0x0F];
+        reg[i][3] = d * kvalues_nvfp4_f[(q2[4*i + 3] >> shr) & 0x0F];
     }
 }
 
@@ -581,10 +585,10 @@ void dequantize_nvfp4_t4(device const block_nvfp4 * xb, short il, thread type4 &
 
     const uint8_t shr = il >= 2 ? 4 : 0;
 
-    reg[0] = d * kvalues_mxfp4_f[(q2[4*il4 + 0] >> shr) & 0x0F];
-    reg[1] = d * kvalues_mxfp4_f[(q2[4*il4 + 1] >> shr) & 0x0F];
-    reg[2] = d * kvalues_mxfp4_f[(q2[4*il4 + 2] >> shr) & 0x0F];
-    reg[3] = d * kvalues_mxfp4_f[(q2[4*il4 + 3] >> shr) & 0x0F];
+    reg[0] = d * kvalues_nvfp4_f[(q2[4*il4 + 0] >> shr) & 0x0F];
+    reg[1] = d * kvalues_nvfp4_f[(q2[4*il4 + 1] >> shr) & 0x0F];
+    reg[2] = d * kvalues_nvfp4_f[(q2[4*il4 + 2] >> shr) & 0x0F];
+    reg[3] = d * kvalues_nvfp4_f[(q2[4*il4 + 3] >> shr) & 0x0F];
 }
 
 template <typename type4x4>
@@ -8461,7 +8465,7 @@ void kernel_mul_mv_nvfp4_f32_impl(
     const int nb   = args.ne00/QK_NVFP4;
     const int ns01 = args.nb01/args.nb00;
 
-    shmem_f32[tiisg] = kvalues_mxfp4_f[tiisg%16];
+    shmem_f32[tiisg] = kvalues_nvfp4_f[tiisg%16];
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float sumf[NR0]={0.f};
