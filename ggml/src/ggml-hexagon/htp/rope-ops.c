@@ -71,8 +71,6 @@ struct htp_rope_context {
     size_t dst_row_size;
     size_t src0_row_size_aligned;
     size_t dst_row_size_aligned;
-    size_t src0_spad_half_size;
-    size_t dst_spad_half_size;
     size_t theta_cache_offset;
     uint32_t src0_nrows;
 };
@@ -302,12 +300,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
               src0_spad_base = src0_spad_base + rctx->theta_cache_offset;
     uint8_t * dst_spad_base  = octx->dst_spad.data + (ith * octx->dst_spad.size_per_thread);
 
-    size_t src0_spad_half_size = rctx->src0_spad_half_size;
-    size_t dst_spad_half_size  = rctx->dst_spad_half_size;
-
     dma_queue * dma_queue = octx->ctx->dma[ith];
     const int32_t * pos = (const int32_t *) src1->data;
-    const float * freq_factors = (src2 && src2->data) ? (const float *) src2->data : NULL;
+    const float * freq_factors = src2->data ? (const float *) src2->data : NULL;
 
     struct rope_rowidx_cache rowidx_cache[HTP_ROPE_SPAD_NROWS];
 
@@ -446,9 +441,6 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
-
-    rctx.src0_spad_half_size = src0_row_size_aligned;
-    rctx.dst_spad_half_size  = dst_row_size_aligned;
 
     uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     rctx.src0_nrows = src0_nrows;
