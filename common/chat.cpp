@@ -2032,6 +2032,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         if (has_reasoning_content && has_tool_calls) {
             auto adjusted_message = msg;
             adjusted_message["thinking"] = msg.at("reasoning_content");
+            adjusted_message.erase("content");
             adjusted_messages.push_back(adjusted_message);
         } else {
             adjusted_messages.push_back(msg);
