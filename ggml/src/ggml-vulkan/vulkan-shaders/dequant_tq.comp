@@ -27,7 +27,9 @@ void main() {
 
     for (uint j = 0; j < 4 && (i + j) < p.ne; ++j) {
         const uint e = (i + j) % QUANT_K;
-#if defined(DATA_A_TQ2_0)
+#if defined(DATA_A_TQ1_0)
+        data_b[i + j] = D_TYPE(tq1_dequantize(ib, e) * d);
+#elif defined(DATA_A_TQ2_0)
         data_b[i + j] = D_TYPE(tq2_dequantize(ib, e) * d);
 #endif
     }

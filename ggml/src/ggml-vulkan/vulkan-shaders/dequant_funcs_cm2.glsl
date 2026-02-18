@@ -686,6 +686,26 @@ float16_t dequantFuncTQ2_0(const in decodeBufTQ2_0 bl, const in uint blockCoords
 }
 #endif
 
+#if defined(DATA_A_TQ1_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
+   block_tq1_0 block;
+};
+
+#define TQ1_CM2 1
+#include "tq_utils.comp"
+#undef TQ1_CM2
+
+float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+
+    const int val = tq1_dequantize(bl, idx);
+
+    return d * float16_t(val);
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufMXFP4 {
    block_mxfp4 block;
@@ -749,6 +769,8 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
 #define dequantFuncA dequantFuncIQ4_NL
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
+#elif defined(DATA_A_TQ1_0)
+#define dequantFuncA dequantFuncTQ1_0
 #elif defined(DATA_A_MXFP4)
 #define dequantFuncA dequantFuncMXFP4
 #elif defined(DATA_A_F32)
