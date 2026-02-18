@@ -1,21 +1,11 @@
-#define(VARIANTS)
+#ifdef INPLACE
+@group(0) @binding(1)
+var<uniform> params: Params;
 
-[
-  {
-    "SHADER_NAME": "scale_f32",
-    "DECLS": ["NOT_INPLACE"]
-  },
-  {
-    "SHADER_NAME": "scale_f32_inplace",
-    "DECLS": ["INPLACE"]
-  }
-]
-
-#end(VARIANTS)
-
-#define(DECLS)
-
-#decl(NOT_INPLACE)
+fn store_scale(val: f32, offset: u32) {
+    src[offset] = val;
+}
+#else
 @group(0) @binding(1)
 var<storage, read_write> dst: array<f32>;
 
@@ -25,20 +15,7 @@ var<uniform> params: Params;
 fn store_scale(val: f32, offset: u32) {
     dst[offset] = val;
 }
-#enddecl(NOT_INPLACE)
-
-#decl(INPLACE)
-@group(0) @binding(1)
-var<uniform> params: Params;
-
-fn store_scale(val: f32, offset: u32) {
-    src[offset] = val;
-}
-#enddecl(INPLACE)
-
-#end(DECLS)
-
-#define(SHADER)
+#endif
 
 struct Params {
     offset_src: u32,
@@ -65,10 +42,7 @@ struct Params {
 @group(0) @binding(0)
 var<storage, read_write> src: array<f32>;
 
-DECLS
-
-override wg_size: u32;
-@compute @workgroup_size(wg_size)
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (gid.x >= params.ne) {
         return;
@@ -87,4 +61,3 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     store_scale(src[i_src] * params.scale + params.bias, i_dst);
 }
-#end(SHADER)

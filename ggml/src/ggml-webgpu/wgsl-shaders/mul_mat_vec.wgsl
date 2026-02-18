@@ -1,84 +1,17 @@
-#define(VARIANTS)
-[
-  {
-    "SHADER_SUFFIX": "f32_f32_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f32>",
-      "SRC1_TYPE" : "vec4<f32>",
-      "DST_TYPE": "vec4<f32>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "f32_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f32",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE": "f32",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f32_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f16>",
-      "SRC1_TYPE" : "vec4<f32>",
-      "DST_TYPE": "vec4<f32>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE": "f32",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f16_vec",
-    "REPLS": {
-      "SRC0_TYPE" : "vec4<f16>",
-      "SRC1_TYPE" : "vec4<f16>",
-      "DST_TYPE": "vec4<f32>",
-      "VEC_SIZE" : 4,
-    },
-    "DECLS": ["VEC", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "f16_f16",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f16",
-      "DST_TYPE": "f32",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["SCALAR", "MUL_ACC_FLOAT"]
-  },
-  {
-    "SHADER_SUFFIX": "q4_0_f32",
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f32",
-      "DST_TYPE": "f32",
-      "VEC_SIZE" : 1,
-    },
-    "DECLS": ["BYTE_HELPERS", "SCALAR", "MUL_ACC_Q4_0"]
-  }
-]
 
-#end(VARIANTS)
+enable f16;
 
-#define(DECLS)
+#include "common_decls.tmpl"
 
-#decl(VEC)
-fn inner_dot(src0_val: {{SRC0_TYPE}}, src1_val: {{SRC1_TYPE}}) -> f32 {
-    return f32(dot({{SRC1_TYPE}}(src0_val), src1_val));
+#ifdef VEC
+
+#define VEC_SIZE 4
+#define DST_TYPE vec4<f32>
+#define SRC0_TYPE vec4<SRC0_INNER_TYPE>
+#define SRC1_TYPE vec4<SRC1_INNER_TYPE>
+
+fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
+    return f32(dot(SRC1_TYPE(src0_val), src1_val));
 }
 
 fn store_val(group_base: u32) -> vec4<f32> {
@@ -87,33 +20,37 @@ fn store_val(group_base: u32) -> vec4<f32> {
                      partial_sums[group_base + THREADS_PER_OUTPUT * 2],
                      partial_sums[group_base + THREADS_PER_OUTPUT * 3]);
 }
-#enddecl(VEC)
+#endif
 
-#decl(SCALAR)
-fn inner_dot(src0_val: {{SRC0_TYPE}}, src1_val: {{SRC1_TYPE}}) -> f32 {
+#ifdef SCALAR
+
+#define VEC_SIZE 1
+#define DST_TYPE f32
+#define SRC0_TYPE SRC0_INNER_TYPE
+#define SRC1_TYPE SRC1_INNER_TYPE
+
+fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(src0_val) * f32(src1_val);
 }
 
 fn store_val(group_base: u32) -> f32 {
     return partial_sums[group_base];
 }
-#enddecl(SCALAR)
+#endif
 
-#decl(MUL_ACC_FLOAT)
-
+#ifdef MUL_ACC_FLOAT
 fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
     var local_sum = 0.0;
-    for (var i = tig * {{VEC_SIZE}}; i < tile_size; i += THREADS_PER_OUTPUT * {{VEC_SIZE}}) {
-        let a = src0[(idx_base + k_outer + i) / {{VEC_SIZE}}];
-        let b = shared_vector[i / {{VEC_SIZE}}];
+    for (var i = tig * VEC_SIZE; i < tile_size; i += THREADS_PER_OUTPUT * VEC_SIZE) {
+        let a = src0[(idx_base + k_outer + i) / VEC_SIZE];
+        let b = shared_vector[i / VEC_SIZE];
         local_sum += inner_dot(a, b);
     }
     return local_sum;
 }
+#endif
 
-#enddecl(MUL_ACC_FLOAT)
-
-#decl(MUL_ACC_Q4_0)
+#ifdef MUL_ACC_Q4_0
 
 const BLOCK_SIZE = 32;
 const NQ = 16u; // number of weights per thread
@@ -145,15 +82,7 @@ fn mul_acc(tig:u32, tile_size: u32, idx_base: u32, k_outer: u32) -> f32 {
     }
     return local_sum;
 }
-
-#enddecl(MUL_ACC_Q4_0)
-
-#end(DECLS)
-
-#define(SHADER)
-enable f16;
-
-DECLS
+#endif
 
 struct MulMatParams {
     offset_src0: u32,
@@ -174,22 +103,20 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // Matrix (M x K)
-@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // Vector (K x 1, transposed)
-@group(0) @binding(2) var<storage, read_write> dst: array<{{DST_TYPE}}>;  // Result vector (transposed)
+// SRC0_TYPE and SRC1_TYPE are defined in mul_mat_decls, which is included
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
+@group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
-override WORKGROUP_SIZE: u32;
-override TILE_K: u32;
-override OUTPUTS_PER_WG: u32;
-override THREADS_PER_OUTPUT = WORKGROUP_SIZE / OUTPUTS_PER_WG;
+const THREADS_PER_OUTPUT = WG_SIZE / OUTPUTS_PER_WG;
 
 // Shared memory for collaborative loading and reduction
-var<workgroup> shared_vector: array<{{SRC1_TYPE}}, TILE_K/{{VEC_SIZE}}>;  // Cache vector tile
-var<workgroup> partial_sums: array<f32, WORKGROUP_SIZE>;   // For reduction
+var<workgroup> shared_vector: array<SRC1_TYPE, TILE_K/VEC_SIZE>;  // Cache vector tile
+var<workgroup> partial_sums: array<f32, WG_SIZE>;   // For reduction
 
-@compute @workgroup_size(WORKGROUP_SIZE)
+@compute @workgroup_size(WG_SIZE)
 fn main(
     @builtin(local_invocation_id) local_id: vec3<u32>,
     @builtin(workgroup_id) wg_id: vec3<u32>,
@@ -232,8 +159,8 @@ fn main(
         let tile_size = min(TILE_K, params.k - k_tile);
 
         // Cooperatively load vector tile into shared memory (all threads)
-        for (var i = thread_id * {{VEC_SIZE}}; i < tile_size; i += WORKGROUP_SIZE * {{VEC_SIZE}}) {
-            shared_vector[i / {{VEC_SIZE}}] = src1[(src1_idx_base + k_tile + i) / {{VEC_SIZE}}];
+        for (var i = thread_id * VEC_SIZE; i < tile_size; i += WG_SIZE * VEC_SIZE) {
+            shared_vector[i / VEC_SIZE] = src1[(src1_idx_base + k_tile + i) / VEC_SIZE];
         }
 
         workgroupBarrier();
@@ -250,7 +177,7 @@ fn main(
     workgroupBarrier();
     let group_base = thread_group * THREADS_PER_OUTPUT;
     let thread_base = group_base + thread_in_group;
-    var offset = THREADS_PER_OUTPUT / 2;
+    var offset: u32 = THREADS_PER_OUTPUT / 2;
     while (offset > 0) {
         if (thread_in_group < offset) {
             partial_sums[thread_base] += partial_sums[thread_base + offset];
@@ -260,8 +187,8 @@ fn main(
     }
 
     // Store back to global memory
-    if (output_row < params.m && thread_group % {{VEC_SIZE}} == 0 && thread_in_group == 0) {
-        dst[dst_idx / {{VEC_SIZE}}] = store_val(group_base);
+    if (output_row < params.m && thread_group % VEC_SIZE == 0 && thread_in_group == 0) {
+        dst[dst_idx / VEC_SIZE] = store_val(group_base);
     }
 }
-#end(SHADER)
+

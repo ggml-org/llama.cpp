@@ -1,195 +1,24 @@
-#define(VARIANTS)
+enable f16;
 
-[
-  {
-    "REPLS": {
-      "SRC0_TYPE" : "f32",
-      "SRC1_TYPE" : "f32",
-      "BLOCK_SIZE" : 1
-    },
-    "DECLS" : ["FLOAT"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f16",
-      "BLOCK_SIZE" : 1
-    },
-    "DECLS" : ["FLOAT"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE" : "f16",
-      "SRC1_TYPE" : "f32",
-      "BLOCK_SIZE" : 1
-    },
-    "DECLS" : ["FLOAT"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q4_0",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q4_0_T", "Q4_0"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q4_1",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q4_1_T", "Q4_1"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q5_0",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q5_0_T", "Q5_0"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q5_1",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q5_1_T", "Q5_1"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q8_0",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": ["BYTE_HELPERS", "Q8_0_T", "Q8_0"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q2_k",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q2_K_T", "Q2_K"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q3_k",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q3_K_T", "Q3_K"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q4_k",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q4_K_T", "Q4_K"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q5_k",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["Q45_K_SCALE_MIN", "BYTE_HELPERS", "Q5_K_T", "Q5_K"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q6_k",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "Q6_K_T", "Q6_K"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq2_xxs",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XXS_GRID", "IQ2_XXS_T", "IQ2_XXS"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq2_xs",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_XS_GRID", "IQ2_XS_T", "IQ2_XS"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq2_s",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ2_S_GRID", "IQ2_S_T", "IQ2_S"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq3_xxs",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_XSS_GRID", "IQ3_XSS_T", "IQ3_XSS"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq3_s",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ23_TABLES", "IQ3_S_GRID", "IQ3_S_T", "IQ3_S"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq1_s",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_S_T", "IQ1_S"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq1_m",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ1_GRID", "IQ1_M_T", "IQ1_M"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq4_nl",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32,
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_NL_T", "IQ4_NL"]
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "iq4_xs",
-      "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 256,
-    },
-    "DECLS": ["BYTE_HELPERS", "IQ4_GRID", "IQ4_XS_T", "IQ4_XS"]
-  }
-]
+#include "common_decls.tmpl"
 
-#end(VARIANTS)
+#ifdef FLOAT
+const BLOCK_SIZE = 1u;
 
-#define(DECLS)
+#elif defined(Q4_0) || defined(Q4_1) || defined(Q5_0) || defined(Q5_1) || defined(Q8_0) || defined(Q8_1) || defined(IQ4_NL)
+const BLOCK_SIZE = 32u;
 
-#decl(FLOAT)
+#elif defined(Q2_K) || defined(Q3_K) || defined(Q4_K) || defined(Q5_K) || defined(Q6_K) || defined(IQ2_XXS) || defined(IQ2_XS) || defined(IQ2_S) || defined(IQ3_XXS) || defined(IQ3_S) || defined(IQ1_S) || defined(IQ1_M) || defined(IQ4_XS)
+const BLOCK_SIZE = 256u;
+#endif
+
+#ifdef FLOAT
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     return f32(src0[src0_idx_base + offset]) * f32(src1[src1_idx_base + offset]);
 }
-#enddecl(FLOAT)
+#endif
 
-#decl(Q4_0)
+#ifdef Q4_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q4_0 = src0[src0_idx_base + offset];
     let d = f32(block_q4_0.d);
@@ -207,9 +36,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q4_0)
+#endif
 
-#decl(Q4_1)
+#ifdef Q4_1
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q4_1 = src0[src0_idx_base + offset];
     let d = f32(block_q4_1.d);
@@ -228,9 +57,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q4_1)
+#endif
 
-#decl(Q5_0)
+#ifdef Q5_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q5_0 = src0[src0_idx_base + offset];
     let d = f32(block_q5_0.d);
@@ -251,9 +80,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q5_0)
+#endif
 
-#decl(Q5_1)
+#ifdef Q5_1
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q5_1 = src0[src0_idx_base + offset];
     let d = f32(block_q5_1.d);
@@ -274,9 +103,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q5_1)
+#endif
 
-#decl(Q8_0)
+#ifdef Q8_0
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q8_0 = src0[src0_idx_base + offset];
     let d = f32(block_q8_0.d);
@@ -292,9 +121,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q8_0)
+#endif
 
-#decl(Q8_1)
+#ifdef Q8_1
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block_q8_1 = src0[src0_idx_base + offset];
     let d = f32(block_q8_1.d);
@@ -311,9 +140,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(Q8_1)
+#endif
 
-#decl(Q2_K)
+#ifdef Q2_K
 // 16 blocks of 16 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
@@ -344,10 +173,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(Q2_K)
-
-#decl(Q3_K)
+#ifdef Q3_K
 // 16 blocks of 16 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
@@ -406,10 +234,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(Q3_K)
-
-#decl(Q4_K)
+#ifdef Q4_K
 // 8 blocks of 32 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
@@ -436,10 +263,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(Q4_K)
-
-#decl(Q5_K)
+#ifdef Q5_K
 // 8 blocks of 32 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
@@ -470,10 +296,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(Q5_K)
-
-#decl(Q6_K)
+#ifdef Q6_K
 // 16 blocks of 16 elements each
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
@@ -529,10 +354,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(Q6_K)
-
-#decl(IQ2_XXS)
+#ifdef IQ2_XXS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -556,10 +380,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ2_XXS)
-
-#decl(IQ2_XS)
+#ifdef IQ2_XS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -591,10 +414,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ2_XS)
-
-#decl(IQ2_S)
+#ifdef IQ2_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -634,11 +456,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-
-#enddecl(IQ2_S)
-
-#decl(IQ3_XSS)
+#ifdef IQ3_XXS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -667,10 +487,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ3_XSS)
-
-#decl(IQ3_S)
+#ifdef IQ3_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -715,9 +534,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-#enddecl(IQ3_S)
+#endif
 
-#decl(IQ1_S)
+#ifdef IQ1_S
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -741,10 +560,10 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ1_S)
 
-#decl(IQ1_M)
+#ifdef IQ1_M
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
 
@@ -787,10 +606,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ1_M)
-
-#decl(IQ4_NL)
+#ifdef IQ4_NL
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -808,10 +626,9 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
+#endif
 
-#enddecl(IQ4_NL)
-
-#decl(IQ4_XS)
+#ifdef IQ4_XS
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     let block = src0[src0_idx_base + offset];
     let d = f32(block.d);
@@ -832,16 +649,7 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     }
     return sum;
 }
-
-#enddecl(IQ4_XS)
-
-#end(DECLS)
-
-#define(SHADER)
-
-enable f16;
-
-DECLS
+#endif
 
 struct MulMatParams {
     offset_src0: u32, // in elements/blocks
@@ -864,8 +672,8 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // M rows, K columns
-@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // K rows, N columns (transposed)
+@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>; // M rows, N columns
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
@@ -898,10 +706,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12 + row * params.stride_11;
 
     var sum = 0.0;
-    for (var i: u32 = 0u; i < params.k/{{BLOCK_SIZE}}; i = i + 1u) {
+    for (var i: u32 = 0u; i < params.k/BLOCK_SIZE; i = i + 1u) {
         sum += multiply_add(src0_idx_base, src1_idx_base, i);
     }
     dst[params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row * params.m + col] = sum;
 }
-
-#end(SHADER)
