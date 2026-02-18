@@ -61,6 +61,10 @@ namespace ggml_sycl_tbb = tbb;
 #    include "gemm.hpp"  // Provides dnnl.hpp → dnnl_sgemm()
 #endif
 
+#ifdef __x86_64__
+#    include <immintrin.h>
+#endif
+
 // ---------------------------------------------------------------------------
 // Host pointer registry: stores original mmap pointers for weight tensors.
 // Populated during set_tensor (when the host data from the GGUF mmap is still
@@ -1112,6 +1116,157 @@ struct quant_cache_key {
 };
 
 // ---------------------------------------------------------------------------
+// 4-row AVX2 SIMD kernel for Q4_0 x Q8_0 dot products
+// ---------------------------------------------------------------------------
+//
+// Processes 4 weight rows against the same activation data in a single pass.
+// Loads each Q8_0 block once, dots against 4 Q4_0 blocks simultaneously.
+// Benefits: 4x activation load amortization, 4x scale conversion amortization,
+// better ILP from 4 independent accumulation chains, reduced loop overhead.
+// ---------------------------------------------------------------------------
+
+#if defined(__AVX2__)
+
+// some compilers don't provide _mm256_set_m128i, e.g. gcc 7
+#ifndef GGML_SYCL_MM256_SET_M128I
+#define GGML_SYCL_MM256_SET_M128I(a, b) \
+    _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
+#endif
+
+// Unpack 32 4-bit fields into 32 bytes.
+// The output vector contains 32 bytes, each one in [ 0 .. 15 ] interval.
+static inline __m256i ggml_sycl_bytes_from_nibbles_32(const uint8_t * rsi) {
+    const __m128i tmp   = _mm_loadu_si128((const __m128i *)rsi);
+    const __m256i bytes = GGML_SYCL_MM256_SET_M128I(_mm_srli_epi16(tmp, 4), tmp);
+    const __m256i low_mask = _mm256_set1_epi8(0xF);
+    return _mm256_and_si256(low_mask, bytes);
+}
+
+// Horizontally add 8 floats.
+static inline float ggml_sycl_hsum_float_8(const __m256 x) {
+    __m128 res = _mm256_extractf128_ps(x, 1);
+    res = _mm_add_ps(res, _mm256_castps256_ps128(x));
+    res = _mm_add_ps(res, _mm_movehl_ps(res, res));
+    res = _mm_add_ss(res, _mm_movehdup_ps(res));
+    return _mm_cvtss_f32(res);
+}
+
+// Process 4 weight rows x 1 activation row for Q4_0 x Q8_0.
+// Loads each Q8_0 block once and dots against 4 Q4_0 blocks simultaneously.
+// Returns 4 dot products in dst[0..3].
+static inline void simd_mul_mat_q4_0_q8_0_4row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0,
+    const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2,
+    const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK4_0;
+
+    const block_q4_0 * GGML_RESTRICT x0 = (const block_q4_0 *)vx0;
+    const block_q4_0 * GGML_RESTRICT x1 = (const block_q4_0 *)vx1;
+    const block_q4_0 * GGML_RESTRICT x2 = (const block_q4_0 *)vx2;
+    const block_q4_0 * GGML_RESTRICT x3 = (const block_q4_0 *)vx3;
+    const block_q8_0 * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m256i off = _mm256_set1_epi8(8);
+
+    // 4 independent float accumulators — enables out-of-order overlap
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        // Load activation block ONCE (amortized across 4 weight rows)
+        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        // --- Row 0 ---
+        {
+            const float d  = GGML_FP16_TO_FP32(x0[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x0[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc0);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc0 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc0);
+#endif
+        }
+
+        // --- Row 1 ---
+        {
+            const float d  = GGML_FP16_TO_FP32(x1[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x1[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc1);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc1 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc1);
+#endif
+        }
+
+        // --- Row 2 ---
+        {
+            const float d  = GGML_FP16_TO_FP32(x2[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x2[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc2);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc2 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc2);
+#endif
+        }
+
+        // --- Row 3 ---
+        {
+            const float d  = GGML_FP16_TO_FP32(x3[ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(x3[ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+#if defined(__AVXVNNIINT8__)
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc3);
+#else
+            const __m256i ax     = _mm256_sign_epi8(qx, qx);
+            const __m256i sy     = _mm256_sign_epi8(qy, qx);
+            const __m256i dot    = _mm256_maddubs_epi16(ax, sy);
+            const __m256i ones   = _mm256_set1_epi16(1);
+            const __m256i summed = _mm256_madd_epi16(ones, dot);
+            acc3 = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(summed), acc3);
+#endif
+        }
+    }
+
+    // Horizontal sum each accumulator
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+}
+
+#endif // defined(__AVX2__)
+
+// ---------------------------------------------------------------------------
 // MUL_MAT  (oneDNN on host, async host_task when enabled)
 // ---------------------------------------------------------------------------
 
@@ -1278,6 +1433,44 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                         // so TBB worker threads would see their own empty instances.
                         // Capturing the raw pointer ensures all workers use the populated buffer.
                         uint8_t * src1_q_data = src1_q_buf.data();
+#if defined(__AVX2__)
+                        if (src0->type == GGML_TYPE_Q4_0) {
+                            ggml_sycl_cpu_arena().execute([&] {
+                                ggml_sycl_tbb::parallel_for(
+                                    ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
+                                    [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
+                                        int n = r.begin();
+                                        // Process 4 weight rows at a time
+                                        for (; n + 3 < r.end(); n += 4) {
+                                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                                float results[4];
+                                                simd_mul_mat_q4_0_q8_0_4row(
+                                                    static_cast<int>(K), results,
+                                                    src0_batch + (n + 0) * nb01,
+                                                    src0_batch + (n + 1) * nb01,
+                                                    src0_batch + (n + 2) * nb01,
+                                                    src0_batch + (n + 3) * nb01,
+                                                    src1_q_data + m * q_row_size);
+                                                dst_batch[m * ldc + n + 0] = results[0];
+                                                dst_batch[m * ldc + n + 1] = results[1];
+                                                dst_batch[m * ldc + n + 2] = results[2];
+                                                dst_batch[m * ldc + n + 3] = results[3];
+                                            }
+                                        }
+                                        // Remainder rows: use original vec_dot
+                                        for (; n < r.end(); n++) {
+                                            const void * weight_row = src0_batch + n * nb01;
+                                            for (dnnl_dim_t m = 0; m < M; m++) {
+                                                float dot_result = 0.0f;
+                                                cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float),
+                                                                    weight_row, 0, src1_q_data + m * q_row_size, 0, 1);
+                                                dst_batch[m * ldc + n] = dot_result;
+                                            }
+                                        }
+                                    });
+                            });
+                        } else {
+#endif
                         ggml_sycl_cpu_arena().execute([&] {
                             ggml_sycl_tbb::parallel_for(
                                 ggml_sycl_tbb::blocked_range<int>(0, N_int, grain),
@@ -1293,7 +1486,40 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                     }
                                 });
                         });
+#if defined(__AVX2__)
+                        }
+#endif
 #    else
+#if defined(__AVX2__)
+                        if (src0->type == GGML_TYPE_Q4_0) {
+                            int n = 0;
+                            for (; n + 3 < N_int; n += 4) {
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float results[4];
+                                    simd_mul_mat_q4_0_q8_0_4row(
+                                        static_cast<int>(K), results,
+                                        src0_batch + (n + 0) * nb01,
+                                        src0_batch + (n + 1) * nb01,
+                                        src0_batch + (n + 2) * nb01,
+                                        src0_batch + (n + 3) * nb01,
+                                        src1_q_buf.data() + m * q_row_size);
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 0)] = results[0];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 1)] = results[1];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 2)] = results[2];
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n + 3)] = results[3];
+                                }
+                            }
+                            for (; n < N_int; n++) {
+                                const void * weight_row = src0_batch + static_cast<dnnl_dim_t>(n) * nb01;
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float dot_result = 0.0f;
+                                    cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row, 0,
+                                                        src1_q_buf.data() + m * q_row_size, 0, 1);
+                                    dst_batch[m * ldc + static_cast<dnnl_dim_t>(n)] = dot_result;
+                                }
+                            }
+                        } else {
+#endif
                         for (int n = 0; n < N_int; n++) {
                             const void * weight_row = src0_batch + static_cast<dnnl_dim_t>(n) * nb01;
                             for (dnnl_dim_t m = 0; m < M; m++) {
@@ -1303,9 +1529,42 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                 dst_batch[m * ldc + static_cast<dnnl_dim_t>(n)] = dot_result;
                             }
                         }
+#if defined(__AVX2__)
+                        }
+#endif
 #    endif
                     } else {
                         // Small N or single thread: use original serial path
+#if defined(__AVX2__)
+                        if (src0->type == GGML_TYPE_Q4_0) {
+                            dnnl_dim_t n = 0;
+                            for (; n + 3 < N; n += 4) {
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float results[4];
+                                    simd_mul_mat_q4_0_q8_0_4row(
+                                        static_cast<int>(K), results,
+                                        src0_batch + (n + 0) * nb01,
+                                        src0_batch + (n + 1) * nb01,
+                                        src0_batch + (n + 2) * nb01,
+                                        src0_batch + (n + 3) * nb01,
+                                        src1_q_buf.data() + m * q_row_size);
+                                    dst_batch[m * ldc + n + 0] = results[0];
+                                    dst_batch[m * ldc + n + 1] = results[1];
+                                    dst_batch[m * ldc + n + 2] = results[2];
+                                    dst_batch[m * ldc + n + 3] = results[3];
+                                }
+                            }
+                            for (; n < N; n++) {
+                                const void * weight_row = src0_batch + n * nb01;
+                                for (dnnl_dim_t m = 0; m < M; m++) {
+                                    float dot_result = 0.0f;
+                                    cpu_traits->vec_dot(static_cast<int>(K), &dot_result, sizeof(float), weight_row, 0,
+                                                        src1_q_buf.data() + m * q_row_size, 0, 1);
+                                    dst_batch[m * ldc + n] = dot_result;
+                                }
+                            }
+                        } else {
+#endif
                         for (dnnl_dim_t n = 0; n < N; n++) {
                             const void * weight_row = src0_batch + n * nb01;
                             for (dnnl_dim_t m = 0; m < M; m++) {
@@ -1315,6 +1574,9 @@ static bool cpu_mul_mat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                                 dst_batch[m * ldc + n] = dot_result;
                             }
                         }
+#if defined(__AVX2__)
+                        }
+#endif
                     }
                 } else {
                     // GEMM fallback: dequantize weights to F32, then dnnl_sgemm
