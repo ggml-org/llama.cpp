@@ -31,7 +31,7 @@ add_library(llama
             llama-model-saver.cpp
             llama-model.cpp
             llama-quant.cpp
-            llama-sampling.cpp
+            llama-sampler.cpp
             llama-vocab.cpp
             unicode-data.cpp
             unicode.cpp
@@ -57,6 +57,7 @@ add_library(llama
             models/deci.cpp
             models/deepseek.cpp
             models/deepseek2.cpp
+            models/delta.cpp
             models/dots1.cpp
             models/dream.cpp
             models/ernie4-5-moe.cpp
@@ -84,6 +85,7 @@ add_library(llama
             models/internlm2.cpp
             models/jais.cpp
             models/jamba.cpp
+            models/kimi-linear.cpp
             models/lfm2.cpp
             models/llada-moe.cpp
             models/llada.cpp
@@ -121,6 +123,8 @@ add_library(llama
             models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
             models/qwen3next.cpp
+            models/qwen3-5.cpp
+            models/qwen3-5moe.cpp
             models/refact.cpp
             models/rnd1.cpp
             models/rwkv6-base.cpp
@@ -134,6 +138,7 @@ add_library(llama
             models/stablelm.cpp
             models/starcoder.cpp
             models/starcoder2.cpp
+            models/step35-iswa.cpp
             models/t5-dec.cpp
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp

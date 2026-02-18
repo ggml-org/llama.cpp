@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.30.1"
-#define CPPHTTPLIB_VERSION_NUM "0x001E01"
+#define CPPHTTPLIB_VERSION "0.30.2"
+#define CPPHTTPLIB_VERSION_NUM "0x001E02"
 
 /*
  * Platform compatibility check
@@ -96,6 +96,22 @@
 
 #ifndef CPPHTTPLIB_CLIENT_MAX_TIMEOUT_MSECOND
 #define CPPHTTPLIB_CLIENT_MAX_TIMEOUT_MSECOND 0
+#endif
+
+#ifndef CPPHTTPLIB_EXPECT_100_THRESHOLD
+#define CPPHTTPLIB_EXPECT_100_THRESHOLD 1024
+#endif
+
+#ifndef CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND
+#define CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND 1000
+#endif
+
+#ifndef CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_THRESHOLD
+#define CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_THRESHOLD (1024 * 1024)
+#endif
+
+#ifndef CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_TIMEOUT_MSECOND
+#define CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_TIMEOUT_MSECOND 50
 #endif
 
 #ifndef CPPHTTPLIB_IDLE_INTERVAL_SECOND
@@ -286,8 +302,10 @@ using socket_t = int;
 #include <atomic>
 #include <cassert>
 #include <cctype>
+#include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <errno.h>
 #include <exception>
@@ -305,6 +323,7 @@ using socket_t = int;
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -493,6 +512,69 @@ private:
   std::function<void(void)> exit_function;
   bool execute_on_destruction;
 };
+
+// Simple from_chars implementation for integer and double types (C++17
+// substitute)
+template <typename T> struct from_chars_result {
+  const char *ptr;
+  std::errc ec;
+};
+
+template <typename T>
+inline from_chars_result<T> from_chars(const char *first, const char *last,
+                                       T &value, int base = 10) {
+  value = 0;
+  const char *p = first;
+  bool negative = false;
+
+  if (p != last && *p == '-') {
+    negative = true;
+    ++p;
+  }
+  if (p == last) { return {first, std::errc::invalid_argument}; }
+
+  T result = 0;
+  for (; p != last; ++p) {
+    char c = *p;
+    int digit = -1;
+    if ('0' <= c && c <= '9') {
+      digit = c - '0';
+    } else if ('a' <= c && c <= 'z') {
+      digit = c - 'a' + 10;
+    } else if ('A' <= c && c <= 'Z') {
+      digit = c - 'A' + 10;
+    } else {
+      break;
+    }
+
+    if (digit < 0 || digit >= base) { break; }
+    if (result > ((std::numeric_limits<T>::max)() - digit) / base) {
+      return {p, std::errc::result_out_of_range};
+    }
+    result = result * base + digit;
+  }
+
+  if (p == first || (negative && p == first + 1)) {
+    return {first, std::errc::invalid_argument};
+  }
+
+  value = negative ? -result : result;
+  return {p, std::errc{}};
+}
+
+// from_chars for double (simple wrapper for strtod)
+inline from_chars_result<double> from_chars(const char *first, const char *last,
+                                            double &value) {
+  std::string s(first, last);
+  char *endptr = nullptr;
+  errno = 0;
+  value = std::strtod(s.c_str(), &endptr);
+  if (endptr == s.c_str()) { return {first, std::errc::invalid_argument}; }
+  if (errno == ERANGE) {
+    return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
+  }
+  return {first + (endptr - s.c_str()), std::errc{}};
+}
 
 } // namespace detail
 
@@ -1848,10 +1930,11 @@ private:
   Result send_(Request &&req);
 
   socket_t create_client_socket(Error &error) const;
-  bool read_response_line(Stream &strm, const Request &req,
-                          Response &res) const;
+  bool read_response_line(Stream &strm, const Request &req, Response &res,
+                          bool skip_100_continue = true) const;
   bool write_request(Stream &strm, Request &req, bool close_connection,
-                     Error &error);
+                     Error &error, bool skip_body = false);
+  bool write_request_body(Stream &strm, Request &req, Error &error);
   void prepare_default_headers(Request &r, bool for_stream,
                                const std::string &ct);
   bool redirect(Request &req, Response &res, Error &error);
@@ -3243,10 +3326,11 @@ private:
       msg.id = value;
     } else if (field == "retry") {
       // Parse retry interval in milliseconds
-      try {
-        retry_ms = std::stoi(value);
-      } catch (...) {
-        // Invalid retry value, ignore
+      {
+        int v = 0;
+        auto res =
+            detail::from_chars(value.data(), value.data() + value.size(), v);
+        if (res.ec == std::errc{}) { retry_ms = v; }
       }
     }
     // Unknown fields are ignored per SSE spec

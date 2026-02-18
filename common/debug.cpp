@@ -45,6 +45,8 @@ static float common_ggml_get_float_value(const uint8_t * data,
     return v;
 }
 
+#define INDENT "    "
+
 template <bool abort>
 void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
     GGML_ASSERT(n > 0);
@@ -60,41 +62,41 @@ void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * n
         }
     }
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LOG_ERR("                                     [\n");
+        LOG(INDENT "[\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
             if (i2 == n && ne[2] > 2 * n) {
-                LOG_ERR("                                      ..., \n");
+                LOG(INDENT INDENT "..., \n");
                 i2 = ne[2] - n;
             }
-            LOG_ERR("                                      [\n");
+            LOG(INDENT INDENT "[\n");
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
                 if (i1 == n && ne[1] > 2 * n) {
-                    LOG_ERR("                                       ..., \n");
+                    LOG(INDENT INDENT INDENT "..., \n");
                     i1 = ne[1] - n;
                 }
-                LOG_ERR("                                       [");
+                LOG(INDENT INDENT INDENT "[");
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
                     if (i0 == n && ne[0] > 2 * n) {
-                        LOG_ERR("..., ");
+                        LOG("   ..., ");
                         i0 = ne[0] - n;
                     }
                     const float v = common_ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    LOG_ERR("%12.4f", v);
+                    LOG("%12.4f", v);
                     if (i0 < ne[0] - 1) {
-                        LOG_ERR(", ");
+                        LOG(", ");
                     }
                 }
-                LOG_ERR("],\n");
+                LOG("  ],\n");
             }
-            LOG_ERR("                                      ],\n");
+            LOG(INDENT INDENT "],\n");
         }
-        LOG_ERR("                                     ]\n");
-        LOG_ERR("                                     sum = %f\n", sum);
+        LOG(INDENT "]\n");
+        LOG(INDENT "sum = %f\n", sum);
     }
 
     if constexpr (abort) {
         if (std::isnan(sum)) {
-            LOG_ERR("encountered NaN - aborting\n");
+            LOG("encountered NaN - aborting\n");
             exit(0);
         }
     }
@@ -137,9 +139,9 @@ template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, b
     }
 
     if (matches_filter) {
-        LOG_ERR("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__, t->name, ggml_type_name(t->type),
-                ggml_op_desc(t), src0->name, common_ggml_ne_string(src0).c_str(), src1 ? src1_str : "",
-                common_ggml_ne_string(t).c_str());
+        LOG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__, t->name, ggml_type_name(t->type),
+            ggml_op_desc(t), src0->name, common_ggml_ne_string(src0).c_str(), src1 ? src1_str : "",
+            common_ggml_ne_string(t).c_str());
     }
 
     const bool is_host = ggml_backend_buffer_is_host(t->buffer);
