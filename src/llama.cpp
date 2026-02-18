@@ -179,7 +179,7 @@ static void llama_params_fit_impl(
 
         // fixes: https://github.com/ggml-org/llama.cpp/issues/19646
         if (cparams->n_ctx == 0) {
-            cparams->n_ctx = 2048;
+            cparams->n_ctx = 4096;
             LLAMA_LOG_INFO("%s: defaulting context size to %d\n", __func__, cparams->n_ctx);
         }
         return;
