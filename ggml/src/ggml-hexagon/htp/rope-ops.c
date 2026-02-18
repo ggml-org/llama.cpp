@@ -22,7 +22,7 @@
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 
-#define HTP_ROPE_SPAD_NROWS  4
+#define HTP_ROPE_SPAD_NROWS  8
 
 #define htp_rope_preamble              \
     const uint32_t ne00 = src0->ne[0]; \
@@ -261,6 +261,13 @@ static void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, u
     }
 }
 
+struct rope_rowidx_cache {
+    uint32_t i1;
+    uint32_t i2;
+    uint32_t i3;
+    uint32_t pad;
+};
+
 static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
@@ -302,6 +309,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     const int32_t * pos = (const int32_t *) src1->data;
     const float * freq_factors = (src2 && src2->data) ? (const float *) src2->data : NULL;
 
+    struct rope_rowidx_cache rowidx_cache[HTP_ROPE_SPAD_NROWS];
+
     for (uint32_t ir = src0_start_row, is = 0; ir < src0_end_row && is < HTP_ROPE_SPAD_NROWS; ir++, is++) {
         // Dummy DMA transaction for sequencing (interleaving dst,src,dst,...)
         dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + is * rctx->dst_row_size_aligned), 0, 0, 0);
@@ -314,14 +323,17 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
         dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad_base + is * rctx->src0_row_size_aligned, src_addr),
             rctx->src0_row_size_aligned, rctx->src0_row_size, 1);
+
+        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1 = i1;
+        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2 = i2;
+        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3 = i3;
     }
 
     uint32_t prev_i2 = (uint32_t) -1;
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        uint32_t i1 = fastmodulo(ir, ne01, &rctx->fastdiv_ne01);
-        uint32_t r_div_ne01 = fastdiv(ir, &rctx->fastdiv_ne01);
-        uint32_t i2 = fastmodulo(r_div_ne01, ne02, &rctx->fastdiv_ne02);
-        uint32_t i3 = fastdiv(r_div_ne01, &rctx->fastdiv_ne02);
+        uint32_t i1 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1;
+        uint32_t i2 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2;
+        uint32_t i3 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3;
 
         if (i2 != prev_i2) {
             const int32_t p = pos[i2];
@@ -358,6 +370,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
             dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, psrc_addr), // reusing src0_spad buffer
                 rctx->src0_row_size_aligned, rctx->src0_row_size, 1);
+
+            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1 = pi1;
+            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2 = pi2;
+            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3 = pi3;
         }
     }
 
