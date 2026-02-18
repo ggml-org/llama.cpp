@@ -106,9 +106,6 @@ export { getImageErrorFallbackHtml } from './image-error-fallback';
 // Data URL utilities
 export { createBase64DataUrl } from './data-url';
 
-// Header utilities
-export { parseHeadersToArray, serializeHeaders } from './headers';
-
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
 
