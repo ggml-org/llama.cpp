@@ -468,7 +468,7 @@ kernel void kernel_restore_block_q6_K(
     }
 }
 
-kernel void kernel_convert_block_q6_K_nonshuffle(
+kernel void kernel_convert_block_q6_K_noshuffle(
     global struct block_q6_K * src0,
     global uchar * dst_ql,
     global uchar * dst_qh,
