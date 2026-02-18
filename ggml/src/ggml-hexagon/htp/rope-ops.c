@@ -22,6 +22,8 @@
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 
+#define HTP_ROPE_SPAD_NROWS  4
+
 #define htp_rope_preamble              \
     const uint32_t ne00 = src0->ne[0]; \
     const uint32_t ne01 = src0->ne[1]; \
@@ -72,7 +74,6 @@ struct htp_rope_context {
     size_t src0_spad_half_size;
     size_t dst_spad_half_size;
     size_t theta_cache_offset;
-    uint32_t block_size;
     uint32_t src0_nrows;
 };
 
@@ -297,15 +298,13 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     size_t src0_spad_half_size = rctx->src0_spad_half_size;
     size_t dst_spad_half_size  = rctx->dst_spad_half_size;
 
-    const int BLOCK = rctx->block_size;
-
     dma_queue * dma_queue = octx->ctx->dma[ith];
     const int32_t * pos = (const int32_t *) src1->data;
     const float * freq_factors = (src2 && src2->data) ? (const float *) src2->data : NULL;
 
-    for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
+    for (uint32_t ir = src0_start_row, is = 0; ir < src0_end_row && is < HTP_ROPE_SPAD_NROWS; ir++, is++) {
         // Dummy DMA transaction for sequencing (interleaving dst,src,dst,...)
-        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + (spad_idx * dst_spad_half_size)), 0, 0, 0);
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + is * rctx->dst_row_size_aligned), 0, 0, 0);
 
         uint32_t i1 = fastmodulo(ir, ne01, &rctx->fastdiv_ne01);
         uint32_t r_div_ne01 = fastdiv(ir, &rctx->fastdiv_ne01);
@@ -313,14 +312,12 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
         uint32_t i3 = fastdiv(r_div_ne01, &rctx->fastdiv_ne02);
         const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01;
 
-        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad_base + (spad_idx * src0_spad_half_size), src_addr),
+        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad_base + is * rctx->src0_row_size_aligned, src_addr),
             rctx->src0_row_size_aligned, rctx->src0_row_size, 1);
     }
 
     uint32_t prev_i2 = (uint32_t) -1;
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
-        // Process block (single row)
-        // Recalculate indices for params
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
         uint32_t i1 = fastmodulo(ir, ne01, &rctx->fastdiv_ne01);
         uint32_t r_div_ne01 = fastdiv(ir, &rctx->fastdiv_ne01);
         uint32_t i2 = fastmodulo(r_div_ne01, ne02, &rctx->fastdiv_ne02);
@@ -349,12 +346,12 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
         uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
         dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, 1);
 
-        // Prefetch next
-        const uint32_t pref_block = (ir + BLOCK * 2);
-        if (pref_block < src0_end_row) {
+        // prefetch next row
+        const uint32_t pr = (ir + HTP_ROPE_SPAD_NROWS);
+        if (pr < src0_end_row) {
             // Re-calculate src ptr for prefetch
-            uint32_t pi1 = fastmodulo(pref_block, ne01, &rctx->fastdiv_ne01);
-            uint32_t pr_div_ne01 = fastdiv(pref_block, &rctx->fastdiv_ne01);
+            uint32_t pi1 = fastmodulo(pr, ne01, &rctx->fastdiv_ne01);
+            uint32_t pr_div_ne01 = fastdiv(pr, &rctx->fastdiv_ne01);
             uint32_t pi2 = fastmodulo(pr_div_ne01, ne02, &rctx->fastdiv_ne02);
             uint32_t pi3 = fastdiv(pr_div_ne01, &rctx->fastdiv_ne02);
             const uint8_t * psrc_addr = (const uint8_t *) src0->data + pi3 * nb03 + pi2 * nb02 + pi1 * nb01;
@@ -404,8 +401,8 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const size_t theta_cache_size_aligned = hex_round_up(src0->ne[0] * sizeof(float), 128);
 
     // Calculate spad sizes per thread
-    size_t src0_spad_per_thread = theta_cache_size_aligned + 2 * src0_row_size_aligned;
-    size_t dst_spad_per_thread  = 2 * dst_row_size_aligned;
+    size_t src0_spad_per_thread = theta_cache_size_aligned + HTP_ROPE_SPAD_NROWS * src0_row_size_aligned;
+    size_t dst_spad_per_thread  = HTP_ROPE_SPAD_NROWS * dst_row_size_aligned;
     size_t spad_per_thread = src0_spad_per_thread + dst_spad_per_thread;
 
     // Check if we fit in VTCM
@@ -434,7 +431,6 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
 
-    rctx.block_size = 1;
     rctx.src0_spad_half_size = src0_row_size_aligned;
     rctx.dst_spad_half_size  = dst_row_size_aligned;
 
