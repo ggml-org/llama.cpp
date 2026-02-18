@@ -350,18 +350,7 @@ struct llm_build_kimi_linear : public llm_build_mamba_base {
 
 template <bool iswa>
 struct llm_build_lfm2 : public llm_graph_context {
-    using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa,  llm_graph_input_mem_hybrid>;
-    using inp_attn_type   = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa,     llm_graph_input_attn_kv>;
-    using mem_hybrid_ctx  = std::conditional_t<iswa, llama_memory_hybrid_iswa_context, llama_memory_hybrid_context>;
-
-    const llama_model & model;
-
     llm_build_lfm2(const llama_model & model, const llm_graph_params & params);
-    ggml_tensor * build_moe_feed_forward(ggml_tensor * cur, int il) const;
-    ggml_tensor * build_dense_feed_forward(ggml_tensor * cur, int il) const;
-    ggml_tensor * build_attn_block(ggml_tensor * cur, ggml_tensor * inp_pos, inp_attn_type * inp_attn, int il) const;
-    ggml_tensor * build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il);
-
 };
 
 struct llm_build_llada : public llm_graph_context {
