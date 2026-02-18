@@ -8,9 +8,9 @@
 	import {
 		ChatFormPromptPickerList,
 		ChatFormPromptPickerHeader,
-		ChatFormPromptPickerArgumentForm
+		ChatFormPromptPickerArgumentForm,
+		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
-	import * as Popover from '$lib/components/ui/popover';
 
 	interface Props {
 		class?: string;
@@ -342,61 +342,47 @@
 	let showSearchInput = $derived(prompts.length > 3);
 </script>
 
-<Popover.Root
-	bind:open={isOpen}
-	onOpenChange={(open) => {
-		if (!open) {
-			onClose?.();
-		}
-	}}
+<ChatFormPickerPopover
+	bind:isOpen
+	class={className}
+	srLabel="Open prompt picker"
+	{onClose}
+	onKeydown={handleKeydown}
 >
-	<Popover.Trigger class="pointer-events-none absolute inset-0 opacity-0">
-		<span class="sr-only">Open prompt picker</span>
-	</Popover.Trigger>
+	{#if selectedPrompt}
+		{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
+		{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
 
-	<Popover.Content
-		side="top"
-		align="start"
-		sideOffset={12}
-		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl {className}"
-		onkeydown={handleKeydown}
-		onOpenAutoFocus={(e) => e.preventDefault()}
-	>
-		{#if selectedPrompt}
-			{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
-			{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
+		<div class="p-4">
+			<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
 
-			<div class="p-4">
-				<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
-
-				<ChatFormPromptPickerArgumentForm
-					prompt={selectedPrompt}
-					{promptArgs}
-					{suggestions}
-					{loadingSuggestions}
-					{activeAutocomplete}
-					{autocompleteIndex}
-					{promptError}
-					onArgInput={handleArgInput}
-					onArgKeydown={handleArgKeydown}
-					onArgBlur={handleArgBlur}
-					onArgFocus={handleArgFocus}
-					onSelectSuggestion={selectSuggestion}
-					onSubmit={handleArgumentSubmit}
-					onCancel={handleCancelArgumentForm}
-				/>
-			</div>
-		{:else}
-			<ChatFormPromptPickerList
-				prompts={filteredPrompts}
-				{isLoading}
-				{selectedIndex}
-				bind:searchQuery={internalSearchQuery}
-				{showSearchInput}
-				{serverSettingsMap}
-				getServerLabel={(server) => mcpStore.getServerLabel(server)}
-				onPromptClick={handlePromptClick}
+			<ChatFormPromptPickerArgumentForm
+				prompt={selectedPrompt}
+				{promptArgs}
+				{suggestions}
+				{loadingSuggestions}
+				{activeAutocomplete}
+				{autocompleteIndex}
+				{promptError}
+				onArgInput={handleArgInput}
+				onArgKeydown={handleArgKeydown}
+				onArgBlur={handleArgBlur}
+				onArgFocus={handleArgFocus}
+				onSelectSuggestion={selectSuggestion}
+				onSubmit={handleArgumentSubmit}
+				onCancel={handleCancelArgumentForm}
 			/>
-		{/if}
-	</Popover.Content>
-</Popover.Root>
+		</div>
+	{:else}
+		<ChatFormPromptPickerList
+			prompts={filteredPrompts}
+			{isLoading}
+			{selectedIndex}
+			bind:searchQuery={internalSearchQuery}
+			{showSearchInput}
+			{serverSettingsMap}
+			getServerLabel={(server) => mcpStore.getServerLabel(server)}
+			onPromptClick={handlePromptClick}
+		/>
+	{/if}
+</ChatFormPickerPopover>

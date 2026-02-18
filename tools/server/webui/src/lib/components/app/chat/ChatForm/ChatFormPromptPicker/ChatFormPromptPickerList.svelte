@@ -5,6 +5,7 @@
 	import ChatFormPromptPickerListItemSkeleton from './ChatFormPromptPickerListItemSkeleton.svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
+	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants/css-classes';
 
 	interface Props {
 		prompts: MCPPromptInfo[];
@@ -54,7 +55,11 @@
 		</div>
 	{/if}
 
-	<div bind:this={listContainer} class="max-h-64 p-2" class:pt-13={showSearchInput}>
+	<div
+		bind:this={listContainer}
+		class="{CHAT_FORM_POPOVER_MAX_HEIGHT} p-2"
+		class:pt-13={showSearchInput}
+	>
 		{#if isLoading}
 			<ChatFormPromptPickerListItemSkeleton />
 		{:else if prompts.length === 0}
