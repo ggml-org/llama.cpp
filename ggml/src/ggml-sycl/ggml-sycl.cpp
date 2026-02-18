@@ -25136,10 +25136,9 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         const char * env = getenv("GGML_SYCL_HOST_COMPUTE");
         return env && (std::string(env) == "1" || std::string(env) == "true");
     }();
-    // Enable host_task mode when HOST_COMPUTE is active.
-    // Compute buffers are host-pinned USM — CPU ops access t->data directly.
-    // host_task on gpu_q eliminates cross-queue sync overhead (~10x faster per op).
-    ggml_sycl_host_task_mode_set(cpu_offload_active && host_compute_enabled);
+    // D+: HOST_COMPUTE uses direct dispatch (batched_mode), not host_task.
+    // Only enable host_task_mode for non-batched fallback paths.
+    ggml_sycl_host_task_mode_set(false);
     // IMPORTANT: node_cpu_flags MUST remain in scope for the entire function
     // because g_preclassified_cpu_flags holds a raw pointer to its data.
     std::vector<int8_t> node_cpu_flags;
@@ -25217,6 +25216,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
     bool                                           prev_on_cpu          = false;
     bool                                           retained_mode_active = false;
+    bool                                           gpu_queue_dirty      = false;  // D+: track pending GPU submissions
     std::unordered_map<ggml_tensor *, sycl::event> gpu_tensor_events;
 
     g_preclassified_cpu_flags = cpu_offload_active && !node_cpu_flags.empty() ? node_cpu_flags.data() : nullptr;
@@ -25674,101 +25674,64 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 prev_on_cpu = node_on_cpu;
             }
 
-            // HOST_COMPUTE batching: collect consecutive CPU nodes into batches
-            // and submit a single host_task per CPU segment instead of one per op.
+            // HOST_COMPUTE direct dispatch: call CPU kernels inline on the
+            // calling thread.  No host_task overhead — uses batched_mode for
+            // synchronous for-loop execution in cpu-dispatch.cpp kernels.
+            // GPU islands are dispatched to the queue and waited on explicitly.
             if (node_on_cpu && host_compute_enabled) {
-                // Collect this node and all subsequent CPU nodes until
-                // a GPU node, GPU island, or end of graph.
-                std::vector<ggml_tensor *> cpu_batch;
+                // D+: Drain any in-flight GPU ops before CPU direct dispatch.
+                // With direct inline dispatch, the calling thread must ensure
+                // prior GPU submissions have completed so that host-pinned
+                // output is visible to the CPU kernel.
+                sycl_ctx->stream()->wait();
 
-                // Check if a node can be CPU-dispatched in batched mode.
-                // Returns false for nodes whose sources are in device-only memory
-                // (e.g. attention kq/kqv MUL_MATs that use KV cache as src[0]).
+                // Check if node sources are host-accessible
                 auto can_batch_cpu = [&](const ggml_tensor * t) -> bool {
                     for (int s = 0; s < GGML_MAX_SRC && t->src[s]; s++) {
                         const ggml_tensor * src = t->src[s];
                         if (!src->buffer) continue;
                         if (ggml_backend_buffer_is_host(src->buffer)) continue;
-                        // Weight tensors (norm weights, MUL_MAT weights) are
-                        // CPU-accessible via host cache / direct host pointer.
-                        // KV cache and other device-only tensors are NOT.
                         if (ggml_sycl_tensor_is_weight(src)) continue;
-                        // Non-host, non-weight buffer → device memory, can't access
                         return false;
                     }
                     return true;
                 };
 
-                // If the first node can't be CPU-dispatched (e.g. attention MUL_MAT
-                // with device-only KV cache), skip batch and fall through to GPU.
                 if (!can_batch_cpu(node)) {
                     // Fall through to GPU dispatch below
                 } else {
-                    cpu_batch.push_back(node);
+                    ggml_sycl_batched_mode_set(true);
 
-                    int j = i + 1;
-                    while (j < cgraph->n_nodes) {
-                        ggml_tensor * next = cgraph->nodes[j];
-                        if (!next || ggml_sycl_is_noop(next)) {
-                            j++;
-                            continue;
+                    // Try fusion with next CPU node
+                    bool fused = false;
+                    if (i + 1 < cgraph->n_nodes) {
+                        ggml_tensor * next = cgraph->nodes[i + 1];
+                        if (next && !ggml_sycl_is_noop(next)) {
+                            int8_t nflag = (i + 1 < (int)node_cpu_flags.size()) ? node_cpu_flags[i + 1] : FLAG_UNKNOWN;
+                            if (nflag == FLAG_CPU && can_batch_cpu(next)) {
+                                if (node->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
+                                    && next->src[0] == node) {
+                                    fused = ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, node, next);
+                                    if (fused) i++;
+                                } else if (node->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
+                                           && next->src[0] == node) {
+                                    fused = ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, node, next);
+                                    if (fused) i++;
+                                }
+                            }
                         }
-                        int8_t jflag = (j < (int)node_cpu_flags.size()) ? node_cpu_flags[j] : FLAG_UNKNOWN;
-                        if (jflag != FLAG_CPU) {
-                            break;  // hit GPU node or island → end of batch
-                        }
-                        if (!can_batch_cpu(next)) {
-                            break;  // device-only sources → end of batch
-                        }
-                        cpu_batch.push_back(next);
-                        j++;
                     }
 
-                    // Submit CPU batch as a single host_task on the GPU queue.
-                    // The in-order queue guarantees: prior GPU ops complete before
-                    // the host_task runs, and subsequent GPU ops wait for it.
-                    // This gives us GPU-CPU async overlap on the main thread.
-                    // Flags are thread_local so no race between worker and main thread.
-                    sycl_ctx->stream()->submit([&](sycl::handler & cgh) {
-                        cgh.host_task([sycl_ctx, cpu_batch]() {
-                            ggml_sycl_batched_mode_set(true);
-                            ggml_sycl_host_task_mode_set(false);
-                            for (size_t bi = 0; bi < cpu_batch.size(); bi++) {
-                                ggml_tensor * n = cpu_batch[bi];
+                    if (!fused) {
+                        bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, node);
+                        if (!ok) {
+                            fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
+                                    ggml_op_name(node->op), node->name ? node->name : "?");
+                        }
+                        GGML_ASSERT(ok);
+                    }
 
-                                // Try fusion with next node in batch
-                                if (bi + 1 < cpu_batch.size()) {
-                                    ggml_tensor * next = cpu_batch[bi + 1];
-                                    if (n->op == GGML_OP_RMS_NORM && next->op == GGML_OP_MUL
-                                        && next->src[0] == n) {
-                                        if (ggml_sycl_compute_fused_rms_norm_mul(*sycl_ctx, n, next)) {
-                                            bi++;
-                                            continue;
-                                        }
-                                    }
-                                    if (n->op == GGML_OP_ADD && next->op == GGML_OP_RMS_NORM
-                                        && next->src[0] == n) {
-                                        if (ggml_sycl_compute_fused_add_rms_norm(*sycl_ctx, n, next)) {
-                                            bi++;
-                                            continue;
-                                        }
-                                    }
-                                }
-
-                                bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, n);
-                                if (!ok) {
-                                    fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
-                                            ggml_op_name(n->op), n->name ? n->name : "?");
-                                }
-                                GGML_ASSERT(ok);
-                            }
-                            ggml_sycl_batched_mode_set(false);
-                            ggml_sycl_host_task_mode_set(true);
-                        });
-                    });
-
-                    // Advance loop index past the batch
-                    i = j - 1;  // -1 because loop will i++
+                    ggml_sycl_batched_mode_set(false);
                     continue;
                 }
             }
@@ -25827,6 +25790,12 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
         }
 
         GGML_ASSERT(ok);
+
+        // D+: Mark queue as dirty after any GPU submission.  The next CPU
+        // direct-dispatch node will drain it before reading host-pinned output.
+        if (host_compute_enabled && cpu_offload_active) {
+            gpu_queue_dirty = true;
+        }
 
         // Per-tensor event tracking: after each GPU op, record a barrier event
         // for dst so that GPU→CPU transitions can wait on specific tensors.
