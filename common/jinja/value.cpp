@@ -734,7 +734,8 @@ const func_builtins & value_string_t::get_builtins() const {
                 indent = "    ";
             }
             std::string indented;
-            std::istringstream iss = std::istringstream(val_input->as_string().str());
+            std::string input = val_input->as_string().str();
+            std::istringstream iss = std::istringstream(input);
             std::string line;
             bool first_line = true;
             while (std::getline(iss, line)) {
@@ -751,6 +752,13 @@ const func_builtins & value_string_t::get_builtins() const {
                 }
                 indented.append(line);
             }
+            if (!input.empty() && input.back() == '\n') {
+                indented.append("\n");
+                if (blank) {
+                    indented.append(indent);
+                }
+            }
+
             auto res = mk_val<value_string>(indented);
             res->val_str.mark_input_based_on(val_input->as_string());
             return res;
