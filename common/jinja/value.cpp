@@ -737,25 +737,19 @@ const func_builtins & value_string_t::get_builtins() const {
             std::string input = val_input->as_string().str();
             std::istringstream iss = std::istringstream(input);
             std::string line;
-            bool first_line = true;
             while (std::getline(iss, line)) {
-                bool do_indent = true;
-                if (first_line) {
-                    first_line = false;
-                    do_indent &= first;
-                } else {
-                    indented.append("\n");
+                if (!indented.empty()) {
+                    indented.push_back('\n');
                 }
-                do_indent &= blank || !line.empty();
-                if (do_indent) {
-                   indented.append(indent);
+                if ((indented.empty() && first) || !line.empty() || blank) {
+                    indented += indent;
                 }
-                indented.append(line);
+                indented += line;
             }
             if (!input.empty() && input.back() == '\n') {
-                indented.append("\n");
+                indented.push_back('\n');
                 if (blank) {
-                    indented.append(indent);
+                    indented += indent;
                 }
             }
 
