@@ -741,7 +741,7 @@ const func_builtins & value_string_t::get_builtins() const {
                 if (!indented.empty()) {
                     indented.push_back('\n');
                 }
-                if ((indented.empty() && first) || !line.empty() || blank) {
+                if ((indented.empty() ? first : (!line.empty() || blank))) {
                     indented += indent;
                 }
                 indented += line;
