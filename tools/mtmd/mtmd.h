@@ -129,6 +129,10 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 // return -1 if audio is not supported
 MTMD_API int mtmd_get_audio_bitrate(mtmd_context * ctx);
 
+// whether the current model uses the Voxtral Realtime dual-stream protocol
+// (audio + text embeddings added at every position, not prepended)
+MTMD_API bool mtmd_support_voxtral_realtime(mtmd_context * ctx);
+
 // mtmd_bitmap
 //
 // if bitmap is image:

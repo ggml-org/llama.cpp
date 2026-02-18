@@ -907,6 +907,10 @@ bool mtmd_support_audio(mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
 }
 
+bool mtmd_support_voxtral_realtime(mtmd_context * ctx) {
+    return ctx->proj_type_a() == PROJECTOR_TYPE_VOXTRAL_REALTIME;
+}
+
 int mtmd_get_audio_bitrate(mtmd_context * ctx) {
     if (!ctx->ctx_a) {
         return -1;

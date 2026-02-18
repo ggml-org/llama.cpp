@@ -2538,12 +2538,11 @@ class LlamaModel(TextModel):
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        try:
+        if self.is_mistral_format:
+            self.origin_hf_arch = None
+        else:
             hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format=False)
             self.origin_hf_arch = hparams.get('architectures', [None])[0]
-        except Exception:
-            # Mistral-format models may not have config.json
-            self.origin_hf_arch = None
 
     def set_vocab(self):
         if self.origin_hf_arch == "GlmasrModel":
