@@ -3,6 +3,7 @@
 static const char * ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
+    // Return the prefixed name that was built once during initialization
     return gpu->cached_device_info.name;
 }
 

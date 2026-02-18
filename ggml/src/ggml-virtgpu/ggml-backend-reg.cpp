@@ -35,12 +35,25 @@ static virtgpu * apir_initialize() {
         if (!gpu->cached_device_info.description) {
             GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu device description", __func__);
         }
-        gpu->cached_device_info.name         = apir_device_get_name(gpu);
-        if (!gpu->cached_device_info.name) {
-            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu device name", __func__);
-        }
         gpu->cached_device_info.device_count = apir_device_get_count(gpu);
         gpu->cached_device_info.type         = apir_device_get_type(gpu);
+
+        {
+            // Get the remote name and create prefixed version
+            char* rmt_device_name = apir_device_get_name(gpu);
+            if (!rmt_device_name) {
+                GGML_ABORT(GGML_VIRTGPU "%s: failed to get the virtgpu device name", __func__);
+            }
+
+            size_t device_name_len = strlen(rmt_device_name) + 11; // "[virtgpu] " + null terminator
+            gpu->cached_device_info.name = (char*)malloc(device_name_len);
+            if (!gpu->cached_device_info.name) {
+                free(rmt_device_name);
+                GGML_ABORT(GGML_VIRTGPU "%s: failed to allocate memory for prefixed device name", __func__);
+            }
+            snprintf(gpu->cached_device_info.name, device_name_len, "[virtgpu] %s", rmt_device_name);
+            free(rmt_device_name);
+        }
 
         apir_device_get_memory(gpu,
                               &gpu->cached_device_info.memory_free,
@@ -48,10 +61,23 @@ static virtgpu * apir_initialize() {
 
         apir_buffer_type_host_handle_t buft_host_handle = apir_device_get_buffer_type(gpu);
         gpu->cached_buffer_type.host_handle             = buft_host_handle;
-        gpu->cached_buffer_type.name                    = apir_buffer_type_get_name(gpu, buft_host_handle);
-        if (!gpu->cached_buffer_type.name) {
-            GGML_ABORT(GGML_VIRTGPU "%s: failed to initialize the virtgpu buffer type name", __func__);
+        {
+            // Get the remote name and create prefixed version
+            char* rmt_name = apir_buffer_type_get_name(gpu, buft_host_handle);
+            if (!rmt_name) {
+                GGML_ABORT(GGML_VIRTGPU "%s: failed to get the virtgpu buffer type name", __func__);
+            }
+
+            size_t prefixed_len = strlen(rmt_name) + 11; // "[virtgpu] " + null terminator
+            gpu->cached_buffer_type.name = (char*)malloc(prefixed_len);
+            if (!gpu->cached_buffer_type.name) {
+                free(rmt_name);
+                GGML_ABORT(GGML_VIRTGPU "%s: failed to allocate memory for prefixed buffer type name", __func__);
+            }
+            snprintf(gpu->cached_buffer_type.name, prefixed_len, "[virtgpu] %s", rmt_name);
+            free(rmt_name);
         }
+
         gpu->cached_buffer_type.alignment               = apir_buffer_type_get_alignment(gpu, buft_host_handle);
         gpu->cached_buffer_type.max_size                = apir_buffer_type_get_max_size(gpu, buft_host_handle);
 

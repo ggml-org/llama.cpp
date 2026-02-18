@@ -34,6 +34,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
 static const char * ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
+    // Return the prefixed name that was built once during initialization
     return gpu->cached_buffer_type.name;
 }
 
