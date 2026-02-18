@@ -11005,7 +11005,7 @@ class ModernBertModel(BertModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("model."):
             name = name[6:]
-            
+
         if self.cls_out_labels:
             # For BertForSequenceClassification (direct projection layer)
             if name == "classifier.weight":
