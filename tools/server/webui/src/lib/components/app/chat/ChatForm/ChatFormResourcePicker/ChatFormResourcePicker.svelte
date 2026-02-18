@@ -5,7 +5,15 @@
 	import { KeyboardKey } from '$lib/enums';
 	import type { MCPResourceInfo, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { ChatFormResourcePickerList, ChatFormPickerPopover } from '$lib/components/app/chat';
+	import { FolderOpen } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import {
+		ChatFormPickerPopover,
+		ChatFormPickerList,
+		ChatFormPickerListItem,
+		ChatFormPickerItemHeader,
+		ChatFormPickerListItemSkeleton
+	} from '$lib/components/app/chat';
 
 	interface Props {
 		class?: string;
@@ -161,16 +169,68 @@
 	{onClose}
 	onKeydown={handleKeydown}
 >
-	<ChatFormResourcePickerList
-		resources={filteredResources}
+	<ChatFormPickerList
+		items={filteredResources}
 		{isLoading}
 		{selectedIndex}
 		bind:searchQuery={internalSearchQuery}
 		{showSearchInput}
-		{serverSettingsMap}
-		getServerLabel={(server) => mcpStore.getServerLabel(server)}
-		{isResourceAttached}
-		onResourceClick={handleResourceClick}
-		{onBrowse}
-	/>
+		searchPlaceholder="Search resources..."
+		emptyMessage="No MCP resources available"
+		itemKey={(resource) => resource.serverName + ':' + resource.uri}
+	>
+		{#snippet item(resource, index, isSelected)}
+			{@const server = serverSettingsMap.get(resource.serverName)}
+			{@const serverLabel = server ? mcpStore.getServerLabel(server) : resource.serverName}
+
+			<ChatFormPickerListItem
+				dataIndex={index}
+				{isSelected}
+				onClick={() => handleResourceClick(resource)}
+			>
+				<ChatFormPickerItemHeader
+					{server}
+					{serverLabel}
+					title={resource.title || resource.name}
+					description={resource.description}
+				>
+					{#snippet titleExtra()}
+						{#if isResourceAttached(resource.uri)}
+							<span
+								class="inline-flex items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+							>
+								attached
+							</span>
+						{/if}
+					{/snippet}
+
+					{#snippet subtitle()}
+						<p class="mt-0.5 truncate text-xs text-muted-foreground/60">
+							{resource.uri}
+						</p>
+					{/snippet}
+				</ChatFormPickerItemHeader>
+			</ChatFormPickerListItem>
+		{/snippet}
+
+		{#snippet skeleton()}
+			<ChatFormPickerListItemSkeleton />
+		{/snippet}
+
+		{#snippet footer()}
+			{#if onBrowse && resources.length > 3}
+				<Button
+					class="fixed right-3 bottom-3"
+					type="button"
+					onclick={onBrowse}
+					variant="secondary"
+					size="sm"
+				>
+					<FolderOpen class="h-3 w-3" />
+
+					Browse all
+				</Button>
+			{/if}
+		{/snippet}
+	</ChatFormPickerList>
 </ChatFormPickerPopover>

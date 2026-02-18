@@ -5,11 +5,14 @@
 	import { KeyboardKey } from '$lib/enums';
 	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
+	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import {
-		ChatFormPromptPickerList,
-		ChatFormPromptPickerHeader,
-		ChatFormPromptPickerArgumentForm,
-		ChatFormPickerPopover
+		ChatFormPickerPopover,
+		ChatFormPickerList,
+		ChatFormPickerListItem,
+		ChatFormPickerItemHeader,
+		ChatFormPickerListItemSkeleton,
+		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
 
 	interface Props {
@@ -350,11 +353,25 @@
 	onKeydown={handleKeydown}
 >
 	{#if selectedPrompt}
-		{@const server = serverSettingsMap.get(selectedPrompt.serverName)}
-		{@const serverLabel = server ? mcpStore.getServerLabel(server) : selectedPrompt.serverName}
+		{@const prompt = selectedPrompt}
+		{@const server = serverSettingsMap.get(prompt.serverName)}
+		{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
 
 		<div class="p-4">
-			<ChatFormPromptPickerHeader prompt={selectedPrompt} {server} {serverLabel} />
+			<ChatFormPickerItemHeader
+				{server}
+				{serverLabel}
+				title={prompt.title || prompt.name}
+				description={prompt.description}
+			>
+				{#snippet titleExtra()}
+					{#if prompt.arguments?.length}
+						<Badge variant="secondary">
+							{prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''}
+						</Badge>
+					{/if}
+				{/snippet}
+			</ChatFormPickerItemHeader>
 
 			<ChatFormPromptPickerArgumentForm
 				prompt={selectedPrompt}
@@ -374,15 +391,45 @@
 			/>
 		</div>
 	{:else}
-		<ChatFormPromptPickerList
-			prompts={filteredPrompts}
+		<ChatFormPickerList
+			items={filteredPrompts}
 			{isLoading}
 			{selectedIndex}
 			bind:searchQuery={internalSearchQuery}
 			{showSearchInput}
-			{serverSettingsMap}
-			getServerLabel={(server) => mcpStore.getServerLabel(server)}
-			onPromptClick={handlePromptClick}
-		/>
+			searchPlaceholder="Search prompts..."
+			emptyMessage="No MCP prompts available"
+			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
+		>
+			{#snippet item(prompt, index, isSelected)}
+				{@const server = serverSettingsMap.get(prompt.serverName)}
+				{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
+
+				<ChatFormPickerListItem
+					dataIndex={index}
+					{isSelected}
+					onClick={() => handlePromptClick(prompt)}
+				>
+					<ChatFormPickerItemHeader
+						{server}
+						{serverLabel}
+						title={prompt.title || prompt.name}
+						description={prompt.description}
+					>
+						{#snippet titleExtra()}
+							{#if prompt.arguments?.length}
+								<Badge variant="secondary">
+									{prompt.arguments.length} arg{prompt.arguments.length > 1 ? 's' : ''}
+								</Badge>
+							{/if}
+						{/snippet}
+					</ChatFormPickerItemHeader>
+				</ChatFormPickerListItem>
+			{/snippet}
+
+			{#snippet skeleton()}
+				<ChatFormPickerListItemSkeleton titleWidth="w-32" showBadge />
+			{/snippet}
+		</ChatFormPickerList>
 	{/if}
 </ChatFormPickerPopover>

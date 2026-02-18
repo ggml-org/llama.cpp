@@ -55,7 +55,12 @@
 			</span>
 
 			{#if onRemove}
-				<ActionIconRemove class="-mr-1.5 bg-transparent -my-2" iconSize={2} id={attachment.id} {onRemove} />
+				<ActionIconRemove
+					class="-my-2 -mr-1.5 bg-transparent"
+					iconSize={2}
+					id={attachment.id}
+					{onRemove}
+				/>
 			{/if}
 		</button>
 	</Tooltip.Trigger>

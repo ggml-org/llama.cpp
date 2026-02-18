@@ -268,38 +268,38 @@ export { default as ChatFormPromptPickerArgumentForm } from './ChatForm/ChatForm
 export { default as ChatFormPromptPickerArgumentInput } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerArgumentInput.svelte';
 
 /**
- * Header for prompt picker with search input and close button. Contains the
- * search field for filtering prompts and X button to dismiss the picker.
- * Search input is auto-focused when picker opens.
- */
-export { default as ChatFormPromptPickerHeader } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerHeader.svelte';
-
-/**
- * Scrollable list of available MCP prompts. Renders ChatFormPromptPickerListItem
- * for each prompt, grouped by server. Handles empty state when no prompts match
- * search query. Manages scroll position for keyboard navigation.
- */
-export { default as ChatFormPromptPickerList } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerList.svelte';
-
-/**
- * Single prompt item in the picker list. Displays server avatar, prompt name,
- * and description. Highlights on hover/keyboard focus. Triggers selection
- * callback on click or Enter key.
- */
-export { default as ChatFormPromptPickerListItem } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerListItem.svelte';
-
-/**
- * Skeleton loading placeholder for prompt picker items. Displays animated
- * placeholder while prompts are being fetched from MCP servers.
- * Matches dimensions of ChatFormPromptPickerListItem.
- */
-export { default as ChatFormPromptPickerListItemSkeleton } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerListItemSkeleton.svelte';
-
-/**
  * Shared popover wrapper for inline picker popovers (prompts, resources).
  * Provides consistent positioning, styling, and open/close behavior.
  */
 export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickerPopover.svelte';
+
+/**
+ * Generic scrollable list for picker popovers. Provides search input,
+ * scroll-into-view for keyboard navigation, loading skeletons, empty state,
+ * and optional footer. Uses Svelte 5 snippets for item/skeleton/footer rendering.
+ * Shared by ChatFormPromptPicker and ChatFormResourcePicker.
+ */
+export { default as ChatFormPickerList } from './ChatForm/ChatFormPicker/ChatFormPickerList.svelte';
+
+/**
+ * Generic button wrapper for picker list items. Provides consistent styling,
+ * hover/selected states, and data-picker-index attribute for scroll-into-view.
+ * Shared by ChatFormPromptPicker and ChatFormResourcePicker.
+ */
+export { default as ChatFormPickerListItem } from './ChatForm/ChatFormPicker/ChatFormPickerListItem.svelte';
+
+/**
+ * Generic header for picker items displaying server favicon, label, item title,
+ * and optional description. Accepts `titleExtra` and `subtitle` snippets for
+ * custom content like badges or URIs. Shared by both pickers.
+ */
+export { default as ChatFormPickerItemHeader } from './ChatForm/ChatFormPicker/ChatFormPickerItemHeader.svelte';
+
+/**
+ * Generic skeleton loading placeholder for picker list items. Configurable
+ * title width and optional badge skeleton. Shared by both pickers.
+ */
+export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
 
 /**
  * **ChatFormResourcePicker** - MCP resource selection interface
@@ -319,25 +319,6 @@ export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickerPopov
  * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
  */
 export { default as ChatFormResourcePicker } from './ChatForm/ChatFormResourcePicker/ChatFormResourcePicker.svelte';
-
-/**
- * Scrollable list of available MCP resources. Renders ChatFormResourcePickerListItem
- * for each resource. Handles empty state when no resources match the search query.
- * Manages scroll position for keyboard navigation.
- */
-export { default as ChatFormResourcePickerList } from './ChatForm/ChatFormResourcePicker/ChatFormResourcePickerList.svelte';
-
-/**
- * Single resource item in the picker list. Displays server favicon, resource name/title,
- * URI, description, and attached state. Highlights on hover/keyboard focus.
- */
-export { default as ChatFormResourcePickerListItem } from './ChatForm/ChatFormResourcePicker/ChatFormResourcePickerListItem.svelte';
-
-/**
- * Skeleton loading placeholder for resource picker items. Displays animated
- * placeholder while resources are being fetched from MCP servers.
- */
-export { default as ChatFormResourcePickerListItemSkeleton } from './ChatForm/ChatFormResourcePicker/ChatFormResourcePickerListItemSkeleton.svelte';
 
 /**
  *
