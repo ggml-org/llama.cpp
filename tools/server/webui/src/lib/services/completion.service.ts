@@ -58,11 +58,13 @@ export class CompletionService {
 		// We only support streaming responses
 		const stream: boolean = true;
 		const cache_prompt: boolean = true;
+		const return_progress: boolean = true;
 
 		const requestBody: ApiCompletionRequest = {
+			cache_prompt,
+			return_progress,
 			prompt,
-			stream,
-			cache_prompt
+			stream
 		};
 
 		// Include model in request if provided
@@ -125,9 +127,7 @@ export class CompletionService {
 
 			if (!response.ok) {
 				const error = await ChatService.parseErrorResponse(response);
-				if (callbacks.onError) {
-					callbacks.onError(error);
-				}
+				callbacks.onError?.(error);
 				throw error;
 			}
 
@@ -161,9 +161,7 @@ export class CompletionService {
 			}
 
 			console.error('Error in sendCompletion:', error);
-			if (callbacks.onError) {
-				callbacks.onError(userFriendlyError);
-			}
+			callbacks.onError?.(userFriendlyError);
 			throw userFriendlyError;
 		}
 	}

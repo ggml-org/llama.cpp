@@ -828,7 +828,6 @@ export class ChatService {
 	 *
 	 * @param data - Raw response data from the Chat Completions API
 	 * @returns Model name string if found, undefined otherwise
-	 * @private
 	 */
 	public static extractModelName(data: unknown): string | undefined {
 		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
@@ -879,7 +878,7 @@ export class ChatService {
 	 * @param onTimingsCallback - Callback function to invoke with timing data
 	 * @private
 	 */
-	public static notifyTimings(
+	private static notifyTimings(
 		timings: ChatMessageTimings | undefined,
 		promptProgress: ChatMessagePromptProgress | undefined,
 		onTimingsCallback:
