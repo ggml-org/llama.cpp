@@ -154,7 +154,8 @@ static void get_rows_cuda_float(
     const size_t s12 = nb12 / sizeof(int32_t);
     // const size_t s13 = nb13 / sizeof(int32_t);
 
-    k_get_rows_float<<<block_nums, block_dims, 0, stream>>>(
+    auto launch_params = ggml_cuda_kernel_launch_params{block_nums, block_dims, 0, stream};
+    ggml_cuda_kernel_launch(k_get_rows_float<src0_t, dst_t>, launch_params,
         src0_d, src1_d, dst_d,
         ne00, /*ne01, ne02, ne03,*/
         /*ne10,*/ ne11, ne12, /*ne13,*/
