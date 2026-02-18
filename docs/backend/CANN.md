@@ -246,7 +246,7 @@ cmake --build build --config release
 
 1. **Retrieve and prepare model**
 
-    You can refer to the general [*Prepare and Quantize*](../../README.md#prepare-and-quantize) guide for model prepration.
+    You can refer to the general [*Obtaining and quantizing models*](../../README.md#obtaining-and-quantizing-models) guide for model prepration.
 
     **Notes**:
 
@@ -327,3 +327,7 @@ Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. Whe
 ### GGML_CANN_PREFILL_USE_GRAPH
 
 Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.
+
+### GGML_CANN_OPERATOR_FUSION
+
+Enable operator fusion during computation, default is false. This option fuses compatible operators (e.g., ADD + RMS_NORM) to reduce overhead and improve performance.

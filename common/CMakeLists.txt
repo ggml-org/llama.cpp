@@ -5,7 +5,6 @@ find_package(Threads REQUIRED)
 llama_add_compile_flags()
 
 # Build info header
-#
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
     set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
@@ -60,6 +59,8 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    debug.cpp
+    debug.h
     download.cpp
     download.h
     http.h
@@ -71,6 +72,10 @@ add_library(${TARGET} STATIC
     log.h
     ngram-cache.cpp
     ngram-cache.h
+    ngram-map.cpp
+    ngram-map.h
+    ngram-mod.cpp
+    ngram-mod.h
     peg-parser.cpp
     peg-parser.h
     preset.cpp
@@ -83,6 +88,18 @@ add_library(${TARGET} STATIC
     speculative.h
     unicode.cpp
     unicode.h
+    jinja/lexer.cpp
+    jinja/lexer.h
+    jinja/parser.cpp
+    jinja/parser.h
+    jinja/runtime.cpp
+    jinja/runtime.h
+    jinja/value.cpp
+    jinja/value.h
+    jinja/string.cpp
+    jinja/string.h
+    jinja/caps.cpp
+    jinja/caps.h
     )
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)
@@ -92,43 +109,16 @@ if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
 
-# TODO: use list(APPEND LLAMA_COMMON_EXTRA_LIBS ...)
-set(LLAMA_COMMON_EXTRA_LIBS build_info)
-
-if (LLAMA_CURL)
-    # Use curl to download model url
-    find_package(CURL)
-    if (NOT CURL_FOUND)
-        message(FATAL_ERROR "Could NOT find CURL. Hint: to disable this feature, set -DLLAMA_CURL=OFF")
-    endif()
-    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
-    include_directories(${CURL_INCLUDE_DIRS})
-    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
-elseif (LLAMA_HTTPLIB)
-    # otherwise, use cpp-httplib
-    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_HTTPLIB)
-    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} cpp-httplib)
-endif()
+target_link_libraries(${TARGET} PRIVATE
+    build_info
+    cpp-httplib
+)
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)
     set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
     set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
-
-    # Set the correct library file extension based on platform
-    if (WIN32)
-        set(LLGUIDANCE_LIB_NAME "llguidance.lib")
-        # Add Windows-specific libraries
-        set(LLGUIDANCE_PLATFORM_LIBS
-            ws2_32    # Windows Sockets API
-            userenv   # For GetUserProfileDirectoryW
-            ntdll     # For NT functions
-            bcrypt    # For BCryptGenRandom
-        )
-    else()
-        set(LLGUIDANCE_LIB_NAME "libllguidance.a")
-        set(LLGUIDANCE_PLATFORM_LIBS "")
-    endif()
+    set(LLGUIDANCE_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}llguidance${CMAKE_STATIC_LIBRARY_SUFFIX}")
 
     ExternalProject_Add(llguidance_ext
         GIT_REPOSITORY https://github.com/guidance-ai/llguidance
@@ -150,32 +140,10 @@ if (LLAMA_LLGUIDANCE)
     add_dependencies(llguidance llguidance_ext)
 
     target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
-    # Add platform libraries to the main target
-    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance ${LLGUIDANCE_PLATFORM_LIBS})
-endif ()
-
-target_link_libraries(${TARGET} PRIVATE ${LLAMA_COMMON_EXTRA_LIBS} PUBLIC llama Threads::Threads)
-
-
-#
-# copy the license files
-#
-
-# Check if running in GitHub Actions
-if (DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
-    message(STATUS "Running inside GitHub Actions - copying license files")
-
-    # Copy all files from licenses/ to build/bin/
-    file(GLOB LICENSE_FILES "${CMAKE_SOURCE_DIR}/licenses/*")
-    foreach(LICENSE_FILE ${LICENSE_FILES})
-        get_filename_component(FILENAME ${LICENSE_FILE} NAME)
-        add_custom_command(
-            POST_BUILD
-            TARGET ${TARGET}
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${LICENSE_FILE}"
-                "$<TARGET_FILE_DIR:llama>/${FILENAME}"
-            COMMENT "Copying ${FILENAME} to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-        message(STATUS "Copying ${LICENSE_FILE} to ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${FILENAME}")
-    endforeach()
+    target_link_libraries(${TARGET} PRIVATE llguidance)
+    if (WIN32)
+        target_link_libraries(${TARGET} PRIVATE ws2_32 userenv ntdll bcrypt)
+    endif()
 endif()
+
+target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)

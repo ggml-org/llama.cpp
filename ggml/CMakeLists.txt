@@ -1,10 +1,10 @@
-cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
 project("ggml" C CXX ASM)
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
 set(GGML_VERSION_MINOR 9)
-set(GGML_VERSION_PATCH 4)
+set(GGML_VERSION_PATCH 7)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
 find_program(GIT_EXE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
@@ -228,6 +228,8 @@ option(GGML_WEBGPU_CPU_PROFILE              "ggml: enable WebGPU profiling (CPU)
 option(GGML_WEBGPU_GPU_PROFILE              "ggml: enable WebGPU profiling (GPU)"             OFF)
 option(GGML_WEBGPU_JSPI                     "ggml: use JSPI for WebGPU"                       ON)
 option(GGML_ZDNN                            "ggml: use zDNN"                                  OFF)
+option(GGML_VIRTGPU                         "ggml: use the VirtGPU/Virglrenderer API Remoting frontend"     OFF)
+option(GGML_VIRTGPU_BACKEND                 "ggml: build the VirtGPU/Virglrenderer API Remoting backend"    OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
 option(GGML_METAL_SHADER_DEBUG              "ggml: compile Metal with -fno-fast-math"         OFF)
@@ -320,6 +322,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-opt.h
     include/ggml-metal.h
     include/ggml-rpc.h
+    include/ggml-virtgpu.h
     include/ggml-sycl.h
     include/ggml-vulkan.h
     include/ggml-webgpu.h
@@ -430,10 +433,22 @@ if (MSVC)
     configure_msvc_target(ggml-cpu-x64)
     configure_msvc_target(ggml-cpu-sse42)
     configure_msvc_target(ggml-cpu-sandybridge)
+    # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+    # skipping            ggml-cpu-ivybridge
+    # skipping            ggml-cpu-piledriver
     configure_msvc_target(ggml-cpu-haswell)
     configure_msvc_target(ggml-cpu-skylakex)
+    configure_msvc_target(ggml-cpu-cannonlake)
+    configure_msvc_target(ggml-cpu-cascadelake)
     configure_msvc_target(ggml-cpu-icelake)
+    # MSVC 2022 doesn't support BF16 intrinsics without `/arch:AVX10.1` ?!
+    # https://learn.microsoft.com/en-us/cpp/intrinsics/x64-amd64-intrinsics-list?view=msvc-170
+    # https://learn.microsoft.com/en-us/cpp/build/reference/arch-x64?view=msvc-170
+    # skipping            ggml-cpu-cooperlake
+    # skipping            ggml-cpu-zen4
     configure_msvc_target(ggml-cpu-alderlake)
+    # MSVC doesn't support AMX
+    # skipping            ggml-cpu-sapphirerapids
 
     if (GGML_BUILD_EXAMPLES)
         configure_msvc_target(common-ggml)

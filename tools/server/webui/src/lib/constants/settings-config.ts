@@ -1,13 +1,16 @@
+import { ColorMode } from '$lib/enums/ui';
+import { Monitor, Moon, Sun } from '@lucide/svelte';
+
 export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	systemMessage: '',
 	showSystemMessage: true,
-	theme: 'system',
+	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
-	showToolCalls: false,
-	disableReasoningFormat: false,
+	disableReasoningParsing: false,
+	showRawOutputSwitch: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
@@ -21,6 +24,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	autoMicOnEmpty: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
+	backend_sampling: false,
 	temperature: 0.8,
 	dynatemp_range: 0.0,
 	dynatemp_exponent: 1.0,
@@ -57,6 +61,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
 	samplers:
 		'The order at which samplers are applied, in simplified way. Default is "top_k;typ_p;top_p;min_p;temperature": top_k->typ_p->top_p->min_p->temperature',
+	backend_sampling:
+		'Enable backend-based samplers. When enabled, supported samplers run on the accelerator backend for faster sampling.',
 	temperature:
 		'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
 	dynatemp_range:
@@ -87,10 +93,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	showToolCalls:
-		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
-	disableReasoningFormat:
-		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
+	disableReasoningParsing:
+		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
+	showRawOutputSwitch:
+		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
@@ -112,3 +118,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	enableContinueGeneration:
 		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
 };
+
+export const SETTINGS_COLOR_MODES_CONFIG = [
+	{ value: ColorMode.SYSTEM, label: 'System', icon: Monitor },
+	{ value: ColorMode.LIGHT, label: 'Light', icon: Sun },
+	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
+];

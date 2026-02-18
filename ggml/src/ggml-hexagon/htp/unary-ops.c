@@ -2,28 +2,20 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
-
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <HAP_ps.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
-#include <qurt_thread.h>
 #include <string.h>
+
+#include "hex-dma.h"
+#include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "hvx-utils.h"
-#include "ops-utils.h"
 
 #define htp_unary_preamble            \
     const uint32_t ne00 = src->ne[0]; \
@@ -55,7 +47,7 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
     HVX_Vector sum_v     = Q6_V_vsplat_R(0x00000000);
-    HVX_Vector epsilon_v = hvx_vec_splat_fp32(epsilon);
+    HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
 
     int step_of_1 = num_elems >> 5;
     #pragma unroll(4)
@@ -65,21 +57,46 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
         sum_v         = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
     }
 
-    HVX_Vector reduced_sum = hvx_vec_qf32_reduce_sum(sum_v);
-    sum_v                  = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(reduced_sum));
+    HVX_Vector reduced_sum = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    sum_v                  = hvx_vec_repl4(reduced_sum);
 
-    HVX_Vector t_v            = hvx_vec_splat_fp32((float) num_elems);
-    HVX_Vector denom_v        = hvx_vec_inverse_fp32(t_v);
+    HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
+    HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
     HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
     HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
 
-    HVX_Vector scale_v = hvx_vec_rsqrt_fp32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, scale_v);
         v_dst[i]      = Q6_Vsf_equals_Vqf32(v2);
+    }
+}
+
+static void scale_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+    float scale = 0.f;
+    float bias  = 0.f;
+    memcpy(&scale, &op_params[0], sizeof(float));
+    memcpy(&bias,  &op_params[1], sizeof(float));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
+        }
+
+        hvx_scale_offset_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
     }
 }
 
@@ -99,7 +116,7 @@ static void rms_norm_htp_f32(const float * restrict src,
         float * restrict dst_local       = dst + (ir * row_elems);
 
         if (ir + 1 < num_rows) {
-            htp_l2fetch(src_local + row_elems, 1, row_size, row_size);
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
         }
 
         if (1 == opt_path) {
@@ -110,7 +127,57 @@ static void rms_norm_htp_f32(const float * restrict src,
             const float mean  = sum / row_elems;
             const float scale = 1.0f / sqrtf(mean + epsilon);
 
-            hvx_scale_f32((const uint8_t *) src_local, (uint8_t *) dst_local, row_elems, scale);
+            hvx_scale_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale);
+        }
+    }
+}
+
+static void sqr_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
+        }
+
+        if (1 == opt_path) {
+            hvx_sqr_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        } else {
+            hvx_sqr_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        }
+    }
+}
+
+static void sqrt_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            hex_l2fetch(src_local + row_elems, row_size, row_size, 1);
+        }
+
+        if (1 == opt_path) {
+            hvx_sqrt_f32_aa((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
+        } else {
+            hvx_sqrt_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems);
         }
     }
 }
@@ -143,9 +210,8 @@ static void unary_job_f32_per_thread(const struct htp_tensor * src,
 
     int is_aligned = 1;
     int opt_path   = 0;
-    if ((0 == htp_is_aligned((void *) src->data, VLEN)) || (0 == htp_is_aligned((void *) dst->data, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src->data, VLEN)) || (0 == hex_is_aligned((void *) dst->data, VLEN))) {
         is_aligned = 0;
-        FARF(HIGH, "unary-f32: unaligned addresses in unary op, possibly slower execution\n");
     }
     if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
         opt_path = 1;
@@ -161,6 +227,15 @@ static void unary_job_f32_per_thread(const struct htp_tensor * src,
     switch (htp_op) {
         case HTP_OP_RMS_NORM:
             rms_norm_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
+        case HTP_OP_SCALE:
+            scale_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
+        case HTP_OP_SQR:
+            sqr_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
+        case HTP_OP_SQRT:
+            sqrt_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
             break;
 
         default:
@@ -195,6 +270,18 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
             unary_op_func = unary_job_dispatcher_f32;
             op_type       = "rmsnorm-f32";
             break;
+        case HTP_OP_SCALE:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "scale-f32";
+            break;
+        case HTP_OP_SQR:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "sqr-f32";
+            break;
+        case HTP_OP_SQRT:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "sqrt-f32";
+            break;
 
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
@@ -208,8 +295,8 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
     const size_t dst_row_size  = dst->nb[1];
 
     // VTCM scratchpads for all tensors
-    octx->dst_spad.size  = htp_round_up(dst_row_size, 128) * n_threads;
-    octx->src0_spad.size = htp_round_up(src0_row_size, 128) * n_threads;
+    octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
+    octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
 
     size_t spad_size = octx->src0_spad.size + octx->dst_spad.size;
 

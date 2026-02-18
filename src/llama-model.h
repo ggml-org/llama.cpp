@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct llama_cparams;
@@ -117,13 +118,19 @@ enum llm_type {
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
+    LLM_TYPE_35B_A3B, // Qwen3.5
+    LLM_TYPE_48B_A3B, // Kimi Linear
     LLM_TYPE_80B_A3B, // Qwen3 Next
     LLM_TYPE_100B_A6B,
+    LLM_TYPE_102B_A12B, // Solar-Open
     LLM_TYPE_106B_A12B, // GLM-4.5-Air
+    LLM_TYPE_196B_A11B, // Step3.5-Flash
     LLM_TYPE_230B_A10B, // Minimax M2
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
+    LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
     LLM_TYPE_355B_A32B, // GLM-4.5
+    LLM_TYPE_744B_A40B, // GLM-5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
@@ -317,6 +324,9 @@ struct llama_layer {
     // qwen3next
     struct ggml_tensor * ssm_beta_alpha = nullptr;
 
+    // qwen3.5
+    struct ggml_tensor * ssm_alpha = nullptr;
+
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;
     struct ggml_tensor * time_mix_w2         = nullptr;
@@ -408,6 +418,25 @@ struct llama_layer {
     struct ggml_tensor * ffn_act_beta    = nullptr;
     struct ggml_tensor * ffn_act_eps     = nullptr;
 
+    // Kimi Linear KDA (using ssm_ prefix for consistency)
+    // Note: ssm_dt_b already exists above (mamba bias), reused for Kimi dt_bias
+    struct ggml_tensor * ssm_q_conv = nullptr;
+    struct ggml_tensor * ssm_k_conv = nullptr;
+    struct ggml_tensor * ssm_v_conv = nullptr;
+    struct ggml_tensor * ssm_f_a    = nullptr;
+    struct ggml_tensor * ssm_f_b    = nullptr;
+    struct ggml_tensor * ssm_beta   = nullptr;
+    struct ggml_tensor * ssm_g_a    = nullptr;
+    struct ggml_tensor * ssm_g_b    = nullptr;
+    struct ggml_tensor * ssm_o_norm = nullptr;
+
+    // DSA (deepseek sparse attention)
+    struct ggml_tensor * indexer_k_norm   = nullptr;
+    struct ggml_tensor * indexer_k_norm_b = nullptr;
+    struct ggml_tensor * indexer_proj     = nullptr;
+    struct ggml_tensor * indexer_attn_k   = nullptr;
+    struct ggml_tensor * indexer_attn_q_b = nullptr; // note: for lora a/b, not bias
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -466,8 +495,6 @@ struct llama_model {
     struct ggml_tensor * dense_2_out_layers = nullptr;
     struct ggml_tensor * dense_3_out_layers = nullptr;
 
-    llama_model_params params;
-
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
@@ -476,6 +503,9 @@ struct llama_model {
 
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
+
+    // for keeping track of associated LoRA adapters
+    std::unordered_set<llama_adapter_lora *> loras;
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
@@ -497,6 +527,9 @@ struct llama_model {
     size_t size() const; // file size
     size_t n_tensors() const;
     size_t n_devices() const;
+
+    uint32_t n_gpu_layers() const;
+    llama_split_mode split_mode() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
@@ -526,6 +559,8 @@ struct llama_model {
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
 private:
+    llama_model_params params;
+
     struct impl;
     std::unique_ptr<impl> pimpl;
 };

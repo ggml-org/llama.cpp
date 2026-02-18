@@ -1,15 +1,15 @@
 [versions]
 
 # Plugins
-agp = "8.13.0"
-kotlin = "2.2.20"
+agp = "8.13.2"
+kotlin = "2.3.0"
 
 # AndroidX
-activity = "1.11.0"
+activity = "1.12.2"
 appcompat = "1.7.1"
 core-ktx = "1.17.0"
 constraint-layout = "2.2.1"
-datastore-preferences = "1.1.7"
+datastore-preferences = "1.2.0"
 
 # Material
 material = "1.13.0"

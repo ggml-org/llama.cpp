@@ -4,15 +4,17 @@
 #include "htp-ctx.h"
 #include "htp-msg.h"
 #include "worker-pool.h"
-#include "ops-utils.h"
 
 #include <assert.h>
 #include <stdint.h>
+
+#include <hex-fastdiv.h>
 
 // ggml-common.h must be included prior to this header
 
 struct htp_spad {
     uint8_t * data;
+    size_t    stride;
     size_t    size;
     size_t    size_per_thread;
 };
@@ -26,11 +28,14 @@ struct htp_ops_context {
     struct htp_tensor src0;
     struct htp_tensor src1;
     struct htp_tensor src2;
+    struct htp_tensor src3;
+    struct htp_tensor src4;
     struct htp_tensor dst;
 
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
     struct htp_spad src2_spad;
+    struct htp_spad src3_spad;
     struct htp_spad dst_spad;
 
     worker_pool_context_t * wpool;      // worker pool
@@ -49,6 +54,22 @@ struct htp_ops_context {
     struct fastdiv_values src1_div3;  // fastdiv values for ne3
     struct fastdiv_values src1_div21; // fastdiv values for ne2 * ne1
 
+    struct fastdiv_values src3_div1;  // fastdiv values for ne1
+    struct fastdiv_values src3_div2;  // fastdiv values for ne2
+    struct fastdiv_values src3_div3;  // fastdiv values for ne3
+    struct fastdiv_values src3_div21; // fastdiv values for ne2 * ne1
+
+    struct fastdiv_values broadcast_rk2;
+    struct fastdiv_values broadcast_rk3;
+    struct fastdiv_values broadcast_rv2;
+    struct fastdiv_values broadcast_rv3;
+
+    struct fastdiv_values set_rows_div_ne12; // fastdiv values for ne12
+    struct fastdiv_values set_rows_div_ne11; // fastdiv values for ne11
+
+    struct fastdiv_values get_rows_div_ne10;      // fastdiv values for ne10
+    struct fastdiv_values get_rows_div_ne10_ne11; // fastdiv values for ne10 * ne11
+
     uint32_t flags;
 };
 
@@ -56,9 +77,15 @@ int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
+int op_sum_rows(struct htp_ops_context * octx);
 int op_activations(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
 int op_rope(struct htp_ops_context * octx);
+int op_flash_attn_ext(struct htp_ops_context * octx);
+int op_set_rows(struct htp_ops_context * octx);
+int op_get_rows(struct htp_ops_context * octx);
+int op_cpy(struct htp_ops_context * octx);
+int op_argsort(struct htp_ops_context * octx);
 
 #endif /* HTP_OPS_H */

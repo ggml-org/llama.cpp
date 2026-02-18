@@ -1,15 +1,15 @@
 //
 //  httplib.h
 //
-//  Copyright (c) 2025 Yuji Hirose. All rights reserved.
+//  Copyright (c) 2026 Yuji Hirose. All rights reserved.
 //  MIT License
 //
 
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.28.0"
-#define CPPHTTPLIB_VERSION_NUM "0x001C00"
+#define CPPHTTPLIB_VERSION "0.32.0"
+#define CPPHTTPLIB_VERSION_NUM "0x002000"
 
 /*
  * Platform compatibility check
@@ -98,6 +98,22 @@
 #define CPPHTTPLIB_CLIENT_MAX_TIMEOUT_MSECOND 0
 #endif
 
+#ifndef CPPHTTPLIB_EXPECT_100_THRESHOLD
+#define CPPHTTPLIB_EXPECT_100_THRESHOLD 1024
+#endif
+
+#ifndef CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND
+#define CPPHTTPLIB_EXPECT_100_TIMEOUT_MSECOND 1000
+#endif
+
+#ifndef CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_THRESHOLD
+#define CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_THRESHOLD (1024 * 1024)
+#endif
+
+#ifndef CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_TIMEOUT_MSECOND
+#define CPPHTTPLIB_WAIT_EARLY_SERVER_RESPONSE_TIMEOUT_MSECOND 50
+#endif
+
 #ifndef CPPHTTPLIB_IDLE_INTERVAL_SECOND
 #define CPPHTTPLIB_IDLE_INTERVAL_SECOND 0
 #endif
@@ -131,7 +147,7 @@
 #endif
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
-#define CPPHTTPLIB_PAYLOAD_MAX_LENGTH ((std::numeric_limits<size_t>::max)())
+#define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
 #endif
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
@@ -205,7 +221,10 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+#ifndef _SSIZE_T_DEFINED
 using ssize_t = __int64;
+#define _SSIZE_T_DEFINED
+#endif
 #endif // _MSC_VER
 
 #ifndef S_ISREG
@@ -283,8 +302,10 @@ using socket_t = int;
 #include <atomic>
 #include <cassert>
 #include <cctype>
+#include <chrono>
 #include <climits>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <errno.h>
 #include <exception>
@@ -302,6 +323,7 @@ using socket_t = int;
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -360,6 +382,45 @@ using socket_t = int;
 #endif
 
 #endif // CPPHTTPLIB_OPENSSL_SUPPORT
+
+#ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/error.h>
+#include <mbedtls/md5.h>
+#include <mbedtls/net_sockets.h>
+#include <mbedtls/oid.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/sha1.h>
+#include <mbedtls/sha256.h>
+#include <mbedtls/sha512.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/x509_crt.h>
+#ifdef _WIN32
+#include <wincrypt.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "crypt32.lib")
+#endif
+#endif // _WIN32
+#if defined(CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN)
+#if TARGET_OS_MAC
+#include <Security/Security.h>
+#endif
+#endif // CPPHTTPLIB_USE_CERTS_FROM_MACOSX_KEYCHAIN
+
+// Mbed TLS 3.x API compatibility
+#if MBEDTLS_VERSION_MAJOR >= 3
+#define CPPHTTPLIB_MBEDTLS_V3
+#endif
+
+#endif // CPPHTTPLIB_MBEDTLS_SUPPORT
+
+// Define CPPHTTPLIB_SSL_ENABLED if any SSL backend is available
+// This simplifies conditional compilation when adding new backends (e.g.,
+// wolfSSL)
+#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) || defined(CPPHTTPLIB_MBEDTLS_SUPPORT)
+#define CPPHTTPLIB_SSL_ENABLED
+#endif
 
 #ifdef CPPHTTPLIB_ZLIB_SUPPORT
 #include <zlib.h>
@@ -490,6 +551,69 @@ private:
   std::function<void(void)> exit_function;
   bool execute_on_destruction;
 };
+
+// Simple from_chars implementation for integer and double types (C++17
+// substitute)
+template <typename T> struct from_chars_result {
+  const char *ptr;
+  std::errc ec;
+};
+
+template <typename T>
+inline from_chars_result<T> from_chars(const char *first, const char *last,
+                                       T &value, int base = 10) {
+  value = 0;
+  const char *p = first;
+  bool negative = false;
+
+  if (p != last && *p == '-') {
+    negative = true;
+    ++p;
+  }
+  if (p == last) { return {first, std::errc::invalid_argument}; }
+
+  T result = 0;
+  for (; p != last; ++p) {
+    char c = *p;
+    int digit = -1;
+    if ('0' <= c && c <= '9') {
+      digit = c - '0';
+    } else if ('a' <= c && c <= 'z') {
+      digit = c - 'a' + 10;
+    } else if ('A' <= c && c <= 'Z') {
+      digit = c - 'A' + 10;
+    } else {
+      break;
+    }
+
+    if (digit < 0 || digit >= base) { break; }
+    if (result > ((std::numeric_limits<T>::max)() - digit) / base) {
+      return {p, std::errc::result_out_of_range};
+    }
+    result = result * base + digit;
+  }
+
+  if (p == first || (negative && p == first + 1)) {
+    return {first, std::errc::invalid_argument};
+  }
+
+  value = negative ? -result : result;
+  return {p, std::errc{}};
+}
+
+// from_chars for double (simple wrapper for strtod)
+inline from_chars_result<double> from_chars(const char *first, const char *last,
+                                            double &value) {
+  std::string s(first, last);
+  char *endptr = nullptr;
+  errno = 0;
+  value = std::strtod(s.c_str(), &endptr);
+  if (endptr == s.c_str()) { return {first, std::errc::invalid_argument}; }
+  if (errno == ERANGE) {
+    return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
+  }
+  return {first + (endptr - s.c_str()), std::errc{}};
+}
 
 } // namespace detail
 
@@ -714,6 +838,105 @@ public:
 using Range = std::pair<ssize_t, ssize_t>;
 using Ranges = std::vector<Range>;
 
+#ifdef CPPHTTPLIB_SSL_ENABLED
+// TLS abstraction layer - public type definitions and API
+namespace tls {
+
+// Opaque handles (defined as void* for abstraction)
+using ctx_t = void *;
+using session_t = void *;
+using const_session_t = const void *; // For read-only session access
+using cert_t = void *;
+using ca_store_t = void *;
+
+// TLS versions
+enum class Version {
+  TLS1_2 = 0x0303,
+  TLS1_3 = 0x0304,
+};
+
+// Subject Alternative Names (SAN) entry types
+enum class SanType { DNS, IP, EMAIL, URI, OTHER };
+
+// SAN entry structure
+struct SanEntry {
+  SanType type;
+  std::string value;
+};
+
+// Verification context for certificate verification callback
+struct VerifyContext {
+  session_t session;        // TLS session handle
+  cert_t cert;              // Current certificate being verified
+  int depth;                // Certificate chain depth (0 = leaf)
+  bool preverify_ok;        // OpenSSL/Mbed TLS pre-verification result
+  long error_code;          // Backend-specific error code (0 = no error)
+  const char *error_string; // Human-readable error description
+
+  // Certificate introspection methods
+  std::string subject_cn() const;
+  std::string issuer_name() const;
+  bool check_hostname(const char *hostname) const;
+  std::vector<SanEntry> sans() const;
+  bool validity(time_t &not_before, time_t &not_after) const;
+  std::string serial() const;
+};
+
+using VerifyCallback = std::function<bool(const VerifyContext &ctx)>;
+
+// TlsError codes for TLS operations (backend-independent)
+enum class ErrorCode : int {
+  Success = 0,
+  WantRead,         // Non-blocking: need to wait for read
+  WantWrite,        // Non-blocking: need to wait for write
+  PeerClosed,       // Peer closed the connection
+  Fatal,            // Unrecoverable error
+  SyscallError,     // System call error (check sys_errno)
+  CertVerifyFailed, // Certificate verification failed
+  HostnameMismatch, // Hostname verification failed
+};
+
+// TLS error information
+struct TlsError {
+  ErrorCode code = ErrorCode::Fatal;
+  uint64_t backend_code = 0; // OpenSSL: ERR_get_error(), mbedTLS: return value
+  int sys_errno = 0;         // errno when SyscallError
+
+  // Convert verification error code to human-readable string
+  static std::string verify_error_to_string(long error_code);
+};
+
+// RAII wrapper for peer certificate
+class PeerCert {
+public:
+  PeerCert();
+  PeerCert(PeerCert &&other) noexcept;
+  PeerCert &operator=(PeerCert &&other) noexcept;
+  ~PeerCert();
+
+  PeerCert(const PeerCert &) = delete;
+  PeerCert &operator=(const PeerCert &) = delete;
+
+  explicit operator bool() const;
+  std::string subject_cn() const;
+  std::string issuer_name() const;
+  bool check_hostname(const char *hostname) const;
+  std::vector<SanEntry> sans() const;
+  bool validity(time_t &not_before, time_t &not_after) const;
+  std::string serial() const;
+
+private:
+  explicit PeerCert(cert_t cert);
+  cert_t cert_ = nullptr;
+  friend PeerCert get_peer_cert_from_session(const_session_t session);
+};
+
+// Callback for TLS context setup (used by SSLServer constructor)
+using ContextSetupCallback = std::function<bool(ctx_t ctx)>;
+
+} // namespace tls
+#endif
+
 struct Request {
   std::string method;
   std::string path;
@@ -743,9 +966,6 @@ struct Request {
   ContentReceiverWithProgress content_receiver;
   DownloadProgress download_progress;
   UploadProgress upload_progress;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  const SSL *ssl = nullptr;
-#endif
 
   bool has_header(const std::string &key) const;
   std::string get_header_value(const std::string &key, const char *def = "",
@@ -773,6 +993,12 @@ struct Request {
   size_t authorization_count_ = 0;
   std::chrono::time_point<std::chrono::steady_clock> start_time_ =
       (std::chrono::steady_clock::time_point::min)();
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  tls::const_session_t ssl = nullptr;
+  tls::PeerCert peer_cert() const;
+  std::string sni() const;
+#endif
 };
 
 struct Response {
@@ -838,6 +1064,50 @@ struct Response {
   std::string file_content_content_type_;
 };
 
+enum class Error {
+  Success = 0,
+  Unknown,
+  Connection,
+  BindIPAddress,
+  Read,
+  Write,
+  ExceedRedirectCount,
+  Canceled,
+  SSLConnection,
+  SSLLoadingCerts,
+  SSLServerVerification,
+  SSLServerHostnameVerification,
+  UnsupportedMultipartBoundaryChars,
+  Compression,
+  ConnectionTimeout,
+  ProxyConnection,
+  ConnectionClosed,
+  Timeout,
+  ResourceExhaustion,
+  TooManyFormDataFiles,
+  ExceedMaxPayloadSize,
+  ExceedUriMaxLength,
+  ExceedMaxSocketDescriptorCount,
+  InvalidRequestLine,
+  InvalidHTTPMethod,
+  InvalidHTTPVersion,
+  InvalidHeaders,
+  MultipartParsing,
+  OpenFile,
+  Listen,
+  GetSockName,
+  UnsupportedAddressFamily,
+  HTTPParsing,
+  InvalidRangeHeader,
+
+  // For internal use only
+  SSLPeerCouldBeClosed_,
+};
+
+std::string to_string(Error error);
+
+std::ostream &operator<<(std::ostream &os, const Error &obj);
+
 class Stream {
 public:
   virtual ~Stream() = default;
@@ -856,6 +1126,11 @@ public:
 
   ssize_t write(const char *ptr);
   ssize_t write(const std::string &s);
+
+  Error get_error() const { return error_; }
+
+protected:
+  Error error_ = Error::Success;
 };
 
 class TaskQueue {
@@ -871,73 +1146,18 @@ public:
 
 class ThreadPool final : public TaskQueue {
 public:
-  explicit ThreadPool(size_t n, size_t mqr = 0)
-      : shutdown_(false), max_queued_requests_(mqr) {
-    while (n) {
-      threads_.emplace_back(worker(*this));
-      n--;
-    }
-  }
-
+  explicit ThreadPool(size_t n, size_t mqr = 0);
   ThreadPool(const ThreadPool &) = delete;
   ~ThreadPool() override = default;
 
-  bool enqueue(std::function<void()> fn) override {
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (max_queued_requests_ > 0 && jobs_.size() >= max_queued_requests_) {
-        return false;
-      }
-      jobs_.push_back(std::move(fn));
-    }
-
-    cond_.notify_one();
-    return true;
-  }
-
-  void shutdown() override {
-    // Stop all worker threads...
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      shutdown_ = true;
-    }
-
-    cond_.notify_all();
-
-    // Join...
-    for (auto &t : threads_) {
-      t.join();
-    }
-  }
+  bool enqueue(std::function<void()> fn) override;
+  void shutdown() override;
 
 private:
   struct worker {
-    explicit worker(ThreadPool &pool) : pool_(pool) {}
+    explicit worker(ThreadPool &pool);
 
-    void operator()() {
-      for (;;) {
-        std::function<void()> fn;
-        {
-          std::unique_lock<std::mutex> lock(pool_.mutex_);
-
-          pool_.cond_.wait(
-              lock, [&] { return !pool_.jobs_.empty() || pool_.shutdown_; });
-
-          if (pool_.shutdown_ && pool_.jobs_.empty()) { break; }
-
-          fn = pool_.jobs_.front();
-          pool_.jobs_.pop_front();
-        }
-
-        assert(true == static_cast<bool>(fn));
-        fn();
-      }
-
-#if defined(CPPHTTPLIB_OPENSSL_SUPPORT) && !defined(OPENSSL_IS_BORINGSSL) &&   \
-    !defined(LIBRESSL_VERSION_NUMBER)
-      OPENSSL_thread_stop();
-#endif
-    }
+    void operator()();
 
     ThreadPool &pool_;
   };
@@ -961,19 +1181,13 @@ using ErrorLogger = std::function<void(const Error &, const Request *)>;
 
 using SocketOptions = std::function<void(socket_t sock)>;
 
-namespace detail {
-
-bool set_socket_opt_impl(socket_t sock, int level, int optname,
-                         const void *optval, socklen_t optlen);
-bool set_socket_opt(socket_t sock, int level, int optname, int opt);
-bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
-                         time_t usec);
-
-} // namespace detail
-
 void default_socket_options(socket_t sock);
 
 const char *status_message(int status);
+
+std::string to_string(Error error);
+
+std::ostream &operator<<(std::ostream &os, const Error &obj);
 
 std::string get_bearer_token_auth(const Request &req);
 
@@ -981,7 +1195,7 @@ namespace detail {
 
 class MatcherBase {
 public:
-  MatcherBase(std::string pattern) : pattern_(pattern) {}
+  MatcherBase(std::string pattern) : pattern_(std::move(pattern)) {}
   virtual ~MatcherBase() = default;
 
   const std::string &pattern() const { return pattern_; }
@@ -1051,10 +1265,12 @@ private:
   std::regex regex_;
 };
 
+int close_socket(socket_t sock);
+
 ssize_t write_headers(Stream &strm, const Headers &headers);
 
-std::string make_host_and_port_string(const std::string &host, int port,
-                                      bool is_ssl);
+bool set_socket_opt_time(socket_t sock, int level, int optname, time_t sec,
+                         time_t usec);
 
 } // namespace detail
 
@@ -1206,7 +1422,11 @@ private:
   bool listen_internal();
 
   bool routing(Request &req, Response &res, Stream &strm);
-  bool handle_file_request(const Request &req, Response &res);
+  bool handle_file_request(Request &req, Response &res);
+  bool check_if_not_modified(const Request &req, Response &res,
+                             const std::string &etag, time_t mtime) const;
+  bool check_if_range(Request &req, const std::string &etag,
+                      time_t mtime) const;
   bool dispatch_request(Request &req, Response &res,
                         const Handlers &handlers) const;
   bool dispatch_request_for_content_reader(
@@ -1290,48 +1510,6 @@ private:
       detail::write_headers;
 };
 
-enum class Error {
-  Success = 0,
-  Unknown,
-  Connection,
-  BindIPAddress,
-  Read,
-  Write,
-  ExceedRedirectCount,
-  Canceled,
-  SSLConnection,
-  SSLLoadingCerts,
-  SSLServerVerification,
-  SSLServerHostnameVerification,
-  UnsupportedMultipartBoundaryChars,
-  Compression,
-  ConnectionTimeout,
-  ProxyConnection,
-  ResourceExhaustion,
-  TooManyFormDataFiles,
-  ExceedMaxPayloadSize,
-  ExceedUriMaxLength,
-  ExceedMaxSocketDescriptorCount,
-  InvalidRequestLine,
-  InvalidHTTPMethod,
-  InvalidHTTPVersion,
-  InvalidHeaders,
-  MultipartParsing,
-  OpenFile,
-  Listen,
-  GetSockName,
-  UnsupportedAddressFamily,
-  HTTPParsing,
-  InvalidRangeHeader,
-
-  // For internal use only
-  SSLPeerCouldBeClosed_,
-};
-
-std::string to_string(Error error);
-
-std::ostream &operator<<(std::ostream &os, const Error &obj);
-
 class Result {
 public:
   Result() = default;
@@ -1339,17 +1517,6 @@ public:
          Headers &&request_headers = Headers{})
       : res_(std::move(res)), err_(err),
         request_headers_(std::move(request_headers)) {}
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error)
-      : res_(std::move(res)), err_(err),
-        request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
-  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
-         int ssl_error, unsigned long ssl_openssl_error)
-      : res_(std::move(res)), err_(err),
-        request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
-        ssl_openssl_error_(ssl_openssl_error) {}
-#endif
   // Response
   operator bool() const { return res_ != nullptr; }
   bool operator==(std::nullptr_t) const { return res_ == nullptr; }
@@ -1364,13 +1531,6 @@ public:
   // Error
   Error error() const { return err_; }
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  // SSL Error
-  int ssl_error() const { return ssl_error_; }
-  // OpenSSL Error
-  unsigned long ssl_openssl_error() const { return ssl_openssl_error_; }
-#endif
-
   // Request Headers
   bool has_request_header(const std::string &key) const;
   std::string get_request_header_value(const std::string &key,
@@ -1384,11 +1544,106 @@ private:
   std::unique_ptr<Response> res_;
   Error err_ = Error::Unknown;
   Headers request_headers_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
+         int ssl_error)
+      : res_(std::move(res)), err_(err),
+        request_headers_(std::move(request_headers)), ssl_error_(ssl_error) {}
+  Result(std::unique_ptr<Response> &&res, Error err, Headers &&request_headers,
+         int ssl_error, unsigned long ssl_backend_error)
+      : res_(std::move(res)), err_(err),
+        request_headers_(std::move(request_headers)), ssl_error_(ssl_error),
+        ssl_backend_error_(ssl_backend_error) {}
+
+  int ssl_error() const { return ssl_error_; }
+  unsigned long ssl_backend_error() const { return ssl_backend_error_; }
+
+private:
   int ssl_error_ = 0;
-  unsigned long ssl_openssl_error_ = 0;
+  unsigned long ssl_backend_error_ = 0;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use ssl_backend_error() instead")]]
+  unsigned long ssl_openssl_error() const {
+    return ssl_backend_error_;
+  }
 #endif
 };
+
+struct ClientConnection {
+  socket_t sock = INVALID_SOCKET;
+
+  bool is_open() const { return sock != INVALID_SOCKET; }
+
+  ClientConnection() = default;
+
+  ~ClientConnection();
+
+  ClientConnection(const ClientConnection &) = delete;
+  ClientConnection &operator=(const ClientConnection &) = delete;
+
+  ClientConnection(ClientConnection &&other) noexcept
+      : sock(other.sock)
+#ifdef CPPHTTPLIB_SSL_ENABLED
+        ,
+        session(other.session)
+#endif
+  {
+    other.sock = INVALID_SOCKET;
+#ifdef CPPHTTPLIB_SSL_ENABLED
+    other.session = nullptr;
+#endif
+  }
+
+  ClientConnection &operator=(ClientConnection &&other) noexcept {
+    if (this != &other) {
+      sock = other.sock;
+      other.sock = INVALID_SOCKET;
+#ifdef CPPHTTPLIB_SSL_ENABLED
+      session = other.session;
+      other.session = nullptr;
+#endif
+    }
+    return *this;
+  }
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+  tls::session_t session = nullptr;
+#endif
+};
+
+namespace detail {
+
+struct ChunkedDecoder;
+
+struct BodyReader {
+  Stream *stream = nullptr;
+  bool has_content_length = false;
+  size_t content_length = 0;
+  size_t payload_max_length = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  size_t bytes_read = 0;
+  bool chunked = false;
+  bool eof = false;
+  std::unique_ptr<ChunkedDecoder> chunked_decoder;
+  Error last_error = Error::Success;
+
+  ssize_t read(char *buf, size_t len);
+  bool has_error() const { return last_error != Error::Success; }
+};
+
+inline ssize_t read_body_content(Stream *stream, BodyReader &br, char *buf,
+                                 size_t len) {
+  (void)stream;
+  return br.read(buf, len);
+}
+
+class decompressor;
+
+} // namespace detail
 
 class ClientImpl {
 public:
@@ -1403,6 +1658,44 @@ public:
   virtual ~ClientImpl();
 
   virtual bool is_valid() const;
+
+  struct StreamHandle {
+    std::unique_ptr<Response> response;
+    Error error = Error::Success;
+
+    StreamHandle() = default;
+    StreamHandle(const StreamHandle &) = delete;
+    StreamHandle &operator=(const StreamHandle &) = delete;
+    StreamHandle(StreamHandle &&) = default;
+    StreamHandle &operator=(StreamHandle &&) = default;
+    ~StreamHandle() = default;
+
+    bool is_valid() const {
+      return response != nullptr && error == Error::Success;
+    }
+
+    ssize_t read(char *buf, size_t len);
+    void parse_trailers_if_needed();
+    Error get_read_error() const { return body_reader_.last_error; }
+    bool has_read_error() const { return body_reader_.has_error(); }
+
+    bool trailers_parsed_ = false;
+
+  private:
+    friend class ClientImpl;
+
+    ssize_t read_with_decompression(char *buf, size_t len);
+
+    std::unique_ptr<ClientConnection> connection_;
+    std::unique_ptr<Stream> socket_stream_;
+    Stream *stream_ = nullptr;
+    detail::BodyReader body_reader_;
+
+    std::unique_ptr<detail::decompressor> decompressor_;
+    std::string decompress_buffer_;
+    size_t decompress_offset_ = 0;
+    size_t decompressed_bytes_read_ = 0;
+  };
 
   // clang-format off
   Result Get(const std::string &path, DownloadProgress progress = nullptr);
@@ -1497,6 +1790,15 @@ public:
   Result Options(const std::string &path, const Headers &headers);
   // clang-format on
 
+  // Streaming API: Open a stream for reading response body incrementally
+  // Socket ownership is transferred to StreamHandle for true streaming
+  // Supports all HTTP methods (GET, POST, PUT, PATCH, DELETE, etc.)
+  StreamHandle open_stream(const std::string &method, const std::string &path,
+                           const Params &params = {},
+                           const Headers &headers = {},
+                           const std::string &body = {},
+                           const std::string &content_type = {});
+
   bool send(Request &req, Response &res, Error &error);
   Result send(const Request &req);
 
@@ -1539,10 +1841,6 @@ public:
 
   void set_basic_auth(const std::string &username, const std::string &password);
   void set_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_digest_auth(const std::string &username,
-                       const std::string &password);
-#endif
 
   void set_keep_alive(bool on);
   void set_follow_location(bool on);
@@ -1553,30 +1851,14 @@ public:
 
   void set_decompress(bool on);
 
+  void set_payload_max_length(size_t length);
+
   void set_interface(const std::string &intf);
 
   void set_proxy(const std::string &host, int port);
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_proxy_digest_auth(const std::string &username,
-                             const std::string &password);
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_ca_cert_path(const std::string &ca_cert_file_path,
-                        const std::string &ca_cert_dir_path = std::string());
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
-  X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void enable_server_certificate_verification(bool enabled);
-  void enable_server_hostname_verification(bool enabled);
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-#endif
 
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
@@ -1584,14 +1866,19 @@ public:
 protected:
   struct Socket {
     socket_t sock = INVALID_SOCKET;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    SSL *ssl = nullptr;
-#endif
+
+    // For Mbed TLS compatibility: start_time for request timeout tracking
+    std::chrono::time_point<std::chrono::steady_clock> start_time_;
 
     bool is_open() const { return sock != INVALID_SOCKET; }
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+    tls::session_t ssl = nullptr;
+#endif
   };
 
   virtual bool create_and_connect_socket(Socket &socket, Error &error);
+  virtual bool ensure_socket_connection(Socket &socket, Error &error);
 
   // All of:
   //   shutdown_ssl
@@ -1618,7 +1905,6 @@ protected:
   // Socket endpoint information
   const std::string host_;
   const int port_;
-  const std::string host_and_port_;
 
   // Current open socket
   Socket socket_;
@@ -1655,10 +1941,6 @@ protected:
   std::string basic_auth_username_;
   std::string basic_auth_password_;
   std::string bearer_token_auth_token_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string digest_auth_username_;
-  std::string digest_auth_password_;
-#endif
 
   bool keep_alive_ = false;
   bool follow_location_ = false;
@@ -1673,6 +1955,9 @@ protected:
   bool compress_ = false;
   bool decompress_ = true;
 
+  size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool has_payload_max_length_ = false;
+
   std::string interface_;
 
   std::string proxy_host_;
@@ -1681,42 +1966,23 @@ protected:
   std::string proxy_basic_auth_username_;
   std::string proxy_basic_auth_password_;
   std::string proxy_bearer_token_auth_token_;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string proxy_digest_auth_username_;
-  std::string proxy_digest_auth_password_;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  std::string ca_cert_file_path_;
-  std::string ca_cert_dir_path_;
-
-  X509_STORE *ca_cert_store_ = nullptr;
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  bool server_certificate_verification_ = true;
-  bool server_hostname_verification_ = true;
-  std::function<SSLVerifierResponse(SSL *ssl)> server_certificate_verifier_;
-#endif
 
   mutable std::mutex logger_mutex_;
   Logger logger_;
   ErrorLogger error_logger_;
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  int last_ssl_error_ = 0;
-  unsigned long last_openssl_error_ = 0;
-#endif
 
 private:
   bool send_(Request &req, Response &res, Error &error);
   Result send_(Request &&req);
 
   socket_t create_client_socket(Error &error) const;
-  bool read_response_line(Stream &strm, const Request &req,
-                          Response &res) const;
+  bool read_response_line(Stream &strm, const Request &req, Response &res,
+                          bool skip_100_continue = true) const;
   bool write_request(Stream &strm, Request &req, bool close_connection,
-                     Error &error);
+                     Error &error, bool skip_body = false);
+  bool write_request_body(Stream &strm, Request &req, Error &error);
+  void prepare_default_headers(Request &r, bool for_stream,
+                               const std::string &ct);
   bool redirect(Request &req, Response &res, Error &error);
   bool create_redirect_client(const std::string &scheme,
                               const std::string &host, int port, Request &req,
@@ -1747,6 +2013,46 @@ private:
                  std::chrono::time_point<std::chrono::steady_clock> start_time,
                  std::function<bool(Stream &strm)> callback);
   virtual bool is_ssl() const;
+
+  void transfer_socket_ownership_to_handle(StreamHandle &handle);
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  void set_digest_auth(const std::string &username,
+                       const std::string &password);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
+  void set_ca_cert_path(const std::string &ca_cert_file_path,
+                        const std::string &ca_cert_dir_path = std::string());
+  void enable_server_certificate_verification(bool enabled);
+  void enable_server_hostname_verification(bool enabled);
+
+protected:
+  std::string digest_auth_username_;
+  std::string digest_auth_password_;
+  std::string proxy_digest_auth_username_;
+  std::string proxy_digest_auth_password_;
+  std::string ca_cert_file_path_;
+  std::string ca_cert_dir_path_;
+  bool server_certificate_verification_ = true;
+  bool server_hostname_verification_ = true;
+  std::string ca_cert_pem_; // Store CA cert PEM for redirect transfer
+  int last_ssl_error_ = 0;
+  unsigned long last_backend_error_ = 0;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use load_ca_cert_store() instead")]]
+  void set_ca_cert_store(X509_STORE *ca_cert_store);
+
+  [[deprecated("Use tls::create_ca_store() instead")]]
+  X509_STORE *create_ca_cert_store(const char *ca_cert, std::size_t size) const;
+
+  [[deprecated("Use set_server_certificate_verifier(VerifyCallback) instead")]]
+  virtual void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
+#endif
 };
 
 class Client {
@@ -1865,6 +2171,16 @@ public:
   Result Options(const std::string &path, const Headers &headers);
   // clang-format on
 
+  // Streaming API: Open a stream for reading response body incrementally
+  // Socket ownership is transferred to StreamHandle for true streaming
+  // Supports all HTTP methods (GET, POST, PUT, PATCH, DELETE, etc.)
+  ClientImpl::StreamHandle open_stream(const std::string &method,
+                                       const std::string &path,
+                                       const Params &params = {},
+                                       const Headers &headers = {},
+                                       const std::string &body = {},
+                                       const std::string &content_type = {});
+
   bool send(Request &req, Response &res, Error &error);
   Result send(const Request &req);
 
@@ -1906,10 +2222,6 @@ public:
 
   void set_basic_auth(const std::string &username, const std::string &password);
   void set_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_digest_auth(const std::string &username,
-                       const std::string &password);
-#endif
 
   void set_keep_alive(bool on);
   void set_follow_location(bool on);
@@ -1921,49 +2233,65 @@ public:
 
   void set_decompress(bool on);
 
+  void set_payload_max_length(size_t length);
+
   void set_interface(const std::string &intf);
 
   void set_proxy(const std::string &host, int port);
   void set_proxy_basic_auth(const std::string &username,
                             const std::string &password);
   void set_proxy_bearer_token_auth(const std::string &token);
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_proxy_digest_auth(const std::string &username,
-                             const std::string &password);
-#endif
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void enable_server_certificate_verification(bool enabled);
-  void enable_server_hostname_verification(bool enabled);
-  void set_server_certificate_verifier(
-      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
-#endif
-
   void set_logger(Logger logger);
   void set_error_logger(ErrorLogger error_logger);
-
-  // SSL
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-  void set_ca_cert_path(const std::string &ca_cert_file_path,
-                        const std::string &ca_cert_dir_path = std::string());
-
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
-  void load_ca_cert_store(const char *ca_cert, std::size_t size);
-
-  long get_openssl_verify_result() const;
-
-  SSL_CTX *ssl_context() const;
-#endif
 
 private:
   std::unique_ptr<ClientImpl> cli_;
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#ifdef CPPHTTPLIB_SSL_ENABLED
+public:
+  void set_digest_auth(const std::string &username,
+                       const std::string &password);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
+  void enable_server_certificate_verification(bool enabled);
+  void enable_server_hostname_verification(bool enabled);
+  void set_ca_cert_path(const std::string &ca_cert_file_path,
+                        const std::string &ca_cert_dir_path = std::string());
+
+  void set_ca_cert_store(tls::ca_store_t ca_cert_store);
+  void load_ca_cert_store(const char *ca_cert, std::size_t size);
+
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
+
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+
+  tls::ctx_t tls_context() const;
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  void enable_windows_certificate_verification(bool enabled);
+#endif
+
+private:
   bool is_ssl_ = false;
+#endif
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier);
+
+  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  long get_verify_result() const;
 #endif
 };
 
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+#ifdef CPPHTTPLIB_SSL_ENABLED
 class SSLServer : public Server {
 public:
   SSLServer(const char *cert_path, const char *private_key_path,
@@ -1971,32 +2299,60 @@ public:
             const char *client_ca_cert_dir_path = nullptr,
             const char *private_key_password = nullptr);
 
-  SSLServer(X509 *cert, EVP_PKEY *private_key,
-            X509_STORE *client_ca_cert_store = nullptr);
+  struct PemMemory {
+    const char *cert_pem;
+    size_t cert_pem_len;
+    const char *key_pem;
+    size_t key_pem_len;
+    const char *client_ca_pem;
+    size_t client_ca_pem_len;
+    const char *private_key_password;
+  };
+  explicit SSLServer(const PemMemory &pem);
 
-  SSLServer(
-      const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
+  // The callback receives the ctx_t handle which can be cast to the
+  // appropriate backend type (SSL_CTX* for OpenSSL,
+  // tls::impl::MbedTlsContext* for Mbed TLS)
+  explicit SSLServer(const tls::ContextSetupCallback &setup_callback);
 
   ~SSLServer() override;
 
   bool is_valid() const override;
 
-  SSL_CTX *ssl_context() const;
+  bool update_certs_pem(const char *cert_pem, const char *key_pem,
+                        const char *client_ca_pem = nullptr,
+                        const char *password = nullptr);
 
-  void update_certs(X509 *cert, EVP_PKEY *private_key,
-                    X509_STORE *client_ca_cert_store = nullptr);
+  tls::ctx_t tls_context() const { return ctx_; }
 
   int ssl_last_error() const { return last_ssl_error_; }
 
 private:
   bool process_and_close_socket(socket_t sock) override;
 
-  STACK_OF(X509_NAME) * extract_ca_names_from_x509_store(X509_STORE *store);
-
-  SSL_CTX *ctx_;
+  tls::ctx_t ctx_ = nullptr;
   std::mutex ctx_mutex_;
 
   int last_ssl_error_ = 0;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use SSLServer(PemMemory) or "
+               "SSLServer(ContextSetupCallback) instead")]]
+  SSLServer(X509 *cert, EVP_PKEY *private_key,
+            X509_STORE *client_ca_cert_store = nullptr);
+
+  [[deprecated("Use SSLServer(ContextSetupCallback) instead")]]
+  SSLServer(
+      const std::function<bool(SSL_CTX &ssl_ctx)> &setup_ssl_ctx_callback);
+
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use update_certs_pem() instead")]]
+  void update_certs(X509 *cert, EVP_PKEY *private_key,
+                    X509_STORE *client_ca_cert_store = nullptr);
+#endif
 };
 
 class SSLClient final : public ClientImpl {
@@ -2010,23 +2366,38 @@ public:
                      const std::string &client_key_path,
                      const std::string &private_key_password = std::string());
 
-  explicit SSLClient(const std::string &host, int port, X509 *client_cert,
-                     EVP_PKEY *client_key,
-                     const std::string &private_key_password = std::string());
+  struct PemMemory {
+    const char *cert_pem;
+    size_t cert_pem_len;
+    const char *key_pem;
+    size_t key_pem_len;
+    const char *private_key_password;
+  };
+  explicit SSLClient(const std::string &host, int port, const PemMemory &pem);
 
   ~SSLClient() override;
 
   bool is_valid() const override;
 
-  void set_ca_cert_store(X509_STORE *ca_cert_store);
+  void set_ca_cert_store(tls::ca_store_t ca_cert_store);
   void load_ca_cert_store(const char *ca_cert, std::size_t size);
 
-  long get_openssl_verify_result() const;
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
 
-  SSL_CTX *ssl_context() const;
+  // Post-handshake session verifier (backend-independent)
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+
+  tls::ctx_t tls_context() const { return ctx_; }
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  void enable_windows_certificate_verification(bool enabled);
+#endif
 
 private:
   bool create_and_connect_socket(Socket &socket, Error &error) override;
+  bool ensure_socket_connection(Socket &socket, Error &error) override;
   void shutdown_ssl(Socket &socket, bool shutdown_gracefully) override;
   void shutdown_ssl_impl(Socket &socket, bool shutdown_gracefully);
 
@@ -2044,26 +2415,45 @@ private:
 
   bool load_certs();
 
-  bool verify_host(X509 *server_cert) const;
-  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
-  bool verify_host_with_common_name(X509 *server_cert) const;
-  bool check_host_name(const char *pattern, size_t pattern_len) const;
-
-  SSL_CTX *ctx_;
+  tls::ctx_t ctx_ = nullptr;
   std::mutex ctx_mutex_;
   std::once_flag initialize_cert_;
 
-  std::vector<std::string> host_components_;
-
   long verify_result_ = 0;
 
-  friend class ClientImpl;
-};
+  std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+
+#if defined(_WIN32) &&                                                         \
+    !defined(CPPHTTPLIB_DISABLE_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE)
+  bool enable_windows_cert_verification_ = true;
 #endif
 
-/*
- * Implementation of template methods.
- */
+  friend class ClientImpl;
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+public:
+  [[deprecated("Use SSLClient(host, port, PemMemory) instead")]]
+  explicit SSLClient(const std::string &host, int port, X509 *client_cert,
+                     EVP_PKEY *client_key,
+                     const std::string &private_key_password = std::string());
+
+  [[deprecated("Use Result::ssl_backend_error() instead")]]
+  long get_verify_result() const;
+
+  [[deprecated("Use tls_context() instead")]]
+  SSL_CTX *ssl_context() const;
+
+  [[deprecated("Use set_session_verifier(session_t) instead")]]
+  void set_server_certificate_verifier(
+      std::function<SSLVerifierResponse(SSL *ssl)> verifier) override;
+
+private:
+  bool verify_host(X509 *server_cert) const;
+  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
+  bool verify_host_with_common_name(X509 *server_cert) const;
+#endif
+};
+#endif // CPPHTTPLIB_SSL_ENABLED
 
 namespace detail {
 
@@ -2112,142 +2502,6 @@ inline size_t get_header_value_u64(const Headers &headers,
 
 } // namespace detail
 
-inline size_t Request::get_header_value_u64(const std::string &key, size_t def,
-                                            size_t id) const {
-  return detail::get_header_value_u64(headers, key, def, id);
-}
-
-inline size_t Response::get_header_value_u64(const std::string &key, size_t def,
-                                             size_t id) const {
-  return detail::get_header_value_u64(headers, key, def, id);
-}
-
-namespace detail {
-
-inline bool set_socket_opt_impl(socket_t sock, int level, int optname,
-                                const void *optval, socklen_t optlen) {
-  return setsockopt(sock, level, optname,
-#ifdef _WIN32
-                    reinterpret_cast<const char *>(optval),
-#else
-                    optval,
-#endif
-                    optlen) == 0;
-}
-
-inline bool set_socket_opt(socket_t sock, int level, int optname, int optval) {
-  return set_socket_opt_impl(sock, level, optname, &optval, sizeof(optval));
-}
-
-inline bool set_socket_opt_time(socket_t sock, int level, int optname,
-                                time_t sec, time_t usec) {
-#ifdef _WIN32
-  auto timeout = static_cast<uint32_t>(sec * 1000 + usec / 1000);
-#else
-  timeval timeout;
-  timeout.tv_sec = static_cast<long>(sec);
-  timeout.tv_usec = static_cast<decltype(timeout.tv_usec)>(usec);
-#endif
-  return set_socket_opt_impl(sock, level, optname, &timeout, sizeof(timeout));
-}
-
-} // namespace detail
-
-inline void default_socket_options(socket_t sock) {
-  detail::set_socket_opt(sock, SOL_SOCKET,
-#ifdef SO_REUSEPORT
-                         SO_REUSEPORT,
-#else
-                         SO_REUSEADDR,
-#endif
-                         1);
-}
-
-inline const char *status_message(int status) {
-  switch (status) {
-  case StatusCode::Continue_100: return "Continue";
-  case StatusCode::SwitchingProtocol_101: return "Switching Protocol";
-  case StatusCode::Processing_102: return "Processing";
-  case StatusCode::EarlyHints_103: return "Early Hints";
-  case StatusCode::OK_200: return "OK";
-  case StatusCode::Created_201: return "Created";
-  case StatusCode::Accepted_202: return "Accepted";
-  case StatusCode::NonAuthoritativeInformation_203:
-    return "Non-Authoritative Information";
-  case StatusCode::NoContent_204: return "No Content";
-  case StatusCode::ResetContent_205: return "Reset Content";
-  case StatusCode::PartialContent_206: return "Partial Content";
-  case StatusCode::MultiStatus_207: return "Multi-Status";
-  case StatusCode::AlreadyReported_208: return "Already Reported";
-  case StatusCode::IMUsed_226: return "IM Used";
-  case StatusCode::MultipleChoices_300: return "Multiple Choices";
-  case StatusCode::MovedPermanently_301: return "Moved Permanently";
-  case StatusCode::Found_302: return "Found";
-  case StatusCode::SeeOther_303: return "See Other";
-  case StatusCode::NotModified_304: return "Not Modified";
-  case StatusCode::UseProxy_305: return "Use Proxy";
-  case StatusCode::unused_306: return "unused";
-  case StatusCode::TemporaryRedirect_307: return "Temporary Redirect";
-  case StatusCode::PermanentRedirect_308: return "Permanent Redirect";
-  case StatusCode::BadRequest_400: return "Bad Request";
-  case StatusCode::Unauthorized_401: return "Unauthorized";
-  case StatusCode::PaymentRequired_402: return "Payment Required";
-  case StatusCode::Forbidden_403: return "Forbidden";
-  case StatusCode::NotFound_404: return "Not Found";
-  case StatusCode::MethodNotAllowed_405: return "Method Not Allowed";
-  case StatusCode::NotAcceptable_406: return "Not Acceptable";
-  case StatusCode::ProxyAuthenticationRequired_407:
-    return "Proxy Authentication Required";
-  case StatusCode::RequestTimeout_408: return "Request Timeout";
-  case StatusCode::Conflict_409: return "Conflict";
-  case StatusCode::Gone_410: return "Gone";
-  case StatusCode::LengthRequired_411: return "Length Required";
-  case StatusCode::PreconditionFailed_412: return "Precondition Failed";
-  case StatusCode::PayloadTooLarge_413: return "Payload Too Large";
-  case StatusCode::UriTooLong_414: return "URI Too Long";
-  case StatusCode::UnsupportedMediaType_415: return "Unsupported Media Type";
-  case StatusCode::RangeNotSatisfiable_416: return "Range Not Satisfiable";
-  case StatusCode::ExpectationFailed_417: return "Expectation Failed";
-  case StatusCode::ImATeapot_418: return "I'm a teapot";
-  case StatusCode::MisdirectedRequest_421: return "Misdirected Request";
-  case StatusCode::UnprocessableContent_422: return "Unprocessable Content";
-  case StatusCode::Locked_423: return "Locked";
-  case StatusCode::FailedDependency_424: return "Failed Dependency";
-  case StatusCode::TooEarly_425: return "Too Early";
-  case StatusCode::UpgradeRequired_426: return "Upgrade Required";
-  case StatusCode::PreconditionRequired_428: return "Precondition Required";
-  case StatusCode::TooManyRequests_429: return "Too Many Requests";
-  case StatusCode::RequestHeaderFieldsTooLarge_431:
-    return "Request Header Fields Too Large";
-  case StatusCode::UnavailableForLegalReasons_451:
-    return "Unavailable For Legal Reasons";
-  case StatusCode::NotImplemented_501: return "Not Implemented";
-  case StatusCode::BadGateway_502: return "Bad Gateway";
-  case StatusCode::ServiceUnavailable_503: return "Service Unavailable";
-  case StatusCode::GatewayTimeout_504: return "Gateway Timeout";
-  case StatusCode::HttpVersionNotSupported_505:
-    return "HTTP Version Not Supported";
-  case StatusCode::VariantAlsoNegotiates_506: return "Variant Also Negotiates";
-  case StatusCode::InsufficientStorage_507: return "Insufficient Storage";
-  case StatusCode::LoopDetected_508: return "Loop Detected";
-  case StatusCode::NotExtended_510: return "Not Extended";
-  case StatusCode::NetworkAuthenticationRequired_511:
-    return "Network Authentication Required";
-
-  default:
-  case StatusCode::InternalServerError_500: return "Internal Server Error";
-  }
-}
-
-inline std::string get_bearer_token_auth(const Request &req) {
-  if (req.has_header("Authorization")) {
-    constexpr auto bearer_header_prefix_len = detail::str_len("Bearer ");
-    return req.get_header_value("Authorization")
-        .substr(bearer_header_prefix_len);
-  }
-  return "";
-}
-
 template <class Rep, class Period>
 inline Server &
 Server::set_read_timeout(const std::chrono::duration<Rep, Period> &duration) {
@@ -2270,61 +2524,6 @@ Server::set_idle_interval(const std::chrono::duration<Rep, Period> &duration) {
   detail::duration_to_sec_and_usec(
       duration, [&](time_t sec, time_t usec) { set_idle_interval(sec, usec); });
   return *this;
-}
-
-inline std::string to_string(const Error error) {
-  switch (error) {
-  case Error::Success: return "Success (no error)";
-  case Error::Unknown: return "Unknown";
-  case Error::Connection: return "Could not establish connection";
-  case Error::BindIPAddress: return "Failed to bind IP address";
-  case Error::Read: return "Failed to read connection";
-  case Error::Write: return "Failed to write connection";
-  case Error::ExceedRedirectCount: return "Maximum redirect count exceeded";
-  case Error::Canceled: return "Connection handling canceled";
-  case Error::SSLConnection: return "SSL connection failed";
-  case Error::SSLLoadingCerts: return "SSL certificate loading failed";
-  case Error::SSLServerVerification: return "SSL server verification failed";
-  case Error::SSLServerHostnameVerification:
-    return "SSL server hostname verification failed";
-  case Error::UnsupportedMultipartBoundaryChars:
-    return "Unsupported HTTP multipart boundary characters";
-  case Error::Compression: return "Compression failed";
-  case Error::ConnectionTimeout: return "Connection timed out";
-  case Error::ProxyConnection: return "Proxy connection failed";
-  case Error::ResourceExhaustion: return "Resource exhaustion";
-  case Error::TooManyFormDataFiles: return "Too many form data files";
-  case Error::ExceedMaxPayloadSize: return "Exceeded maximum payload size";
-  case Error::ExceedUriMaxLength: return "Exceeded maximum URI length";
-  case Error::ExceedMaxSocketDescriptorCount:
-    return "Exceeded maximum socket descriptor count";
-  case Error::InvalidRequestLine: return "Invalid request line";
-  case Error::InvalidHTTPMethod: return "Invalid HTTP method";
-  case Error::InvalidHTTPVersion: return "Invalid HTTP version";
-  case Error::InvalidHeaders: return "Invalid headers";
-  case Error::MultipartParsing: return "Multipart parsing failed";
-  case Error::OpenFile: return "Failed to open file";
-  case Error::Listen: return "Failed to listen on socket";
-  case Error::GetSockName: return "Failed to get socket name";
-  case Error::UnsupportedAddressFamily: return "Unsupported address family";
-  case Error::HTTPParsing: return "HTTP parsing failed";
-  case Error::InvalidRangeHeader: return "Invalid Range header";
-  default: break;
-  }
-
-  return "Invalid";
-}
-
-inline std::ostream &operator<<(std::ostream &os, const Error &obj) {
-  os << to_string(obj);
-  os << " (" << static_cast<std::underlying_type<Error>::type>(obj) << ')';
-  return os;
-}
-
-inline size_t Result::get_request_header_value_u64(const std::string &key,
-                                                   size_t def,
-                                                   size_t id) const {
-  return detail::get_header_value_u64(request_headers_, key, def, id);
 }
 
 template <class Rep, class Period>
@@ -2421,16 +2620,20 @@ namespace detail {
 
 #if defined(_WIN32)
 inline std::wstring u8string_to_wstring(const char *s) {
-  std::wstring ws;
+  if (!s) { return std::wstring(); }
+
   auto len = static_cast<int>(strlen(s));
+  if (!len) { return std::wstring(); }
+
   auto wlen = ::MultiByteToWideChar(CP_UTF8, 0, s, len, nullptr, 0);
-  if (wlen > 0) {
-    ws.resize(wlen);
-    wlen = ::MultiByteToWideChar(
-        CP_UTF8, 0, s, len,
-        const_cast<LPWSTR>(reinterpret_cast<LPCWSTR>(ws.data())), wlen);
-    if (wlen != static_cast<int>(ws.size())) { ws.clear(); }
-  }
+  if (!wlen) { return std::wstring(); }
+
+  std::wstring ws;
+  ws.resize(wlen);
+  wlen = ::MultiByteToWideChar(
+      CP_UTF8, 0, s, len,
+      const_cast<LPWSTR>(reinterpret_cast<LPCWSTR>(ws.data())), wlen);
+  if (wlen != static_cast<int>(ws.size())) { ws.clear(); }
   return ws;
 }
 #endif
@@ -2439,6 +2642,8 @@ struct FileStat {
   FileStat(const std::string &path);
   bool is_file() const;
   bool is_dir() const;
+  time_t mtime() const;
+  size_t size() const;
 
 private:
 #if defined(_WIN32)
@@ -2448,6 +2653,9 @@ private:
 #endif
   int ret_ = -1;
 };
+
+std::string make_host_and_port_string(const std::string &host, int port,
+                                      bool is_ssl);
 
 std::string trim_copy(const std::string &s);
 
@@ -2669,6 +2877,25 @@ private:
   std::string growable_buffer_;
 };
 
+bool parse_trailers(stream_line_reader &line_reader, Headers &dest,
+                    const Headers &src_headers);
+
+struct ChunkedDecoder {
+  Stream &strm;
+  size_t chunk_remaining = 0;
+  bool finished = false;
+  char line_buf[64];
+  size_t last_chunk_total = 0;
+  size_t last_chunk_offset = 0;
+
+  explicit ChunkedDecoder(Stream &s);
+
+  ssize_t read_payload(char *buf, size_t len, size_t &out_chunk_offset,
+                       size_t &out_chunk_total);
+
+  bool parse_trailers_into(Headers &dest, const Headers &src_headers);
+};
+
 class mmap {
 public:
   mmap(const char *path);
@@ -2696,59 +2923,417 @@ private:
 // NOTE: https://www.rfc-editor.org/rfc/rfc9110#section-5
 namespace fields {
 
-inline bool is_token_char(char c) {
-  return std::isalnum(c) || c == '!' || c == '#' || c == '$' || c == '%' ||
-         c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' ||
-         c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
-}
-
-inline bool is_token(const std::string &s) {
-  if (s.empty()) { return false; }
-  for (auto c : s) {
-    if (!is_token_char(c)) { return false; }
-  }
-  return true;
-}
-
-inline bool is_field_name(const std::string &s) { return is_token(s); }
-
-inline bool is_vchar(char c) { return c >= 33 && c <= 126; }
-
-inline bool is_obs_text(char c) { return 128 <= static_cast<unsigned char>(c); }
-
-inline bool is_field_vchar(char c) { return is_vchar(c) || is_obs_text(c); }
-
-inline bool is_field_content(const std::string &s) {
-  if (s.empty()) { return true; }
-
-  if (s.size() == 1) {
-    return is_field_vchar(s[0]);
-  } else if (s.size() == 2) {
-    return is_field_vchar(s[0]) && is_field_vchar(s[1]);
-  } else {
-    size_t i = 0;
-
-    if (!is_field_vchar(s[i])) { return false; }
-    i++;
-
-    while (i < s.size() - 1) {
-      auto c = s[i++];
-      if (c == ' ' || c == '\t' || is_field_vchar(c)) {
-      } else {
-        return false;
-      }
-    }
-
-    return is_field_vchar(s[i]);
-  }
-}
-
-inline bool is_field_value(const std::string &s) { return is_field_content(s); }
+bool is_token_char(char c);
+bool is_token(const std::string &s);
+bool is_field_name(const std::string &s);
+bool is_vchar(char c);
+bool is_obs_text(char c);
+bool is_field_vchar(char c);
+bool is_field_content(const std::string &s);
+bool is_field_value(const std::string &s);
 
 } // namespace fields
-
 } // namespace detail
 
+/*
+ * TLS Abstraction Layer Declarations
+ */
+
+#ifdef CPPHTTPLIB_SSL_ENABLED
+// TLS abstraction layer - backend-specific type declarations
+#ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
+namespace tls {
+namespace impl {
+
+// Mbed TLS context wrapper (holds config, entropy, DRBG, CA chain, own
+// cert/key). This struct is accessible via tls::impl for use in SSL context
+// setup callbacks (cast ctx_t to tls::impl::MbedTlsContext*).
+struct MbedTlsContext {
+  mbedtls_ssl_config conf;
+  mbedtls_entropy_context entropy;
+  mbedtls_ctr_drbg_context ctr_drbg;
+  mbedtls_x509_crt ca_chain;
+  mbedtls_x509_crt own_cert;
+  mbedtls_pk_context own_key;
+  bool is_server = false;
+  bool verify_client = false;
+  bool has_verify_callback = false;
+
+  MbedTlsContext();
+  ~MbedTlsContext();
+
+  MbedTlsContext(const MbedTlsContext &) = delete;
+  MbedTlsContext &operator=(const MbedTlsContext &) = delete;
+};
+
+} // namespace impl
+} // namespace tls
+#endif
+
+#endif // CPPHTTPLIB_SSL_ENABLED
+
+namespace stream {
+
+class Result {
+public:
+  Result();
+  explicit Result(ClientImpl::StreamHandle &&handle, size_t chunk_size = 8192);
+  Result(Result &&other) noexcept;
+  Result &operator=(Result &&other) noexcept;
+  Result(const Result &) = delete;
+  Result &operator=(const Result &) = delete;
+
+  // Response info
+  bool is_valid() const;
+  explicit operator bool() const;
+  int status() const;
+  const Headers &headers() const;
+  std::string get_header_value(const std::string &key,
+                               const char *def = "") const;
+  bool has_header(const std::string &key) const;
+  Error error() const;
+  Error read_error() const;
+  bool has_read_error() const;
+
+  // Stream reading
+  bool next();
+  const char *data() const;
+  size_t size() const;
+  std::string read_all();
+
+private:
+  ClientImpl::StreamHandle handle_;
+  std::string buffer_;
+  size_t current_size_ = 0;
+  size_t chunk_size_;
+  bool finished_ = false;
+};
+
+// GET
+template <typename ClientType>
+inline Result Get(ClientType &cli, const std::string &path,
+                  size_t chunk_size = 8192) {
+  return Result{cli.open_stream("GET", path), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Get(ClientType &cli, const std::string &path,
+                  const Headers &headers, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("GET", path, {}, headers), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Get(ClientType &cli, const std::string &path,
+                  const Params &params, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("GET", path, params), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Get(ClientType &cli, const std::string &path,
+                  const Params &params, const Headers &headers,
+                  size_t chunk_size = 8192) {
+  return Result{cli.open_stream("GET", path, params, headers), chunk_size};
+}
+
+// POST
+template <typename ClientType>
+inline Result Post(ClientType &cli, const std::string &path,
+                   const std::string &body, const std::string &content_type,
+                   size_t chunk_size = 8192) {
+  return Result{cli.open_stream("POST", path, {}, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Post(ClientType &cli, const std::string &path,
+                   const Headers &headers, const std::string &body,
+                   const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("POST", path, {}, headers, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Post(ClientType &cli, const std::string &path,
+                   const Params &params, const std::string &body,
+                   const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("POST", path, params, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Post(ClientType &cli, const std::string &path,
+                   const Params &params, const Headers &headers,
+                   const std::string &body, const std::string &content_type,
+                   size_t chunk_size = 8192) {
+  return Result{
+      cli.open_stream("POST", path, params, headers, body, content_type),
+      chunk_size};
+}
+
+// PUT
+template <typename ClientType>
+inline Result Put(ClientType &cli, const std::string &path,
+                  const std::string &body, const std::string &content_type,
+                  size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PUT", path, {}, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Put(ClientType &cli, const std::string &path,
+                  const Headers &headers, const std::string &body,
+                  const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PUT", path, {}, headers, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Put(ClientType &cli, const std::string &path,
+                  const Params &params, const std::string &body,
+                  const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PUT", path, params, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Put(ClientType &cli, const std::string &path,
+                  const Params &params, const Headers &headers,
+                  const std::string &body, const std::string &content_type,
+                  size_t chunk_size = 8192) {
+  return Result{
+      cli.open_stream("PUT", path, params, headers, body, content_type),
+      chunk_size};
+}
+
+// PATCH
+template <typename ClientType>
+inline Result Patch(ClientType &cli, const std::string &path,
+                    const std::string &body, const std::string &content_type,
+                    size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PATCH", path, {}, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Patch(ClientType &cli, const std::string &path,
+                    const Headers &headers, const std::string &body,
+                    const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PATCH", path, {}, headers, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Patch(ClientType &cli, const std::string &path,
+                    const Params &params, const std::string &body,
+                    const std::string &content_type, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("PATCH", path, params, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Patch(ClientType &cli, const std::string &path,
+                    const Params &params, const Headers &headers,
+                    const std::string &body, const std::string &content_type,
+                    size_t chunk_size = 8192) {
+  return Result{
+      cli.open_stream("PATCH", path, params, headers, body, content_type),
+      chunk_size};
+}
+
+// DELETE
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Headers &headers, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path, {}, headers), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const std::string &body, const std::string &content_type,
+                     size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path, {}, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Headers &headers, const std::string &body,
+                     const std::string &content_type,
+                     size_t chunk_size = 8192) {
+  return Result{
+      cli.open_stream("DELETE", path, {}, headers, body, content_type),
+      chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Params &params, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path, params), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Params &params, const Headers &headers,
+                     size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path, params, headers), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Params &params, const std::string &body,
+                     const std::string &content_type,
+                     size_t chunk_size = 8192) {
+  return Result{cli.open_stream("DELETE", path, params, {}, body, content_type),
+                chunk_size};
+}
+
+template <typename ClientType>
+inline Result Delete(ClientType &cli, const std::string &path,
+                     const Params &params, const Headers &headers,
+                     const std::string &body, const std::string &content_type,
+                     size_t chunk_size = 8192) {
+  return Result{
+      cli.open_stream("DELETE", path, params, headers, body, content_type),
+      chunk_size};
+}
+
+// HEAD
+template <typename ClientType>
+inline Result Head(ClientType &cli, const std::string &path,
+                   size_t chunk_size = 8192) {
+  return Result{cli.open_stream("HEAD", path), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Head(ClientType &cli, const std::string &path,
+                   const Headers &headers, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("HEAD", path, {}, headers), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Head(ClientType &cli, const std::string &path,
+                   const Params &params, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("HEAD", path, params), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Head(ClientType &cli, const std::string &path,
+                   const Params &params, const Headers &headers,
+                   size_t chunk_size = 8192) {
+  return Result{cli.open_stream("HEAD", path, params, headers), chunk_size};
+}
+
+// OPTIONS
+template <typename ClientType>
+inline Result Options(ClientType &cli, const std::string &path,
+                      size_t chunk_size = 8192) {
+  return Result{cli.open_stream("OPTIONS", path), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Options(ClientType &cli, const std::string &path,
+                      const Headers &headers, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("OPTIONS", path, {}, headers), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Options(ClientType &cli, const std::string &path,
+                      const Params &params, size_t chunk_size = 8192) {
+  return Result{cli.open_stream("OPTIONS", path, params), chunk_size};
+}
+
+template <typename ClientType>
+inline Result Options(ClientType &cli, const std::string &path,
+                      const Params &params, const Headers &headers,
+                      size_t chunk_size = 8192) {
+  return Result{cli.open_stream("OPTIONS", path, params, headers), chunk_size};
+}
+
+} // namespace stream
+
+namespace sse {
+
+struct SSEMessage {
+  std::string event; // Event type (default: "message")
+  std::string data;  // Event payload
+  std::string id;    // Event ID for Last-Event-ID header
+
+  SSEMessage();
+  void clear();
+};
+
+class SSEClient {
+public:
+  using MessageHandler = std::function<void(const SSEMessage &)>;
+  using ErrorHandler = std::function<void(Error)>;
+  using OpenHandler = std::function<void()>;
+
+  SSEClient(Client &client, const std::string &path);
+  SSEClient(Client &client, const std::string &path, const Headers &headers);
+  ~SSEClient();
+
+  SSEClient(const SSEClient &) = delete;
+  SSEClient &operator=(const SSEClient &) = delete;
+
+  // Event handlers
+  SSEClient &on_message(MessageHandler handler);
+  SSEClient &on_event(const std::string &type, MessageHandler handler);
+  SSEClient &on_open(OpenHandler handler);
+  SSEClient &on_error(ErrorHandler handler);
+  SSEClient &set_reconnect_interval(int ms);
+  SSEClient &set_max_reconnect_attempts(int n);
+
+  // State accessors
+  bool is_connected() const;
+  const std::string &last_event_id() const;
+
+  // Blocking start - runs event loop with auto-reconnect
+  void start();
+
+  // Non-blocking start - runs in background thread
+  void start_async();
+
+  // Stop the client (thread-safe)
+  void stop();
+
+private:
+  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms);
+  void run_event_loop();
+  void dispatch_event(const SSEMessage &msg);
+  bool should_reconnect(int count) const;
+  void wait_for_reconnect();
+
+  // Client and path
+  Client &client_;
+  std::string path_;
+  Headers headers_;
+
+  // Callbacks
+  MessageHandler on_message_;
+  std::map<std::string, MessageHandler> event_handlers_;
+  OpenHandler on_open_;
+  ErrorHandler on_error_;
+
+  // Configuration
+  int reconnect_interval_ms_ = 3000;
+  int max_reconnect_attempts_ = 0; // 0 = unlimited
+
+  // State
+  std::atomic<bool> running_{false};
+  std::atomic<bool> connected_{false};
+  std::string last_event_id_;
+
+  // Async support
+  std::thread async_thread_;
+};
+
+} // namespace sse
 
 
 } // namespace httplib
