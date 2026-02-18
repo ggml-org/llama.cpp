@@ -28,9 +28,7 @@
 	import type { Component } from 'svelte';
 	import { NUMERIC_FIELDS, POSITIVE_INTEGER_FIELDS } from '$lib/constants/settings-fields';
 	import { SETTINGS_COLOR_MODES_CONFIG } from '$lib/constants/settings-config';
-	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
 	import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
-	import type { SettingsSectionTitle } from '$lib/constants/settings-sections';
 
 	interface Props {
 		onSave?: () => void;

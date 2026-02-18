@@ -32,8 +32,6 @@
 
 	const chatActions = getChatActionsContext();
 
-	const chatActions = getChatActionsContext();
-
 	let deletionInfo = $state<{
 		totalCount: number;
 		userMessages: number;
