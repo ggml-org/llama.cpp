@@ -1037,9 +1037,9 @@ void launch_fattn(
         const dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
-        flash_attn_combine_results<DV>
-            <<<blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream>>>
-            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+        auto launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
+        ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
+            dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
 }
