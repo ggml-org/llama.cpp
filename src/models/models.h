@@ -367,6 +367,10 @@ struct llm_build_llada_moe : public llm_graph_context {
     llm_build_llada_moe(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_llada2 : public llm_graph_context {
+    llm_build_llada2(const llama_model & model, const llm_graph_params & params);
+};
+
 template <bool embed>
 struct llm_build_llama : public llm_graph_context {
     llm_build_llama(const llama_model & model, const llm_graph_params & params);

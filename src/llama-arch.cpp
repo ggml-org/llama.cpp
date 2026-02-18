@@ -111,6 +111,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_DREAM,            "dream"            },
     { LLM_ARCH_SMALLTHINKER,     "smallthinker"     },
     { LLM_ARCH_LLADA,            "llada"            },
+    { LLM_ARCH_LLADA2,           "llada2"           },
     { LLM_ARCH_LLADA_MOE,        "llada-moe"        },
     { LLM_ARCH_SEED_OSS,         "seed_oss"         },
     { LLM_ARCH_GROVEMOE,         "grovemoe"         },
@@ -964,6 +965,33 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_GATE_EXPS,
                 LLM_TENSOR_FFN_DOWN_EXPS,
                 LLM_TENSOR_FFN_UP_EXPS,
+            };
+        case LLM_ARCH_LLADA2:
+            // LLaDA2 uses combined QKV and shared experts
+            // Layer 0 is dense (needs regular FFN), layers 1+ are MoE
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_Q_NORM,
+                LLM_TENSOR_ATTN_K_NORM,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                // Dense layer (layer 0) tensors
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
+                // MoE layer tensors
+                LLM_TENSOR_FFN_GATE_INP,
+                LLM_TENSOR_FFN_GATE_EXPS,
+                LLM_TENSOR_FFN_DOWN_EXPS,
+                LLM_TENSOR_FFN_UP_EXPS,
+                LLM_TENSOR_FFN_GATE_SHEXP,
+                LLM_TENSOR_FFN_DOWN_SHEXP,
+                LLM_TENSOR_FFN_UP_SHEXP,
+                LLM_TENSOR_FFN_EXP_PROBS_B,
             };
         case LLM_ARCH_QWEN3NEXT:
             return {
@@ -2800,6 +2828,7 @@ bool llm_arch_is_diffusion(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_DREAM:
         case LLM_ARCH_LLADA:
+        case LLM_ARCH_LLADA2:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
             return true;
