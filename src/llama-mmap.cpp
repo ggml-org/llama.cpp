@@ -290,6 +290,19 @@ struct llama_mmap::impl {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
 
+#ifdef __linux__
+        // Request transparent huge pages to reduce TLB pressure for large model files.
+        // With 2MB pages, a 3.9GB model needs ~2000 pages (fits in L2 TLB) vs ~1M 4KB pages.
+        // Requires THP in "madvise" or "always" mode. Returns EINVAL when THP is "never".
+        // Skip for NUMA: THP can merge pages across NUMA boundaries, defeating locality.
+        if (!numa) {
+            if (madvise(addr, file->size(), MADV_HUGEPAGE)) {
+                LLAMA_LOG_WARN("warning: madvise(MADV_HUGEPAGE) failed: %s\n",
+                        strerror(errno));
+            }
+        }
+#endif
+
         if (prefetch > 0) {
             if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
