@@ -421,6 +421,22 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ2_0)
+#include "tq_utils.comp"
+
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    return vec2(tq2_dequantize(ib + a_offset, iqs), tq2_dequantize(ib + a_offset, iqs + 1));
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(
+        tq2_dequantize(ib + a_offset, iqs + 0),
+        tq2_dequantize(ib + a_offset, iqs + 1),
+        tq2_dequantize(ib + a_offset, iqs + 2),
+        tq2_dequantize(ib + a_offset, iqs + 3)
+    );
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);

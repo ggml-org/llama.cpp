@@ -1,0 +1,57 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+#include "mul_mat_vec_base.glsl"
+#include "tq_utils.comp"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    const uint num_blocks_per_row = p.ncols / QUANT_K;
+
+    const uint tid = gl_LocalInvocationID.x;
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
+    }
+
+    for (uint r = 0; r < num_rows; ++r) {
+        const uint ib0 = a_offset / QUANT_K + (first_row + r) * num_blocks_per_row;
+        for (uint jcol = 0; jcol < NUM_COLS; ++jcol) {
+            const uint b_base = (jcol * p.batch_stride_b);
+            for (uint i = tid/8; i < num_blocks_per_row; i += gl_WorkGroupSize.x/8) {
+                const FLOAT_TYPE d = FLOAT_TYPE(data_a[ib0 + i].d);
+                
+                [[unroll]] for (uint e = tid % 8; e < 256; e += 8) {
+#if defined(DATA_A_TQ2_0)
+                    const FLOAT_TYPE dequant_val = FLOAT_TYPE(tq2_dequantize(ib0 + i, e)) * d;
+#endif
+                    const uint b_idx = i * QUANT_K + e;
+                    temp[jcol][r] += dequant_val * FLOAT_TYPE(data_b[b_base + b_offset + b_idx]);
+                }
+            }
+        }
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

@@ -1,0 +1,24 @@
+#ifndef TQ_UTILS_COMP
+#define TQ_UTILS_COMP
+
+#if defined(DATA_A_TQ2_0)
+#if defined(TQ2_CM2)
+int tq2_dequantize(const in decodeBufTQ2_0 bl, uint iqs) {
+#else
+int tq2_dequantize(uint ib, uint iqs) {
+#endif
+    const uint upper = iqs / 128;
+
+    const uint byte = (upper * 32) + (iqs % 32);
+    const uint shift = ((iqs % 128) / 32) * 2;
+
+#if defined(TQ2_CM2)
+    const int c = (int(bl.block.qs[byte]) >> shift) & 3;
+#else
+    const int c = (int(data_a[ib].qs[byte]) >> shift) & 3;
+#endif
+    return c - 1;
+}
+#endif
+
+#endif
