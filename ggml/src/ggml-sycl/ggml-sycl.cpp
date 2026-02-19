@@ -19909,6 +19909,9 @@ struct split_cpu_work {
 };
 static thread_local std::vector<split_cpu_work> g_split_cpu_queue;
 
+// Cached src1 D2H offset map: populated by split_stage_src1(), consumed by split_compute_and_upload().
+static thread_local std::unordered_map<void *, size_t> g_split_src1_offsets;
+
 // Per-work output buffer: each CPU work item writes to a distinct region.
 // Grows-only host-pinned buffer sized to hold the largest single work item.
 static struct {
@@ -19950,31 +19953,29 @@ static void split_src1_staging_ensure(size_t needed, sycl::queue * q) {
     g_split_src1_staging.bytes = g_split_src1_staging.data ? needed : 0;
 }
 
-// Execute all queued CPU work items using 3-phase batched execution.
-// Phase 1: Batch D2H src1 (deduplicated, one wait)
-// Phase 2: Single TBB parallel_for via ggml_sycl_cpu_vec_dot_batched()
-// Phase 3: Batch H2D output (one wait)
-// Called after graph replay or first graph execution.
-static void split_execute_cpu_work(sycl::queue * q) {
+// Stage src1 data from device to host BEFORE graph replay.
+// Must be called before ext_oneapi_graph() so the D2H copies complete
+// without serializing behind the GPU graph on the same in-order queue.
+// Returns true if staging succeeded and CPU work should proceed.
+static bool split_stage_src1(sycl::queue * q) {
     if (g_split_cpu_queue.empty()) {
-        return;
+        return false;
     }
-    const size_t n_work = g_split_cpu_queue.size();
 
-    // --- Phase 0: Compute buffer sizes ---
+    // Compute buffer sizes
     size_t total_output_rows = 0;
     for (const auto & w : g_split_cpu_queue) {
         total_output_rows += w.n_rows;
     }
 
     // Count unique src1 device pointers for D2H dedup
-    std::unordered_map<void *, size_t> src1_unique;  // device_ptr -> offset in staging buf
+    g_split_src1_offsets.clear();
     size_t src1_staging_needed = 0;
     for (const auto & w : g_split_cpu_queue) {
-        if (src1_unique.count(w.src1_device)) {
+        if (g_split_src1_offsets.count(w.src1_device)) {
             continue;
         }
-        src1_unique[w.src1_device] = src1_staging_needed;
+        g_split_src1_offsets[w.src1_device] = src1_staging_needed;
         src1_staging_needed += w.src1_bytes;
     }
 
@@ -19984,12 +19985,11 @@ static void split_execute_cpu_work(sycl::queue * q) {
 
     if (!g_split_src1_staging.data || !g_split_cpu_output.data) {
         GGML_LOG_WARN("[TENSOR-SPLIT] Failed to allocate staging buffers\n");
-        return;
+        return false;
     }
 
-    // --- Phase 1: Batch D2H src1 copies (deduplicated) ---
-    for (const auto & [dev_ptr, offset] : src1_unique) {
-        // Find the first work item with this src1 to get the byte count
+    // D2H src1 copies (deduplicated) — completes before graph submission
+    for (const auto & [dev_ptr, offset] : g_split_src1_offsets) {
         size_t bytes = 0;
         for (const auto & w : g_split_cpu_queue) {
             if (w.src1_device == dev_ptr) {
@@ -19998,16 +19998,28 @@ static void split_execute_cpu_work(sycl::queue * q) {
             }
         }
         void * host_dst = (char *) g_split_src1_staging.data + offset;
-        q->memcpy(host_dst, dev_ptr, bytes);  // async, no wait
+        q->memcpy(host_dst, dev_ptr, bytes);
     }
-    q->wait();  // ONE wait for all D2H copies
+    q->wait();  // ~5us for 16KB — must complete before graph submission
 
-    // --- Phase 2: Build batch work items and call batched vec_dot ---
+    return true;
+}
+
+// Execute CPU vec_dot and upload results.  Called AFTER ext_oneapi_graph()
+// so CPU work overlaps with GPU graph replay.  src1 was already staged
+// by split_stage_src1() before graph submission.
+static void split_compute_and_upload(sycl::queue * q) {
+    if (g_split_cpu_queue.empty()) {
+        return;
+    }
+    const size_t n_work = g_split_cpu_queue.size();
+
+    // Build batch work items using pre-staged src1
     std::vector<cpu_vec_dot_batch_item> batch_items(n_work);
     size_t output_offset = 0;
     for (size_t wi = 0; wi < n_work; wi++) {
         const auto & w = g_split_cpu_queue[wi];
-        size_t src1_off = src1_unique[w.src1_device];
+        size_t src1_off = g_split_src1_offsets[w.src1_device];
         batch_items[wi] = {
             w.host_weights,
             (const float *) ((char *) g_split_src1_staging.data + src1_off),
@@ -20019,21 +20031,25 @@ static void split_execute_cpu_work(sycl::queue * q) {
         output_offset += w.n_rows;
     }
 
+    // CPU vec_dot runs while GPU is busy with graph replay
     ggml_sycl_cpu_vec_dot_batched(batch_items.data(), static_cast<int>(n_work));
 
-    // --- Phase 3: Batch H2D output copies ---
+    // Wait for GPU graph to finish before uploading CPU results
+    q->wait();
+
+    // H2D output copies
     output_offset = 0;
     for (size_t wi = 0; wi < n_work; wi++) {
         const auto & w = g_split_cpu_queue[wi];
         q->memcpy(w.dst_device + w.N_gpu,
                   g_split_cpu_output.data + output_offset,
-                  w.n_rows * sizeof(float));  // async, no wait
+                  w.n_rows * sizeof(float));
         output_offset += w.n_rows;
     }
-    q->wait();  // ONE wait for all H2D copies
+    q->wait();
 
-    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched: %zu items, %zu unique src1, %zu total rows\n",
-                    n_work, src1_unique.size(), total_output_rows);
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched: %zu items, %zu total rows\n",
+                    n_work, output_offset);
 }
 
 // Look up or create a persistent host-pinned weight cache entry for a tensor.
@@ -32256,11 +32272,17 @@ normal_dispatch:
 
             graph_refresh_input_tensors(sycl_ctx, cgraph);
 
+            // Tensor split: stage src1 D2H BEFORE graph submit to avoid
+            // serializing behind the graph on the same in-order queue.
+            bool has_cpu_work = split_stage_src1(sycl_ctx->stream());
+
             graph_executed = true;
             sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
 
-            // Tensor split Phase 2: execute CPU work concurrently with GPU graph replay.
-            split_execute_cpu_work(sycl_ctx->stream());
+            // CPU vec_dot overlaps with GPU graph execution.
+            if (has_cpu_work) {
+                split_compute_and_upload(sycl_ctx->stream());
+            }
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
         } else {
@@ -32325,11 +32347,17 @@ normal_dispatch:
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] unique_ptr created, cached n_nodes=%d, phase=%s\n", cgraph->n_nodes,
                                 is_decode_phase ? "decode" : "prompt");
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] execute new graph...\n");
+
+                // Tensor split: stage src1 before first graph execution
+                bool has_cpu_work = split_stage_src1(sycl_ctx->stream());
+
                 graph_executed = true;
                 sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
 
-                // Tensor split: execute CPU work after first graph execution too
-                split_execute_cpu_work(sycl_ctx->stream());
+                // CPU vec_dot overlaps with GPU graph execution.
+                if (has_cpu_work) {
+                    split_compute_and_upload(sycl_ctx->stream());
+                }
 
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] execute done\n");
             } catch (const sycl::exception & exc) {
