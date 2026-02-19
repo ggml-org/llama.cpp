@@ -239,7 +239,13 @@ internal class InferenceEngineImpl private constructor(
             _state.value = InferenceEngine.State.Generating
             while (!_cancelGeneration) {
                 generateNextToken()?.let { utf8token ->
-                    if (utf8token.isNotEmpty()) emit(utf8token)
+                    val cleaned = utf8token
+                        .replace("<|START_RESPONSE|>", "")
+                        .replace("<|END_RESPONSE|>", "")
+                        .replace("<|END_OF_TURN_TOKEN|>", "")
+                        .replace("<|START_OF_TURN_TOKEN|>", "")
+                        .replace("<|CHATBOT_TOKEN|>", "")
+                    if (cleaned.isNotEmpty()) emit(cleaned)
                 } ?: break
             }
             if (_cancelGeneration) {
