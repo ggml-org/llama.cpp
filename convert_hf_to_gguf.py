@@ -3888,18 +3888,17 @@ class PaddleOCRVisionModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("rms_norm_eps", 1e-6))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
         name = name.replace("visual.", "model.")
 
         if "vision_model" in name or "mlp_AR" in name:
             if "packing_position_embedding" in name:
-                return [] # unused
+                return # unused
             elif "vision_model.head" in name:
                 # we don't yet support image embeddings for this model
-                return []
+                return
             else:
-                return [(self.map_tensor_name(name), data_torch)]
-        return [] # skip other tensors
+                yield from super().modify_tensors(data_torch, name, bid)
+        return # skip other tensors
 
 
 @ModelBase.register(
