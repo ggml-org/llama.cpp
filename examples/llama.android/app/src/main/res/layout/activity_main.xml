@@ -1,90 +1,107 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout
+<androidx.drawerlayout.widget.DrawerLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
+    android:id="@+id/drawer_layout"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:fitsSystemWindows="true">
 
+    <!-- ── Ana içerik ── -->
     <LinearLayout
-        android:fitsSystemWindows="true"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical"
-        tools:context=".MainActivity">
+        android:orientation="vertical">
 
         <androidx.appcompat.widget.Toolbar
-    android:id="@+id/toolbar"
-    android:layout_width="match_parent"
-    android:layout_height="?attr/actionBarSize"
-    android:background="?attr/colorPrimaryContainer"
-    android:elevation="4dp"
-    app:title="LLaMA Chat"
-    app:titleTextColor="?attr/colorOnPrimaryContainer" />
-
-        <TextView
-            android:id="@+id/gguf"
+            android:id="@+id/toolbar"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingHorizontal="16dp"
-            android:paddingVertical="4dp"
-            android:text="Model seçmek için butona bas"
-            android:maxLines="1"
-            android:ellipsize="end"
-            android:textSize="12sp"
-            android:textColor="?attr/colorPrimary"
-            style="@style/TextAppearance.MaterialComponents.Caption" />
-
-        <com.google.android.material.divider.MaterialDivider
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginHorizontal="16dp" />
+            android:layout_height="?attr/actionBarSize"
+            android:background="#6200EE"
+            android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
+            app:navigationIcon="@drawable/ic_menu_hamburger"
+            app:title="LLaMA Chat" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            android:fadeScrollbars="false"
-            android:scrollbars="vertical"
+            android:clipToPadding="false"
             android:padding="8dp"
-            tools:listitem="@layout/item_message_assistant" />
-
-        <com.google.android.material.divider.MaterialDivider
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:layout_marginHorizontal="16dp" />
+            android:scrollbars="vertical" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:paddingStart="16dp"
-            android:paddingEnd="4dp"
-            android:gravity="center_vertical">
+            android:padding="8dp">
 
             <EditText
-                android:id="@+id/user_input"
-                android:enabled="false"
+                android:id="@+id/message"
                 android:layout_width="0dp"
-                android:layout_weight="1"
                 android:layout_height="wrap_content"
-                android:padding="8dp"
+                android:layout_weight="1"
+                android:hint="Mesaj yazın..."
+                android:imeOptions="actionSend"
+                android:inputType="textMultiLine"
                 android:maxLines="4"
-                style="@style/TextAppearance.MaterialComponents.Body2"
-                android:hint="Önce bir model seçin" />
+                android:minHeight="48dp" />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
-                android:id="@+id/fab"
-                android:enabled="true"
-                style="@style/Widget.Material3.FloatingActionButton.Primary"
+                android:id="@+id/send"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_margin="12dp"
-                android:src="@drawable/outline_folder_open_24" />
+                android:layout_marginStart="8dp"
+                android:contentDescription="Gönder" />
+        </LinearLayout>
+    </LinearLayout>
 
+    <!-- ── Sol çekmece ── -->
+    <LinearLayout
+        android:id="@+id/nav_drawer"
+        android:layout_width="280dp"
+        android:layout_height="match_parent"
+        android:layout_gravity="start"
+        android:background="#FAFAFA"
+        android:elevation="8dp"
+        android:fitsSystemWindows="true"
+        android:orientation="vertical">
+
+        <!-- Başlık -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="#6200EE"
+            android:gravity="center_vertical"
+            android:paddingStart="16dp"
+            android:paddingEnd="8dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Sohbet Geçmişi"
+                android:textColor="#FFFFFF"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btn_new_chat"
+                style="@style/Widget.AppCompat.Button.Borderless"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="+ Yeni"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp" />
         </LinearLayout>
 
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/conversations_list"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:divider="@null" />
     </LinearLayout>
-</androidx.constraintlayout.widget.ConstraintLayout>
+
+</androidx.drawerlayout.widget.DrawerLayout>
