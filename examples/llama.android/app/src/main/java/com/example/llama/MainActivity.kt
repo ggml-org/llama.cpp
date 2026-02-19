@@ -217,12 +217,12 @@ class MainActivity : AppCompatActivity() {
                 GgufMetadataReader.create().readStructuredMetadata(it)
             }?.let { metadata ->
                 val modelName = uri.lastPathSegment
-    ?.substringAfterLast('/')
-    ?.let { if (it.endsWith(FILE_EXTENSION_GGUF)) it else it + FILE_EXTENSION_GGUF }
-    ?: (metadata.filename() + FILE_EXTENSION_GGUF
-                val displayName = metadata.basic.nameLabel
-                    ?: metadata.basic.name
-                    ?: cleanModelName(modelName)
+                    ?.substringAfterLast('/')
+                    ?.let { if (it.endsWith(FILE_EXTENSION_GGUF)) it else it + FILE_EXTENSION_GGUF }
+                    ?: (metadata.filename() + FILE_EXTENSION_GGUF)
+                val displayName = modelName.removeSuffix(FILE_EXTENSION_GGUF)
+                    .replace("_", " ")
+                    .replaceFirstChar { it.uppercase() }
 
                 contentResolver.openInputStream(uri)?.use { input ->
                     ensureModelFile(modelName, input)
