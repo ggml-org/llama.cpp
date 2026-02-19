@@ -1,6 +1,6 @@
 # OpenVINO Backend for llama.cpp
 
-This document describes the OpenVINO backend for `llama.cpp`, which enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**.
+This document describes the [OpenVINO](https://docs.openvino.ai/) backend for `llama.cpp`, which enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**.
 
 The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
 
@@ -20,7 +20,7 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 
 ## Supported Model Precisions
 
-- `FP16` 
+- `FP16`
 - `BF16` (on Intel Xeon)
 - `Q4_0`
 - `Q4_1`
@@ -112,7 +112,7 @@ GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
 - Does not support llama-server -np > 1 (multiple parallel sequences)
 - Only supports llama-perplexity -b 512 or smaller
 
-## Llama.cpp Tools 
+## Llama.cpp Tools
 
 The following tools work with the OpenVINO backend on CPU and GPU: llama-simple, llama-run, llama-cli, llama-server, llama-bench, llama-perplexity.
 

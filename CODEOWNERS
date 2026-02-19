@@ -72,6 +72,7 @@
 /ggml/src/ggml-virtgpu/                 @kpouget
 /ggml/src/ggml-webgpu/                  @reeselevine
 /ggml/src/ggml-zdnn/                    @taronaeo @Andreas-Krebbel @AlekseiNikiforovIBM
+/ggml/src/ggml-openvino/                @cavusmustafa @wine99
 /ggml/src/ggml.c                        @ggerganov
 /ggml/src/ggml.cpp                      @ggerganov
 /ggml/src/gguf.cpp                      @JohannesGaessler @Green-Sky

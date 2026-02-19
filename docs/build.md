@@ -777,7 +777,7 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 - **Linux:**
 
     <details>
-    <summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
+    <summary>📦 Click to expand OpenVINO installation from an archive file on Ubuntu</summary>
     <br>
 
     ```bash
@@ -851,6 +851,20 @@ Control OpenVINO behavior using these environment variables:
 -   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling.
 -   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`.
 -   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps.
+
+| Variable | Description |
+|--------|-------------|
+| `GGML_OPENVINO_DEVICE` | Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables  |
+| `GGML_OPENVINO_CACHE_DIR` | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet. |
+| `GGML_OPENVINO_PROFILING` | Enable execution-time profiling. |
+| `GGML_OPENVINO_DUMP_CGRAPH` | Save the GGML compute graph to `cgraph.txt`. |
+| `GGML_OPENVINO_DUMP_IR` | Export OpenVINO IR files with timestamps. |
+| `GGML_OPENVINO_DEBUG_INPUT` | Enable input debugging. |
+| `GGML_OPENVINO_DEBUG_OUTPUT` | Enable output debugging. |
+| `GGML_OPENVINO_STATEFUL_EXECUTION` | Enable stateful execution for better performance. |
+
+> [!NOTE]
+>`GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature to allow stateful execution for managing the KV cache internally inside the OpenVINO model, improving performance on CPUs and GPUs. Stateful execution is not effective on NPUs, and not all models currently support this feature. This feature is experimental and has been validated only with the llama-simple, llama-cli, llama-bench, and llama-run applications and is recommended to enable for the best performance. Other applications, such as llama-server and llama-perplexity, are not yet supported.
 
 ### Example with Profiling
 

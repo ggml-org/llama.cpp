@@ -748,8 +748,8 @@ jobs:
 
       env:
         # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-        OPENVINO_VERSION_MAJOR: "2026.0.1"  
-        OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"  
+        OPENVINO_VERSION_MAJOR: "2026.0.1"
+        OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"
 
       steps:
         - name: Clone
@@ -789,7 +789,7 @@ jobs:
             cd ./openvino_toolkit
             chmod +x ./install_dependencies/install_openvino_dependencies.sh
             echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
-            
+
         - name: Build
           id: cmake_build
           run: |
@@ -799,10 +799,10 @@ jobs:
               -DGGML_OPENVINO=ON
             cmake --build build/ReleaseOV --config Release -j $(nproc)
 
-        - name: Test  
-          id: cmake_test  
-          run: |  
-            cd ${{ github.workspace }}  
+        - name: Test
+          id: cmake_test
+          run: |
+            cd ${{ github.workspace }}
             ctest --test-dir build/ReleaseOV -L main --verbose --timeout 2000
 
   build-linux-cross:
