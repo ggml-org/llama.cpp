@@ -19,7 +19,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.llama.data.AppDatabase
 import com.example.llama.data.Conversation
-import com.example.llama.data.Message
+import com.example.llama.data.DbMessage
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -27,16 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-// ── Mevcut llama.cpp bağlantısını koru ──────────────────────────────────────
-// (Llm, InferenceEngine vb. importlar sende mevcut olduğu şekilde bırakılmalı)
-// Aşağıdaki import'ları kendi projenize göre uyarlayın:
-import com.arm.aichat.InferenceEngine          // veya mevcut import yolun
-import com.arm.aichat.InferenceEngineConfig
-// ────────────────────────────────────────────────────────────────────────────
-
 class MainActivity : AppCompatActivity() {
 
-    // ── UI ──────────────────────────────────────────────────────────────────
     private lateinit var drawerLayout: DrawerLayout
     private lateinit var toolbar: Toolbar
     private lateinit var messagesRv: RecyclerView
@@ -45,21 +37,17 @@ class MainActivity : AppCompatActivity() {
     private lateinit var conversationsRv: RecyclerView
     private lateinit var btnNewChat: Button
 
-    // ── Adapter'lar ─────────────────────────────────────────────────────────
     private lateinit var messageAdapter: MessageAdapter
     private lateinit var conversationAdapter: ConversationAdapter
 
-    // ── DB ──────────────────────────────────────────────────────────────────
     private lateinit var db: AppDatabase
 
-    // ── Durum ───────────────────────────────────────────────────────────────
     private var currentConversationId: String = ""
     private var loadedModelPath: String? = null
     private var isGenerating = false
-    private var inferenceEngine: InferenceEngine? = null   // kendi tipine göre düzenle
+    private val llm = Llm.instance()
 
-    // Mesaj listesi (mevcut sohbet)
-    private val currentMessages = mutableListOf<ChatMessage>()  // MessageAdapter'ın kullandığı tip
+    private val currentMessages = mutableListOf<ChatMessage>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,30 +64,26 @@ class MainActivity : AppCompatActivity() {
         setupInput()
         observeConversations()
 
-        // İlk açılışta aktif sohbeti yükle veya yeni oluştur
         lifecycleScope.launch {
             ensureActiveConversation()
         }
     }
 
-    // ── View bağlama ────────────────────────────────────────────────────────
     private fun bindViews() {
-        drawerLayout      = findViewById(R.id.drawer_layout)
-        toolbar           = findViewById(R.id.toolbar)
-        messagesRv        = findViewById(R.id.messages)
-        messageInput      = findViewById(R.id.message)
-        fab               = findViewById(R.id.send)
-        conversationsRv   = findViewById(R.id.conversations_list)
-        btnNewChat        = findViewById(R.id.btn_new_chat)
+        drawerLayout    = findViewById(R.id.drawer_layout)
+        toolbar         = findViewById(R.id.toolbar)
+        messagesRv      = findViewById(R.id.messages)
+        messageInput    = findViewById(R.id.message)
+        fab             = findViewById(R.id.send)
+        conversationsRv = findViewById(R.id.conversations_list)
+        btnNewChat      = findViewById(R.id.btn_new_chat)
     }
 
-    // ── Toolbar ─────────────────────────────────────────────────────────────
     private fun setupToolbar() {
         setSupportActionBar(toolbar)
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
     }
 
-    // ── Drawer ──────────────────────────────────────────────────────────────
     private fun setupDrawer() {
         val toggle = ActionBarDrawerToggle(
             this, drawerLayout, toolbar,
@@ -116,7 +100,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── Mesaj listesi ───────────────────────────────────────────────────────
     private fun setupMessageList() {
         messageAdapter = MessageAdapter { msg ->
             val clip = ClipData.newPlainText("mesaj", msg)
@@ -128,7 +111,6 @@ class MainActivity : AppCompatActivity() {
         messagesRv.adapter = messageAdapter
     }
 
-    // ── Sohbet listesi (drawer) ──────────────────────────────────────────────
     private fun setupConversationList() {
         conversationAdapter = ConversationAdapter(
             onSelect = { conv ->
@@ -143,7 +125,6 @@ class MainActivity : AppCompatActivity() {
         conversationsRv.adapter = conversationAdapter
     }
 
-    // ── FAB (model yok / gönder / durdur) ───────────────────────────────────
     private fun setupFab() {
         updateFabIcon()
         fab.setOnClickListener {
@@ -158,13 +139,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateFabIcon() {
         val icon = when {
             isGenerating -> android.R.drawable.ic_media_pause
-            loadedModelPath == null -> android.R.drawable.ic_menu_add  // klasör yoksa bunu kullan
+            loadedModelPath == null -> android.R.drawable.ic_menu_add
             else -> android.R.drawable.ic_menu_send
         }
         fab.setImageResource(icon)
     }
 
-    // ── Input ────────────────────────────────────────────────────────────────
     private fun setupInput() {
         messageInput.setOnEditorActionListener { _, _, _ ->
             if (!isGenerating && loadedModelPath != null) sendMessage()
@@ -172,7 +152,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── DB: sohbet akışını gözlemle ──────────────────────────────────────────
     private fun observeConversations() {
         lifecycleScope.launch {
             db.chatDao().getAllConversations().collectLatest { list ->
@@ -182,11 +161,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ── DB: aktif sohbeti yükle veya oluştur ────────────────────────────────
     private suspend fun ensureActiveConversation() {
         val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
         val savedId = prefs.getString("active_conversation_id", null)
-
         currentConversationId = if (savedId != null && conversationExists(savedId)) {
             savedId
         } else {
@@ -196,22 +173,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun conversationExists(id: String): Boolean = withContext(Dispatchers.IO) {
-        // Basit kontrol: mesaj sayısına bakarak
-        try {
-            db.chatDao().getMessages(id).isNotEmpty() ||
-            db.chatDao().conversationCount() > 0
-        } catch (e: Exception) { false }
+        try { db.chatDao().getMessages(id).isNotEmpty() } catch (e: Exception) { false }
     }
 
     private suspend fun createNewConversation(): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
-        val conv = Conversation(
-            id = id,
-            title = "Yeni Sohbet",
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis()
+        db.chatDao().insertConversation(
+            Conversation(id = id, title = "Yeni Sohbet")
         )
-        db.chatDao().insertConversation(conv)
         withContext(Dispatchers.Main) {
             currentConversationId = id
             saveActiveId(id)
@@ -238,14 +207,16 @@ class MainActivity : AppCompatActivity() {
     private suspend fun loadMessagesForCurrent() = withContext(Dispatchers.IO) {
         val dbMessages = db.chatDao().getMessages(currentConversationId)
         val chatMessages = dbMessages.map {
-            ChatMessage(role = it.role, content = it.content)  // MessageAdapter'ın beklediği tip
+            ChatMessage(content = it.content, isUser = it.role == "user")
         }
         withContext(Dispatchers.Main) {
             currentMessages.clear()
             currentMessages.addAll(chatMessages)
             messageAdapter.submitList(currentMessages.toList())
-            messagesRv.scrollToPosition(currentMessages.size - 1)
-            val title = if (chatMessages.isNotEmpty()) chatMessages.first().content.take(30) else "Yeni Sohbet"
+            if (currentMessages.isNotEmpty())
+                messagesRv.scrollToPosition(currentMessages.size - 1)
+            val title = if (chatMessages.isNotEmpty())
+                chatMessages.first().content.take(30) else "Yeni Sohbet"
             updateToolbarTitle(title)
         }
     }
@@ -259,52 +230,67 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.title = title
     }
 
-    // ── Mesaj gönder ─────────────────────────────────────────────────────────
     private fun sendMessage() {
         val text = messageInput.text.toString().trim()
         if (text.isEmpty()) return
         messageInput.text.clear()
 
-        val userMsg = ChatMessage(role = "user", content = text)
+        val userMsg = ChatMessage(content = text, isUser = true)
         currentMessages.add(userMsg)
         messageAdapter.submitList(currentMessages.toList())
         messagesRv.scrollToPosition(currentMessages.size - 1)
 
+        val convId = currentConversationId
+
         lifecycleScope.launch(Dispatchers.IO) {
-            // DB'ye kaydet
             db.chatDao().insertMessage(
-                Message(UUID.randomUUID().toString(), currentConversationId, "user", text)
+                DbMessage(UUID.randomUUID().toString(), convId, "user", text)
             )
-            // Sohbet başlığını güncelle (ilk kullanıcı mesajından)
             if (currentMessages.size == 1) {
-                db.chatDao().updateConversationTitle(
-                    currentConversationId,
-                    text.take(40),
-                    System.currentTimeMillis()
-                )
+                db.chatDao().updateConversationTitle(convId, text.take(40), System.currentTimeMillis())
             } else {
-                db.chatDao().touchConversation(currentConversationId, System.currentTimeMillis())
+                db.chatDao().touchConversation(convId, System.currentTimeMillis())
             }
         }
 
-        // ── Buradan sonrasını mevcut inference kodunla entegre et ────────────
-        // inferenceEngine?.generate(currentMessages) { token -> ... } gibi
-        // Cevap tamamlanınca DB'ye assistant mesajı kaydet:
-        // db.chatDao().insertMessage(Message(..., "assistant", fullResponse))
-        // ─────────────────────────────────────────────────────────────────────
-
         isGenerating = true
         updateFabIcon()
-        // TODO: kendi llm.generate() çağrını buraya ekle
+        var fullResponse = ""
+
+        lifecycleScope.launch {
+            try {
+                llm.send(text, loadedModelPath!!)
+                    .collect { token ->
+                        fullResponse += token
+                        messageAdapter.updateLastAssistantMessage(fullResponse)
+                        messagesRv.scrollToPosition(currentMessages.size - 1)
+                    }
+            } catch (e: Exception) {
+                messageAdapter.updateLastAssistantMessage("[Hata: ${e.message}]")
+            } finally {
+                if (currentMessages.isNotEmpty() && !currentMessages.last().isUser) {
+                    currentMessages[currentMessages.size - 1] = ChatMessage(fullResponse, false)
+                } else {
+                    currentMessages.add(ChatMessage(fullResponse, false))
+                }
+                lifecycleScope.launch(Dispatchers.IO) {
+                    db.chatDao().insertMessage(
+                        DbMessage(UUID.randomUUID().toString(), convId, "assistant", fullResponse)
+                    )
+                    db.chatDao().touchConversation(convId, System.currentTimeMillis())
+                }
+                isGenerating = false
+                updateFabIcon()
+            }
+        }
     }
 
     private fun stopGeneration() {
-        // inferenceEngine?.stop()
+        llm.stop()
         isGenerating = false
         updateFabIcon()
     }
 
-    // ── Sohbet sil ───────────────────────────────────────────────────────────
     private fun confirmDeleteConversation(conv: Conversation) {
         AlertDialog.Builder(this)
             .setTitle("Sohbeti Sil")
@@ -315,22 +301,66 @@ class MainActivity : AppCompatActivity() {
                         db.chatDao().deleteMessages(conv.id)
                         db.chatDao().deleteConversation(conv.id)
                     }
-                    if (conv.id == currentConversationId) {
-                        createNewConversation()
-                    }
+                    if (conv.id == currentConversationId) createNewConversation()
                 }
             }
             .setNegativeButton("İptal", null)
             .show()
     }
 
-    // ── Model seçici ─────────────────────────────────────────────────────────
     private fun showModelPickerDialog() {
-        // Mevcut model picker kodunu buraya taşı
-        Toast.makeText(this, "Model seç", Toast.LENGTH_SHORT).show()
+        val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+        val savedModels = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableList()
+
+        val options = savedModels.map { it.substringAfterLast("/") }.toMutableList()
+        options.add("+ Yeni model ekle")
+
+        AlertDialog.Builder(this)
+            .setTitle("Model Seç")
+            .setItems(options.toTypedArray()) { _, which ->
+                if (which == options.size - 1) {
+                    showAddModelDialog()
+                } else {
+                    loadModel(savedModels[which])
+                }
+            }
+            .show()
     }
 
-    // ── 3 nokta menü ─────────────────────────────────────────────────────────
+    private fun showAddModelDialog() {
+        val input = EditText(this).apply { hint = "/storage/emulated/0/models/model.gguf" }
+        AlertDialog.Builder(this)
+            .setTitle("Model Yolu")
+            .setView(input)
+            .setPositiveButton("Yükle") { _, _ ->
+                val path = input.text.toString().trim()
+                if (path.isNotEmpty()) {
+                    val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+                    val models = prefs.getStringSet("saved_models", mutableSetOf())!!.toMutableSet()
+                    models.add(path)
+                    prefs.edit().putStringSet("saved_models", models).apply()
+                    loadModel(path)
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun loadModel(path: String) {
+        lifecycleScope.launch {
+            try {
+                llm.load(path)
+                loadedModelPath = path
+                updateFabIcon()
+                Toast.makeText(this@MainActivity,
+                    path.substringAfterLast("/") + " yüklendi", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity,
+                    "Model yüklenemedi: ${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         return true
