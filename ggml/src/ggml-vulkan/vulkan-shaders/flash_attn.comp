@@ -185,7 +185,7 @@ void main() {
             [[unroll]] for (uint32_t idx = 0; idx < Bc * HSK / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t d = (idx + tid) % (HSK / 4);
                 uint32_t c = (idx + tid) / (HSK / 4);
-                if (c < Bc) {
+                if (idx + gl_WorkGroupSize.x <= Bc * HSK / 4 || c < Bc) {
                     FLOAT_TYPEV4 K_Tf = FLOAT_TYPEV4(0);
                     if (!KV_bounds_check || j * Bc + c < KV) {
 #if BLOCK_SIZE > 1
@@ -320,7 +320,7 @@ void main() {
             [[unroll]] for (uint32_t idx = 0; idx < Bc * HSV / 4; idx += gl_WorkGroupSize.x) {
                 uint32_t d = (idx + tid) % (HSV / 4);
                 uint32_t c = (idx + tid) / (HSV / 4);
-                if (c < Bc) {
+                if (idx + gl_WorkGroupSize.x <= Bc * HSV / 4 || c < Bc) {
                     FLOAT_TYPEV4 V_Tf = FLOAT_TYPEV4(0);
                     if (!KV_bounds_check || j * Bc + c < KV) {
 #if BLOCK_SIZE > 1
