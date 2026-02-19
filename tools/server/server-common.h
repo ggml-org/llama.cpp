@@ -170,6 +170,8 @@ public:
     llama_pos pos_next() const;
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
+    size_t tokens_up_to_pos(llama_pos max_pos) const;
+    
     void push_back(llama_token tok);
 
     // will create a copy of the chunk if it contains non-text data
