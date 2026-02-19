@@ -190,44 +190,44 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             ov_input_names_cache[key] = std::move(ov_input_names);
             ov_output_names_cache[key] = std::move(ov_output_names);
         }
-    }
 
-    auto ov_input_names = ov_input_names_cache[key];
-    auto ov_output_names = ov_output_names_cache[key];
+        auto ov_input_names = ov_input_names_cache[key];
+        auto ov_output_names = ov_output_names_cache[key];
 
-    for (size_t i = 0; i < ov_input_names.size(); i++) {
-        auto param_name = ov_input_names[i];
-        auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
-        infer_request->set_input_tensor(i, input_tensor);
+        for (size_t i = 0; i < ov_input_names.size(); i++) {
+            auto param_name = ov_input_names[i];
+            auto input_tensor = get_ov_input_tensor(ggml_decoder, param_name);
+            infer_request->set_input_tensor(i, input_tensor);
 
-        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
-            print_input_tensor_info(param_name, input_tensor);
+            if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+                print_input_tensor_info(param_name, input_tensor);
+            }
         }
-    }
 
-    for (size_t i = 0; i < ov_output_names.size(); i++) {
-        auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
-        infer_request->set_output_tensor(i, output_tensor);
-    }
-
-    infer_request->infer();
-    infer_end_time = ggml_time_us();
-
-    if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
         for (size_t i = 0; i < ov_output_names.size(); i++) {
-            const auto output_tensor = infer_request->get_output_tensor(i);
-            print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
+            auto output_tensor = get_ov_output_tensor(ggml_decoder, ov_output_names[i]);
+            infer_request->set_output_tensor(i, output_tensor);
         }
-    }
 
-    if (getenv("GGML_OPENVINO_PROFILING")) {
-        GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
-        GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
-        if (!cache_hit) {
-            GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
-            GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+        infer_request->infer();
+        infer_end_time = ggml_time_us();
+
+        if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+            for (size_t i = 0; i < ov_output_names.size(); i++) {
+                const auto output_tensor = infer_request->get_output_tensor(i);
+                print_output_tensor_info(ov_output_names[i], output_tensor, output_tensor.data());
+            }
         }
-        GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+
+        if (getenv("GGML_OPENVINO_PROFILING")) {
+            GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
+            GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
+            if (!cache_hit) {
+                GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
+                GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+            }
+            GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+        }
     }
 
     return GGML_STATUS_SUCCESS;
