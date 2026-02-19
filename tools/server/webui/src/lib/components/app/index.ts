@@ -7,4 +7,5 @@ export * from './forms';
 export * from './misc';
 export * from './models';
 export * from './navigation';
+export * from './notebook';
 export * from './server';

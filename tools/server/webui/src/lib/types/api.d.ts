@@ -233,6 +233,64 @@ export interface ApiChatCompletionRequest {
 	timings_per_token?: boolean;
 }
 
+// Reference: https://github.com/ggml-org/llama.cpp/tree/master/tools/server#post-completion-given-a-prompt-it-returns-the-predicted-completion
+export interface ApiCompletionRequest {
+	prompt: string;
+	stream?: boolean;
+	model?: string;
+	// Configure return
+	return_progress?: boolean;
+	return_tokens?: boolean;
+	timings_per_token?: boolean;
+	post_sampling_probs?: boolean;
+	response_fields?: string[];
+	// Generation parameters
+	temperature?: number;
+	// Sampling parameters
+	dynatemp_range?: number;
+	dynatemp_exponent?: number;
+	top_k?: number;
+	top_p?: number;
+	min_p?: number;
+	// We can use either n_predict or max_tokens
+	max_tokens?: number;
+	n_indent?: number;
+	n_keep?: number;
+	n_cmpl?: number;
+	n_cache_reuse?: number;
+	stop?: string[];
+	typical_p?: number;
+	xtc_probability?: number;
+	xtc_threshold?: number;
+	// Penalty parameters
+	repeat_last_n?: number;
+	repeat_penalty?: number;
+	presence_penalty?: number;
+	frequency_penalty?: number;
+	dry_multiplier?: number;
+	dry_base?: number;
+	dry_allowed_length?: number;
+	dry_penalty_last_n?: number;
+	dry_sequence_breakers?: string[];
+	mirostat?: number;
+	mirostat_tau?: number;
+	mirostat_eta?: number;
+	grammar?: string;
+	json_schema?: string;
+	seed?: number;
+	ignore_eos?: boolean;
+	n_probs?: number;
+	min_keep?: number;
+	t_max_predict_ms?: number;
+	id_slot?: number;
+	cache_prompt?: boolean;
+	// Sampler configuration
+	samplers?: string[];
+	backend_sampling?: boolean;
+	// Custom parameters (JSON string)
+	custom?: Record<string, unknown>;
+}
+
 export interface ApiChatCompletionToolCallFunctionDelta {
 	name?: string;
 	arguments?: string;
@@ -263,6 +321,20 @@ export interface ApiChatCompletionStreamChunk {
 		};
 		finish_reason?: string | null;
 	}>;
+	timings?: {
+		prompt_n?: number;
+		prompt_ms?: number;
+		predicted_n?: number;
+		predicted_ms?: number;
+		cache_n?: number;
+	};
+	prompt_progress?: ChatMessagePromptProgress;
+}
+
+export interface ApiCompletionStreamChunk {
+	content: string;
+	stop: boolean;
+	model: string;
 	timings?: {
 		prompt_n?: number;
 		prompt_ms?: number;

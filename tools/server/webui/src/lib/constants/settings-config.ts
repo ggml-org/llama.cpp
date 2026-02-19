@@ -98,8 +98,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showRawOutputSwitch:
 		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
-	showMessageStats:
-		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
+	showMessageStats: 'Display generation statistics (tokens/second, token count, duration).',
 	askForTitleConfirmation:
 		'Ask for confirmation before automatically changing conversation title when editing the first message.',
 	pdfAsImage:

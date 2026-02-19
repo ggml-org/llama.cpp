@@ -14,6 +14,15 @@ export interface SettingsFieldConfig {
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
 }
 
+export interface CompletionServiceCallbacks {
+	// Callbacks
+	onChunk: (chunk: string) => void;
+	onModel?: (model: string) => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onComplete: (response: string, timings?: ChatMessageTimings) => void;
+	onError: (error: Error) => void;
+}
+
 export interface SettingsChatServiceOptions {
 	stream?: boolean;
 	// Model (required in ROUTER mode, optional in MODEL mode)

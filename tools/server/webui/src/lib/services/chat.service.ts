@@ -10,6 +10,15 @@ import {
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { AGENTIC_REGEX } from '$lib/constants/agentic';
+import type {
+	ApiChatCompletionRequest,
+	ApiChatCompletionResponse,
+	ApiChatCompletionStreamChunk,
+	ApiChatCompletionToolCall,
+	ApiChatCompletionToolCallDelta,
+	ApiChatMessageContentPart,
+	ApiChatMessageData
+} from '$lib/types/api';
 
 export class ChatService {
 	private static stripReasoningContent(
@@ -777,7 +786,7 @@ export class ChatService {
 	 * @param response - HTTP response object
 	 * @returns Promise<Error> - Parsed error with context info if available
 	 */
-	private static async parseErrorResponse(
+	public static async parseErrorResponse(
 		response: Response
 	): Promise<Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }> {
 		try {
@@ -821,7 +830,7 @@ export class ChatService {
 	 * @returns Model name string if found, undefined otherwise
 	 * @private
 	 */
-	private static extractModelName(data: unknown): string | undefined {
+	public static extractModelName(data: unknown): string | undefined {
 		const asRecord = (value: unknown): Record<string, unknown> | undefined => {
 			return typeof value === 'object' && value !== null
 				? (value as Record<string, unknown>)
@@ -870,7 +879,7 @@ export class ChatService {
 	 * @param onTimingsCallback - Callback function to invoke with timing data
 	 * @private
 	 */
-	private static notifyTimings(
+	public static notifyTimings(
 		timings: ChatMessageTimings | undefined,
 		promptProgress: ChatMessagePromptProgress | undefined,
 		onTimingsCallback:

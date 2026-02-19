@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { NotepadText, Search, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -61,6 +61,18 @@
 			</div>
 
 			<KeyboardShortcutInfo keys={['shift', 'cmd', 'o']} />
+		</Button>
+
+		<Button
+			class="w-full justify-between hover:[&>kbd]:opacity-100"
+			href="/#/notebook"
+			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<NotepadText class="h-4 w-4" />
+				Notebook
+			</div>
 		</Button>
 
 		<Button
