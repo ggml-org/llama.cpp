@@ -58,6 +58,17 @@ void   ggml_sycl_cpu_retained_deactivate();
 // Used by can_batch_cpu() to verify HOST_COMPUTE buffers are CPU-accessible.
 bool ggml_sycl_is_host_accessible_usm(void * ptr, int device);
 
+// Tensor-split: compute vec_dot for a contiguous range of weight rows on CPU.
+// src0_host must point to the FIRST row to process (pre-offset by caller).
+// Output buffer receives n_rows float results.
+void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
+                                 const void * src0_host, const float * src1_host,
+                                 float * output, int n_rows);
+
+// Lookup the registered host (mmap) pointer for a weight tensor by name.
+// Returns nullptr if not registered.
+const void * ggml_sycl_cpu_dispatch_get_host_ptr(const char * name);
+
 // HOST_COMPUTE host_task mode: when active, CPU ops run as host_task
 // callbacks on gpu_q instead of parallel_for on cpu_q.  Activated when
 // GGML_SYCL_HOST_COMPUTE=1 + CPU offload is active.

@@ -237,6 +237,74 @@ static const void * cpu_dispatch_lookup_host_ptr(const char * name) {
     return (it != g_host_ptr_map.end()) ? it->second : nullptr;
 }
 
+const void * ggml_sycl_cpu_dispatch_get_host_ptr(const char * name) {
+    return cpu_dispatch_lookup_host_ptr(name);
+}
+
+// Forward declarations for TBB arena used by vec_dot_rows below.
+#if GGML_SYCL_HAS_TBB
+static ggml_sycl_tbb::task_arena & ggml_sycl_cpu_arena();
+#endif
+
+void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
+                                 const void * src0_host, const float * src1_host,
+                                 float * output, int n_rows) {
+    if (n_rows <= 0 || !src0_host || !src1_host || !output) {
+        return;
+    }
+
+    const auto * cpu_traits = ggml_get_type_traits_cpu(type);
+    if (!cpu_traits || !cpu_traits->vec_dot) {
+        GGML_LOG_WARN("[TENSOR-SPLIT] No vec_dot for type %d, skipping CPU rows\n", type);
+        return;
+    }
+
+    const ggml_type        vec_dot_type  = cpu_traits->vec_dot_type;
+    const auto *           vdt_traits    = ggml_get_type_traits_cpu(vec_dot_type);
+    ggml_from_float_t      from_float_fn = vdt_traits ? vdt_traits->from_float : nullptr;
+    if (!from_float_fn) {
+        GGML_LOG_WARN("[TENSOR-SPLIT] No from_float for vec_dot_type %d\n", vec_dot_type);
+        return;
+    }
+
+    // Quantize src1 (activation) from float32 to Q8 format
+    const size_t q_row_size = ggml_row_size(vec_dot_type, ne00);
+    // Thread-local to avoid repeated allocation across tokens
+    static thread_local std::vector<uint8_t> src1_q_buf;
+    src1_q_buf.resize(q_row_size);
+    from_float_fn(src1_host, src1_q_buf.data(), ne00);
+
+    const size_t row_stride = ggml_row_size(type, ne00);
+
+#if GGML_SYCL_HAS_TBB
+    if (n_rows > 1) {
+        uint8_t * src1_q_data = src1_q_buf.data();
+        ggml_sycl_cpu_arena().execute([&] {
+            ggml_sycl_tbb::parallel_for(
+                ggml_sycl_tbb::blocked_range<int>(0, n_rows),
+                [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
+                    for (int i = r.begin(); i < r.end(); i++) {
+                        const void * row = (const char *) src0_host + (size_t) i * row_stride;
+                        float        dot_result;
+                        cpu_traits->vec_dot(ne00, &dot_result, sizeof(float),
+                                            row, 0, src1_q_data, 0, 1);
+                        output[i] = dot_result;
+                    }
+                });
+        });
+        return;
+    }
+#endif
+    // Single-row or no-TBB fallback
+    for (int i = 0; i < n_rows; i++) {
+        const void * row = (const char *) src0_host + (size_t) i * row_stride;
+        float        dot_result;
+        cpu_traits->vec_dot(ne00, &dot_result, sizeof(float),
+                            row, 0, src1_q_buf.data(), 0, 1);
+        output[i] = dot_result;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Retained activation state: eliminates per-op staging overhead
 // ---------------------------------------------------------------------------
