@@ -657,10 +657,23 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
         //   the ggml_tensor structs to the appropriate locations in the binary blob
 
         // compute the exact size needed for the new ggml_context
-        const size_t mem_size =
-            params.no_alloc ?
-            (n_tensors    )*ggml_tensor_overhead() :
-            (n_tensors + 1)*ggml_tensor_overhead() + ctx->size;
+        size_t mem_size = 0;
+        {
+            if ((n_tensors + 1) != 0 && SIZE_MAX / (n_tensors + 1) < ggml_tensor_overhead()) {
+                GGML_LOG_ERROR("%s: memory size overflow while allocating ggml context\n", __func__);
+                gguf_free(ctx);
+                return nullptr;
+            }
+
+            const size_t overhead = (n_tensors + 1) * ggml_tensor_overhead();
+            if (SIZE_MAX - overhead < ctx->size) {
+                GGML_LOG_ERROR("%s: memory size overflow while allocating ggml context\n", __func__);
+                gguf_free(ctx);
+                return nullptr;
+            }
+
+            mem_size = overhead + ctx->size;
+        }
 
         struct ggml_init_params pdata = {
             /*mem_size   =*/ mem_size,
