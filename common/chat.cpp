@@ -3141,15 +3141,15 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
-    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
-    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Also matches Step-3.5-Flash and Nemotron 3 Nano which use the same output format.
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        // Nemotron 3 Nano 30B A3B
+        // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
+        // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
+        // Qwen3-Coder has no <think> in its template.
         if (src.find("<think>") != std::string::npos) {
             return common_chat_params_init_nemotron_v3(tmpl, params);
         }
