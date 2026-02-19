@@ -12,10 +12,10 @@ data class Conversation(
 )
 
 @Entity(tableName = "messages")
-data class Message(
+data class DbMessage(
     @PrimaryKey val id: String,
     val conversationId: String,
-    val role: String,          // "user" | "assistant"
+    val role: String,
     val content: String,
     val timestamp: Long = System.currentTimeMillis()
 )
