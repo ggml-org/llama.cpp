@@ -1664,33 +1664,19 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         auto & embd_seq_out = embd_seq;
 
                         // For V-L models, the embedding output tensor may have different dimensions
-                        // Use tensor's actual size to determine correct embedding dimension
-                        const size_t tensor_size = ggml_nbytes(t_embd);
-                        const uint32_t n_embd_tensor = tensor_size / (ubatch.n_seqs_unq > 0 ? ubatch.n_seqs_unq : 1) / sizeof(float);
-                        const uint32_t n_embd_to_use = (n_embd_tensor > 0 && n_embd_tensor < n_embd) ? n_embd_tensor : n_embd;
+                        // The embedding dimension is determined by the tensor shape (ne[0]), not by model hparams
+                        const uint32_t n_embd_tensor = t_embd->ne[0];
+
+                        // Use the tensor's embedding dimension if valid, otherwise fall back to model dimension
+                        const uint32_t n_embd_to_use = n_embd_tensor > 0 ? n_embd_tensor : n_embd;
 
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
                             embd_seq_out[seq_id].resize(n_embd_to_use);
-                            const size_t src_offset = (size_t)n_embd_to_use * seq_idx * sizeof(float);
-                            const size_t copy_size = (size_t)n_embd_to_use * sizeof(float);
-                            // Validate bounds
-                            if (src_offset + copy_size <= tensor_size) {
-                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), src_offset, copy_size);
-                            } else {
-                                LLAMA_LOG_ERROR("%s: tensor bounds check failed: offset=%zu + size=%zu > tensor_size=%zu, using fallback\n",
-                                    __func__, src_offset, copy_size, tensor_size);
-                                // Try using smaller dimension
-                                const uint32_t n_embd_fallback = hparams.n_embd_out();
-                                if (n_embd_fallback > 0 && (size_t)n_embd_fallback * sizeof(float) <= tensor_size) {
-                                    embd_seq_out[seq_id].resize(n_embd_fallback);
-                                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), 0, n_embd_fallback * sizeof(float));
-                                } else {
-                                    std::fill(embd_seq_out[seq_id].begin(), embd_seq_out[seq_id].end(), 0.0f);
-                                }
-                            }
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(),
+                                (n_embd_to_use*seq_idx)*sizeof(float), n_embd_to_use*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
