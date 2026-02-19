@@ -298,9 +298,26 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
         uint8_t * src1_q_data = src1_q_buf.data();
         ggml_sycl_cpu_arena().execute([&] {
             ggml_sycl_tbb::parallel_for(
-                ggml_sycl_tbb::blocked_range<int>(0, n_rows, 4),
+                ggml_sycl_tbb::blocked_range<int>(0, n_rows, 16),
                 [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
-                    for (int i = r.begin(); i < r.end(); i++) {
+                    int i = r.begin();
+                    // Q4_0 fast path — requires -mavx2 or higher (enabled in CMakeLists.txt)
+#if defined(__AVX2__)
+                    if (type == GGML_TYPE_Q4_0) {
+                        // 4-row SIMD kernel: loads activation once, dots against 4 rows
+                        for (; i + 3 < r.end(); i += 4) {
+                            simd_mul_mat_q4_0_q8_0_4row(
+                                ne00, output + i,
+                                (const char *) src0_host + (size_t) (i + 0) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 1) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 2) * row_stride,
+                                (const char *) src0_host + (size_t) (i + 3) * row_stride,
+                                src1_q_data);
+                        }
+                    }
+#endif
+                    // Remainder: generic single-row path
+                    for (; i < r.end(); i++) {
                         const void * row = (const char *) src0_host + (size_t) i * row_stride;
                         float        dot_result = 0.0f;
                         cpu_traits->vec_dot(ne00, &dot_result, sizeof(float),
