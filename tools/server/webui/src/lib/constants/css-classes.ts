@@ -8,3 +8,5 @@ export const INPUT_CLASSES = `
     outline-none
     text-foreground
 `;
+
+export const CHAT_FORM_POPOVER_MAX_HEIGHT = 'max-h-80';

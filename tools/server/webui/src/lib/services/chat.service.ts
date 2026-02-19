@@ -1,5 +1,10 @@
 import { getJsonHeaders, formatAttachmentText, isAbortError } from '$lib/utils';
-import { ATTACHMENT_LABEL_PDF_FILE } from '$lib/constants/attachment-labels';
+import { AGENTIC_REGEX } from '$lib/constants/agentic';
+import {
+	ATTACHMENT_LABEL_PDF_FILE,
+	ATTACHMENT_LABEL_MCP_PROMPT,
+	ATTACHMENT_LABEL_MCP_RESOURCE
+} from '$lib/constants/attachment-labels';
 import {
 	AttachmentType,
 	ContentPartType,
@@ -8,8 +13,8 @@ import {
 	UrlPrefix
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { AGENTIC_REGEX } from '$lib/constants/agentic';
 
 export class ChatService {
 	private static stripReasoningContent(
@@ -756,11 +761,47 @@ export class ChatService {
 			}
 		}
 
+		const mcpPrompts = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpPrompt =>
+				extra.type === AttachmentType.MCP_PROMPT
+		);
+
+		for (const mcpPrompt of mcpPrompts) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText(
+					ATTACHMENT_LABEL_MCP_PROMPT,
+					mcpPrompt.name,
+					mcpPrompt.content,
+					mcpPrompt.serverName
+				)
+			});
+		}
+
+		const mcpResources = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraMcpResource =>
+				extra.type === AttachmentType.MCP_RESOURCE
+		);
+
+		for (const mcpResource of mcpResources) {
+			contentParts.push({
+				type: ContentPartType.TEXT,
+				text: formatAttachmentText(
+					ATTACHMENT_LABEL_MCP_RESOURCE,
+					mcpResource.name,
+					mcpResource.content,
+					mcpResource.serverName
+				)
+			});
+		}
+
 		const result: ApiChatMessageData = {
 			role: message.role as MessageRole,
 			content: contentParts
 		};
-
+		if (toolCalls && toolCalls.length > 0) {
+			result.tool_calls = toolCalls;
+		}
 		return result;
 	}
 

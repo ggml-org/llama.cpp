@@ -5,15 +5,19 @@
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		McpServersSelector,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { DialogChatSettings } from '$lib/components/app/dialogs';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants/settings-sections';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages } from '$lib/stores/conversations.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -27,6 +31,8 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
+		onMcpPromptClick?: () => void;
+		onMcpResourcesClick?: () => void;
 	}
 
 	let {
@@ -40,7 +46,9 @@
 		onFileUpload,
 		onMicClick,
 		onStop,
-		onSystemPromptClick
+		onSystemPromptClick,
+		onMcpPromptClick,
+		onMcpResourcesClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -153,6 +161,20 @@
 	export function openModelSelector() {
 		selectorModelRef?.open();
 	}
+
+	let showChatSettingsDialogWithMcpSection = $state(false);
+
+	let hasMcpPromptsSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+
+		return mcpStore.hasPromptsCapability(perChatOverrides);
+	});
+
+	let hasMcpResourcesSupport = $derived.by(() => {
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+
+		return mcpStore.hasResourcesCapability(perChatOverrides);
+	});
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
@@ -161,8 +183,18 @@
 			{disabled}
 			{hasAudioModality}
 			{hasVisionModality}
+			{hasMcpPromptsSupport}
+			{hasMcpResourcesSupport}
 			{onFileUpload}
 			{onSystemPromptClick}
+			{onMcpPromptClick}
+			{onMcpResourcesClick}
+			onMcpSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
+		/>
+
+		<McpServersSelector
+			{disabled}
+			onSettingsClick={() => (showChatSettingsDialogWithMcpSection = true)}
 		/>
 	</div>
 
@@ -201,3 +233,9 @@
 		/>
 	{/if}
 </div>
+
+<DialogChatSettings
+	open={showChatSettingsDialogWithMcpSection}
+	onOpenChange={(open) => (showChatSettingsDialogWithMcpSection = open)}
+	initialSection={SETTINGS_SECTION_TITLES.MCP}
+/>

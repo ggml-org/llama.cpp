@@ -103,8 +103,35 @@ export { debounce } from './debounce';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
+// MCP utilities
+export {
+	detectMcpTransportFromUrl,
+	parseMcpServerSettings,
+	getMcpLogLevelIcon,
+	getMcpLogLevelClass,
+	isImageMimeType,
+	parseResourcePath,
+	getDisplayName,
+	getResourceDisplayName,
+	isCodeResource,
+	isImageResource,
+	getResourceIcon,
+	getResourceTextContent,
+	getResourceBlobContent,
+	downloadResourceContent
+} from './mcp';
+
 // Data URL utilities
 export { createBase64DataUrl } from './data-url';
+
+// Header utilities
+export { parseHeadersToArray, serializeHeaders } from './headers';
+
+// Favicon utilities
+export { getFaviconUrl } from './favicon';
+
+// Agentic content parsing utilities
+export { parseAgenticContent, type AgenticSection } from './agentic';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
