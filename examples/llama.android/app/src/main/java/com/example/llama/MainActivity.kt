@@ -214,7 +214,10 @@ class MainActivity : AppCompatActivity() {
             contentResolver.openInputStream(uri)?.use {
                 GgufMetadataReader.create().readStructuredMetadata(it)
             }?.let { metadata ->
-                val modelName = metadata.filename() + FILE_EXTENSION_GGUF
+                val modelName = uri.lastPathSegment
+    ?.substringAfterLast('/')
+    ?.let { if (it.endsWith(FILE_EXTENSION_GGUF)) it else it + FILE_EXTENSION_GGUF }
+    ?: (metadata.filename() + FILE_EXTENSION_GGUF
                 val displayName = metadata.basic.nameLabel
                     ?: metadata.basic.name
                     ?: cleanModelName(modelName)
