@@ -1,66 +1,73 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/main"
-    android:layout_height="match_parent"
-    android:layout_width="match_parent">
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
 
     <LinearLayout
         android:fitsSystemWindows="true"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="vertical"
-        android:layout_marginEnd="4dp"
         tools:context=".MainActivity">
 
-        <ScrollView
+        <!-- Küçük status bar: sadece model adı -->
+        <TextView
+            android:id="@+id/gguf"
             android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1"
-            android:fadeScrollbars="false">
-
-            <TextView
-                android:id="@+id/gguf"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:padding="16dp"
-                android:text="Selected GGUF model's metadata will show here."
-                style="@style/TextAppearance.MaterialComponents.Body2" />
-
-        </ScrollView>
+            android:layout_height="wrap_content"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="8dp"
+            android:text="Model seçmek için butona bas"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textSize="13sp"
+            android:textColor="?attr/colorPrimary"
+            style="@style/TextAppearance.MaterialComponents.Caption" />
 
         <com.google.android.material.divider.MaterialDivider
             android:layout_width="match_parent"
-            android:layout_height="2dp"
+            android:layout_height="1dp"
             android:layout_marginHorizontal="16dp" />
 
+        <!-- Sohbet alanı — tüm boş alanı kaplar -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"
             android:layout_width="match_parent"
             android:layout_height="0dp"
-            android:layout_weight="4"
+            android:layout_weight="1"
             android:fadeScrollbars="false"
             android:scrollbars="vertical"
-            app:reverseLayout="true"
-            tools:listitem="@layout/item_message_assistant"/>
+            android:padding="8dp"
+            tools:listitem="@layout/item_message_assistant" />
 
+        <com.google.android.material.divider.MaterialDivider
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginHorizontal="16dp" />
+
+        <!-- Mesaj giriş alanı -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:paddingStart="16dp"
-            android:paddingEnd="4dp">
+            android:paddingEnd="4dp"
+            android:gravity="center_vertical">
 
             <EditText
                 android:id="@+id/user_input"
                 android:enabled="false"
                 android:layout_width="0dp"
                 android:layout_weight="1"
-                android:layout_height="match_parent"
+                android:layout_height="wrap_content"
                 android:padding="8dp"
+                android:maxLines="4"
                 style="@style/TextAppearance.MaterialComponents.Body2"
-                android:hint="Please first pick a GGUF model file to import." />
+                android:hint="Önce bir model seçin" />
 
             <com.google.android.material.floatingactionbutton.FloatingActionButton
                 android:id="@+id/fab"
