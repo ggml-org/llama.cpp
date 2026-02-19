@@ -14,17 +14,23 @@
         android:orientation="vertical"
         tools:context=".MainActivity">
 
-        <!-- Küçük status bar: sadece model adı -->
+        <androidx.appcompat.widget.Toolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="?attr/colorSurface"
+            app:title="LLaMA Chat" />
+
         <TextView
             android:id="@+id/gguf"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="8dp"
+            android:paddingVertical="4dp"
             android:text="Model seçmek için butona bas"
             android:maxLines="1"
             android:ellipsize="end"
-            android:textSize="13sp"
+            android:textSize="12sp"
             android:textColor="?attr/colorPrimary"
             style="@style/TextAppearance.MaterialComponents.Caption" />
 
@@ -33,7 +39,6 @@
             android:layout_height="1dp"
             android:layout_marginHorizontal="16dp" />
 
-        <!-- Sohbet alanı — tüm boş alanı kaplar -->
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"
             android:layout_width="match_parent"
@@ -49,14 +54,7 @@
             android:layout_height="1dp"
             android:layout_marginHorizontal="16dp" />
 
-        <!-- Mesaj giriş alanı -->
         <LinearLayout
-           <androidx.appcompat.widget.Toolbar
-               android:id="@+id/toolbar"
-               android:layout_width="match_parent"
-               android:layout_height="?attr/actionBarSize"
-               android:background="?attr/colorSurface"
-               app:title="LLaMA Chat" />
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
