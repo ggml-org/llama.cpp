@@ -19825,6 +19825,16 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
 
 }  // namespace ggml_sycl
 
+// Tensor split CPU percentage (0 = disabled).
+// Shared between mul_mat dispatch and graph compute.
+static int ggml_sycl_tensor_split_pct() {
+    static const int pct = []() {
+        const char * env = std::getenv("GGML_SYCL_TENSOR_SPLIT");
+        return env ? std::atoi(env) : 0;
+    }();
+    return pct;
+}
+
 // ---------------------------------------------------------------------------
 // Tensor split: GPU+CPU cooperative MUL_MAT staging
 // ---------------------------------------------------------------------------
@@ -20161,13 +20171,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
 
             if (has_soa_reorder) {
                 // Tensor split: cooperative GPU+CPU MUL_MAT
-                static const int tensor_split_cpu_pct = []() {
-                    const char * env = std::getenv("GGML_SYCL_TENSOR_SPLIT");
-                    return env ? std::atoi(env) : 0;
-                }();
-                if (tensor_split_cpu_pct > 0) {
+                const int split_pct = ggml_sycl_tensor_split_pct();
+                if (split_pct > 0) {
                     if (ggml_sycl_mul_mat_tensor_split(ctx, src0, src1, dst,
-                                                        tensor_split_cpu_pct, effective_layout)) {
+                                                        split_pct, effective_layout)) {
                         return;
                     }
                     // Fall through to normal GPU dispatch if split failed
