@@ -1,385 +1,360 @@
 package com.example.llama
 
-import android.net.Uri
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Bundle
-import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.widget.Button
 import android.widget.EditText
-import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.addCallback
-import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.ActionBarDrawerToggle
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.Toolbar
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import com.arm.aichat.AiChat
-import com.arm.aichat.InferenceEngine
-import com.arm.aichat.gguf.GgufMetadata
-import com.arm.aichat.gguf.GgufMetadataReader
+import com.example.llama.data.AppDatabase
+import com.example.llama.data.Conversation
+import com.example.llama.data.Message
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
-import java.io.InputStream
 import java.util.UUID
+
+// ── Mevcut llama.cpp bağlantısını koru ──────────────────────────────────────
+// (Llm, InferenceEngine vb. importlar sende mevcut olduğu şekilde bırakılmalı)
+// Aşağıdaki import'ları kendi projenize göre uyarlayın:
+import com.arm.aichat.InferenceEngine          // veya mevcut import yolun
+import com.arm.aichat.InferenceEngineConfig
+// ────────────────────────────────────────────────────────────────────────────
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var statusTv: TextView
+    // ── UI ──────────────────────────────────────────────────────────────────
+    private lateinit var drawerLayout: DrawerLayout
+    private lateinit var toolbar: Toolbar
     private lateinit var messagesRv: RecyclerView
-    private lateinit var userInputEt: EditText
-    private lateinit var userActionFab: FloatingActionButton
+    private lateinit var messageInput: EditText
+    private lateinit var fab: FloatingActionButton
+    private lateinit var conversationsRv: RecyclerView
+    private lateinit var btnNewChat: Button
 
-    private lateinit var engine: InferenceEngine
-    private var generationJob: Job? = null
+    // ── Adapter'lar ─────────────────────────────────────────────────────────
+    private lateinit var messageAdapter: MessageAdapter
+    private lateinit var conversationAdapter: ConversationAdapter
 
-    private var isModelReady = false
+    // ── DB ──────────────────────────────────────────────────────────────────
+    private lateinit var db: AppDatabase
+
+    // ── Durum ───────────────────────────────────────────────────────────────
+    private var currentConversationId: String = ""
+    private var loadedModelPath: String? = null
     private var isGenerating = false
-    private var currentModelName: String? = null
-    private val messages = mutableListOf<Message>()
-    private val lastAssistantMsg = StringBuilder()
-    private val messageAdapter = MessageAdapter(messages)
+    private var inferenceEngine: InferenceEngine? = null   // kendi tipine göre düzenle
+
+    // Mesaj listesi (mevcut sohbet)
+    private val currentMessages = mutableListOf<ChatMessage>()  // MessageAdapter'ın kullandığı tip
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContentView(R.layout.activity_main)
-        onBackPressedDispatcher.addCallback { Log.w(TAG, "Ignore back press") }
-        val toolbar = findViewById<androidx.appcompat.widget.Toolbar>(R.id.toolbar)
-        setSupportActionBar(toolbar)
-        statusTv = findViewById(R.id.gguf)
-        messagesRv = findViewById(R.id.messages)
-        messagesRv.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
-        messagesRv.adapter = messageAdapter
-        userInputEt = findViewById(R.id.user_input)
-        userActionFab = findViewById(R.id.fab)
 
-        // Kaydedilmiş sohbeti yükle
-        loadChatHistory()
+        db = AppDatabase.getInstance(this)
 
-        lifecycleScope.launch(Dispatchers.Default) {
-            engine = AiChat.getInferenceEngine(applicationContext)
+        bindViews()
+        setupToolbar()
+        setupDrawer()
+        setupMessageList()
+        setupConversationList()
+        setupFab()
+        setupInput()
+        observeConversations()
+
+        // İlk açılışta aktif sohbeti yükle veya yeni oluştur
+        lifecycleScope.launch {
+            ensureActiveConversation()
         }
+    }
 
-        statusTv.text = "Model seçmek için butona bas"
+    // ── View bağlama ────────────────────────────────────────────────────────
+    private fun bindViews() {
+        drawerLayout      = findViewById(R.id.drawer_layout)
+        toolbar           = findViewById(R.id.toolbar)
+        messagesRv        = findViewById(R.id.messages)
+        messageInput      = findViewById(R.id.message)
+        fab               = findViewById(R.id.send)
+        conversationsRv   = findViewById(R.id.conversations_list)
+        btnNewChat        = findViewById(R.id.btn_new_chat)
+    }
 
-        userActionFab.setOnClickListener {
-            when {
-                isGenerating -> {
-                    // Üretimi durdur
-                    generationJob?.cancel()
-                }
-                isModelReady -> {
-                    handleUserInput()
-                }
-                else -> {
-                    showModelPickerDialog()
-                }
+    // ── Toolbar ─────────────────────────────────────────────────────────────
+    private fun setupToolbar() {
+        setSupportActionBar(toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+    }
+
+    // ── Drawer ──────────────────────────────────────────────────────────────
+    private fun setupDrawer() {
+        val toggle = ActionBarDrawerToggle(
+            this, drawerLayout, toolbar,
+            R.string.drawer_open, R.string.drawer_close
+        )
+        drawerLayout.addDrawerListener(toggle)
+        toggle.syncState()
+
+        btnNewChat.setOnClickListener {
+            lifecycleScope.launch {
+                createNewConversation()
+                drawerLayout.closeDrawers()
             }
         }
     }
 
+    // ── Mesaj listesi ───────────────────────────────────────────────────────
+    private fun setupMessageList() {
+        messageAdapter = MessageAdapter { msg ->
+            val clip = ClipData.newPlainText("mesaj", msg)
+            (getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager)
+                .setPrimaryClip(clip)
+            Toast.makeText(this, "Panoya kopyalandı", Toast.LENGTH_SHORT).show()
+        }
+        messagesRv.layoutManager = LinearLayoutManager(this).also { it.stackFromEnd = true }
+        messagesRv.adapter = messageAdapter
+    }
+
+    // ── Sohbet listesi (drawer) ──────────────────────────────────────────────
+    private fun setupConversationList() {
+        conversationAdapter = ConversationAdapter(
+            onSelect = { conv ->
+                lifecycleScope.launch {
+                    switchConversation(conv.id)
+                    drawerLayout.closeDrawers()
+                }
+            },
+            onDelete = { conv -> confirmDeleteConversation(conv) }
+        )
+        conversationsRv.layoutManager = LinearLayoutManager(this)
+        conversationsRv.adapter = conversationAdapter
+    }
+
+    // ── FAB (model yok / gönder / durdur) ───────────────────────────────────
+    private fun setupFab() {
+        updateFabIcon()
+        fab.setOnClickListener {
+            when {
+                isGenerating -> stopGeneration()
+                loadedModelPath == null -> showModelPickerDialog()
+                else -> sendMessage()
+            }
+        }
+    }
+
+    private fun updateFabIcon() {
+        val icon = when {
+            isGenerating -> android.R.drawable.ic_media_pause
+            loadedModelPath == null -> android.R.drawable.ic_menu_add  // klasör yoksa bunu kullan
+            else -> android.R.drawable.ic_menu_send
+        }
+        fab.setImageResource(icon)
+    }
+
+    // ── Input ────────────────────────────────────────────────────────────────
+    private fun setupInput() {
+        messageInput.setOnEditorActionListener { _, _, _ ->
+            if (!isGenerating && loadedModelPath != null) sendMessage()
+            true
+        }
+    }
+
+    // ── DB: sohbet akışını gözlemle ──────────────────────────────────────────
+    private fun observeConversations() {
+        lifecycleScope.launch {
+            db.chatDao().getAllConversations().collectLatest { list ->
+                conversationAdapter.activeId = currentConversationId
+                conversationAdapter.submitList(list)
+            }
+        }
+    }
+
+    // ── DB: aktif sohbeti yükle veya oluştur ────────────────────────────────
+    private suspend fun ensureActiveConversation() {
+        val prefs = getSharedPreferences("llama_prefs", MODE_PRIVATE)
+        val savedId = prefs.getString("active_conversation_id", null)
+
+        currentConversationId = if (savedId != null && conversationExists(savedId)) {
+            savedId
+        } else {
+            createNewConversation()
+        }
+        loadMessagesForCurrent()
+    }
+
+    private suspend fun conversationExists(id: String): Boolean = withContext(Dispatchers.IO) {
+        // Basit kontrol: mesaj sayısına bakarak
+        try {
+            db.chatDao().getMessages(id).isNotEmpty() ||
+            db.chatDao().conversationCount() > 0
+        } catch (e: Exception) { false }
+    }
+
+    private suspend fun createNewConversation(): String = withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID().toString()
+        val conv = Conversation(
+            id = id,
+            title = "Yeni Sohbet",
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+        db.chatDao().insertConversation(conv)
+        withContext(Dispatchers.Main) {
+            currentConversationId = id
+            saveActiveId(id)
+            currentMessages.clear()
+            messageAdapter.submitList(emptyList())
+            conversationAdapter.activeId = id
+            conversationAdapter.notifyDataSetChanged()
+            updateToolbarTitle("Yeni Sohbet")
+        }
+        id
+    }
+
+    private suspend fun switchConversation(id: String) {
+        if (id == currentConversationId) return
+        currentConversationId = id
+        saveActiveId(id)
+        loadMessagesForCurrent()
+        withContext(Dispatchers.Main) {
+            conversationAdapter.activeId = id
+            conversationAdapter.notifyDataSetChanged()
+        }
+    }
+
+    private suspend fun loadMessagesForCurrent() = withContext(Dispatchers.IO) {
+        val dbMessages = db.chatDao().getMessages(currentConversationId)
+        val chatMessages = dbMessages.map {
+            ChatMessage(role = it.role, content = it.content)  // MessageAdapter'ın beklediği tip
+        }
+        withContext(Dispatchers.Main) {
+            currentMessages.clear()
+            currentMessages.addAll(chatMessages)
+            messageAdapter.submitList(currentMessages.toList())
+            messagesRv.scrollToPosition(currentMessages.size - 1)
+            val title = if (chatMessages.isNotEmpty()) chatMessages.first().content.take(30) else "Yeni Sohbet"
+            updateToolbarTitle(title)
+        }
+    }
+
+    private fun saveActiveId(id: String) {
+        getSharedPreferences("llama_prefs", MODE_PRIVATE)
+            .edit().putString("active_conversation_id", id).apply()
+    }
+
+    private fun updateToolbarTitle(title: String) {
+        supportActionBar?.title = title
+    }
+
+    // ── Mesaj gönder ─────────────────────────────────────────────────────────
+    private fun sendMessage() {
+        val text = messageInput.text.toString().trim()
+        if (text.isEmpty()) return
+        messageInput.text.clear()
+
+        val userMsg = ChatMessage(role = "user", content = text)
+        currentMessages.add(userMsg)
+        messageAdapter.submitList(currentMessages.toList())
+        messagesRv.scrollToPosition(currentMessages.size - 1)
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            // DB'ye kaydet
+            db.chatDao().insertMessage(
+                Message(UUID.randomUUID().toString(), currentConversationId, "user", text)
+            )
+            // Sohbet başlığını güncelle (ilk kullanıcı mesajından)
+            if (currentMessages.size == 1) {
+                db.chatDao().updateConversationTitle(
+                    currentConversationId,
+                    text.take(40),
+                    System.currentTimeMillis()
+                )
+            } else {
+                db.chatDao().touchConversation(currentConversationId, System.currentTimeMillis())
+            }
+        }
+
+        // ── Buradan sonrasını mevcut inference kodunla entegre et ────────────
+        // inferenceEngine?.generate(currentMessages) { token -> ... } gibi
+        // Cevap tamamlanınca DB'ye assistant mesajı kaydet:
+        // db.chatDao().insertMessage(Message(..., "assistant", fullResponse))
+        // ─────────────────────────────────────────────────────────────────────
+
+        isGenerating = true
+        updateFabIcon()
+        // TODO: kendi llm.generate() çağrını buraya ekle
+    }
+
+    private fun stopGeneration() {
+        // inferenceEngine?.stop()
+        isGenerating = false
+        updateFabIcon()
+    }
+
+    // ── Sohbet sil ───────────────────────────────────────────────────────────
+    private fun confirmDeleteConversation(conv: Conversation) {
+        AlertDialog.Builder(this)
+            .setTitle("Sohbeti Sil")
+            .setMessage("\"${conv.title}\" silinsin mi?")
+            .setPositiveButton("Sil") { _, _ ->
+                lifecycleScope.launch {
+                    withContext(Dispatchers.IO) {
+                        db.chatDao().deleteMessages(conv.id)
+                        db.chatDao().deleteConversation(conv.id)
+                    }
+                    if (conv.id == currentConversationId) {
+                        createNewConversation()
+                    }
+                }
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    // ── Model seçici ─────────────────────────────────────────────────────────
+    private fun showModelPickerDialog() {
+        // Mevcut model picker kodunu buraya taşı
+        Toast.makeText(this, "Model seç", Toast.LENGTH_SHORT).show()
+    }
+
+    // ── 3 nokta menü ─────────────────────────────────────────────────────────
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, MENU_CHANGE_MODEL, 0, "Model değiştir")
-        menu.add(0, MENU_CLEAR_CHAT, 1, "Sohbeti temizle")
+        menuInflater.inflate(R.menu.main_menu, menu)
         return true
     }
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            MENU_CHANGE_MODEL -> {
-                generationJob?.cancel()
-                if (isModelReady) {
-                    try { engine.cleanUp() } catch (e: Exception) { Log.e(TAG, "CleanUp error", e) }
-                }
-                isModelReady = false
-                isGenerating = false
-                currentModelName = null
-                updateFabIcon()
-                statusTv.text = "Model seçmek için butona bas"
-                showModelPickerDialog()
-                true
-            }
-            MENU_CLEAR_CHAT -> {
-                AlertDialog.Builder(this)
-                    .setTitle("Sohbeti temizle")
-                    .setMessage("Tüm mesajlar silinecek. Emin misiniz?")
-                    .setPositiveButton("Evet") { _, _ ->
-                        messages.clear()
-                        messageAdapter.notifyDataSetChanged()
-                        saveChatHistory()
-                    }
-                    .setNegativeButton("İptal", null)
-                    .show()
-                true
-            }
+            R.id.action_change_model -> { showModelPickerDialog(); true }
+            R.id.action_clear_chat  -> { clearCurrentChat(); true }
             else -> super.onOptionsItemSelected(item)
         }
     }
 
-    private fun updateFabIcon() {
-        when {
-            isGenerating -> userActionFab.setImageResource(android.R.drawable.ic_media_pause)
-            isModelReady -> userActionFab.setImageResource(R.drawable.outline_send_24)
-            else -> userActionFab.setImageResource(android.R.drawable.ic_input_add)
-        }
-    }
-
-    private fun showModelPickerDialog() {
-        val savedModels = getSavedModels()
-        if (savedModels.isEmpty()) {
-            getContent.launch(arrayOf("*/*"))
-            return
-        }
-        val options = savedModels.map { cleanModelName(it.name) }.toMutableList()
-        options.add("+ Yeni model ekle")
-
-        AlertDialog.Builder(this)
-            .setTitle("Model seç")
-            .setItems(options.toTypedArray()) { _, which ->
-                if (which == savedModels.size) {
-                    getContent.launch(arrayOf("*/*"))
-                } else {
-                    loadSavedModel(savedModels[which])
-                }
+    private fun clearCurrentChat() {
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                db.chatDao().deleteMessages(currentConversationId)
+                db.chatDao().updateConversationTitle(
+                    currentConversationId, "Yeni Sohbet", System.currentTimeMillis()
+                )
             }
-            .show()
-    }
-
-    private fun cleanModelName(filename: String): String {
-        return filename
-            .removeSuffix(FILE_EXTENSION_GGUF)
-            .replace(Regex("-\\d{13}$"), "")  // timestamp sonunu kaldır
-            .replace("-", " ")
-            .replaceFirstChar { it.uppercase() }
-    }
-
-    private fun getSavedModels(): List<File> {
-        return ensureModelsDirectory()
-            .listFiles()
-            ?.filter { it.isFile && it.name.endsWith(FILE_EXTENSION_GGUF) }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
-    }
-
-    private fun loadSavedModel(modelFile: File) {
-        userActionFab.isEnabled = false
-        userInputEt.hint = "Model yükleniyor..."
-        val displayName = cleanModelName(modelFile.name)
-        statusTv.text = "⏳ $displayName yükleniyor..."
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                loadModel(modelFile.name, modelFile)
-                withContext(Dispatchers.Main) {
-                    currentModelName = displayName
-                    isModelReady = true
-                    userInputEt.hint = "Mesajınızı yazın..."
-                    userInputEt.isEnabled = true
-                    userActionFab.isEnabled = true
-                    updateFabIcon()
-                    statusTv.text = "✓ $displayName"
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "Model yüklenemedi: ${e.message}", Toast.LENGTH_LONG).show()
-                    userActionFab.isEnabled = true
-                    statusTv.text = "Hata! Tekrar dene"
-                }
-            }
+            currentMessages.clear()
+            messageAdapter.submitList(emptyList())
+            updateToolbarTitle("Yeni Sohbet")
         }
     }
-
-    private val getContent = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        uri?.let { handleSelectedModel(it) }
-    }
-
-    private fun handleSelectedModel(uri: Uri) {
-        userActionFab.isEnabled = false
-        userInputEt.hint = "Dosya okunuyor..."
-        statusTv.text = "⏳ Analiz ediliyor..."
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            contentResolver.openInputStream(uri)?.use {
-                GgufMetadataReader.create().readStructuredMetadata(it)
-            }?.let { metadata ->
-                val modelName = uri.lastPathSegment
-                    ?.substringAfterLast('/')
-                    ?.let { if (it.endsWith(FILE_EXTENSION_GGUF)) it else it + FILE_EXTENSION_GGUF }
-                    ?: (metadata.filename() + FILE_EXTENSION_GGUF)
-                val displayName = modelName.removeSuffix(FILE_EXTENSION_GGUF)
-                    .replace("_", " ")
-                    .replaceFirstChar { it.uppercase() }
-
-                contentResolver.openInputStream(uri)?.use { input ->
-                    ensureModelFile(modelName, input)
-                }?.let { modelFile ->
-                    loadModel(modelName, modelFile)
-                    withContext(Dispatchers.Main) {
-                        currentModelName = displayName
-                        isModelReady = true
-                        userInputEt.hint = "Mesajınızı yazın..."
-                        userInputEt.isEnabled = true
-                        userActionFab.isEnabled = true
-                        updateFabIcon()
-                        statusTv.text = "✓ $displayName"
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun ensureModelFile(modelName: String, input: InputStream) =
-        withContext(Dispatchers.IO) {
-            File(ensureModelsDirectory(), modelName).also { file ->
-                if (!file.exists()) {
-                    withContext(Dispatchers.Main) {
-                        userInputEt.hint = "Kopyalanıyor..."
-                        statusTv.text = "⏳ Kopyalanıyor..."
-                    }
-                    FileOutputStream(file).use { input.copyTo(it) }
-                } else {
-                    Log.i(TAG, "Model zaten mevcut: $modelName")
-                }
-            }
-        }
-
-    private suspend fun loadModel(modelName: String, modelFile: File) =
-        withContext(Dispatchers.IO) {
-            withContext(Dispatchers.Main) {
-                userInputEt.hint = "Model yükleniyor..."
-            }
-            engine.loadModel(modelFile.path)
-        }
-
-    private fun handleUserInput() {
-        val userMsg = userInputEt.text.toString()
-        if (userMsg.isEmpty()) {
-            Toast.makeText(this, "Mesaj boş!", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        userInputEt.text = null
-        userInputEt.isEnabled = false
-        isGenerating = true
-        updateFabIcon()
-
-        messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
-        lastAssistantMsg.clear()
-        messages.add(Message(UUID.randomUUID().toString(), "", false))
-        messageAdapter.notifyItemInserted(messages.size - 1)
-        messagesRv.scrollToPosition(messages.size - 1)
-
-        generationJob = lifecycleScope.launch(Dispatchers.Default) {
-            engine.sendUserPrompt(userMsg)
-                .onCompletion {
-                    withContext(Dispatchers.Main) {
-                        isGenerating = false
-                        userInputEt.isEnabled = true
-                        updateFabIcon()
-                        saveChatHistory()
-                    }
-                }.collect { token ->
-                    withContext(Dispatchers.Main) {
-                        val idx = messages.size - 1
-                        if (idx >= 0 && !messages[idx].isUser) {
-                            messages.removeAt(idx).copy(
-                                content = lastAssistantMsg.append(token).toString()
-                            ).let { messages.add(it) }
-                            messageAdapter.notifyItemChanged(messages.size - 1)
-                            messagesRv.scrollToPosition(messages.size - 1)
-                        }
-                    }
-                }
-        }
-    }
-
-    // Sohbet geçmişini SharedPreferences'a kaydet
-    private fun saveChatHistory() {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val jsonArray = JSONArray()
-        messages.forEach { msg ->
-            JSONObject().apply {
-                put("id", msg.id)
-                put("content", msg.content)
-                put("isUser", msg.isUser)
-            }.let { jsonArray.put(it) }
-        }
-        prefs.edit().putString(KEY_CHAT_HISTORY, jsonArray.toString()).apply()
-    }
-
-    // Kaydedilmiş sohbeti yükle
-    private fun loadChatHistory() {
-        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-        val json = prefs.getString(KEY_CHAT_HISTORY, null) ?: return
-        try {
-            val jsonArray = JSONArray(json)
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                messages.add(Message(
-                    id = obj.getString("id"),
-                    content = obj.getString("content"),
-                    isUser = obj.getBoolean("isUser")
-                ))
-            }
-            messageAdapter.notifyDataSetChanged()
-            if (messages.isNotEmpty()) {
-                messagesRv.scrollToPosition(messages.size - 1)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Sohbet geçmişi yüklenemedi", e)
-        }
-    }
-
-    private fun ensureModelsDirectory() =
-        File(filesDir, DIRECTORY_MODELS).also {
-            if (it.exists() && !it.isDirectory) it.delete()
-            if (!it.exists()) it.mkdir()
-        }
-
-    override fun onStop() {
-        generationJob?.cancel()
-        super.onStop()
-    }
-
-    override fun onDestroy() {
-        engine.destroy()
-        super.onDestroy()
-    }
-
-    companion object {
-        private val TAG = MainActivity::class.java.simpleName
-        private const val DIRECTORY_MODELS = "models"
-        private const val FILE_EXTENSION_GGUF = ".gguf"
-        private const val MENU_CHANGE_MODEL = 1
-        private const val MENU_CLEAR_CHAT = 2
-        private const val PREFS_NAME = "chat_prefs"
-        private const val KEY_CHAT_HISTORY = "chat_history"
-    }
-}
-
-fun GgufMetadata.filename() = when {
-    basic.name != null -> {
-        basic.name?.let { name ->
-            basic.sizeLabel?.let { size -> "$name-$size" } ?: name
-        }
-    }
-    architecture?.architecture != null -> {
-        architecture?.architecture?.let { arch ->
-            basic.uuid?.let { uuid -> "$arch-$uuid" } ?: "$arch-${System.currentTimeMillis()}"
-        }
-    }
-    else -> "model-${System.currentTimeMillis().toHexString()}"
 }
