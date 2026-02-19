@@ -24,7 +24,7 @@ jobs:
 
       - name: Build APK
         working-directory: examples/llama.android
-        run: ./gradlew clean assembleDebug --no-build-cache
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
