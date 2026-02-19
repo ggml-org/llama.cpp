@@ -599,9 +599,20 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     // update the pos of the used seqs
     for (uint32_t s = 0; s < n_seqs; ++s) {
         const uint32_t i = s*n_seq_tokens;
-        const llama_pos last_pos = ubatch.pos[i + n_seq_tokens - 1];
         const int32_t cell_id = s + min;
         auto & cell = cells[cell_id];
+
+        // The temporal plane may have the same value for all image tokens, so we need the max across ALL planes to get the true sequence position.
+        llama_pos last_pos = ubatch.pos[i + n_seq_tokens - 1];
+
+        // For M-RoPE image/audio embeddings,positions are stored in multiple planes. The temporal plane may have the same value for all tokens, so scan all planes for the true max.
+        if (ubatch.n_pos > 1 && ubatch.embd != nullptr) {
+            for (uint32_t p = 0; p < ubatch.n_pos; ++p) {
+                for (uint32_t t = 0; t < n_seq_tokens; ++t) {
+                    last_pos = std::max(last_pos, ubatch.pos[p * ubatch.n_tokens + i + t]);
+                }
+            }
+        }
 
         if (cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
             // What should happen when the pos backtracks or skips a value?
