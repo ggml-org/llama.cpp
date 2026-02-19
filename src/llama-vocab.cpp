@@ -2459,6 +2459,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<end_of_turn>"
                     || t.first == "<|endoftext|>"
                     || t.first == "<|eom_id|>"
+                    || t.first == "<|observation|>"
                     || t.first == "<EOT>"
                     || t.first == "_<EOT>"
                     || t.first == "[EOT]" // Kimi-K2
