@@ -735,7 +735,7 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 ## OpenVINO
 
-[OpenVINO](https://docs.openvino.ai/2025/index.html) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
+[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
 The OpenVINO backend enhances performance by leveraging hardware-specific optimizations and can be enabled for use with llama.cpp.
 
 Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support. For more detailed information on OpenVINO backend, refer to [OPENVINO.md](backend/OPENVINO.md)
@@ -753,12 +753,11 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
     ```
     - OpenCL
     ```bash
-        sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+      sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
     ```
 
 - **Windows:**
-    - Download Microsoft.VisualStudio.2022.BuildTools: [Visual_Studio_Build_Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
-    Select "Desktop development with C++" under workloads
+    - Download Microsoft.VisualStudio.2022.BuildTools: [Visual_Studio_Build_Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe) and select "Desktop development with C++" under workloads
     - Install git
     - Install OpenCL with vcpkg
       ```powershell
@@ -768,7 +767,8 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
       bootstrap-vcpkg.bat
       vcpkg install opencl
       ```
-    - Use "x64 Native Tools Command Prompt" for Build
+> [!NOTE]
+> Use `x64 Native Tools Command Prompt` for Windows build.
 
 ### 1. Install OpenVINO Runtime
 
@@ -811,8 +811,8 @@ git switch dev_backend_openvino
     ```
 
 - **Windows:**
-    ```bash
-    "C:\Program Files (x86)\Intel\openvino_2025.3.0\setupvars.bat"
+    ```cmd
+    "C:\Program Files (x86)\Intel\openvino_2026.0.1\setupvars.bat"
     cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
     cmake --build build\ReleaseOV --parallel
     ```
@@ -831,10 +831,18 @@ wget https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llam
 
 When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
 
-```bash
-# If device is unset or unavailable, default to CPU.
+```
+# Linux
+# If device is unset or unavailable, defaults to CPU.
 export GGML_OPENVINO_DEVICE=GPU
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
+
+# Windows Command Line
+set GGML_OPENVINO_DEVICE=GPU
+# Windows PowerShell
+$env:GGML_OPENVINO_DEVICE = "GPU"
+
+build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_0.gguf" -n 50 "The story of AI is "
 ```
 
 To run in chat mode:
@@ -846,15 +854,9 @@ To run in chat mode:
 
 Control OpenVINO behavior using these environment variables:
 
--   **`GGML_OPENVINO_DEVICE`**: Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables static compilation mode for optimal performance.
--   **`GGML_OPENVINO_CACHE_DIR`**: Directory for model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet.
--   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling.
--   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`.
--   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps.
-
 | Variable | Description |
 |--------|-------------|
-| `GGML_OPENVINO_DEVICE` | Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables  |
+| `GGML_OPENVINO_DEVICE` | Specify the target device for OpenVINO inference. When set to `NPU`, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR` | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet. |
 | `GGML_OPENVINO_PROFILING` | Enable execution-time profiling. |
 | `GGML_OPENVINO_DUMP_CGRAPH` | Save the GGML compute graph to `cgraph.txt`. |
