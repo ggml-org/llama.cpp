@@ -19991,6 +19991,35 @@ static bool ggml_sycl_mul_mat_tensor_split(
     const size_t src0_row_bytes  = ggml_row_size(src0->type, ne00);
     const size_t cpu_weight_bytes = N_cpu * src0_row_bytes;
 
+    // --- Pre-stage for non-recording overlap ---
+    const size_t out_bytes = N_cpu * sizeof(float);
+    void * overlap_weights = nullptr;
+    bool   src1_prestaged  = false;
+
+    if (!g_ggml_sycl_graph_recording) {
+        // Weight lookup (instant after first token; first call triggers D2H + .wait())
+        if (src0->name) {
+            overlap_weights = split_get_cached_weights(
+                src0->name, src0_aos, N_gpu, src0_row_bytes, cpu_weight_bytes, stream);
+        }
+        if (!overlap_weights) {
+            split_weight_staging_ensure(cpu_weight_bytes, stream);
+            if (g_split_weight_staging.data) {
+                stream->memcpy(g_split_weight_staging.data,
+                               src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
+                overlap_weights = g_split_weight_staging.data;
+            }
+        }
+
+        if (overlap_weights) {
+            split_staging_ensure(src1_bytes, out_bytes, stream);
+            if (g_split_staging.src1_host && g_split_staging.output) {
+                stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+                src1_prestaged = true;
+            }
+        }
+    }
+
     // --- GPU portion: partial MMVQ for rows [0, N_gpu) ---
     // This is captured into the graph during recording, or executed immediately.
     const int64_t K         = ne00;
@@ -20050,7 +20079,6 @@ static bool ggml_sycl_mul_mat_tensor_split(
 
         // Ensure persistent host-pinned staging buffers exist.
         // These are allocated once and reused across tokens/replays.
-        const size_t out_bytes = N_cpu * sizeof(float);
         split_staging_ensure(src1_bytes, out_bytes, stream);
         if (!g_split_staging.src1_host || !g_split_staging.output) {
             return false;
@@ -20088,48 +20116,52 @@ static bool ggml_sycl_mul_mat_tensor_split(
     }
 
     // ===================================================================
-    // NON-RECORDING PATH: synchronous execution (unchanged)
+    // NON-RECORDING PATH: overlapped GPU + CPU execution
     // ===================================================================
 
-    // D2H copy weights to persistent host-pinned cache.
-    // This serves two purposes:
-    // 1. Provides CPU-accessible weight data for immediate vec_dot execution
-    // 2. Populates g_split_weight_cache for graph recording/replay
-    // We cannot use g_host_ptr_map (mmap pointer from set_tensor) because it may
-    // point to USM device memory that hangs when accessed from the CPU.
-    void * host_weights = nullptr;
-    if (src0->name) {
-        host_weights = split_get_cached_weights(src0->name, src0_aos, N_gpu,
-                                                 src0_row_bytes, cpu_weight_bytes, stream);
-    }
-    if (!host_weights) {
-        // Fallback: use transient staging buffer
-        split_weight_staging_ensure(cpu_weight_bytes, stream);
-        if (!g_split_weight_staging.data) {
+    if (src1_prestaged) {
+        // GPU Q8 + MMVQ already in flight (submitted above).
+        // CPU vec_dot runs CONCURRENTLY with GPU.
+        ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
+                                    overlap_weights,
+                                    g_split_staging.src1_host,
+                                    g_split_staging.output,
+                                    static_cast<int>(N_cpu));
+
+        // Queue H2D copy — NO stream->wait(), NO .wait().
+        stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes);
+    } else {
+        // Fallback: serialized path (pre-staging failed or first-time alloc issue)
+        void * host_weights = nullptr;
+        if (src0->name) {
+            host_weights = split_get_cached_weights(src0->name, src0_aos, N_gpu,
+                                                     src0_row_bytes, cpu_weight_bytes, stream);
+        }
+        if (!host_weights) {
+            split_weight_staging_ensure(cpu_weight_bytes, stream);
+            if (!g_split_weight_staging.data) {
+                return false;
+            }
+            stream->memcpy(g_split_weight_staging.data,
+                           src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
+            host_weights = g_split_weight_staging.data;
+        }
+
+        split_staging_ensure(src1_bytes, out_bytes, stream);
+        if (!g_split_staging.src1_host || !g_split_staging.output) {
             return false;
         }
-        stream->memcpy(g_split_weight_staging.data, src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
-        host_weights = g_split_weight_staging.data;
+        stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+
+        ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
+                                    host_weights,
+                                    g_split_staging.src1_host,
+                                    g_split_staging.output,
+                                    static_cast<int>(N_cpu));
+
+        // Same async H2D as overlap path — no waits needed.
+        stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes);
     }
-
-    // Stage src1 to host
-    const size_t out_bytes = N_cpu * sizeof(float);
-    split_staging_ensure(src1_bytes, out_bytes, stream);
-    if (!g_split_staging.src1_host || !g_split_staging.output) {
-        return false;
-    }
-    stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
-
-    // CPU vec_dot on cached host weight data
-    ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
-                                host_weights,
-                                g_split_staging.src1_host,
-                                g_split_staging.output,
-                                static_cast<int>(N_cpu));
-
-    // Wait for GPU to complete, then copy CPU output to device
-    stream->wait();
-    stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes).wait();
 
     return true;
 }
