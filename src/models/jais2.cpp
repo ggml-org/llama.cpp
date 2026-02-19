@@ -100,6 +100,7 @@ llm_build_jais2::llm_build_jais2(const llama_model & model, const llm_graph_para
 
         // Residual connection
         inpL = ggml_add(ctx0, cur, ffn_inp);
+        inpL = build_cvec(inpL, il);
         cb(inpL, "l_out", il);
     }
 
