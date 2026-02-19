@@ -868,27 +868,53 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         output.push_back(json {
             {"type",      "function_call"},
-            {"status",    "completed"},
-            {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
+            {"id",        "fc_" + random_string()},
+            {"call_id",   tool_call.id},
             {"name",      tool_call.name},
+            {"arguments", tool_call.arguments},
+            {"status",    "completed"},
         });
     }
 
     std::time_t t = std::time(0);
     json res = {
-        {"completed_at", t},
-        {"created_at",   t},
-        {"id",           oai_resp_id},
-        {"model",        oaicompat_model},
-        {"object",       "response"},
-        {"output",       output},
-        {"status",       "completed"},
-        {"usage",        json {
-            {"input_tokens",  n_prompt_tokens},
-            {"output_tokens", n_decoded},
-            {"total_tokens",  n_decoded + n_prompt_tokens},
+        {"completed_at",         t},
+        {"created_at",           t},
+        {"id",                   oai_resp_id},
+        {"model",                oaicompat_model},
+        {"object",               "response"},
+        {"output",               output},
+        {"status",               "completed"},
+        {"usage",                json {
+            {"input_tokens",          n_prompt_tokens},
+            {"output_tokens",         n_decoded},
+            {"total_tokens",          n_decoded + n_prompt_tokens},
+            {"input_tokens_details",  json{{"cached_tokens", 0}}},
+            {"output_tokens_details", json{{"reasoning_tokens", 0}}},
         }},
+        {"incomplete_details",   nullptr},
+        {"previous_response_id", nullptr},
+        {"instructions",         nullptr},
+        {"error",                nullptr},
+        {"tools",                json::array()},
+        {"tool_choice",          "auto"},
+        {"truncation",           "disabled"},
+        {"parallel_tool_calls",  false},
+        {"text",                 json{{"format", json{{"type", "text"}}}}},
+        {"top_p",                1.0},
+        {"presence_penalty",     0.0},
+        {"frequency_penalty",    0.0},
+        {"top_logprobs",         0},
+        {"temperature",          1.0},
+        {"reasoning",            nullptr},
+        {"max_output_tokens",    nullptr},
+        {"max_tool_calls",       nullptr},
+        {"store",                false},
+        {"background",           false},
+        {"service_tier",         "default"},
+        {"safety_identifier",    nullptr},
+        {"prompt_cache_key",     nullptr},
+        {"metadata",             json::object()},
     };
 
     return res;
@@ -897,6 +923,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
+    int & seq_num = oai_resp_seq_num;
 
     if (oaicompat_msg.reasoning_content != "") {
         const json output_item = json {
@@ -913,8 +940,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
@@ -924,9 +953,13 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_text.done"},
             {"data", json {
-                {"type",    "response.output_text.done"},
-                {"item_id", oai_resp_message_id},
-                {"text",    oaicompat_msg.content}
+                {"type",            "response.output_text.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"content_index",   0},
+                {"item_id",         oai_resp_message_id},
+                {"text",            oaicompat_msg.content},
+                {"logprobs",        json::array()},
             }}
         });
 
@@ -940,9 +973,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.content_part.done"},
             {"data", json {
-                {"type",    "response.content_part.done"},
-                {"item_id", oai_resp_message_id},
-                {"part",    content_part}
+                {"type",            "response.content_part.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"content_index",   0},
+                {"item_id",         oai_resp_message_id},
+                {"part",            content_part},
             }}
         });
         const json output_item = {
@@ -956,8 +992,10 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
@@ -966,16 +1004,19 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         const json output_item = {
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"id",        "fc_" + random_string()},
+            {"call_id",   tool_call.id},
+            {"name",      tool_call.name},
             {"arguments", tool_call.arguments},
-            {"call_id",   "fc_" + tool_call.id},
-            {"name",      tool_call.name}
+            {"status",    "completed"},
         };
         server_sent_events.push_back(json {
             {"event", "response.output_item.done"},
             {"data", json {
-                {"type", "response.output_item.done"},
-                {"item", output_item}
+                {"type",            "response.output_item.done"},
+                {"sequence_number", seq_num++},
+                {"output_index",    0},
+                {"item",            output_item},
             }}
         });
         output.push_back(output_item);
@@ -985,19 +1026,46 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     server_sent_events.push_back(json {
         {"event", "response.completed"},
         {"data", json {
-            {"type", "response.completed"},
+            {"type",            "response.completed"},
+            {"sequence_number", seq_num++},
             {"response", json {
-                {"id",         oai_resp_id},
-                {"object",     "response"},
-                {"created_at", t},
-                {"status",     "completed"},
-                {"model",      oaicompat_model},
-                {"output",     output},
-                {"usage",      json {
-                    {"input_tokens",  n_prompt_tokens},
-                    {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens}
-                }}
+                {"completed_at",         t},
+                {"created_at",           t},
+                {"id",                   oai_resp_id},
+                {"object",               "response"},
+                {"status",               "completed"},
+                {"model",                oaicompat_model},
+                {"output",               output},
+                {"usage",                json {
+                    {"input_tokens",          n_prompt_tokens},
+                    {"output_tokens",         n_decoded},
+                    {"total_tokens",          n_decoded + n_prompt_tokens},
+                    {"input_tokens_details",  json{{"cached_tokens", 0}}},
+                    {"output_tokens_details", json{{"reasoning_tokens", 0}}},
+                }},
+                {"incomplete_details",   nullptr},
+                {"previous_response_id", nullptr},
+                {"instructions",         nullptr},
+                {"error",                nullptr},
+                {"tools",                json::array()},
+                {"tool_choice",          "auto"},
+                {"truncation",           "disabled"},
+                {"parallel_tool_calls",  false},
+                {"text",                 json{{"format", json{{"type", "text"}}}}},
+                {"top_p",                1.0},
+                {"presence_penalty",     0.0},
+                {"frequency_penalty",    0.0},
+                {"top_logprobs",         0},
+                {"temperature",          1.0},
+                {"reasoning",            nullptr},
+                {"max_output_tokens",    nullptr},
+                {"max_tool_calls",       nullptr},
+                {"store",                false},
+                {"background",           false},
+                {"service_tier",         "default"},
+                {"safety_identifier",    nullptr},
+                {"prompt_cache_key",     nullptr},
+                {"metadata",             json::object()},
             }},
         }}
     });
@@ -1273,6 +1341,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     oai_resp_reasoning_id  = state.oai_resp_reasoning_id;
     oai_resp_message_id    = state.oai_resp_message_id;
     oai_resp_fc_id         = state.oai_resp_fc_id;
+    oai_resp_seq_num_ptr   = &state.oai_resp_seq_num;
 
     // track if the accumulated message has any reasoning content
     anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
@@ -1428,28 +1497,57 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
 
 json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
     std::vector<json> events;
+    int & seq_num = *oai_resp_seq_num_ptr;
 
     if (n_decoded == 1) {
+        std::time_t t = std::time(0);
+        json resp_base = {
+            {"id",                   oai_resp_id},
+            {"object",               "response"},
+            {"created_at",           t},
+            {"completed_at",         nullptr},
+            {"status",               "in_progress"},
+            {"model",                oaicompat_model},
+            {"output",               json::array()},
+            {"usage",                nullptr},
+            {"incomplete_details",   nullptr},
+            {"previous_response_id", nullptr},
+            {"instructions",         nullptr},
+            {"error",                nullptr},
+            {"tools",                json::array()},
+            {"tool_choice",          "auto"},
+            {"truncation",           "disabled"},
+            {"parallel_tool_calls",  false},
+            {"text",                 json{{"format", json{{"type", "text"}}}}},
+            {"top_p",                1.0},
+            {"presence_penalty",     0.0},
+            {"frequency_penalty",    0.0},
+            {"top_logprobs",         0},
+            {"temperature",          1.0},
+            {"reasoning",            nullptr},
+            {"max_output_tokens",    nullptr},
+            {"max_tool_calls",       nullptr},
+            {"store",                false},
+            {"background",           false},
+            {"service_tier",         "default"},
+            {"safety_identifier",    nullptr},
+            {"prompt_cache_key",     nullptr},
+            {"metadata",             json::object()},
+        };
         events.push_back(json {
             {"event", "response.created"},
             {"data", json {
-                {"type", "response.created"},
-                {"response", json {
-                    {"id",     oai_resp_id},
-                    {"object", "response"},
-                    {"status", "in_progress"},
-                }},
+                {"type",            "response.created"},
+                {"sequence_number", seq_num++},
+                {"response",        resp_base},
             }},
         });
         events.push_back(json {
             {"event", "response.in_progress"},
             {"data", json {
-                {"type", "response.in_progress"},
-                {"response", json {
-                    {"id",     oai_resp_id},
-                    {"object", "response"},
-                    {"status", "in_progress"},
-                }},
+                {"type",            "response.in_progress"},
+                {"sequence_number", seq_num++},
+                {"response",        resp_base},
             }},
         });
     }
@@ -1460,7 +1558,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 events.push_back(json {
                     {"event", "response.output_item.added"},
                     {"data", json {
-                        {"type", "response.output_item.added"},
+                        {"type",            "response.output_item.added"},
+                        {"sequence_number", seq_num++},
+                        {"output_index",    0},
                         {"item", json {
                             {"id",                oai_resp_reasoning_id},
                             {"summary",           json::array()},
@@ -1476,9 +1576,10 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
             events.push_back(json {
                 {"event", "response.reasoning_text.delta"},
                 {"data", json {
-                    {"type",    "response.reasoning_text.delta"},
-                    {"delta",   diff.reasoning_content_delta},
-                    {"item_id", oai_resp_reasoning_id},
+                    {"type",            "response.reasoning_text.delta"},
+                    {"sequence_number", seq_num++},
+                    {"delta",           diff.reasoning_content_delta},
+                    {"item_id",         oai_resp_reasoning_id},
                 }},
             });
         }
@@ -1488,7 +1589,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 events.push_back(json {
                     {"event", "response.output_item.added"},
                     {"data", json {
-                        {"type", "response.output_item.added"},
+                        {"type",            "response.output_item.added"},
+                        {"sequence_number", seq_num++},
+                        {"output_index",    0},
                         {"item", json {
                             {"content", json::array()},
                             {"id",      oai_resp_message_id},
@@ -1501,11 +1604,16 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 events.push_back(json {
                     {"event", "response.content_part.added"},
                     {"data", json {
-                        {"type",    "response.content_part.added"},
-                        {"item_id", oai_resp_message_id},
+                        {"type",            "response.content_part.added"},
+                        {"sequence_number", seq_num++},
+                        {"output_index",    0},
+                        {"content_index",   0},
+                        {"item_id",         oai_resp_message_id},
                         {"part", json {
-                            {"type", "output_text"},
-                            {"text", ""},
+                            {"type",        "output_text"},
+                            {"text",        ""},
+                            {"annotations", json::array()},
+                            {"logprobs",    json::array()},
                         }},
                     }},
                 });
@@ -1514,9 +1622,13 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
             events.push_back(json {
                 {"event", "response.output_text.delta"},
                 {"data", json {
-                    {"type",    "response.output_text.delta"},
-                    {"item_id", oai_resp_message_id},
-                    {"delta",   diff.content_delta},
+                    {"type",            "response.output_text.delta"},
+                    {"sequence_number", seq_num++},
+                    {"output_index",    0},
+                    {"content_index",   0},
+                    {"item_id",         oai_resp_message_id},
+                    {"delta",           diff.content_delta},
+                    {"logprobs",        json::array()},
                 }},
             });
         }
@@ -1525,12 +1637,15 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
             events.push_back(json {
                 {"event", "response.output_item.added"},
                 {"data", json {
-                    {"type",  "response.output_item.added"},
+                    {"type",            "response.output_item.added"},
+                    {"sequence_number", seq_num++},
+                    {"output_index",    0},
                     {"item", json {
-                        {"arguments", ""},
-                        {"call_id",   "fc_" + diff.tool_call_delta.id},
-                        {"name",      diff.tool_call_delta.name},
                         {"type",      "function_call"},
+                        {"id",        "fc_" + diff.tool_call_delta.id},
+                        {"call_id",   diff.tool_call_delta.id},
+                        {"name",      diff.tool_call_delta.name},
+                        {"arguments", ""},
                         {"status",    "in_progress"},
                     }},
                 }},
@@ -1542,9 +1657,10 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
             events.push_back(json {
                 {"event", "response.function_call_arguments.delta"},
                 {"data", json {
-                    {"type",    "response.function_call_arguments.delta"},
-                    {"delta",   diff.tool_call_delta.arguments},
-                    {"item_id", "fc_" + oai_resp_fc_id},
+                    {"type",            "response.function_call_arguments.delta"},
+                    {"sequence_number", seq_num++},
+                    {"delta",           diff.tool_call_delta.arguments},
+                    {"item_id",         "fc_" + oai_resp_fc_id},
                 }},
             });
         }
