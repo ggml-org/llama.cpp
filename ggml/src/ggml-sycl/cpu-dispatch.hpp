@@ -65,6 +65,22 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                                  const void * src0_host, const float * src1_host,
                                  float * output, int n_rows);
 
+// Batch item for ggml_sycl_cpu_vec_dot_batched().
+// Each item represents one tensor's CPU row range from tensor split.
+struct cpu_vec_dot_batch_item {
+    const void *  weight_data;   // host pointer to first CPU row (pre-offset by caller)
+    const float * src1_host;     // host float32 activation [ne00]
+    float *       output;        // output buffer for this item [n_rows]
+    ggml_type     type;          // weight quant type (e.g. GGML_TYPE_Q4_0)
+    int           ne00;          // K columns per row
+    int           n_rows;        // number of CPU rows for this item
+};
+
+// Process multiple tensor split work items in a single TBB parallel_for.
+// Deduplicates src1 quantization: items sharing the same src1_host pointer
+// share one quantized copy. Distributes work across all TBB threads.
+void ggml_sycl_cpu_vec_dot_batched(const cpu_vec_dot_batch_item * items, int n_items);
+
 // Lookup the registered host (mmap) pointer for a weight tensor by name.
 // Returns nullptr if not registered.
 const void * ggml_sycl_cpu_dispatch_get_host_ptr(const char * name);

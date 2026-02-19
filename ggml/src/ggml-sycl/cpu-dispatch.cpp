@@ -305,6 +305,117 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
     }
 }
 
+void ggml_sycl_cpu_vec_dot_batched(const cpu_vec_dot_batch_item * items, int n_items) {
+    if (n_items <= 0 || !items) {
+        return;
+    }
+
+    // --- Phase 1: Pre-quantize unique src1 values ---
+    // Many items share the same src1 (Q/K/V share hidden state, gate/up share FFN input).
+    // Map: src1_host pointer -> quantized Q8 data.
+    struct src1_q_entry {
+        std::vector<uint8_t> data;
+    };
+    std::unordered_map<const float *, src1_q_entry> src1_q_map;
+
+    for (int i = 0; i < n_items; i++) {
+        const auto & item = items[i];
+        if (!item.src1_host || !item.weight_data || item.n_rows <= 0) {
+            continue;
+        }
+        if (src1_q_map.count(item.src1_host)) {
+            continue;  // Already quantized
+        }
+
+        const auto * cpu_traits = ggml_get_type_traits_cpu(item.type);
+        if (!cpu_traits || !cpu_traits->vec_dot) {
+            continue;
+        }
+        const ggml_type        vdt        = cpu_traits->vec_dot_type;
+        const auto *           vdt_traits = ggml_get_type_traits_cpu(vdt);
+        ggml_from_float_t      from_float = vdt_traits ? vdt_traits->from_float : nullptr;
+        if (!from_float) {
+            continue;
+        }
+
+        const size_t q_size = ggml_row_size(vdt, item.ne00);
+        auto & entry = src1_q_map[item.src1_host];
+        entry.data.resize(q_size);
+        from_float(item.src1_host, entry.data.data(), item.ne00);
+    }
+
+    if (src1_q_map.empty()) {
+        return;
+    }
+
+    // Build per-item Q8 pointer array for O(1) access in the parallel loop.
+    std::vector<const uint8_t *> item_src1_q(n_items, nullptr);
+    for (int i = 0; i < n_items; i++) {
+        auto it = src1_q_map.find(items[i].src1_host);
+        if (it != src1_q_map.end()) {
+            item_src1_q[i] = it->second.data.data();
+        }
+    }
+
+    // --- Phase 2: Single batched parallel_for ---
+    // Parallelize at the work-item level. Each item has ~500-1500 rows,
+    // providing sufficient work per TBB task for good load balance.
+    const cpu_vec_dot_batch_item * items_ptr = items;
+    const uint8_t ** q8_ptrs = item_src1_q.data();
+
+#if GGML_SYCL_HAS_TBB
+    ggml_sycl_cpu_arena().execute([&] {
+        ggml_sycl_tbb::parallel_for(
+            ggml_sycl_tbb::blocked_range<int>(0, n_items, 1),
+            [items_ptr, q8_ptrs](const ggml_sycl_tbb::blocked_range<int> & range) {
+                for (int ii = range.begin(); ii < range.end(); ii++) {
+                    const auto & item    = items_ptr[ii];
+                    const uint8_t * q8   = q8_ptrs[ii];
+                    if (!q8 || !item.weight_data || !item.output || item.n_rows <= 0) {
+                        continue;
+                    }
+
+                    const auto * cpu_traits = ggml_get_type_traits_cpu(item.type);
+                    const size_t row_stride = ggml_row_size(item.type, item.ne00);
+
+                    for (int r = 0; r < item.n_rows; r++) {
+                        const void * row =
+                            (const char *) item.weight_data + (size_t) r * row_stride;
+                        float dot = 0.0f;
+                        cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
+                                            row, 0, q8, 0, 1);
+                        item.output[r] = dot;
+                    }
+                }
+            });
+    });
+#else
+    // No-TBB fallback: sequential
+    for (int ii = 0; ii < n_items; ii++) {
+        const auto & item  = items_ptr[ii];
+        const uint8_t * q8 = q8_ptrs[ii];
+        if (!q8 || !item.weight_data || !item.output || item.n_rows <= 0) {
+            continue;
+        }
+
+        const auto * cpu_traits = ggml_get_type_traits_cpu(item.type);
+        const size_t row_stride = ggml_row_size(item.type, item.ne00);
+
+        for (int r = 0; r < item.n_rows; r++) {
+            const void * row =
+                (const char *) item.weight_data + (size_t) r * row_stride;
+            float dot = 0.0f;
+            cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
+                                row, 0, q8, 0, 1);
+            item.output[r] = dot;
+        }
+    }
+#endif
+
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched vec_dot: %d items, %d unique src1\n",
+                    n_items, (int) src1_q_map.size());
+}
+
 // ---------------------------------------------------------------------------
 // Retained activation state: eliminates per-op staging overhead
 // ---------------------------------------------------------------------------
