@@ -168,13 +168,14 @@ class GGUFReader:
         tensor_count, kv_count = temp_counts
         offs = self._build_fields(offs, kv_count)
 
-        # Build Tensor Info Fields
-        offs, tensors_fields = self._build_tensor_info(offs, tensor_count)
         new_align = self.fields.get('general.alignment')
         if new_align is not None:
             if new_align.types != [GGUFValueType.UINT32]:
                 raise ValueError('Bad type for general.alignment field')
             self.alignment = new_align.parts[-1][0]
+            # Ensure alignment is a non-zero power of two
+            if self.alignment == 0 or (self.alignment & (self.alignment - 1)) != 0:
+                raise ValueError('Invalid alignment: must be a non-zero power of two')
         padding = offs % self.alignment
         if padding != 0:
             offs += self.alignment - padding
