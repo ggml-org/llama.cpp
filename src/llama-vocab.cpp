@@ -692,7 +692,7 @@ struct llm_tokenizer_wpm_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         // normalize and split by whitespace
-        std::vector<std::string> words = preprocess(text);
+        std::vector<std::string> words = preprocess(text, vocab.get_wpm_do_lower_case());
         // bos token prepended already
 
         // find the longest tokens that form the words
@@ -737,7 +737,7 @@ struct llm_tokenizer_wpm_session {
     }
 
     // TODO: reduce string copies by using cpts_offs array
-    static std::vector<std::string> preprocess(const std::string & text)  {
+    static std::vector<std::string> preprocess(const std::string & text, bool do_lower_case)  {
         const std::vector<uint32_t> cpts_nfd = unicode_cpts_normalize_nfd(unicode_cpts_from_utf8(text));
         std::vector<std::string> words(1, "");
 
@@ -756,7 +756,7 @@ struct llm_tokenizer_wpm_session {
                 continue;
             }
 
-            const std::string s = unicode_cpt_to_utf8(unicode_tolower(cpt));
+            const std::string s = unicode_cpt_to_utf8(do_lower_case ? unicode_tolower(cpt) : cpt);
             if (flags.is_punctuation || ( cpt < 0x7F && flags.is_symbol ) || is_chinese_char(cpt)) {
                 if (words.back().size()) {  // finish previous word if any
                     words.emplace_back();
@@ -1614,6 +1614,7 @@ struct llama_vocab::impl {
     bool remove_extra_whitespaces   = false;
     bool escape_whitespaces         = true;
     bool treat_whitespace_as_suffix = false;
+    bool wpm_do_lower_case          = true;
 
     std::unordered_map<std::string, llama_token> token_to_id;
     std::vector<token_data>                      id_to_token;
@@ -2092,6 +2093,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             add_bos = true;
             add_eos = false;
             add_sep = true;
+
+            if (!ml.get_key(LLM_KV_TOKENIZER_WPM_DO_LOWER_CASE, wpm_do_lower_case, false)) {
+                wpm_do_lower_case = true;
+            }
         } else if (type == LLAMA_VOCAB_TYPE_UGM) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_bos = false;
@@ -3607,6 +3612,10 @@ bool llama_vocab::get_escape_whitespaces() const {
 
 bool llama_vocab::get_treat_whitespace_as_suffix() const {
     return pimpl->treat_whitespace_as_suffix;
+}
+
+bool llama_vocab::get_wpm_do_lower_case() const {
+    return pimpl->wpm_do_lower_case;
 }
 
 int llama_vocab::max_token_len() const {

@@ -53,7 +53,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         const float * embd = nullptr;
         int embd_pos = 0;
 
-        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        if (pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) {
             // try to get token embeddings
             embd = llama_get_embeddings_ith(ctx, i);
             embd_pos = i;
@@ -243,7 +243,7 @@ int main(int argc, char ** argv) {
 
     // count number of embeddings
     int n_embd_count = 0;
-    if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+    if (pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) {
         for (int k = 0; k < n_prompts; k++) {
             n_embd_count += inputs[k].size();
         }
@@ -269,7 +269,7 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens + n_toks > n_batch || s >= n_seq_max) {
             float * out = emb + e * n_embd_out;
             batch_decode(ctx, batch, out, s, n_embd_out, params.embd_normalize);
-            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
+            e += (pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) ? batch.n_tokens : s;
             s = 0;
             common_batch_clear(batch);
         }
@@ -286,7 +286,7 @@ int main(int argc, char ** argv) {
     if (params.embd_out.empty()) {
         LOG("\n");
 
-        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        if (pooling_type == LLAMA_POOLING_TYPE_NONE || pooling_type == LLAMA_POOLING_TYPE_TOKEN_CLS) {
             for (int j = 0; j < n_embd_count; j++) {
                 LOG("embedding %d: ", j);
                 for (int i = 0; i < std::min(3, n_embd_out); i++) {

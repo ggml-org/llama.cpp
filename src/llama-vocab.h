@@ -134,6 +134,7 @@ struct llama_vocab {
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
+    bool get_wpm_do_lower_case         () const;
 
     int max_token_len() const;
 

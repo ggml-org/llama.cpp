@@ -33,9 +33,10 @@ static void print_usage(int /*argc*/, char ** argv) {
     LOG("%s\n", usage.c_str());
 }
 
-static bool has_pooling(llama_context * ctx) {
+static bool is_sequence_level_pooling(llama_context * ctx) {
     switch (llama_pooling_type(ctx)) {
         case LLAMA_POOLING_TYPE_NONE:
+        case LLAMA_POOLING_TYPE_TOKEN_CLS:
         case LLAMA_POOLING_TYPE_UNSPECIFIED:
             return false;
         default:
@@ -60,16 +61,16 @@ struct output_data {
 
         if (params.embedding) {
             const int n_embd       = llama_model_n_embd_out(model);
-            const bool pooling     = has_pooling(ctx);
-            const int n_embd_count = pooling ? 1 : tokens.size();
+            const bool seq_level_pooling = is_sequence_level_pooling(ctx);
+            const int  n_embd_count      = seq_level_pooling ? 1 : tokens.size();
             const int n_floats     = n_embd * n_embd_count;
 
-            float * embd_raw = pooling ? llama_get_embeddings_seq(ctx, 0) : llama_get_embeddings(ctx);
+            float * embd_raw = seq_level_pooling ? llama_get_embeddings_seq(ctx, 0) : llama_get_embeddings(ctx);
             if (embd_raw == nullptr) {
                 throw std::runtime_error("failed to get embeddings from the model");
             }
 
-            LOG_DBG("pooling_enabled: %s\n", pooling ? "true" : "false");
+            LOG_DBG("seq_level_pooling: %s\n", seq_level_pooling ? "true" : "false");
             LOG_DBG("n_embd: %d\n", n_embd);
             LOG_DBG("n_floats: %d\n", n_floats);
             LOG_DBG("n_embd_count: %d\n", n_embd_count);
