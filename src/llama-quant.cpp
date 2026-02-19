@@ -932,7 +932,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                tensor_size/1024.0/1024.0,
                                new_size/1024.0/1024.0,
                                ggml_type_name(new_type));
-                if (!will_require_imatrix && tensor_type_requires_imatrix(tensor, new_type)) {
+                if (!will_require_imatrix && tensor_type_requires_imatrix(tensor, new_type, params->ftype)) {
                     will_require_imatrix = true;
                 }
             } else {
