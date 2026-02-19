@@ -263,13 +263,26 @@ const void * ggml_sycl_cpu_dispatch_get_host_ptr(const char * name) {
 static ggml_sycl_tbb::task_arena & ggml_sycl_cpu_arena();
 #endif
 
-// Forward declaration for the 4-row SIMD kernel (defined later, guarded by __AVX2__)
+// Forward declarations for SIMD kernels (defined later, guarded by __AVX2__ / __AVXVNNIINT8__)
 #if defined(__AVX2__)
 static inline void simd_mul_mat_q4_0_q8_0_4row(
     int K_elem, float * GGML_RESTRICT out,
     const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
     const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
     const void * GGML_RESTRICT vy);
+#if defined(__AVXVNNIINT8__)
+static inline void simd_mul_mat_q4_0_q8_0_8row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vx4, const void * GGML_RESTRICT vx5,
+    const void * GGML_RESTRICT vx6, const void * GGML_RESTRICT vx7,
+    const void * GGML_RESTRICT vy);
+static inline void simd_mul_mat_q4_0_q8_0_16row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT rows[16],
+    const void * GGML_RESTRICT vy);
+#endif
 #endif
 
 void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
@@ -313,14 +326,38 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                     // Q4_0 fast path — requires -mavx2 or higher (enabled in CMakeLists.txt)
 #if defined(__AVX2__)
                     if (type == GGML_TYPE_Q4_0) {
-                        // 4-row SIMD kernel: loads activation once, dots against 4 rows
+#if defined(__AVXVNNIINT8__)
+                        // 16-row VNNI kernel: maximum activation amortization
+                        for (; i + 15 < r.end(); i += 16) {
+                            const void * row_ptrs[16];
+                            for (int k = 0; k < 16; k++) {
+                                row_ptrs[k] = (const char *) src0_host + (size_t)(i + k) * row_stride;
+                            }
+                            simd_mul_mat_q4_0_q8_0_16row(ne00, output + i, row_ptrs, src1_q_data);
+                        }
+                        // 8-row VNNI kernel for remainder
+                        for (; i + 7 < r.end(); i += 8) {
+                            simd_mul_mat_q4_0_q8_0_8row(
+                                ne00, output + i,
+                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 4) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 5) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 6) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 7) * row_stride,
+                                src1_q_data);
+                        }
+#endif
+                        // 4-row kernel (AVX2, with or without VNNI)
                         for (; i + 3 < r.end(); i += 4) {
                             simd_mul_mat_q4_0_q8_0_4row(
                                 ne00, output + i,
-                                (const char *) src0_host + (size_t) (i + 0) * row_stride,
-                                (const char *) src0_host + (size_t) (i + 1) * row_stride,
-                                (const char *) src0_host + (size_t) (i + 2) * row_stride,
-                                (const char *) src0_host + (size_t) (i + 3) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 0) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 1) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 2) * row_stride,
+                                (const char *) src0_host + (size_t)(i + 3) * row_stride,
                                 src1_q_data);
                         }
                     }
@@ -1534,6 +1571,127 @@ static inline void simd_mul_mat_q4_0_q8_0_4row(
     out[2] = ggml_sycl_hsum_float_8(acc2);
     out[3] = ggml_sycl_hsum_float_8(acc3);
 }
+
+#if defined(__AVXVNNIINT8__)
+
+// Process 8 weight rows x 1 activation row for Q4_0 x Q8_0.
+// Uses 8 independent 256-bit accumulators with VNNI _mm256_dpbssd_epi32.
+// Loads each Q8_0 block once and dots against 8 Q4_0 blocks simultaneously.
+static inline void simd_mul_mat_q4_0_q8_0_8row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0,
+    const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2,
+    const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vx4,
+    const void * GGML_RESTRICT vx5,
+    const void * GGML_RESTRICT vx6,
+    const void * GGML_RESTRICT vx7,
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK4_0;
+
+    const block_q4_0 * GGML_RESTRICT x0 = (const block_q4_0 *)vx0;
+    const block_q4_0 * GGML_RESTRICT x1 = (const block_q4_0 *)vx1;
+    const block_q4_0 * GGML_RESTRICT x2 = (const block_q4_0 *)vx2;
+    const block_q4_0 * GGML_RESTRICT x3 = (const block_q4_0 *)vx3;
+    const block_q4_0 * GGML_RESTRICT x4 = (const block_q4_0 *)vx4;
+    const block_q4_0 * GGML_RESTRICT x5 = (const block_q4_0 *)vx5;
+    const block_q4_0 * GGML_RESTRICT x6 = (const block_q4_0 *)vx6;
+    const block_q4_0 * GGML_RESTRICT x7 = (const block_q4_0 *)vx7;
+    const block_q8_0 * GGML_RESTRICT y  = (const block_q8_0 *)vy;
+
+    const __m256i off = _mm256_set1_epi8(8);
+
+    __m256 acc0 = _mm256_setzero_ps();
+    __m256 acc1 = _mm256_setzero_ps();
+    __m256 acc2 = _mm256_setzero_ps();
+    __m256 acc3 = _mm256_setzero_ps();
+    __m256 acc4 = _mm256_setzero_ps();
+    __m256 acc5 = _mm256_setzero_ps();
+    __m256 acc6 = _mm256_setzero_ps();
+    __m256 acc7 = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ib++) {
+        // Load activation block ONCE (amortized across 8 weight rows)
+        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+#define PROCESS_ROW_VNNI(xptr, accum) \
+        { \
+            const float d  = GGML_FP16_TO_FP32(xptr[ib].d) * q8_d; \
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xptr[ib].qs); \
+            qx             = _mm256_sub_epi8(qx, off); \
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy); \
+            accum = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), accum); \
+        }
+
+        PROCESS_ROW_VNNI(x0, acc0)
+        PROCESS_ROW_VNNI(x1, acc1)
+        PROCESS_ROW_VNNI(x2, acc2)
+        PROCESS_ROW_VNNI(x3, acc3)
+        PROCESS_ROW_VNNI(x4, acc4)
+        PROCESS_ROW_VNNI(x5, acc5)
+        PROCESS_ROW_VNNI(x6, acc6)
+        PROCESS_ROW_VNNI(x7, acc7)
+
+#undef PROCESS_ROW_VNNI
+    }
+
+    out[0] = ggml_sycl_hsum_float_8(acc0);
+    out[1] = ggml_sycl_hsum_float_8(acc1);
+    out[2] = ggml_sycl_hsum_float_8(acc2);
+    out[3] = ggml_sycl_hsum_float_8(acc3);
+    out[4] = ggml_sycl_hsum_float_8(acc4);
+    out[5] = ggml_sycl_hsum_float_8(acc5);
+    out[6] = ggml_sycl_hsum_float_8(acc6);
+    out[7] = ggml_sycl_hsum_float_8(acc7);
+}
+
+// Process 16 weight rows x 1 activation row for Q4_0 x Q8_0.
+// Array-based interface for 16 row pointers. 16 independent accumulators
+// saturate Arrow Lake P-core's 6-wide issue with dual 256-bit FMA ports.
+static inline void simd_mul_mat_q4_0_q8_0_16row(
+    int K_elem,
+    float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT rows[16],
+    const void * GGML_RESTRICT vy
+) {
+    const int nb = K_elem / QK4_0;
+
+    const block_q4_0 * GGML_RESTRICT xr[16];
+    for (int r = 0; r < 16; r++) {
+        xr[r] = (const block_q4_0 *)rows[r];
+    }
+    const block_q8_0 * GGML_RESTRICT y = (const block_q8_0 *)vy;
+
+    const __m256i off = _mm256_set1_epi8(8);
+
+    __m256 acc[16];
+    for (int r = 0; r < 16; r++) {
+        acc[r] = _mm256_setzero_ps();
+    }
+
+    for (int ib = 0; ib < nb; ib++) {
+        const float   q8_d = GGML_FP16_TO_FP32(y[ib].d);
+        const __m256i qy   = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        for (int r = 0; r < 16; r++) {
+            const float d  = GGML_FP16_TO_FP32(xr[r][ib].d) * q8_d;
+            __m256i     qx = ggml_sycl_bytes_from_nibbles_32(xr[r][ib].qs);
+            qx             = _mm256_sub_epi8(qx, off);
+            const __m256i prod = _mm256_dpbssd_epi32(_mm256_setzero_si256(), qx, qy);
+            acc[r] = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(prod), acc[r]);
+        }
+    }
+
+    for (int r = 0; r < 16; r++) {
+        out[r] = ggml_sycl_hsum_float_8(acc[r]);
+    }
+}
+
+#endif // defined(__AVXVNNIINT8__)
 
 #endif // defined(__AVX2__)
 
