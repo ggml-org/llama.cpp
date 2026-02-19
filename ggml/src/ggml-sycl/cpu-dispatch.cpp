@@ -374,63 +374,108 @@ void ggml_sycl_cpu_vec_dot_batched(const cpu_vec_dot_batch_item * items, int n_i
         }
     }
 
-    // --- Phase 2: Single batched parallel_for ---
-    // Parallelize at the work-item level. Each item has ~500-1500 rows,
-    // providing sufficient work per TBB task for good load balance.
+    // --- Phase 2: Row-level parallel_for ---
+    // Flatten all items into a single row-level parallel_for for maximum
+    // load balancing.  Build prefix-sum array to map flat row index -> item.
     const cpu_vec_dot_batch_item * items_ptr = items;
     const uint8_t ** q8_ptrs = item_src1_q.data();
+
+    // Pre-compute per-item metadata: cpu_traits, row_stride, prefix_sum.
+    struct item_meta {
+        const ggml_type_traits_cpu * cpu_traits;
+        size_t                       row_stride;
+        int                          prefix_rows;  // exclusive: total rows before this item
+    };
+    std::vector<item_meta> meta(n_items);
+    int total_rows = 0;
+    for (int i = 0; i < n_items; i++) {
+        meta[i].prefix_rows = total_rows;
+        const auto & item = items[i];
+        if (!q8_ptrs[i] || !item.weight_data || !item.output || item.n_rows <= 0) {
+            meta[i].cpu_traits = nullptr;
+            meta[i].row_stride = 0;
+            continue;
+        }
+        meta[i].cpu_traits = ggml_get_type_traits_cpu(item.type);
+        meta[i].row_stride = ggml_row_size(item.type, item.ne00);
+        total_rows += item.n_rows;
+    }
+
+    if (total_rows == 0) {
+        return;
+    }
+
+    const item_meta * meta_ptr = meta.data();
 
 #if GGML_SYCL_HAS_TBB
     ggml_sycl_cpu_arena().execute([&] {
         ggml_sycl_tbb::parallel_for(
-            ggml_sycl_tbb::blocked_range<int>(0, n_items, 1),
-            [items_ptr, q8_ptrs](const ggml_sycl_tbb::blocked_range<int> & range) {
-                for (int ii = range.begin(); ii < range.end(); ii++) {
-                    const auto & item    = items_ptr[ii];
-                    const uint8_t * q8   = q8_ptrs[ii];
-                    if (!q8 || !item.weight_data || !item.output || item.n_rows <= 0) {
+            ggml_sycl_tbb::blocked_range<int>(0, total_rows, 64),
+            [items_ptr, q8_ptrs, meta_ptr, n_items](
+                const ggml_sycl_tbb::blocked_range<int> & range) {
+                // Binary search to find which item contains range.begin().
+                int cur_item = 0;
+                {
+                    int lo = 0, hi = n_items;
+                    while (lo < hi) {
+                        int mid = (lo + hi) / 2;
+                        if (meta_ptr[mid].prefix_rows <= range.begin()) {
+                            cur_item = mid;
+                            lo = mid + 1;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                }
+
+                for (int flat_r = range.begin(); flat_r < range.end(); flat_r++) {
+                    // Advance to the correct item if we've passed its rows.
+                    while (cur_item + 1 < n_items
+                           && flat_r >= meta_ptr[cur_item + 1].prefix_rows) {
+                        cur_item++;
+                    }
+                    const auto & m = meta_ptr[cur_item];
+                    if (!m.cpu_traits) {
                         continue;
                     }
+                    const auto & item = items_ptr[cur_item];
+                    int local_r       = flat_r - m.prefix_rows;
 
-                    const auto * cpu_traits = ggml_get_type_traits_cpu(item.type);
-                    const size_t row_stride = ggml_row_size(item.type, item.ne00);
-
-                    for (int r = 0; r < item.n_rows; r++) {
-                        const void * row =
-                            (const char *) item.weight_data + (size_t) r * row_stride;
-                        float dot = 0.0f;
-                        cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
-                                            row, 0, q8, 0, 1);
-                        item.output[r] = dot;
-                    }
+                    const void * row =
+                        (const char *) item.weight_data + (size_t) local_r * m.row_stride;
+                    float dot = 0.0f;
+                    m.cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
+                                          row, 0, q8_ptrs[cur_item], 0, 1);
+                    item.output[local_r] = dot;
                 }
             });
     });
 #else
-    // No-TBB fallback: sequential
-    for (int ii = 0; ii < n_items; ii++) {
-        const auto & item  = items_ptr[ii];
-        const uint8_t * q8 = q8_ptrs[ii];
-        if (!q8 || !item.weight_data || !item.output || item.n_rows <= 0) {
+    // No-TBB fallback: sequential over flattened rows.
+    int cur_item = 0;
+    for (int flat_r = 0; flat_r < total_rows; flat_r++) {
+        while (cur_item + 1 < n_items
+               && flat_r >= meta[cur_item + 1].prefix_rows) {
+            cur_item++;
+        }
+        const auto & m = meta[cur_item];
+        if (!m.cpu_traits) {
             continue;
         }
+        const auto & item = items_ptr[cur_item];
+        int local_r       = flat_r - m.prefix_rows;
 
-        const auto * cpu_traits = ggml_get_type_traits_cpu(item.type);
-        const size_t row_stride = ggml_row_size(item.type, item.ne00);
-
-        for (int r = 0; r < item.n_rows; r++) {
-            const void * row =
-                (const char *) item.weight_data + (size_t) r * row_stride;
-            float dot = 0.0f;
-            cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
-                                row, 0, q8, 0, 1);
-            item.output[r] = dot;
-        }
+        const void * row =
+            (const char *) item.weight_data + (size_t) local_r * m.row_stride;
+        float dot = 0.0f;
+        m.cpu_traits->vec_dot(item.ne00, &dot, sizeof(float),
+                              row, 0, q8_ptrs[cur_item], 0, 1);
+        item.output[local_r] = dot;
     }
 #endif
 
-    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched vec_dot: %d items, %d unique src1\n",
-                    n_items, (int) src1_q_map.size());
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched vec_dot: %d items, %d total_rows, %d unique src1\n",
+                    n_items, total_rows, (int) src1_q_map.size());
 }
 
 // ---------------------------------------------------------------------------
