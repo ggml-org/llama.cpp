@@ -95,7 +95,7 @@ REQD_SUBGROUP_SIZE_64
 kernel void kernel_gemv_noshuffle_q6_K_f32(
     read_only image1d_buffer_t src0_ql,
     read_only image1d_buffer_t src0_qh,
-    global char4 * src0_s,
+    global half2 * src0_s,
     global half2 * src0_d,
     read_only image1d_buffer_t src1,
     global float * dst,
@@ -122,34 +122,34 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
 
     for (int k = grp; k < nb; k += NSUBGROUPS) {
         reg_d = src0_d[gid + k/8 * line_stride_a];
-        reg_s = src0_s[gid +   k * line_stride_a];
+        reg_s = as_char4(src0_s[gid + k * line_stride_a]);
 
         if (slid < 4) {
             reg_b.s0123 = read_imagef(src1, 0 + slid*2 + k*8);
-            reg_b.s4567 = read_imagef(src1, 1 + slid*2 + k*8 + 4);
+            reg_b.s4567 = read_imagef(src1, 1 + slid*2 + k*8);
         }
 
-        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 0).x;
-        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 1).x;
-        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 2).x;
-        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 3).x;
+        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*0).x;
+        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*1).x;
+        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*2).x;
+        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*3).x;
 
-        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 0).x);
-        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 1).x);
-        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 2).x);
-        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 3).x);
+        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*0).x);
+        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*1).x);
+        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*2).x);
+        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*3).x);
 
         dequantize_block_acc_bcast_8_hi(total_sum, as_ushort8(reg_a_l), as_uchar8(reg_a_h), reg_d, reg_s, reg_b);
 
-        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 4).x;
-        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 5).x;
-        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 6).x;
-        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a * 7).x;
+        reg_a_l.s0 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*4).x;
+        reg_a_l.s1 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*5).x;
+        reg_a_l.s2 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*6).x;
+        reg_a_l.s3 = read_imageui(src0_ql, gid + k*block_stride_a + line_stride_a*7).x;
 
-        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 4).x);
-        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 5).x);
-        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 6).x);
-        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a * 7).x);
+        reg_a_h.s0 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*4).x);
+        reg_a_h.s1 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*5).x);
+        reg_a_h.s2 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*6).x);
+        reg_a_h.s3 = as_ushort(read_imageh(src0_qh, gid + k*block_stride_a + line_stride_a*7).x);
 
         dequantize_block_acc_bcast_8_lo(total_sum, as_ushort8(reg_a_l), as_uchar8(reg_a_h), reg_d, reg_s, reg_b);
     }
@@ -179,6 +179,6 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
 
     if (grp == 0) {
         dst = (global float*)((global char*)dst + offsetd);
-        vstore2(total_sum, 0, &dst[gid * 2]);
+        vstore2(total_sum, 0, &(dst[gid * 2]));
     }
 }
