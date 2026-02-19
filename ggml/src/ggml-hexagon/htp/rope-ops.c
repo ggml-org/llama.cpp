@@ -131,7 +131,7 @@ static void rope_corr_dims(int     n_dims,
     dims[1]     = MIN(n_dims - 1, end);
 }
 
-static void init_rope_ctx(struct htp_rope_context * rctx, struct htp_ops_context * octx) {
+static void rope_init_context(struct htp_rope_context * rctx, struct htp_ops_context * octx) {
     memset(rctx, 0, sizeof(struct htp_rope_context));
 
     const int32_t * op_params = &octx->op_params[0];
@@ -160,7 +160,7 @@ static void init_rope_ctx(struct htp_rope_context * rctx, struct htp_ops_context
          rctx->ext_factor, rctx->theta_scale, rctx->attn_factor);
 }
 
-static void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
     const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
     const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
     uint8_t * restrict dst_curr         = (uint8_t *) dst;
@@ -205,7 +205,7 @@ static void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict sr
     }
 }
 
-static void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
+static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
     const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
     const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
     uint8_t * restrict dst_curr         = (uint8_t *) dst;
@@ -421,7 +421,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_ROPE:
-            init_rope_ctx(&rctx, octx);
+            rope_init_context(&rctx, octx);
             break;
 
         default:
@@ -474,7 +474,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.src0_nrows = src0_nrows;
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
-        uint32_t n_jobs             = MIN(n_threads, src0_nrows);
+        uint32_t n_jobs = MIN(n_threads, src0_nrows);
         rctx.src0_nrows_per_thread = (src0_nrows + n_jobs - 1) / n_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, rope_job_f32, &rctx, n_jobs);
     }
