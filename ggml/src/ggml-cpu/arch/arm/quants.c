@@ -670,6 +670,38 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     const int8x16_t values = vld1q_s8(kvalues_mxfp4);
     const uint8x16_t m4b = vdupq_n_u8(0x0f);
 
+    for (; ib + 1 < nb; ib += 2) {
+        const block_nvfp4 * x0 = &x[2*ib + 0];
+        const block_nvfp4 * x1 = &x[2*ib + 1];
+        const block_nvfp4 * x2 = &x[2*ib + 2];
+        const block_nvfp4 * x3 = &x[2*ib + 3];
+
+        const uint8x16_t q4bits_0 = vcombine_u8(vld1_u8(x0->qs), vld1_u8(x1->qs));
+        const int8x16_t q4b_lo_0 = ggml_vqtbl1q_s8(values, vandq_u8  (q4bits_0, m4b));
+        const int8x16_t q4b_hi_0 = ggml_vqtbl1q_s8(values, vshrq_n_u8(q4bits_0, 4));
+        const int8x16_t q4_block0 = vcombine_s8(vget_low_s8(q4b_lo_0), vget_low_s8(q4b_hi_0));
+        const int8x16_t q4_block1 = vcombine_s8(vget_high_s8(q4b_lo_0), vget_high_s8(q4b_hi_0));
+
+        const uint8x16_t q4bits_1 = vcombine_u8(vld1_u8(x2->qs), vld1_u8(x3->qs));
+        const int8x16_t q4b_lo_1 = ggml_vqtbl1q_s8(values, vandq_u8  (q4bits_1, m4b));
+        const int8x16_t q4b_hi_1 = ggml_vqtbl1q_s8(values, vshrq_n_u8(q4bits_1, 4));
+        const int8x16_t q4_block2 = vcombine_s8(vget_low_s8(q4b_lo_1), vget_low_s8(q4b_hi_1));
+        const int8x16_t q4_block3 = vcombine_s8(vget_high_s8(q4b_lo_1), vget_high_s8(q4b_hi_1));
+
+        const int32x4_t prod_0 = ggml_vdotq_s32(vdupq_n_s32(0), q4_block0, vld1q_s8(y[ib + 0].qs));
+        const int32x4_t prod_1 = ggml_vdotq_s32(vdupq_n_s32(0), q4_block1, vld1q_s8(y[ib + 0].qs + 16));
+        const int32x4_t prod_2 = ggml_vdotq_s32(vdupq_n_s32(0), q4_block2, vld1q_s8(y[ib + 1].qs));
+        const int32x4_t prod_3 = ggml_vdotq_s32(vdupq_n_s32(0), q4_block3, vld1q_s8(y[ib + 1].qs + 16));
+
+        const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
+        const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
+
+        sumf += dy0 * GGML_CPU_FP16_TO_FP32(x0->d) * vaddvq_s32(prod_0)
+              + dy0 * GGML_CPU_FP16_TO_FP32(x1->d) * vaddvq_s32(prod_1)
+              + dy1 * GGML_CPU_FP16_TO_FP32(x2->d) * vaddvq_s32(prod_2)
+              + dy1 * GGML_CPU_FP16_TO_FP32(x3->d) * vaddvq_s32(prod_3);
+    }
+
     for (; ib < nb; ++ib) {
         const block_nvfp4 * x0 = &x[2*ib + 0];
         const block_nvfp4 * x1 = &x[2*ib + 1];

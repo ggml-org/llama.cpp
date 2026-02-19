@@ -22,6 +22,12 @@ FLOAT_TYPE get_dm(uint ib) {
 }
 #endif
 
+#if defined(DATA_A_NVFP4)
+FLOAT_TYPE get_dm(uint ib) {
+    return FLOAT_TYPE(data_a[ib].d);
+}
+#endif
+
 #if defined(DATA_A_Q2_K)
 FLOAT_TYPE_VEC2 get_dm(uint ib) {
     const uint ib_k = ib / 8;
@@ -132,7 +138,27 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 #endif
 
-#if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
+#if defined(DATA_A_NVFP4)
+// 1-byte loads for nvfp4 blocks (10 bytes)
+i32vec2 repack(uint ib, uint iqs) {
+    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                      data_a[ib].qs[iqs * 4 + 1],
+                                      data_a[ib].qs[iqs * 4 + 2],
+                                      data_a[ib].qs[iqs * 4 + 3]));
+
+    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
+    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w])),
+                   pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w])));
+}
+
+FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
+    return FLOAT_TYPE(da * dsb.x * float(q_sum));
+}
+#endif
+
+#if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     int32_t q_sum = 0;
 #if QUANT_R == 2
