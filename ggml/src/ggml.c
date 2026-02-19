@@ -899,6 +899,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
+    GGML_ASSERT(type >= 0);
     GGML_ASSERT(type < GGML_TYPE_COUNT);
     return &type_traits[type];
 }
@@ -1265,10 +1266,14 @@ size_t ggml_nbytes_pad(const struct ggml_tensor * tensor) {
 }
 
 int64_t ggml_blck_size(enum ggml_type type) {
+    GGML_ASSERT(type >= 0);
+    GGML_ASSERT(type < GGML_TYPE_COUNT);
     return type_traits[type].blck_size;
 }
 
 size_t ggml_type_size(enum ggml_type type) {
+    GGML_ASSERT(type >= 0);
+    GGML_ASSERT(type < GGML_TYPE_COUNT);
     return type_traits[type].type_size;
 }
 
@@ -1278,14 +1283,20 @@ size_t ggml_row_size(enum ggml_type type, int64_t ne) {
 }
 
 double ggml_type_sizef(enum ggml_type type) {
+    if (type < 0 || type >= GGML_TYPE_COUNT) {
+        return 0.0;
+    }
     return ((double)(type_traits[type].type_size))/type_traits[type].blck_size;
 }
 
 const char * ggml_type_name(enum ggml_type type) {
-    return type < GGML_TYPE_COUNT ? type_traits[type].type_name : "NONE";
+    return type >= 0 && type < GGML_TYPE_COUNT ? type_traits[type].type_name : "NONE";
 }
 
 bool ggml_is_quantized(enum ggml_type type) {
+    if (type < 0 || type >= GGML_TYPE_COUNT) {
+        return false;
+    }
     return type_traits[type].is_quantized;
 }
 
