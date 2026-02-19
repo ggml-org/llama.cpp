@@ -439,6 +439,13 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
         // Argument JSON
         json arguments = json::object();
 
+        // Append a key/value pair to arguments with .emplace_back() to deliberately allow non-unique keys.
+        // Cannot use operator[] because it would overwrite keys mid-streaming, breaking streaming diff calculations.
+        auto & arguments_obj = arguments.get_ref<json::object_t &>();
+        auto append_param = [&](const std::string & k, json v) {
+            arguments_obj.emplace_back(k, std::move(v));
+        };
+
         // Helper to generate a partial argument JSON
         const auto gen_partial_args = [&](auto set_partial_arg) {
             gen_partial_json(set_partial_arg, arguments, builder, function_name);
@@ -466,11 +473,11 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
             // Parse arg_key
             auto key_res = builder.try_find_literal(form.key_val_sep);
             if (!key_res) {
-                gen_partial_args([&](auto &rest, auto &needle) {arguments[rest + needle] = "";});
+                gen_partial_args([&](auto &rest, auto &needle) {append_param(rest + needle, "");});
                 throw common_chat_msg_partial_exception("Expected " + gbnf_format_literal(form.key_val_sep) + " after " + gbnf_format_literal(form.key_start));
             }
             if (key_res->groups[0].end - key_res->groups[0].begin != form.key_val_sep.size()) {
-                gen_partial_args([&](auto &, auto &needle) {arguments[key_res->prelude + needle] = "";});
+                gen_partial_args([&](auto &, auto &needle) {append_param(key_res->prelude + needle, "");});
                 throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.key_val_sep));
             }
             auto &key = key_res->prelude;
@@ -488,11 +495,11 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                         return return_error(builder, start_pos, false);
                     }
                     if (tc->groups[0].end - tc->groups[0].begin != form.key_val_sep2->size()) {
-                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
+                        gen_partial_args([&](auto &, auto &needle) {append_param(key, needle);});
                         throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(*form.key_val_sep2));
                     }
                 } else {
-                    gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
+                    gen_partial_args([&](auto &, auto &needle) {append_param(key, needle);});
                     throw common_chat_msg_partial_exception("Expected " + gbnf_format_literal(*form.key_val_sep2) + " after " + gbnf_format_literal(form.key_val_sep));
                 }
             }
@@ -527,7 +534,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 builder.consume_spaces();
                 if (builder.pos() == builder.input().size()) {
                     if (form.raw_argval && !*form.raw_argval && (value_json->json.is_string() || value_json->json.is_object() || value_json->json.is_array())) {
-                        arguments[key] = value_json->json;
+                        append_param(key, value_json->json);
                         auto json_str = arguments.dump();
                         if (!value_json->healing_marker.json_dump_marker.empty()) {
                             GGML_ASSERT(std::string::npos != json_str.rfind(value_json->healing_marker.json_dump_marker));
@@ -538,7 +545,7 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                         }
                         builder.add_tool_call(function_name, "", json_str);
                     } else {
-                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
+                        gen_partial_args([&](auto &, auto &needle) {append_param(key, needle);});
                     }
                     LOG_DBG("Possible JSON arg_value: %s\n", value_json->json.dump().c_str());
                     throw common_chat_msg_partial_exception("JSON arg_value detected. Waiting for more tokens for validations.");
@@ -547,10 +554,10 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                 auto [val_end_size, tc] = try_find_val_end();
                 if (tc && all_space(tc->prelude) && value_json->healing_marker.marker.empty()) {
                     if (tc->groups[0].end - tc->groups[0].begin != val_end_size) {
-                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = needle;});
+                        gen_partial_args([&](auto &, auto &needle) {append_param(key, needle);});
                         LOG_DBG("Possible terminated JSON arg_value: %s\n", value_json->json.dump().c_str());
                         throw common_chat_msg_partial_exception("Partial literal: " + gbnf_format_literal(form.val_end) + (form.last_val_end ? gbnf_format_literal(*form.last_val_end) : ""));
-                    } else arguments[key] = value_json->json;
+                    } else append_param(key, value_json->json);
                 } else builder.move_to(val_start);
             }
 
@@ -560,19 +567,19 @@ inline bool parse_xml_tool_calls(common_chat_msg_parser & builder, const struct 
                     auto &value_str = value_plain->prelude;
                     if (form.trim_raw_argval) value_str = string_strip(value_str);
                     if (value_plain->groups[0].end - value_plain->groups[0].begin != val_end_size) {
-                        gen_partial_args([&](auto &, auto &needle) {arguments[key] = value_str + needle;});
+                        gen_partial_args([&](auto &, auto &needle) {append_param(key, value_str + needle);});
                         throw common_chat_msg_partial_exception(
                                 "Expected " + gbnf_format_literal(form.val_end) +
                                 " after " + gbnf_format_literal(form.key_val_sep) +
                                 (form.key_val_sep2 ? " " + gbnf_format_literal(*form.key_val_sep2) : "")
                         );
                     }
-                    arguments[key] = value_str;
+                    append_param(key, value_str);
                 } else {
                     if (form.trim_raw_argval) {
-                        gen_partial_args([&](auto &rest, auto &needle) {arguments[key] = string_strip(rest) + needle;});
+                        gen_partial_args([&](auto &rest, auto &needle) {append_param(key, string_strip(rest) + needle);});
                     } else {
-                        gen_partial_args([&](auto &rest, auto &needle) {arguments[key] = rest + needle;});
+                        gen_partial_args([&](auto &rest, auto &needle) {append_param(key, rest + needle);});
                     }
                     throw common_chat_msg_partial_exception(
                             "Expected " + gbnf_format_literal(form.val_end) +

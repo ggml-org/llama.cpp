@@ -3522,6 +3522,26 @@ Hey there!<|im_end|>
                 "  </function>\n"
                 "</tool_call>",
             [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Non-unique parameter keys (As seen in some Qwen3-Coder-Next tool calls)
+        common_chat_msg expected_dup_key;
+        expected_dup_key.role = "assistant";
+        expected_dup_key.tool_calls = {
+            { "write_to_file", R"({"filePath":"a.py","filePath":"b.py"})", "" }
+        };
+
+        test_parser_with_streaming(expected_dup_key,
+                "<tool_call>\n"
+                "  <function=write_to_file>\n"
+                "    <parameter=filePath>\n"
+                "      a.py\n"
+                "    </parameter>\n"
+                "    <parameter=filePath>\n"
+                "      b.py\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return test_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
     }
 
     {
