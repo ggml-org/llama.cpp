@@ -106,7 +106,7 @@
 #    define GGML_CUDA_USE_CUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #   define GGML_CUDA_USE_PDL
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
 
