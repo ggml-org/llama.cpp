@@ -41,6 +41,12 @@ class MessageAdapter(
         if (holder is UserMessageViewHolder || holder is AssistantMessageViewHolder) {
             val textView = holder.itemView.findViewById<TextView>(R.id.msg_content)
             textView.text = message.content
+            holder.itemView.setOnLongClickListener {
+                val clipboard = holder.itemView.context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("message", message.content))
+                android.widget.Toast.makeText(holder.itemView.context, "Kopyalandı", android.widget.Toast.LENGTH_SHORT).show()
+                true
+            }
         }
     }
 
