@@ -224,6 +224,23 @@ void ggml_sycl_cpu_dispatch_register_host_ptr(const char * name, const void * ho
             g_host_ptr_owns_memory = true;
         }
     } else {
+        // Non-offload mode: store the raw pointer only if it is host-accessible.
+        // The `data` parameter from set_tensor is normally the original mmap pointer,
+        // but on SYCL backends the pointer could be device USM.  Device pointers are
+        // readable by the SYCL runtime (page-fault zero-copy) but AVX-512 vec_dot
+        // will deadlock or stall indefinitely when accessing them from the CPU.
+        try {
+            sycl::context    sycl_ctx = ggml_sycl_get_device(0).default_queue().get_context();
+            sycl::usm::alloc alloc    = sycl::get_pointer_type(host_ptr, sycl_ctx);
+            if (alloc == sycl::usm::alloc::device) {
+                // Device-only USM — not safe for CPU vec_dot.  Skip registration.
+                return;
+            }
+        } catch (...) {
+            // If pointer type query fails, assume the pointer is a plain host
+            // allocation (e.g. mmap) and register it.  This is the common case
+            // for non-USM pointers which are invisible to the SYCL runtime.
+        }
         g_host_ptr_map[name] = host_ptr;
     }
 }

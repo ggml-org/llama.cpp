@@ -20131,28 +20131,18 @@ static bool ggml_sycl_mul_mat_tensor_split(
 
     if (g_ggml_sycl_graph_recording) {
         // Recording mode: GPU partial MMVQ was captured above.
-        // Cache weights if not already cached (happens during warmup before recording).
-        // Save work descriptor for replay-time CPU execution.
-        // Try host mmap pointer first (zero-copy, always available after model load).
-        // Falls back to D2H weight cache (populated during warmup).
+        // Look up D2H weight cache populated during warmup (non-recording pass).
+        // Cannot call .wait() here (would deadlock during recording).
         const void * cached_weights = nullptr;
         if (src0->name) {
-            const void * host_ptr_full = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
-            if (host_ptr_full) {
-                cached_weights = (const char *) host_ptr_full + N_gpu * src0_row_bytes;
+            auto it = g_split_weight_cache.find(src0->name);
+            if (it != g_split_weight_cache.end() && it->second.bytes >= cpu_weight_bytes) {
+                cached_weights = it->second.data;
             }
         }
         if (!cached_weights) {
-            // Fallback: check D2H weight cache (populated during warmup)
-            if (src0->name) {
-                auto it = g_split_weight_cache.find(src0->name);
-                if (it != g_split_weight_cache.end() && it->second.bytes >= cpu_weight_bytes) {
-                    cached_weights = it->second.data;
-                }
-            }
-        }
-        if (!cached_weights) {
-            GGML_LOG_WARN("[TENSOR-SPLIT] No host pointer or cached weights for '%s' during recording\n",
+            GGML_LOG_WARN("[TENSOR-SPLIT] No cached weights for '%s' during recording "
+                          "(warmup may not have run tensor split)\n",
                           src0->name ? src0->name : "?");
             return true;
         }
@@ -20169,24 +20159,24 @@ static bool ggml_sycl_mul_mat_tensor_split(
         return true;
     }
 
-    // Non-recording mode: use host mmap pointer if available (zero-copy).
-    // Falls back to D2H from device AOS if host pointer not registered.
-    const void * host_weights = nullptr;
+    // Non-recording mode: D2H copy weights to persistent host-pinned cache.
+    // This serves two purposes:
+    // 1. Provides CPU-accessible weight data for immediate vec_dot execution
+    // 2. Populates g_split_weight_cache for graph recording/replay
+    // We cannot use g_host_ptr_map (mmap pointer from set_tensor) because it may
+    // point to USM device memory that hangs when accessed from the CPU.
+    void * host_weights = nullptr;
     if (src0->name) {
-        const void * host_ptr_full = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
-        if (host_ptr_full) {
-            // Direct host access — no D2H copy needed
-            host_weights = (const char *) host_ptr_full + N_gpu * src0_row_bytes;
-        }
+        host_weights = split_get_cached_weights(src0->name, src0_aos, N_gpu,
+                                                 src0_row_bytes, cpu_weight_bytes, stream);
     }
     if (!host_weights) {
-        // Fallback: D2H from device AOS data
+        // Fallback: use transient staging buffer
         split_weight_staging_ensure(cpu_weight_bytes, stream);
         if (!g_split_weight_staging.data) {
             return false;
         }
-        stream->memcpy(g_split_weight_staging.data,
-                        src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
+        stream->memcpy(g_split_weight_staging.data, src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
         host_weights = g_split_weight_staging.data;
     }
 
