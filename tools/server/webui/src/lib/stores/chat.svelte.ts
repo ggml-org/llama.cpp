@@ -632,6 +632,10 @@ class ChatStore {
 				);
 			},
 			onModel: (modelName: string) => recordModel(modelName),
+			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { timings: intermediateTimings });
+			},
 			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 				const tokensPerSecond =
 					timings?.predicted_ms && timings?.predicted_n

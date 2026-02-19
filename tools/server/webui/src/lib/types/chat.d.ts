@@ -115,6 +115,7 @@ export interface ChatStreamCallbacks {
 		toolCallContent?: string
 	) => void;
 	onError?: (error: Error) => void;
+	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;
 }
 
 /**

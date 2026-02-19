@@ -85,6 +85,7 @@ export interface AgenticFlowCallbacks {
 	) => void;
 	onError?: (error: Error) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
+	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;
 }
 
 /**

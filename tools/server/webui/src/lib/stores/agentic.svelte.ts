@@ -195,7 +195,8 @@ class AgenticStore {
 			onModel,
 			onComplete,
 			onError,
-			onTimings
+			onTimings,
+			onTurnComplete
 		} = callbacks;
 
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
@@ -254,7 +255,8 @@ class AgenticStore {
 					onModel,
 					onComplete,
 					onError,
-					onTimings
+					onTimings,
+					onTurnComplete
 				},
 				signal
 			});
@@ -291,7 +293,8 @@ class AgenticStore {
 			onAttachments,
 			onModel,
 			onComplete,
-			onTimings
+			onTimings,
+			onTurnComplete
 		} = callbacks;
 
 		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
@@ -582,7 +585,12 @@ class AgenticStore {
 				});
 			}
 
-			if (turnStats.toolCalls.length > 0) agenticTimings.perTurn!.push(turnStats);
+			if (turnStats.toolCalls.length > 0) {
+				agenticTimings.perTurn!.push(turnStats);
+
+				const intermediateTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
+				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
+			}
 		}
 
 		onChunk?.(TURN_LIMIT_MESSAGE);
