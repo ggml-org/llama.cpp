@@ -36,7 +36,7 @@ layout (binding = 3) readonly buffer M {float16_t data_m[];};
 // If SubGroupSize is set to 0 then only use shmem reductions
 const uint32_t tmpsh_size = (SubGroupSize > 0) ? (row_split == 1 ? num_subgroups * D_split : num_subgroups) : WorkGroupSize;
 shared float tmpsh[tmpsh_size];
-shared ACC_TYPEV4 tmpsh_accv4[tmpsh_size];
+shared FLOAT_TYPEV4 tmpshv4[tmpsh_size];
 
 const uint32_t masksh_stride = Br + 1;
 shared FLOAT_TYPE masksh[Bc * masksh_stride];
@@ -76,10 +76,10 @@ void main() {
     }
     barrier();
 
-    ACC_TYPEV4 Of[rows_per_thread][HSV_per_thread / 4];
+    FLOAT_TYPEV4 Of[rows_per_thread][HSV_per_thread / 4];
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d] = ACC_TYPEV4(0.0);
+            Of[r][d] = FLOAT_TYPEV4(0.0);
         }
     }
 
@@ -311,7 +311,7 @@ void main() {
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
+                Of[r][d] = FLOAT_TYPE(eMf[r]) * Of[r][d];
             }
         }
 
@@ -365,7 +365,7 @@ void main() {
 #endif
                 }
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                    Of[r][d] += ACC_TYPEV4(Pf[r] * Vf);
+                    Of[r][d] += FLOAT_TYPEV4(Pf[r] * Vf);
                 }
             }
         }
@@ -448,7 +448,7 @@ void main() {
         }
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-            Of[r][d] = ACC_TYPE(eMf) * Of[r][d];
+            Of[r][d] = FLOAT_TYPE(eMf) * Of[r][d];
 
             if (SubGroupSize > 0) {
                 [[unroll]] for (uint s = D_split; s < SubGroupSize; s *= 2) {
@@ -457,26 +457,26 @@ void main() {
                 if (row_split == 1) {
                     barrier();
                     if (gl_SubgroupInvocationID == d_tid) {
-                        tmpsh_accv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
+                        tmpshv4[gl_SubgroupID * D_split + d_tid] = Of[r][d];
                     }
                     barrier();
-                    Of[r][d] = tmpsh_accv4[d_tid];
+                    Of[r][d] = tmpshv4[d_tid];
                     [[unroll]] for (uint32_t s = 1; s < num_subgroups; ++s) {
-                        Of[r][d] += tmpsh_accv4[s * D_split + d_tid];
+                        Of[r][d] += tmpshv4[s * D_split + d_tid];
                     }
                 }
             } else {
                 barrier();
-                tmpsh_accv4[tid] = Of[r][d];
+                tmpshv4[tid] = Of[r][d];
                 barrier();
                 [[unroll]] for (int s = int(threads_per_rowgroup) / 2; s >= D_split; s >>= 1) {
                     if (rowgroup_tid < s) {
-                        Of[r][d] += tmpsh_accv4[tid ^ s];
-                        tmpsh_accv4[tid] = Of[r][d];
+                        Of[r][d] += tmpshv4[tid ^ s];
+                        tmpshv4[tid] = Of[r][d];
                     }
                     barrier();
                 }
-                Of[r][d] = tmpsh_accv4[row_tid * threads_per_rowgroup + d_tid];
+                Of[r][d] = tmpshv4[row_tid * threads_per_rowgroup + d_tid];
             }
         }
     }
@@ -540,7 +540,7 @@ void main() {
                 ms = exp(Mf[r] - sink);
 
                 [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                    Of[r][d] *= ACC_TYPE(ms);
+                    Of[r][d] *= FLOAT_TYPE(ms);
                 }
             } else {
                 vs = exp(sink - Mf[r]);
@@ -557,9 +557,9 @@ void main() {
 
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d] *= ACC_TYPE(Lfrcp[r]);
-#if defined(ACC_TYPE_MAX)
-            Of[r][d] = clamp(Of[r][d], -ACC_TYPE_MAX, ACC_TYPE_MAX);
+            Of[r][d] *= FLOAT_TYPE(Lfrcp[r]);
+#if defined(FLOAT_TYPE_MAX)
+            Of[r][d] = clamp(Of[r][d], -FLOAT_TYPE_MAX, FLOAT_TYPE_MAX);
 #endif
         }
     }
