@@ -427,6 +427,105 @@ typedef struct {
 } block_iq4_xs;
 static_assert(sizeof(block_iq4_xs) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/64 + QK_K/2, "wrong iq4_xs block size/padding");
 
+// IQ2_K: 2-bit K quantization (GGML_TYPE_IQ2_K = 137)
+// 2.375 bpw (76 bytes / 256 values * 8 = 2.375)
+typedef struct {
+    ggml_half d;              //  2 bytes - per-block scale
+    uint16_t extra;           //  2 bytes - extra info
+    uint8_t  scales[QK_K/32]; //  8 bytes - per-32 scales
+    uint8_t  qs[QK_K/4];      // 64 bytes - 2-bit quantized values
+} block_iq2_k;
+static_assert(sizeof(block_iq2_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/32 + QK_K/4, "wrong iq2_k block size/padding");
+
+// IQ3_K: 3-bit K quantization (GGML_TYPE_IQ3_K = 138)
+// 3.44 bpw (110 bytes / 256 values * 8 = 3.4375)
+typedef struct {
+    ggml_half d;               //  2 bytes - per-block scale
+    uint16_t extra;            //  2 bytes - extra info
+    uint16_t scales_h;         //  2 bytes - high bits of scales
+    uint8_t scales_l[QK_K/32]; //  8 bytes - low bits of scales
+    uint8_t qs[QK_K/4];        // 64 bytes - low 2 bits
+    uint8_t qh[QK_K/8];        // 32 bytes - high 1 bit
+} block_iq3_k;
+static_assert(sizeof(block_iq3_k) == sizeof(ggml_half) + 2*sizeof(uint16_t) + QK_K/32 + QK_K/4 + QK_K/8, "wrong iq3_k block size/padding");
+
+// IQ4_K: 4-bit K quantization (GGML_TYPE_IQ4_K = 139)
+// 4.5 bpw (144 bytes / 256 values * 8 = 4.5)
+typedef struct {
+    ggml_half d;                //   2 bytes - per-block scale
+    uint16_t extra;             //   2 bytes - extra info
+    uint8_t  scales_h[QK_K/64]; //   4 bytes - high bits of scales
+    uint8_t  scales_l[QK_K/32]; //   8 bytes - low bits of scales
+    uint8_t  qs[QK_K/2];        // 128 bytes - 4-bit quantized values
+} block_iq4_k;
+static_assert(sizeof(block_iq4_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + 3*QK_K/64, "wrong iq4_k block size/padding");
+
+// IQ5_K: 5-bit K quantization (GGML_TYPE_IQ5_K = 140)
+// 5.5 bpw (176 bytes / 256 values * 8 = 5.5)
+typedef struct {
+    ggml_half d;                //   2 bytes - per-block scale
+    uint16_t extra;             //   2 bytes - extra info
+    uint8_t  scales_h[QK_K/64]; //   4 bytes - high bits of scales
+    uint8_t  scales_l[QK_K/32]; //   8 bytes - low bits of scales
+    uint8_t  qs[QK_K/2];        // 128 bytes - low 4 bits
+    uint8_t  qh[QK_K/8];        //  32 bytes - high 1 bit
+} block_iq5_k;
+static_assert(sizeof(block_iq5_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/8 + 3*QK_K/64, "wrong iq5_k block size/padding");
+
+// IQ6_K: 6-bit K quantization (GGML_TYPE_IQ6_K = 141)
+// 6.625 bpw (212 bytes / 256 values * 8 = 6.625)
+typedef struct {
+    ggml_half d;              //   2 bytes - per-block scale
+    uint16_t extra;           //   2 bytes - extra info
+    int8_t   scales[QK_K/16]; //  16 bytes - signed scales
+    uint8_t  qs[QK_K/2];      // 128 bytes - low 4 bits
+    uint8_t  qh[QK_K/4];      //  64 bytes - high 2 bits
+} block_iq6_k;
+static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/4 + QK_K/16, "wrong iq6_k block size/padding");
+
+// IQ2_KS: 2-bit KS quantization (GGML_TYPE_IQ2_KS = 145)
+// 2.19 bpw (70 bytes / 256 values * 8 = 2.1875)
+typedef struct {
+    uint16_t extra;           //  2 bytes - extra info/scale
+    uint8_t  scales[QK_K/64]; //  4 bytes - per-64 scales
+    uint8_t  qs[QK_K/4];      // 64 bytes - 2-bit quantized values
+} block_iq2_ks;
+static_assert(sizeof(block_iq2_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4, "wrong iq2_ks block size/padding");
+
+// IQ3_KS: 3-bit KS quantization (GGML_TYPE_IQ3_KS = 156)
+// 3.19 bpw (102 bytes / 256 values * 8 = 3.1875)
+typedef struct {
+    uint16_t extra;           //  2 bytes - extra info/scale
+    uint8_t  scales[QK_K/64]; //  4 bytes - per-64 scales
+    uint8_t  qs[QK_K/4];      // 64 bytes - low 2 bits
+    uint8_t  qh[QK_K/8];      // 32 bytes - high 1 bit
+} block_iq3_ks;
+static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
+
+// IQ4_KSS: 4-bit KSS quantization (GGML_TYPE_IQ4_KSS = 146)
+// 4.0 bpw (128 bytes / 256 values * 8 = 4.0)
+typedef struct {
+    uint32_t qs[QK_K/8]; // 32 uint32_t = 128 bytes
+} block_iq4_kss;
+static_assert(sizeof(block_iq4_kss) == QK_K/8*sizeof(uint32_t), "wrong iq4_kss block size/padding");
+
+// IQ4_KS: 4-bit KS quantization (GGML_TYPE_IQ4_KS = 144)
+// 4.25 bpw (136 bytes / 256 values * 8 = 4.25)
+typedef struct {
+    uint8_t  scales[QK_K/32]; //   8 bytes - per-32 scales
+    uint8_t  qs[QK_K/2];      // 128 bytes - 4-bit quantized values
+} block_iq4_ks;
+static_assert(sizeof(block_iq4_ks) == QK_K/32 + QK_K/2, "wrong iq4_ks block size/padding");
+
+// IQ5_KS: 5-bit KS quantization (GGML_TYPE_IQ5_KS = 152)
+// 5.25 bpw (168 bytes / 256 values * 8 = 5.25)
+typedef struct {
+    uint8_t  scales[QK_K/32]; //   8 bytes - per-32 scales
+    uint8_t  qs[QK_K/2];      // 128 bytes - low 4 bits
+    uint8_t  qh[QK_K/8];      //  32 bytes - high 1 bit
+} block_iq5_ks;
+static_assert(sizeof(block_iq5_ks) == QK_K/32 + QK_K/2 + QK_K/8, "wrong iq5_ks block size/padding");
+
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 
@@ -1087,6 +1186,46 @@ GGML_TABLE_END()
 // TODO: fix name to kvalues_iq4_nl
 GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+GGML_TABLE_END()
+
+// IQ2_K and IQ2_KS lookup table
+GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
+    -31, -13, 1, 17,   -26, -8, 6, 22
+GGML_TABLE_END()
+
+GGML_TABLE_BEGIN(uint16_t, iq2kl_values, 32)
+    0xe9c1, 0x0dc1, 0xc1d8, 0xf6d8, 0x0dd8, 0x2fd8, 0xd8e9, 0xe9e9, 0x01e9, 0x0de9, 0x1ce9, 0xc1f6, 0x01f6, 0x0df6, 0x2ff6, 0xe901,
+    0xf601, 0x0101, 0x0d01, 0x1c01, 0xd80d, 0xe90d, 0xf60d, 0x010d, 0x0d0d, 0xc11c, 0xe91c, 0x011c, 0x1c1c, 0x2f1c, 0xe92f, 0x0d2f,
+GGML_TABLE_END()
+
+// IQ3_K and IQ3_KS lookup table
+GGML_TABLE_BEGIN(int8_t, iq3nl_values, 16)
+    -63, -40, -23, -10, 1, 13, 28,  47,
+    -59, -36, -19,  -6, 5, 17, 32,  51,
+GGML_TABLE_END()
+
+// IQ4_KS and IQ4_KSS lookup table
+GGML_TABLE_BEGIN(int8_t, iq4k_values, 32)
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
+    -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117
+GGML_TABLE_END()
+
+// IQ5_K and IQ5_KS lookup table
+GGML_TABLE_BEGIN(int8_t, iq5nl_values, 64)
+    -126, -114, -103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6, -1, 5, 11, 17, 23, 29, 36, 43, 51, 59, 68, 77, 87, 97, 109, 121,
+    -124, -112, -101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10, -4,  1, 7, 13, 19, 25, 31, 38, 45, 53, 61, 70, 79, 89, 99, 111, 123,
+GGML_TABLE_END()
+
+// IQ6_K lookup table
+GGML_TABLE_BEGIN(int8_t, iq6nl_values, 128)
+    -127, -121, -115, -109, -104,  -98,  -93,  -88,  -84,  -79,  -74,  -70,  -66,  -62,  -58,  -54,
+     -51,  -47,  -44,  -40,  -37,  -34,  -31,  -28,  -25,  -22,  -19,  -16,  -13,  -11,   -8,   -5,
+      -2,    0,    3,    6,    9,   12,   14,   17,   20,   23,   27,   30,   33,   36,   40,   44,
+      47,   51,   55,   59,   63,   68,   72,   77,   82,   87,   92,   98,  103,  109,  115,  121,
+    -126, -120, -114, -108, -103,  -97,  -92,  -87,  -83,  -78,  -73,  -69,  -65,  -61,  -57,  -53,
+     -50,  -46,  -43,  -39,  -36,  -33,  -30,  -27,  -24,  -21,  -18,  -15,  -12,  -10,   -7,   -4,
+      -1,    1,    4,    7,   10,   13,   15,   18,   21,   24,   28,   31,   34,   37,   41,   45,
+      48,   52,   56,   60,   64,   69,   73,   78,   83,   88,   93,   99,  104,  110,  116,  122,
 GGML_TABLE_END()
 
 // e2m1 values (doubled)

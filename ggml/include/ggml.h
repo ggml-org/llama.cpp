@@ -427,7 +427,23 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
-        GGML_TYPE_COUNT   = 40,
+        // IDs must match ik_llama.cpp for GGUF interoperability
+        // IDs 40-136 reserved
+        GGML_TYPE_IQ2_K   = 137, // 2.375 bpw
+        GGML_TYPE_IQ3_K   = 138, // 3.44 bpw
+        GGML_TYPE_IQ4_K   = 139, // 4.5 bpw
+        GGML_TYPE_IQ5_K   = 140, // 5.5 bpw
+        GGML_TYPE_IQ6_K   = 141, // 6.625 bpw
+        // IDs 142-143 reserved (deprecated IQ2_TN, IQ1_TN)
+        GGML_TYPE_IQ4_KS  = 144, // 4.25 bpw
+        GGML_TYPE_IQ2_KS  = 145, // 2.19 bpw
+        GGML_TYPE_IQ4_KSS = 146, // 4.0 bpw
+        // IDs 147-151 reserved
+        GGML_TYPE_IQ5_KS  = 152, // 5.25 bpw
+        // IDs 153-155 reserved
+        GGML_TYPE_IQ3_KS  = 156, // 3.19 bpw
+
+        GGML_TYPE_COUNT   = 157,
     };
 
     // precision
@@ -2716,6 +2732,7 @@ extern "C" {
         bool                     is_quantized;
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
+        size_t                   row_meta_size;        // size of per-row metadata (e.g., row-level scale for KS types)
     };
 
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);
