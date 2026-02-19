@@ -978,7 +978,7 @@ extern "C" {
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
 
     // Get all output token embeddings.
-    // when pooling_type is token-level (LLAMA_POOLING_TYPE_NONE or LLAMA_POOLING_TYPE_TOKEN_CLS),
+    // when pooling_type is token-level (LLAMA_POOLING_TYPE_NONE or LLAMA_POOLING_TYPE_TOKEN_CLS)
     // or when using a generative model,
     // the embeddings for which llama_batch.logits[i] != 0 are stored contiguously
     // in the order they have appeared in the batch.
