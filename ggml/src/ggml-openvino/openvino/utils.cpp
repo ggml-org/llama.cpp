@@ -115,7 +115,7 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight,
-							   bool stateful) {
+                                                           bool stateful) {
     if (stateful) {
         inp_pos = std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
