@@ -55,6 +55,24 @@ endif()
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
+# Enable AVX-512 + VNNI for CPU vec_dot kernels in tensor split / CPU offload.
+# Applied ONLY to cpu-dispatch.cpp to avoid affecting SYCL device code compilation.
+# Arrow Lake (Core Ultra 7 265K) supports: AVX-512F, VNNI, AVXVNNIINT8.
+if (GGML_SYCL_TARGET STREQUAL "INTEL" AND NOT WIN32)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-mavx512f" HAS_AVX512F)
+    check_cxx_compiler_flag("-mavxvnniint8" HAS_AVXVNNIINT8)
+    if (HAS_AVX512F)
+        set(_CPU_DISPATCH_AVX_FLAGS "-mavx512f")
+        if (HAS_AVXVNNIINT8)
+            list(APPEND _CPU_DISPATCH_AVX_FLAGS "-mavxvnniint8")
+        endif()
+        set_source_files_properties(cpu-dispatch.cpp PROPERTIES
+            COMPILE_OPTIONS "${_CPU_DISPATCH_AVX_FLAGS}")
+        message(STATUS "cpu-dispatch.cpp AVX flags: ${_CPU_DISPATCH_AVX_FLAGS}")
+    endif()
+endif()
+
 if (GGML_SYCL_ASAN_PARTIAL)
     message(STATUS "GGML_SYCL_ASAN_PARTIAL: enabling ASan for ggml-sycl.cpp + unified-cache.cpp")
     set_source_files_properties(ggml-sycl.cpp unified-cache.cpp

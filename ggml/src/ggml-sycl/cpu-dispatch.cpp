@@ -263,6 +263,15 @@ const void * ggml_sycl_cpu_dispatch_get_host_ptr(const char * name) {
 static ggml_sycl_tbb::task_arena & ggml_sycl_cpu_arena();
 #endif
 
+// Forward declaration for the 4-row SIMD kernel (defined later, guarded by __AVX2__)
+#if defined(__AVX2__)
+static inline void simd_mul_mat_q4_0_q8_0_4row(
+    int K_elem, float * GGML_RESTRICT out,
+    const void * GGML_RESTRICT vx0, const void * GGML_RESTRICT vx1,
+    const void * GGML_RESTRICT vx2, const void * GGML_RESTRICT vx3,
+    const void * GGML_RESTRICT vy);
+#endif
+
 void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
                                  const void * src0_host, const float * src1_host,
                                  float * output, int n_rows) {
