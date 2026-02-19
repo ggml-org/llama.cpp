@@ -1,5 +1,5 @@
-ARG OPENVINO_VERSION_MAJOR=2025.3
-ARG OPENVINO_VERSION_FULL=2025.3.0.19807.44526285f24
+ARG OPENVINO_VERSION_MAJOR=2026.0.1
+ARG OPENVINO_VERSION_FULL=2026.0.1.20960.91859257636
 ARG UBUNTU_VERSION=24.04
 
 # Optional proxy build arguments - empty by default
@@ -23,7 +23,11 @@ RUN apt-get update && \
         ninja-build \
         build-essential \
         libtbb12 \
-        libcurl4-openssl-dev && \
+        libssl-dev \
+        ocl-icd-opencl-dev \
+        opencl-headers \
+        opencl-clhpp-headers \
+        intel-opencl-icd && \
     rm -rf /var/lib/apt/lists/*
 
 # Install OpenVINO for Ubuntu 24.04

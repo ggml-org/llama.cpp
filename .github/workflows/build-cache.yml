@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      # Make sure this is in sync with build.yml
+      # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
       OPENVINO_VERSION_MAJOR: "2026.0.1"  
       OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"  
 

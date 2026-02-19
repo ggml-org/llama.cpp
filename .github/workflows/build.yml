@@ -747,7 +747,7 @@ jobs:
       runs-on: ubuntu-24.04
 
       env:
-        # Make sure this is in sync with build-cache.yml
+        # Sync versions in build.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
         OPENVINO_VERSION_MAJOR: "2026.0.1"  
         OPENVINO_VERSION_FULL: "2026.0.1.20960.91859257636"  
 
@@ -766,7 +766,7 @@ jobs:
           id: depends
           run: |
             sudo apt-get update
-            sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip
+            sudo apt-get install -y build-essential libssl-dev libtbb12 cmake ninja-build python3-pip
             sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
 
         - name: Use OpenVINO Toolkit Cache
