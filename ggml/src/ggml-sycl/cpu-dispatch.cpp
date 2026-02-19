@@ -277,15 +277,15 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
     const size_t row_stride = ggml_row_size(type, ne00);
 
 #if GGML_SYCL_HAS_TBB
-    if (n_rows > 1) {
+    if (n_rows >= 8) {
         uint8_t * src1_q_data = src1_q_buf.data();
         ggml_sycl_cpu_arena().execute([&] {
             ggml_sycl_tbb::parallel_for(
-                ggml_sycl_tbb::blocked_range<int>(0, n_rows),
+                ggml_sycl_tbb::blocked_range<int>(0, n_rows, 4),
                 [&, src1_q_data](const ggml_sycl_tbb::blocked_range<int> & r) {
                     for (int i = r.begin(); i < r.end(); i++) {
                         const void * row = (const char *) src0_host + (size_t) i * row_stride;
-                        float        dot_result;
+                        float        dot_result = 0.0f;
                         cpu_traits->vec_dot(ne00, &dot_result, sizeof(float),
                                             row, 0, src1_q_data, 0, 1);
                         output[i] = dot_result;
@@ -295,10 +295,10 @@ void ggml_sycl_cpu_vec_dot_rows(ggml_type type, int ne00,
         return;
     }
 #endif
-    // Single-row or no-TBB fallback
+    // Single-row, small workload, or no-TBB fallback
     for (int i = 0; i < n_rows; i++) {
         const void * row = (const char *) src0_host + (size_t) i * row_stride;
-        float        dot_result;
+        float        dot_result = 0.0f;
         cpu_traits->vec_dot(ne00, &dot_result, sizeof(float),
                             row, 0, src1_q_buf.data(), 0, 1);
         output[i] = dot_result;

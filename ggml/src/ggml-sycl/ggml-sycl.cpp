@@ -19825,6 +19825,131 @@ MatmulDecision UnifiedMatmulOrchestrator::select(const ggml_tensor *            
 
 }  // namespace ggml_sycl
 
+// ---------------------------------------------------------------------------
+// Tensor split: GPU+CPU cooperative MUL_MAT staging
+// ---------------------------------------------------------------------------
+static struct {
+    float * src1_host = nullptr;   // host-pinned src1 staging (float32)
+    float * output    = nullptr;   // host-pinned CPU output (float32)
+    size_t  src1_size = 0;         // allocated bytes for src1
+    size_t  out_size  = 0;         // allocated bytes for output
+} g_split_staging;
+
+static void split_staging_ensure(size_t src1_bytes, size_t out_bytes, sycl::queue * q) {
+    if (g_split_staging.src1_size < src1_bytes) {
+        if (g_split_staging.src1_host) {
+            sycl::free(g_split_staging.src1_host, *q);
+        }
+        g_split_staging.src1_host = (float *) sycl::malloc_host(src1_bytes, *q);
+        if (!g_split_staging.src1_host) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for src1 (%zu bytes)\n", src1_bytes);
+            g_split_staging.src1_size = 0;
+            return;
+        }
+        g_split_staging.src1_size = src1_bytes;
+    }
+    if (g_split_staging.out_size < out_bytes) {
+        if (g_split_staging.output) {
+            sycl::free(g_split_staging.output, *q);
+        }
+        g_split_staging.output = (float *) sycl::malloc_host(out_bytes, *q);
+        if (!g_split_staging.output) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for output (%zu bytes)\n", out_bytes);
+            g_split_staging.out_size = 0;
+            return;
+        }
+        g_split_staging.out_size = out_bytes;
+    }
+}
+
+static bool ggml_sycl_mul_mat_tensor_split(
+        ggml_backend_sycl_context & ctx,
+        const ggml_tensor *         src0,
+        const ggml_tensor *         src1,
+        ggml_tensor *               dst,
+        int                         cpu_pct,
+        layout_mode                 src0_layout) {
+
+    const int64_t ne00 = src0->ne[0];  // K (columns)
+    const int64_t ne01 = src0->ne[1];  // N (rows, output size)
+
+    // Compute split
+    int64_t N_cpu = ne01 * cpu_pct / 100;
+    int64_t N_gpu = ne01 - N_cpu;
+
+    // Too few CPU rows — not worth the overhead
+    if (N_cpu < 32) {
+        return false;
+    }
+
+    // Get host weight pointer for CPU portion
+    const void * host_ptr = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
+    if (!host_ptr) {
+        return false;
+    }
+
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] %s: N=%lld N_gpu=%lld N_cpu=%lld cpu_pct=%d\n",
+                    src0->name ? src0->name : "?",
+                    (long long) ne01, (long long) N_gpu, (long long) N_cpu, cpu_pct);
+
+    sycl::queue * stream = ctx.stream();
+    const int     device = ctx.device;
+
+    // Ensure staging buffers are allocated
+    const size_t src1_bytes = ggml_nbytes(src1);
+    const size_t out_bytes  = N_cpu * sizeof(float);
+    split_staging_ensure(src1_bytes, out_bytes, stream);
+
+    // Stage src1 (activation) to host — tiny for TG (16KB for 4096-dim)
+    stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+
+    // --- GPU portion: partial MMVQ for rows [0, N_gpu) ---
+    const int64_t K         = ne00;
+    const int64_t K_padded  = GGML_PAD(K, MATRIX_ROW_PADDING);
+    const size_t  q8_1_size = K_padded / QK8_1 * sizeof(block_q8_1);
+
+    ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(), q8_1_size);
+    char * src1_ddq = src1_q8_alloc.get();
+
+    // Quantize src1 to Q8_1 with SOA reorder
+    const float * src1_ddf = (const float *) src1->data;
+    quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+        src1_ddf, src1_ddq, K, 1, K_padded, stream);
+
+    // Get GPU weight pointer (SOA layout)
+    const char * src0_dd = (const char *) ggml_sycl_get_layout_ptr_for(src0, device, src0_layout);
+    if (!src0_dd) {
+        return false;
+    }
+
+    // GPU output: first N_gpu floats of dst
+    float * dst_dd = (float *) dst->data;
+
+    // Submit GPU MMVQ for partial rows
+    ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
+                                src0_dd,
+                                nullptr,
+                                src1_ddq,
+                                dst_dd,
+                                0,          // row_low
+                                N_gpu,      // row_high
+                                1,          // src1_ncols (batch=1)
+                                K_padded,
+                                stream);
+
+    // --- CPU portion: placeholder (zeros) ---
+    // Task 3 will replace this with actual ggml_sycl_cpu_vec_dot_rows() call
+    memset(g_split_staging.output, 0, out_bytes);
+
+    // Wait for GPU to complete
+    stream->wait();
+
+    // Copy CPU output to device dst[N_gpu..N-1]
+    stream->memcpy(dst_dd + N_gpu, g_split_staging.output, out_bytes).wait();
+
+    return true;
+}
+
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                               const ggml_tensor *         src0,
                               const ggml_tensor *         src1,
@@ -19861,6 +19986,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             const layout_mode effective_layout = extra ? get_effective_layout_mode(extra) : GGML_LAYOUT_AOS;
 
             if (has_soa_reorder) {
+                // Tensor split: cooperative GPU+CPU MUL_MAT
+                static const int tensor_split_cpu_pct = []() {
+                    const char * env = std::getenv("GGML_SYCL_TENSOR_SPLIT");
+                    return env ? std::atoi(env) : 0;
+                }();
+                if (tensor_split_cpu_pct > 0 && !g_ggml_sycl_graph_recording) {
+                    if (ggml_sycl_mul_mat_tensor_split(ctx, src0, src1, dst,
+                                                        tensor_split_cpu_pct, effective_layout)) {
+                        return;
+                    }
+                    // Fall through to normal GPU dispatch if split failed
+                }
+
                 // MMVQ with SOA reorder -- matches master's fast path
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d)\n",
                                 src0->name ? src0->name : "?", src0->type, static_cast<int>(effective_layout));
