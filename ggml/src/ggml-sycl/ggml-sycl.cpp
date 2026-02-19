@@ -31886,6 +31886,20 @@ normal_dispatch:
         sycl_ctx->moe_graphs_disabled_once = false;
     }
 
+    // Tensor split provides ~14% TG improvement via GPU/CPU overlap, while
+    // graph replay only adds ~2.8% for TG (MMVQ fast-path already eliminates
+    // most kernel dispatch overhead). Auto-disable graph for decode phase
+    // when tensor split is enabled to allow overlap for every token.
+    if (use_sycl_graph && cached_is_decode && ggml_sycl_tensor_split_pct() > 0) {
+        static bool logged_once = false;
+        if (!logged_once) {
+            GGML_LOG_INFO("[SYCL] Tensor split %d%%: disabling graph replay for TG (GPU/CPU overlap)\n",
+                          ggml_sycl_tensor_split_pct());
+            logged_once = true;
+        }
+        use_sycl_graph = false;
+    }
+
     if (use_sycl_graph) {
         GGML_ASSERT(global_graph_lock.owns_lock());
         // Cache graph hash (saves ~41K FNV-1a hash mix ops per token)
