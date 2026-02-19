@@ -1094,11 +1094,11 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.only_copy                   =*/ false,
         /*.pure                        =*/ false,
         /*.keep_split                  =*/ false,
+        /*.dry_run                     =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr,
-        /*.dry_run                     =*/ false
+        /*.prune_layers                =*/ nullptr
     };
 
     return result;
