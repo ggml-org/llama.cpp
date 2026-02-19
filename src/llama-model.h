@@ -270,6 +270,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_norm_exps    = nullptr;
     struct ggml_tensor * ffn_norm_enc     = nullptr;
 
+    // adaptive normalization (Voxtral Realtime: ada_rms_norm_t_cond)
+    struct ggml_tensor * ffn_ada_norm_down = nullptr; // [ada_dim, n_embd]
+    struct ggml_tensor * ffn_ada_norm_up   = nullptr; // [n_embd, ada_dim]
+
     // ff
     struct ggml_tensor * ffn_gate     = nullptr; // w1
     struct ggml_tensor * ffn_down     = nullptr; // w2

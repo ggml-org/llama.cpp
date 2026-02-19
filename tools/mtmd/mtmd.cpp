@@ -345,6 +345,9 @@ struct mtmd_context {
             case PROJECTOR_TYPE_MUSIC_FLAMINGO:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 break;
+            case PROJECTOR_TYPE_VOXTRAL_REALTIME:
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_voxtral_rt>(ctx_a);
+                break;
             case PROJECTOR_TYPE_LFM2A:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;
@@ -902,6 +905,10 @@ bool mtmd_support_vision(mtmd_context * ctx) {
 
 bool mtmd_support_audio(mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
+}
+
+bool mtmd_support_voxtral_realtime(mtmd_context * ctx) {
+    return ctx->proj_type_a() == PROJECTOR_TYPE_VOXTRAL_REALTIME;
 }
 
 int mtmd_get_audio_bitrate(mtmd_context * ctx) {

@@ -2983,6 +2983,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
+                        // Voxtral Realtime: precomputed adaptive RMSNorm scale
+                        // This is optional - only present in Voxtral Realtime models
+                        // Contains precomputed (1 + ada_scale) for the default transcription delay
+                        layer.ffn_ada_norm_up = create_tensor(tn(LLM_TENSOR_FFN_ADA_NORM_UP, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+
                         if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
                             layer.rope_long  = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_LONG,  "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
                             layer.rope_short = create_tensor(tn(LLM_TENSOR_ROPE_FACTORS_SHORT, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));

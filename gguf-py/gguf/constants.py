@@ -521,6 +521,8 @@ class MODEL_TENSOR(IntEnum):
     FFN_NORM             = auto()
     FFN_PRE_NORM         = auto()
     FFN_POST_NORM        = auto()
+    FFN_ADA_NORM_DOWN    = auto()
+    FFN_ADA_NORM_UP      = auto()
     FFN_GATE             = auto()
     FFN_DOWN             = auto()
     FFN_UP               = auto()
@@ -959,6 +961,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_NORM:                  "blk.{bid}.ffn_norm",
     MODEL_TENSOR.FFN_PRE_NORM:              "blk.{bid}.ffn_norm",
     MODEL_TENSOR.FFN_POST_NORM:             "blk.{bid}.post_ffw_norm",
+    MODEL_TENSOR.FFN_ADA_NORM_DOWN:        "blk.{bid}.ffn_ada_norm_down",
+    MODEL_TENSOR.FFN_ADA_NORM_UP:          "blk.{bid}.ffn_ada_norm_up",
     MODEL_TENSOR.FFN_GATE:                  "blk.{bid}.ffn_gate",
     MODEL_TENSOR.FFN_DOWN:                  "blk.{bid}.ffn_down",
     MODEL_TENSOR.FFN_UP:                    "blk.{bid}.ffn_up",
@@ -1354,6 +1358,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_ROT_EMBD,
         MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_ADA_NORM_DOWN,
+        MODEL_TENSOR.FFN_ADA_NORM_UP,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
@@ -3827,6 +3833,7 @@ class VisionProjectorType:
     GLMA = "glma" # audio
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
+    VOXTRAL_REALTIME = "voxtral_realtime"  # audio, causal encoder
     LFM2 = "lfm2"
     KIMIVL = "kimivl"
     KIMIK25 = "kimik25"

@@ -400,6 +400,16 @@ class TensorNameMap:
             "model.layers.{bid}.pre_mlp_layernorm",        # afmoe
         ),
 
+        # Adaptive FFN norm down projection (Voxtral Realtime: ada_rms_norm_t_cond)
+        MODEL_TENSOR.FFN_ADA_NORM_DOWN: (
+            "layers.{bid}.ada_rms_norm_t_cond.0",  # voxtral-realtime (mistral format)
+        ),
+
+        # Adaptive FFN norm up projection (Voxtral Realtime: ada_rms_norm_t_cond)
+        MODEL_TENSOR.FFN_ADA_NORM_UP: (
+            "layers.{bid}.ada_rms_norm_t_cond.2",  # voxtral-realtime (mistral format)
+        ),
+
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm",  # gemma2 olmo2
@@ -1689,6 +1699,7 @@ class TensorNameMap:
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
+            "whisper_encoder.conv_layers.{bid}.conv", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
@@ -1700,24 +1711,28 @@ class TensorNameMap:
         MODEL_TENSOR.A_POST_NORM: (
             "audio_tower.layer_norm", # ultravox
             "audio_tower.ln_post", # qwen2omni
+            "whisper_encoder.transformer.norm", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.attention.wq", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.attention.wk", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.attention.wv", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_PER_DIM_SCALE: (
@@ -1732,18 +1747,21 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.attention_norm", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.attention.wo", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_out", # lfm2
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.ffn_norm", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
@@ -1763,14 +1781,18 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc1", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.feed_forward.w3", # voxtral realtime (up, remapped in modify_tensors)
         ),
 
-        MODEL_TENSOR.A_ENC_FFN_GATE: (),
+        MODEL_TENSOR.A_ENC_FFN_GATE: (
+            "whisper_encoder.transformer.layers.{bid}.feed_forward.w1", # voxtral realtime (gate, remapped in modify_tensors)
+        ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_tower.layers.{bid}.fc2", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
+            "whisper_encoder.transformer.layers.{bid}.feed_forward.w2", # voxtral realtime (down, remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
@@ -1819,7 +1841,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MMPROJ: (
             "audio.multi_modal_projector.linear_{bid}", # ultravox
-            "audio_adapter.model.{bid}" # lfm2
+            "audio_adapter.model.{bid}", # lfm2
+            "audio_language_projection.{bid}", # voxtral realtime (remapped in modify_tensors)
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (
