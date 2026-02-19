@@ -1240,6 +1240,10 @@ class TensorNameMap:
         MODEL_TENSOR.CLS_OUT: (
             "classifier.out_proj", # roberta
         ),
+
+        MODEL_TENSOR.CLS_NORM: (
+            "head.norm", # modern-bert
+        ),
         #############################################################################
 
         MODEL_TENSOR.CONVNEXT_DW: (
@@ -1404,6 +1408,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.q_norm", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.q_norm", # Intern-S1
+            "visual.blocks.{bid}.attn.q_norm", # GLM-OCR
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
@@ -1422,6 +1427,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.attn.k_norm", # InternVL
             "model.vision_tower.encoder.layer.{bid}.attention.k_norm", # Intern-S1
+            "visual.blocks.{bid}.attn.k_norm", # GLM-OCR
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
