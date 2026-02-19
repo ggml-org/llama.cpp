@@ -138,9 +138,9 @@ void llama_memory_hybrid_iswa::clear(bool data) {
 
 bool llama_memory_hybrid_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     if (!mem_recr->seq_rm(seq_id, p0, p1)) {
-        mem_recr->seq_rm(seq_id, 0, std::numeric_limits<llama_pos>::max());
-        mem_attn->seq_rm(seq_id, p0, p1);
-        return false;
+        mem_recr->seq_rm(seq_id, 0, std::numeric_limits<llama_pos>::max()); 
+        mem_attn->seq_rm(seq_id, p0, p1); 
+        return false; //This should always fail, since we cannot truncate recurrent
     }
     return mem_attn->seq_rm(seq_id, p0, p1);
 }
