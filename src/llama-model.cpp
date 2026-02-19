@@ -908,7 +908,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa);
                     ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-                    hparams.set_swa_pattern(swa_period);
+                    hparams.set_swa_pattern(swa_period, true);
                 } else {
                     hparams.swa_type = LLAMA_SWA_TYPE_NONE;
                 }
@@ -3513,9 +3513,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                     }
 
-                    cls       = create_tensor(tn(LLM_TENSOR_CLS,     "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
-                    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
-                    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    cls       = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {n_embd, n_embd},            TENSOR_NOT_REQUIRED);
+                    cls_norm  = create_tensor(tn(LLM_TENSOR_CLS_NORM, "weight"), {n_embd},                    TENSOR_NOT_REQUIRED);
 
                 } break;
             case LLM_ARCH_NEO_BERT:
@@ -8734,7 +8735,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     }
 
     // add on pooling layer
-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
+    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
 
     // add backend sampling layers (if any)
     llm->build_sampling();

@@ -11003,12 +11003,16 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # these layers act as MLM head, so we don't need them
-        if name.startswith("decoder."):
-            return
-
         if name.startswith("model."):
             name = name[6:]
+
+        if self.cls_out_labels:
+            # For BertForSequenceClassification (direct projection layer)
+            if name == "classifier.weight":
+                name = "classifier.out_proj.weight"
+
+            if name == "classifier.bias":
+                name = "classifier.out_proj.bias"
 
         yield from super().modify_tensors(data_torch, name, bid)
 
