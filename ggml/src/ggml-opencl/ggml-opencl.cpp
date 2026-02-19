@@ -9555,24 +9555,24 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
         kernel = backend_ctx->kernel_gemv_noshuffle_q6_K_f32;
+
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),      &ql_img));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),      &qh_img));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),      &extra0_q6_K->s));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),      &extra0_q6_K->d));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),      &b_img));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),      &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong),    &offsetd));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int),      &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_int),      &ne01));
+
+        size_t local_work_size[3] = {64, 4, 1};
+        size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01/2, 64)*64, 4, 1};
+
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
         GGML_ABORT("TODO: q6_K GEMM");
     }
-
-    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),      &ql_img));
-    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),      &qh_img));
-    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),      &extra0_q6_K->s));
-    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),      &extra0_q6_K->d));
-    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),      &b_img));
-    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),      &extrad->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong),    &offsetd));
-    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_int),      &ne00));
-    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_int),      &ne01));
-
-    size_t local_work_size[3] = {64, 4, 1};
-    size_t global_work_size[3] = {(size_t)CEIL_DIV(ne01/2, 64)*64, 4, 1};
-
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 #else
     GGML_UNUSED(backend);
     GGML_UNUSED(src0);
