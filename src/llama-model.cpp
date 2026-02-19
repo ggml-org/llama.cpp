@@ -40,6 +40,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const std::regex pattern_attn_sinks("blk\\.\\d*\\.attn_sinks.weight");
     const std::regex pattern_attn_out_weight("blk\\.\\d*\\.attn_output.weight");
     const std::regex pattern_attn_out_bias("blk\\.\\d*\\.attn_output.bias");
+
+    // const std::regex pattern_qkv_weight("blk\\.\\d*\\.attn_qkv.weight");
+    // const std::regex pattern_attn_gate_weight("blk\\.\\d*\\.attn_gate.weight");
+
     const std::regex pattern_ffn_up_gate_weight("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.weight");
     const std::regex pattern_ffn_up_gate_bias("blk\\.\\d*\\.ffn_(up|gate)(_exps)?.bias");
     const std::regex pattern_ffn_down_weight("blk\\.\\d*\\.ffn_down(_exps)?.weight");
@@ -48,7 +52,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const std::regex pattern_output_bias("output\\.bias");
 
     auto get_split_axis = [&]() -> ggml_backend_meta_split_axis {
-        // attention
+        // standard attention
         if (std::regex_match(tensor->name, pattern_q_weight) || std::regex_match(tensor->name, pattern_kv_weight)) {
             return GGML_BACKEND_SPLIT_AXIS_1;
         }
@@ -67,6 +71,12 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (std::regex_match(tensor->name, pattern_attn_out_bias)) {
             return GGML_BACKEND_SPLIT_AXIS_MIRRORED;
         }
+
+        // Qwen 3 Next
+        // TODO: cache_r and cache_s need different shapes
+        // if (std::regex_match(tensor->name, pattern_qkv_weight) || std::regex_match(tensor->name, pattern_attn_gate_weight)) {
+        //     return GGML_BACKEND_SPLIT_AXIS_1;
+        // }
 
         // FFN
         if (std::regex_match(tensor->name, pattern_ffn_up_gate_weight)) {
