@@ -1383,7 +1383,7 @@ void ggml_vec_dot_iq5_k_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 // IQ6_K uses polynomial dequantization
 #define A_IQ6K -127.f
 #define B_IQ6K 6.2568f
-#define C_IQ6K 0.11126f
+#define C_IQ6K 0.11218f
 #define D_IQ6K 0.0011972f
 #define S_IQ6K 1.f
 

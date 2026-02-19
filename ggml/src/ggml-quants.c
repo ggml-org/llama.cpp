@@ -5194,7 +5194,7 @@ void dequantize_row_iq5_k(const block_iq5_k * GGML_RESTRICT x, float * GGML_REST
 // IQ6_K constants for polynomial dequantization
 #define A_IQ6K -127.f
 #define B_IQ6K 6.2568f
-#define C_IQ6K 0.11126f
+#define C_IQ6K 0.11218f
 #define D_IQ6K 0.0011972f
 #define S_IQ6K 1.f
 
