@@ -173,7 +173,7 @@ apir_buffer_context_t apir_device_buffer_from_ptr(virtgpu * gpu, size_t size, si
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR);
 
     if (virtgpu_shmem_create(gpu, size, &buffer_context.shmem)) {
-        GGML_ABORT(GGML_VIRTGPU "Couldn't allocate the guest-host shared buffer");
+        GGML_ABORT(GGML_VIRTGPU "%s: Couldn't allocate %ldb of guest-host shared buffer", __func__, size);
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem.res_id);
