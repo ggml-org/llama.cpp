@@ -19919,6 +19919,17 @@ static void * split_get_cached_weights(const char * name, const char * src0_aos,
     return buf;
 }
 
+// Check if tensor split should be recorded into SYCL command graphs.
+// Opt-in via GGML_SYCL_TENSOR_SPLIT_GRAPH=1 since host_task in Level Zero
+// graphs is experimental and may crash on some driver versions.
+static bool ggml_sycl_tensor_split_graph_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("GGML_SYCL_TENSOR_SPLIT_GRAPH");
+        return env && std::atoi(env) != 0;
+    }();
+    return enabled;
+}
+
 static bool ggml_sycl_mul_mat_tensor_split(
         ggml_backend_sycl_context & ctx,
         const ggml_tensor *         src0,
@@ -19927,11 +19938,11 @@ static bool ggml_sycl_mul_mat_tensor_split(
         int                         cpu_pct,
         layout_mode                 src0_layout) {
 
-    // Tensor split is incompatible with graph replay: partial MUL_MAT outputs
-    // leave stale data in [N_gpu, N) that subsequent graph ops consume before
-    // CPU results can be uploaded.  Skip during recording so the graph captures
-    // full MUL_MATs; the non-graph execution path handles tensor split correctly.
-    if (g_ggml_sycl_graph_recording) {
+    // During graph recording, tensor split requires host_task graph nodes to
+    // execute CPU vec_dot at the correct point in the dependency chain.
+    // This is opt-in (GGML_SYCL_TENSOR_SPLIT_GRAPH=1) because Level Zero
+    // has documented issues with host_task that can corrupt event handles.
+    if (g_ggml_sycl_graph_recording && !ggml_sycl_tensor_split_graph_enabled()) {
         return false;
     }
 
@@ -19993,6 +20004,82 @@ static bool ggml_sycl_mul_mat_tensor_split(
     ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
                                 src0_dd, nullptr, src1_ddq, dst_dd,
                                 0, N_gpu, 1, K_padded, stream);
+
+    // --- CPU portion: host_task graph path vs synchronous path ---
+    if (g_ggml_sycl_graph_recording) {
+        // ===================================================================
+        // GRAPH RECORDING PATH: submit host_task + memcpy as graph nodes
+        // ===================================================================
+        // During recording, all operations must be async on the in-order queue.
+        // We submit: D2H memcpy (src1) -> host_task (vec_dot) -> H2D memcpy (output)
+        // On replay, graph_refresh_input_tensors() updates src1 device memory
+        // at the SAME pointer, so the recorded D2H memcpy reads fresh data.
+
+        // Verify host_task is safe for this queue/backend combination
+        if (!ggml_sycl_host_task_stable_for_queue(*stream)) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] host_task unstable for queue backend, skipping graph recording\n");
+            return false;
+        }
+
+        // Weights must be pre-cached from warmup pass (split_get_cached_weights
+        // uses .wait() which is illegal during recording). Look up only.
+        void * host_weights = nullptr;
+        if (src0->name) {
+            auto it = g_split_weight_cache.find(src0->name);
+            if (it != g_split_weight_cache.end() && it->second.bytes >= cpu_weight_bytes) {
+                host_weights = it->second.data;
+            }
+        }
+        if (!host_weights) {
+            // Weights not cached yet — cannot D2H during recording.
+            // Fall back to full GPU MUL_MAT (return false skips tensor split).
+            GGML_SYCL_DEBUG("[TENSOR-SPLIT] weights not cached for '%s', skipping graph recording\n",
+                            src0->name ? src0->name : "?");
+            return false;
+        }
+
+        // Ensure persistent host-pinned staging buffers exist.
+        // These are allocated once and reused across tokens/replays.
+        const size_t out_bytes = N_cpu * sizeof(float);
+        split_staging_ensure(src1_bytes, out_bytes, stream);
+        if (!g_split_staging.src1_host || !g_split_staging.output) {
+            return false;
+        }
+
+        // Step 1: Async D2H memcpy for src1 (device float32 -> host-pinned float32)
+        // On replay, graph_refresh_input_tensors() updates src1->data with new
+        // activations at the same device address, so this memcpy reads fresh data.
+        float * src1_host_ptr = g_split_staging.src1_host;
+        float * output_ptr    = g_split_staging.output;
+        stream->memcpy(src1_host_ptr, src1->data, src1_bytes);
+
+        // Step 2: host_task — CPU vec_dot for rows [N_gpu, N)
+        // Captures: weight pointer (static), staging buffer pointers (static),
+        //           type/dimension info (static). All pointers remain valid across
+        //           graph replays because weights and staging buffers are persistent.
+        const ggml_type src0_type = src0->type;
+        const int       ne00_int  = static_cast<int>(ne00);
+        const int       N_cpu_int = static_cast<int>(N_cpu);
+
+        stream->submit([&](sycl::handler & cgh) {
+            cgh.host_task([=]() {
+                ggml_sycl_cpu_vec_dot_rows(src0_type, ne00_int,
+                                            host_weights, src1_host_ptr,
+                                            output_ptr, N_cpu_int);
+            });
+        });
+
+        // Step 3: Async H2D memcpy for output (host-pinned -> device dst[N_gpu..N))
+        stream->memcpy(dst_dd + N_gpu, output_ptr, out_bytes);
+
+        GGML_SYCL_DEBUG("[TENSOR-SPLIT] %s: recorded host_task graph nodes (N_cpu=%d)\n",
+                        src0->name ? src0->name : "?", N_cpu_int);
+        return true;
+    }
+
+    // ===================================================================
+    // NON-RECORDING PATH: synchronous execution (unchanged)
+    // ===================================================================
 
     // D2H copy weights to persistent host-pinned cache.
     // This serves two purposes:
