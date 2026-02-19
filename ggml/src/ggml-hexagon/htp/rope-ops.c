@@ -161,20 +161,22 @@ static void rope_init_context(struct htp_rope_context * rctx, struct htp_ops_con
 }
 
 static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
-    const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
-    const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
-    uint8_t * restrict dst_curr         = (uint8_t *) dst;
+    const HVX_Vector * restrict vsrc   = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vtheta = (const HVX_Vector *) theta_cache;
+    HVX_Vector       * restrict vdst   = (HVX_Vector *) dst;
 
-    int step_of_1 = ne >> 6;  // 6 because we process two vectors at once
-    int half_size = (sizeof(float) * (ne / 2));
-    const int32_t half_dims = ne / 2;
+    uint32_t nvec = (ne / (VLEN_FP32 * 2) * 2); // 2 vecs per loop, step of 2
 
-    for (int i = 0; i < step_of_1; i++) {
-        HVX_Vector v0 = *(HVX_Vector *) src0_curr;
-        HVX_Vector v1 = *(HVX_Vector *) (src0_curr + half_size);
+    uint32_t he = ne / 2;         // half_dims offset in elements
+    uint32_t hv = he / VLEN_FP32; // half_dims offset in vectors
 
-        HVX_Vector v2 = *(HVX_Vector *) theta_curr;
-        HVX_Vector v3 = *(HVX_Vector *) (theta_curr + VLEN);
+    #pragma unroll(2)
+    for (uint32_t i = 0; i < nvec; i += 2) {
+        HVX_Vector v0 = vsrc[i/2+0];
+        HVX_Vector v1 = vsrc[i/2+hv];
+
+        HVX_Vector v2 = vtheta[i+0];
+        HVX_Vector v3 = vtheta[i+1];
 
         HVX_VectorPair vcos_sin = Q6_W_vdeal_VVR(v3, v2, -4);  // vcos_sin[0] = cos_theta, vcos_sin[1] = sin_theta
 
@@ -186,38 +188,34 @@ static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * rest
         HVX_Vector v4 = Q6_Vqf32_vsub_Vqf32Vqf32(vx0_c, vx1_s);
         HVX_Vector v5 = Q6_Vqf32_vadd_Vqf32Vqf32(vx0_s, vx1_c);
 
-        *(HVX_Vector *) dst_curr               = Q6_Vsf_equals_Vqf32(v4);
-        *(HVX_Vector *) (dst_curr + half_size) = Q6_Vsf_equals_Vqf32(v5);
-
-        src0_curr  += VLEN;
-        theta_curr += 2 * VLEN;
-        dst_curr   += VLEN;
+        vdst[i/2+0]  = Q6_Vsf_equals_Vqf32(v4);
+        vdst[i/2+hv] = Q6_Vsf_equals_Vqf32(v5);
     }
 
-    int processed = (ne >> 6) << 6; // multiples of 64
-    for (int i = processed; i < ne; i += 2) {
+    for (uint32_t i = nvec * VLEN_FP32; i < ne; i += 2) {
         const float cos_theta = theta_cache[i+0];
         const float sin_theta = theta_cache[i+1];
         float x0 = src0[i/2];
-        float x1 = src0[i/2 + half_dims];
-        dst[i/2]             = x0 * cos_theta - x1 * sin_theta;
-        dst[i/2 + half_dims] = x0 * sin_theta + x1 * cos_theta;
+        float x1 = src0[i/2 + he];
+        dst[i/2]      = x0 * cos_theta - x1 * sin_theta;
+        dst[i/2 + he] = x0 * sin_theta + x1 * cos_theta;
     }
 }
 
 static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
-    const uint8_t * restrict src0_curr  = (const uint8_t *) src0;
-    const uint8_t * restrict theta_curr = (const uint8_t *) theta_cache;
-    uint8_t * restrict dst_curr         = (uint8_t *) dst;
+    const HVX_Vector * restrict vsrc   = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vtheta = (const HVX_Vector *) theta_cache;
+    HVX_Vector       * restrict vdst   = (HVX_Vector *) dst;
 
-    int step_of_1 = ne >> 6;  // 6 because we process two vectors at once
+    uint32_t nvec = (ne / (VLEN_FP32 * 2)) * 2; // 2 vecs per loop, step of two
 
-    for (int i = 0; i < step_of_1; i++) {
-        HVX_Vector v0 = *(HVX_Vector *) src0_curr;
-        HVX_Vector v1 = *(HVX_Vector *) (src0_curr + VLEN);
+    #pragma unroll(2)
+    for (uint32_t i = 0; i < nvec; i+=2) {
+        HVX_Vector v0 = vsrc[i+0];
+        HVX_Vector v1 = vsrc[i+1];
 
-        HVX_Vector v2 = *(HVX_Vector *) theta_curr;
-        HVX_Vector v3 = *(HVX_Vector *) (theta_curr + VLEN);
+        HVX_Vector v2 = vtheta[i+0];
+        HVX_Vector v3 = vtheta[i+1];
 
         HVX_VectorPair vx0_x1   = Q6_W_vdeal_VVR(v1, v0, -4);  // vx0_x1[0] = x0, vx0_x1[1] = x1
         HVX_VectorPair vcos_sin = Q6_W_vdeal_VVR(v3, v2, -4);  // vcos_sin[0] = cos_theta, vcos_sin[1] = sin_theta
@@ -232,16 +230,11 @@ static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict 
 
         HVX_VectorPair vstore = Q6_W_vshuff_VVR(Q6_Vsf_equals_Vqf32(v5), Q6_Vsf_equals_Vqf32(v4), -4);
 
-        *(HVX_Vector *) dst_curr          = Q6_V_lo_W(vstore);
-        *(HVX_Vector *) (dst_curr + VLEN) = Q6_V_hi_W(vstore);
-
-        src0_curr  += 2 * VLEN;
-        theta_curr += 2 * VLEN;
-        dst_curr   += 2 * VLEN;
+        vdst[i+0] = Q6_V_lo_W(vstore);
+        vdst[i+1] = Q6_V_hi_W(vstore);
     }
 
-    int processed = (ne >> 6) << 6;
-    for (int i = processed; i < ne; i += 2) {
+    for (uint32_t i = nvec * VLEN_FP32; i < ne; i += 2) {
         const float cos_theta = theta_cache[i+0];
         const float sin_theta = theta_cache[i+1];
         float x0 = src0[i+0];
