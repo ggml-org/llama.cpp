@@ -15,11 +15,13 @@
         tools:context=".MainActivity">
 
         <androidx.appcompat.widget.Toolbar
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="?attr/actionBarSize"
-            android:background="?attr/colorSurface"
-            app:title="LLaMA Chat" />
+    android:id="@+id/toolbar"
+    android:layout_width="match_parent"
+    android:layout_height="?attr/actionBarSize"
+    android:background="?attr/colorPrimaryContainer"
+    android:elevation="4dp"
+    app:title="LLaMA Chat"
+    app:titleTextColor="?attr/colorOnPrimaryContainer" />
 
         <TextView
             android:id="@+id/gguf"
