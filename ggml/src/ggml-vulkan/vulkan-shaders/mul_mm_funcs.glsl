@@ -486,6 +486,23 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                                                  kvalues_mxfp4[vui2 & 0xF] * d);
             buf_a[buf_idx + 8] = FLOAT_TYPE_VEC2(kvalues_mxfp4[vui  >>  4] * d,
                                                  kvalues_mxfp4[vui2 >>  4] * d);
+#elif defined(DATA_A_NVFP4)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib = idx / 4;
+            const uint iqs = (idx & 0x03) * 2;
+
+            const float d = float(data_a[ib].d);
+            const uint vui0 = uint(data_a[ib].qs[iqs]);
+            const uint vui1 = uint(data_a[ib].qs[iqs+1]);
+
+            // Each NVFP4 block (QK=16) occupies 8 vec2 slots: 4 low nibbles + 4 high nibbles.
+            // row & ~3 gives the block-start in row units; *2 because each block uses 8 slots.
+            const uint base = col * SHMEM_STRIDE + (row & ~0x03u) * 2 + (row & 0x03);
+            buf_a[base    ] = FLOAT_TYPE_VEC2(kvalues_mxfp4[vui0 & 0xF] * d,
+                                              kvalues_mxfp4[vui1 & 0xF] * d);
+            buf_a[base + 4] = FLOAT_TYPE_VEC2(kvalues_mxfp4[vui0 >>  4] * d,
+                                              kvalues_mxfp4[vui1 >>  4] * d);
 #endif
 }
 

@@ -918,6 +918,44 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     // NOTE: when AVX512 path runs, sumf already has a partial result and ib > 0,
     // so the AVX2 loop below only handles the remainder.
 
+    __m256 accum2 = _mm256_setzero_ps();
+
+    for (; ib + 1 < nb; ib += 2) {
+        const block_nvfp4 * x0 = &x[2*ib + 0];
+        const block_nvfp4 * x1 = &x[2*ib + 1];
+        const block_nvfp4 * x2 = &x[2*ib + 2];
+        const block_nvfp4 * x3 = &x[2*ib + 3];
+
+        const __m128i q4bits_0 = _mm_set_epi64x(*(const int64_t *)x1->qs, *(const int64_t *)x0->qs);
+        const __m128i q4_lo_0 = _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_0, m4b));
+        const __m128i q4_hi_0 = _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_0, 4), m4b));
+        const __m256i q4b_0 = MM256_SET_M128I(_mm_unpackhi_epi64(q4_lo_0, q4_hi_0),
+                                              _mm_unpacklo_epi64(q4_lo_0, q4_hi_0));
+
+        const __m128i q4bits_1 = _mm_set_epi64x(*(const int64_t *)x3->qs, *(const int64_t *)x2->qs);
+        const __m128i q4_lo_1 = _mm_shuffle_epi8(values128, _mm_and_si128(q4bits_1, m4b));
+        const __m128i q4_hi_1 = _mm_shuffle_epi8(values128, _mm_and_si128(_mm_srli_epi16(q4bits_1, 4), m4b));
+        const __m256i q4b_1 = MM256_SET_M128I(_mm_unpackhi_epi64(q4_lo_1, q4_hi_1),
+                                              _mm_unpacklo_epi64(q4_lo_1, q4_hi_1));
+
+        const __m256i p32_0 = _mm256_madd_epi16(mul_add_epi8(q4b_0, _mm256_loadu_si256((const __m256i *)y[ib + 0].qs)), mone);
+        const __m256i p32_1 = _mm256_madd_epi16(mul_add_epi8(q4b_1, _mm256_loadu_si256((const __m256i *)y[ib + 1].qs)), mone);
+
+        const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
+        const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
+        const __m256 scale0 = _mm256_blend_ps(
+            _mm256_set1_ps(dy0 * GGML_CPU_FP16_TO_FP32(x0->d)),
+            _mm256_set1_ps(dy0 * GGML_CPU_FP16_TO_FP32(x1->d)), 0xF0);
+        const __m256 scale1 = _mm256_blend_ps(
+            _mm256_set1_ps(dy1 * GGML_CPU_FP16_TO_FP32(x2->d)),
+            _mm256_set1_ps(dy1 * GGML_CPU_FP16_TO_FP32(x3->d)), 0xF0);
+
+        accum  = _mm256_fmadd_ps(scale0, _mm256_cvtepi32_ps(p32_0), accum);
+        accum2 = _mm256_fmadd_ps(scale1, _mm256_cvtepi32_ps(p32_1), accum2);
+    }
+
+    accum = _mm256_add_ps(accum, accum2);
+
     for (; ib < nb; ++ib) {
         const block_nvfp4 * x0 = &x[2*ib + 0];
         const block_nvfp4 * x1 = &x[2*ib + 1];
