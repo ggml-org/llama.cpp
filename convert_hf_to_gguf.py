@@ -8640,9 +8640,6 @@ class T5EncoderModel(TextModel):
 class Jais2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS2
 
-    def set_vocab(self):
-        self._set_vocab_gpt2()
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
