@@ -975,7 +975,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         }
                     }
                 }
-                if (!imatrix && tensor_type_requires_imatrix(tensor, new_type)) {
+                if (!imatrix && tensor_type_requires_imatrix(tensor, new_type, params->ftype)) {
                     LLAMA_LOG_ERROR("\n\n============================================================\n");
                     LLAMA_LOG_ERROR("Missing importance matrix for tensor %s in a very low-bit quantization\n", tensor->name);
                     LLAMA_LOG_ERROR("The result will be garbage, so bailing out\n");
