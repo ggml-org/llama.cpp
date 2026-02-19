@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include <limits>
 
 //
 // llama_memory_hybrid_iswa
@@ -136,9 +137,9 @@ void llama_memory_hybrid_iswa::clear(bool data) {
 }
 
 bool llama_memory_hybrid_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    // Try removing from the recurrent cache first since it may fail. If it does
-    // fail, the cache will not have been mutated.
     if (!mem_recr->seq_rm(seq_id, p0, p1)) {
+        mem_recr->seq_rm(seq_id, 0, std::numeric_limits<llama_pos>::max());
+        mem_attn->seq_rm(seq_id, p0, p1);
         return false;
     }
     return mem_attn->seq_rm(seq_id, p0, p1);
