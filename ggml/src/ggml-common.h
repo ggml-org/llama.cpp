@@ -483,49 +483,6 @@ typedef struct {
 } block_iq6_k;
 static_assert(sizeof(block_iq6_k) == sizeof(ggml_half) + sizeof(uint16_t) + QK_K/2 + QK_K/4 + QK_K/16, "wrong iq6_k block size/padding");
 
-// IQ2_KS: 2-bit KS quantization (GGML_TYPE_IQ2_KS = 145)
-// 2.19 bpw (70 bytes / 256 values * 8 = 2.1875)
-typedef struct {
-    uint16_t extra;           //  2 bytes - extra info/scale
-    uint8_t  scales[QK_K/64]; //  4 bytes - per-64 scales
-    uint8_t  qs[QK_K/4];      // 64 bytes - 2-bit quantized values
-} block_iq2_ks;
-static_assert(sizeof(block_iq2_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4, "wrong iq2_ks block size/padding");
-
-// IQ3_KS: 3-bit KS quantization (GGML_TYPE_IQ3_KS = 156)
-// 3.19 bpw (102 bytes / 256 values * 8 = 3.1875)
-typedef struct {
-    uint16_t extra;           //  2 bytes - extra info/scale
-    uint8_t  scales[QK_K/64]; //  4 bytes - per-64 scales
-    uint8_t  qs[QK_K/4];      // 64 bytes - low 2 bits
-    uint8_t  qh[QK_K/8];      // 32 bytes - high 1 bit
-} block_iq3_ks;
-static_assert(sizeof(block_iq3_ks) == sizeof(uint16_t) + QK_K/64 + QK_K/4 + QK_K/8, "wrong iq3_ks block size/padding");
-
-// IQ4_KSS: 4-bit KSS quantization (GGML_TYPE_IQ4_KSS = 146)
-// 4.0 bpw (128 bytes / 256 values * 8 = 4.0)
-typedef struct {
-    uint32_t qs[QK_K/8]; // 32 uint32_t = 128 bytes
-} block_iq4_kss;
-static_assert(sizeof(block_iq4_kss) == QK_K/8*sizeof(uint32_t), "wrong iq4_kss block size/padding");
-
-// IQ4_KS: 4-bit KS quantization (GGML_TYPE_IQ4_KS = 144)
-// 4.25 bpw (136 bytes / 256 values * 8 = 4.25)
-typedef struct {
-    uint8_t  scales[QK_K/32]; //   8 bytes - per-32 scales
-    uint8_t  qs[QK_K/2];      // 128 bytes - 4-bit quantized values
-} block_iq4_ks;
-static_assert(sizeof(block_iq4_ks) == QK_K/32 + QK_K/2, "wrong iq4_ks block size/padding");
-
-// IQ5_KS: 5-bit KS quantization (GGML_TYPE_IQ5_KS = 152)
-// 5.25 bpw (168 bytes / 256 values * 8 = 5.25)
-typedef struct {
-    uint8_t  scales[QK_K/32]; //   8 bytes - per-32 scales
-    uint8_t  qs[QK_K/2];      // 128 bytes - low 4 bits
-    uint8_t  qh[QK_K/8];      //  32 bytes - high 1 bit
-} block_iq5_ks;
-static_assert(sizeof(block_iq5_ks) == QK_K/32 + QK_K/2 + QK_K/8, "wrong iq5_ks block size/padding");
-
 #endif // GGML_COMMON_DECL
 #endif // GGML_COMMON_DECL
 
@@ -1188,7 +1145,7 @@ GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 GGML_TABLE_END()
 
-// IQ2_K and IQ2_KS lookup table
+// IQ2_K lookup table
 GGML_TABLE_BEGIN(int8_t, iq2nl_values, 8)
     -31, -13, 1, 17,   -26, -8, 6, 22
 GGML_TABLE_END()
@@ -1198,19 +1155,19 @@ GGML_TABLE_BEGIN(uint16_t, iq2kl_values, 32)
     0xf601, 0x0101, 0x0d01, 0x1c01, 0xd80d, 0xe90d, 0xf60d, 0x010d, 0x0d0d, 0xc11c, 0xe91c, 0x011c, 0x1c1c, 0x2f1c, 0xe92f, 0x0d2f,
 GGML_TABLE_END()
 
-// IQ3_K and IQ3_KS lookup table
+// IQ3_K lookup table
 GGML_TABLE_BEGIN(int8_t, iq3nl_values, 16)
     -63, -40, -23, -10, 1, 13, 28,  47,
     -59, -36, -19,  -6, 5, 17, 32,  51,
 GGML_TABLE_END()
 
-// IQ4_KS and IQ4_KSS lookup table
+// IQ4_K lookup table
 GGML_TABLE_BEGIN(int8_t, iq4k_values, 32)
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
     -123, -100, -79, -61, -45, -31, -18,  -6, 5, 17, 29, 42, 57, 73, 93, 117
 GGML_TABLE_END()
 
-// IQ5_K and IQ5_KS lookup table
+// IQ5_K lookup table
 GGML_TABLE_BEGIN(int8_t, iq5nl_values, 64)
     -126, -114, -103, -92, -83, -74, -65, -57, -50, -43, -36, -30, -24, -18, -12, -6, -1, 5, 11, 17, 23, 29, 36, 43, 51, 59, 68, 77, 87, 97, 109, 121,
     -124, -112, -101, -90, -81, -72, -63, -55, -48, -41, -34, -28, -22, -16, -10, -4,  1, 7, 13, 19, 25, 31, 38, 45, 53, 61, 70, 79, 89, 99, 111, 123,

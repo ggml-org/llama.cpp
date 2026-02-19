@@ -981,51 +981,6 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .from_float_ref           = (ggml_from_float_t) quantize_row_iq6_k_ref,
         .row_meta_size            = 0,
     },
-    [GGML_TYPE_IQ2_KS] = {
-        .type_name                = "iq2_ks",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_iq2_ks),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq2_ks,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_iq2_ks_ref,
-        .row_meta_size            = sizeof(ggml_half),  // fp16 row scale
-    },
-    [GGML_TYPE_IQ3_KS] = {
-        .type_name                = "iq3_ks",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_iq3_ks),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq3_ks,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_iq3_ks_ref,
-        .row_meta_size            = sizeof(ggml_half),  // fp16 row scale
-    },
-    [GGML_TYPE_IQ4_KSS] = {
-        .type_name                = "iq4_kss",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_iq4_kss),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq4_kss,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_iq4_kss_ref,
-        .row_meta_size            = sizeof(float),      // fp32 row scale
-    },
-    [GGML_TYPE_IQ4_KS] = {
-        .type_name                = "iq4_ks",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_iq4_ks),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq4_ks,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_iq4_ks_ref,
-        .row_meta_size            = sizeof(float),      // fp32 row scale
-    },
-    [GGML_TYPE_IQ5_KS] = {
-        .type_name                = "iq5_ks",
-        .blck_size                = QK_K,
-        .type_size                = sizeof(block_iq5_ks),
-        .is_quantized             = true,
-        .to_float                 = (ggml_to_float_t) dequantize_row_iq5_ks,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_iq5_ks_ref,
-        .row_meta_size            = sizeof(float),      // fp32 row scale
-    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
@@ -1381,8 +1336,6 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        // Use nb[1] (row size) instead of ne[0]*nb[0]/blck_size to account for
-        // types with row_meta_size (e.g., IQ*_KS types with per-row scales)
         nbytes = tensor->nb[1];
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
@@ -7722,11 +7675,6 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ4_K:   result = quantize_iq4_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ5_K:   result = quantize_iq5_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ6_K:   result = quantize_iq6_k  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ2_KS:  result = quantize_iq2_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ3_KS:  result = quantize_iq3_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ4_KSS: result = quantize_iq4_kss(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ4_KS:  result = quantize_iq4_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IQ5_KS:  result = quantize_iq5_ks (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

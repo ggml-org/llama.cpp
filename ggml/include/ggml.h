@@ -434,16 +434,9 @@ extern "C" {
         GGML_TYPE_IQ4_K   = 139, // 4.5 bpw
         GGML_TYPE_IQ5_K   = 140, // 5.5 bpw
         GGML_TYPE_IQ6_K   = 141, // 6.625 bpw
-        // IDs 142-143 reserved (deprecated IQ2_TN, IQ1_TN)
-        GGML_TYPE_IQ4_KS  = 144, // 4.25 bpw
-        GGML_TYPE_IQ2_KS  = 145, // 2.19 bpw
-        GGML_TYPE_IQ4_KSS = 146, // 4.0 bpw
-        // IDs 147-151 reserved
-        GGML_TYPE_IQ5_KS  = 152, // 5.25 bpw
-        // IDs 153-155 reserved
-        GGML_TYPE_IQ3_KS  = 156, // 3.19 bpw
+        // IDs 142-156 reserved
 
-        GGML_TYPE_COUNT   = 157,
+        GGML_TYPE_COUNT   = 142,
     };
 
     // precision

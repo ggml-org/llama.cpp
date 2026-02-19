@@ -3726,14 +3726,7 @@ class GGMLQuantizationType(IntEnum):
     IQ4_K   = 139  # 4.5 bpw
     IQ5_K   = 140  # 5.5 bpw
     IQ6_K   = 141  # 6.625 bpw
-    # IDs 142-143 reserved (deprecated IQ2_TN, IQ1_TN)
-    IQ4_KS  = 144  # 4.25 bpw
-    IQ2_KS  = 145  # 2.19 bpw
-    IQ4_KSS = 146  # 4.0 bpw
-    # IDs 147-151 reserved
-    IQ5_KS  = 152  # 5.25 bpw
-    # IDs 153-155 reserved
-    IQ3_KS  = 156  # 3.19 bpw
+    # IDs 142-156 reserved
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -3895,11 +3888,6 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.IQ4_K:   (256, 2 + 2 + QK_K // 64 + QK_K // 32 + QK_K // 2),              # d(2) + extra(2) + scales_h[4] + scales_l[8] + qs[128] = 144
     GGMLQuantizationType.IQ5_K:   (256, 2 + 2 + QK_K // 64 + QK_K // 32 + QK_K // 2 + QK_K // 8),  # d(2) + extra(2) + scales_h[4] + scales_l[8] + qs[128] + qh[32] = 176
     GGMLQuantizationType.IQ6_K:   (256, 2 + 2 + QK_K // 16 + QK_K // 2 + QK_K // 4),               # d(2) + extra(2) + scales[16] + qs[128] + qh[64] = 212
-    GGMLQuantizationType.IQ2_KS:  (256, 2 + QK_K // 64 + QK_K // 4),                               # 2 + 4 + 64 = 70
-    GGMLQuantizationType.IQ3_KS:  (256, 2 + QK_K // 64 + QK_K // 4 + QK_K // 8),                   # 2 + 4 + 64 + 32 = 102
-    GGMLQuantizationType.IQ4_KSS: (256, QK_K // 2),                                                # 128 (32 uint32_t)
-    GGMLQuantizationType.IQ4_KS:  (256, QK_K // 32 + QK_K // 2),                                   # 8 + 128 = 136
-    GGMLQuantizationType.IQ5_KS:  (256, QK_K // 32 + QK_K // 2 + QK_K // 8),                       # 8 + 128 + 32 = 168
 }
 
 
