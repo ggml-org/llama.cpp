@@ -25696,13 +25696,36 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                                     i, node->name ? node->name : "(null)");
                 }
 
-                // Check if node sources are host-accessible
+                // Check if node and its sources are host-accessible
                 auto can_batch_cpu = [&](const ggml_tensor * t) -> bool {
+                    // Check output tensor is host-accessible
+                    if (t->buffer && !ggml_backend_buffer_is_host(t->buffer)) {
+                        if (host_compute_enabled && t->data) {
+                            const ggml_tensor * base = t;
+                            while (base->view_src) base = base->view_src;
+                            if (!ggml_sycl_is_host_accessible_usm(base->data, sycl_ctx->device)) {
+                                return false;
+                            }
+                        } else {
+                            return false;
+                        }
+                    }
+                    // Check all source tensors are host-accessible
                     for (int s = 0; s < GGML_MAX_SRC && t->src[s]; s++) {
                         const ggml_tensor * src = t->src[s];
                         if (!src->buffer) continue;
                         if (ggml_backend_buffer_is_host(src->buffer)) continue;
                         if (ggml_sycl_tensor_is_weight(src)) continue;
+                        // HOST_COMPUTE: compute buffers use sycl::malloc_host
+                        // (host-pinned USM), accessible from CPU via zero-copy.
+                        // Reject non-contiguous sources (e.g. permuted KV cache
+                        // views) — CPU path cannot handle linear memcpy on those.
+                        if (host_compute_enabled && src->data) {
+                            if (!ggml_is_contiguous(src)) return false;
+                            const ggml_tensor * base = src;
+                            while (base->view_src) base = base->view_src;
+                            if (ggml_sycl_is_host_accessible_usm(base->data, sycl_ctx->device)) continue;
+                        }
                         return false;
                     }
                     return true;
@@ -25710,7 +25733,11 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
                 if (!can_batch_cpu(node)) {
                     // Fall through to GPU dispatch below
+                    GGML_SYCL_DEBUG("[HC-BATCH] REJECT %s (%s) — not host-accessible\n",
+                                    node->name ? node->name : "?", ggml_op_name(node->op));
                 } else {
+                    GGML_SYCL_DEBUG("[HC-BATCH] ACCEPT %s (%s) — host-accessible\n",
+                                    node->name ? node->name : "?", ggml_op_name(node->op));
                     ggml_sycl_batched_mode_set(true);
 
                     // Try fusion with next CPU node
@@ -25736,10 +25763,14 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                     if (!fused) {
                         bool ok = ggml_sycl_compute_forward_cpu(*sycl_ctx, node);
                         if (!ok) {
-                            fprintf(stderr, "[HOST_COMPUTE] FATAL: CPU dispatch failed for op=%s name=%s\n",
-                                    ggml_op_name(node->op), node->name ? node->name : "?");
+                            // CPU dispatch failed — fall back to GPU dispatch.
+                            // This can happen for ops with non-contiguous sources
+                            // (e.g. attention MUL_MATs with permuted KV views).
+                            GGML_SYCL_DEBUG("[HC-BATCH] FALLBACK %s (%s) — CPU dispatch failed, using GPU\n",
+                                            node->name ? node->name : "?", ggml_op_name(node->op));
+                            ggml_sycl_batched_mode_set(false);
+                            goto gpu_dispatch;
                         }
-                        GGML_ASSERT(ok);
                     }
 
                     ggml_sycl_batched_mode_set(false);
@@ -25791,6 +25822,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 }
             }
         }
+gpu_dispatch:
         if (g_ggml_sycl_graph_recording) {
             g_sycl_submit_count_during_recording.fetch_add(1, std::memory_order_relaxed);
         }

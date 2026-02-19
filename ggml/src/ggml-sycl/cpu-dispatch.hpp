@@ -54,6 +54,10 @@ void   ggml_sycl_cpu_retained_flush_selective(int device, sycl::queue * gpu_q,
                                                int n_gpu_nodes);
 void   ggml_sycl_cpu_retained_deactivate();
 
+// Check if a pointer is host-accessible USM (host or shared allocation).
+// Used by can_batch_cpu() to verify HOST_COMPUTE buffers are CPU-accessible.
+bool ggml_sycl_is_host_accessible_usm(void * ptr, int device);
+
 // HOST_COMPUTE host_task mode: when active, CPU ops run as host_task
 // callbacks on gpu_q instead of parallel_for on cpu_q.  Activated when
 // GGML_SYCL_HOST_COMPUTE=1 + CPU offload is active.

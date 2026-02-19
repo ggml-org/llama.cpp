@@ -756,6 +756,10 @@ static bool is_host_accessible_usm(void * ptr, int device) {
     return is_host;
 }
 
+bool ggml_sycl_is_host_accessible_usm(void * ptr, int device) {
+    return is_host_accessible_usm(ptr, device);
+}
+
 static void * get_host_ptr(const ggml_tensor * t,
                            int                 device,
                            int                 slot,
