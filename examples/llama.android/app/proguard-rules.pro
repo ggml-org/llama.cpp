@@ -12,6 +12,11 @@
 #   public *;
 #}
 
+# Room
+-keep class com.example.llama.data.** { *; }
+-keepclassmembers class com.example.llama.data.** { *; }
+-dontwarn androidx.room.**
+
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
 #-keepattributes SourceFile,LineNumberTable
