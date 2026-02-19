@@ -65,14 +65,25 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     } else if (!content_parts.empty()) {
         if (concat_typed_text) {
             std::string text;
+            bool last_was_media_marker = false;
+            // join parts with newline, do not add newline before or after media markers
             for (const auto & part : content_parts) {
-                if (part.type != "text") {
+                bool add_new_line = true;
+                if (part.type == "text") {
+                    add_new_line = !last_was_media_marker && !text.empty();
+                    last_was_media_marker = false;
+                } else if (part.type == "media_marker") {
+                    add_new_line = false;
+                    last_was_media_marker = true;
+                } else {
                     LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
                     continue;
                 }
-                if (!text.empty()) {
+
+                if (add_new_line) {
                     text += '\n';
                 }
+
                 text += part.text;
             }
             jmsg["content"] = text;
@@ -319,7 +330,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text") {
+                        if (type != "text" && type != "media_marker") {
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
@@ -3307,7 +3318,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     for (const auto & msg : inputs.messages) {
         auto content = msg.content;
         for (const auto & part : msg.content_parts) {
-            if (part.type != "text") {
+            if (part.type != "text" && part.type != "media_marker") {
                 LOG_WRN("Ignoring non-text content part: %s\n", part.type.c_str());
                 continue;
             }
