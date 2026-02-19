@@ -2287,9 +2287,7 @@ private:
 
                             // the largest pos_min required for a checkpoint to be useful
                             const auto pos_min_thold = std::max(0, n_past - n_swa);
-
-                            // note: disallow with mtmd contexts for now
-                            //       https://github.com/ggml-org/llama.cpp/issues/17043
+                            
                             if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
