@@ -479,13 +479,13 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-static bool tensor_type_requires_imatrix(const ggml_tensor * t, const ggml_type dst_type) {
+static bool tensor_type_requires_imatrix(const ggml_tensor * t, const ggml_type dst_type, const llama_ftype ftype) {
     return (
         dst_type == GGML_TYPE_IQ2_XXS || dst_type == GGML_TYPE_IQ2_XS ||
         dst_type == GGML_TYPE_IQ3_XXS || dst_type == GGML_TYPE_IQ1_S  ||
         dst_type == GGML_TYPE_IQ2_S   || dst_type == GGML_TYPE_IQ1_M  ||
-        (   // Q2_K is the worst k-quant type - only allow it without imatrix for token embeddings
-            dst_type == GGML_TYPE_Q2_K && strcmp(t->name, "token_embd.weight") != 0
+        (   // Q2_K_S is the worst k-quant type - only allow it without imatrix for token embeddings
+            dst_type == GGML_TYPE_Q2_K && ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S && strcmp(t->name, "token_embd.weight") != 0
         )
     );
 }
