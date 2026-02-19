@@ -33,7 +33,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Suppress deprecation warning for ov::Tensor::data()
+// Suppress  deprecation warning for ov::Tensor::data()
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
