@@ -623,15 +623,14 @@ static __global__ void dequantize_block_nvfp4(const void * __restrict__ vx, dst_
     const block_nvfp4 * x = (const block_nvfp4 *) vx + i*(QK_K/QK_NVFP4);
 
     const int64_t tid = threadIdx.x; // 0..31
-    // QK_K/QK_NVFP4 = 16 blocks per super-block, but we have 32 threads
-    // Each thread handles 8 elements (half a block)
     const int64_t ib = tid / 2;  // block index: 0..15
     const int64_t il = tid % 2;  // lo or hi nibbles
     dst_t * y = yy + i*QK_K + QK_NVFP4*ib + il*(QK_NVFP4/2);
     const float d = __half2float(x[ib].d);
+    const int shift = il * 4;
+#pragma unroll
     for (int j = 0; j < QK_NVFP4/2; ++j) {
-        const uint8_t q = il ? (x[ib].qs[j] >> 4) : (x[ib].qs[j] & 0xf);
-        y[j] = d * kvalues_mxfp4[q];
+        y[j] = d * kvalues_mxfp4[(x[ib].qs[j] >> shift) & 0xf];
     }
 }
 
