@@ -5022,7 +5022,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
                 backend_ctx->prealloc_scales_trans.buffer, CL_MEM_READ_WRITE,
                 CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-            cl_int stride_k_s = K/2;
+            cl_int stride_k_s = K/16/2;
             kernel = backend_ctx->kernel_transpose_16_buf;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->s));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s_trans));
@@ -5046,7 +5046,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
                 backend_ctx->prealloc_scales_trans.buffer, CL_MEM_READ_WRITE,
                 CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-            cl_int stride_k_d = K/2;
+            cl_int stride_k_d = K/256;
             kernel = backend_ctx->kernel_transpose_16_buf;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->d));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &d_trans));
