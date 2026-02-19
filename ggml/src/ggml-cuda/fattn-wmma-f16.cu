@@ -49,6 +49,7 @@ static __global__ void flash_attn_ext_f16(
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         NO_DEVICE_CODE;
+        GGML_CUDA_PDL_LC();
         return;
     }
 
@@ -78,6 +79,7 @@ static __global__ void flash_attn_ext_f16(
     constexpr int kqs_padded = FATTN_KQ_STRIDE + 8;
     constexpr int kqar = sizeof(KQ_acc_t)/sizeof(half);
 
+    GGML_CUDA_PDL_SYNC(); // needs to guard Q, K, V, mask, sinks, KV_max, dst, dst_meta data accesses. Conservatively placed, not optimal
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
@@ -433,6 +435,7 @@ static __global__ void flash_attn_ext_f16(
     for (int j0 = 0; j0 < ncols; j0 += nwarps) {
         const int j_VKQ = j0 + threadIdx.y;
         if (ic0 + j_VKQ >= int(ne01.z)) {
+            GGML_CUDA_PDL_LC();
             return;
         }
 
