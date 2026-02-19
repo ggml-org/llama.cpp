@@ -19898,14 +19898,14 @@ static std::unordered_map<std::string, split_weight_cache_entry> g_split_weight_
 // descriptors are saved here. During replay, GPU graph runs async while CPU
 // executes all queued vec_dot work concurrently.
 struct split_cpu_work {
-    void *    host_weights;  // persistent host-pinned weight data (cached once)
-    void *    src1_device;   // device pointer to src1->data (re-staged each replay)
-    float *   dst_device;    // device pointer to dst->data
-    ggml_type type;          // weight quant type
-    int       ne00;          // K columns
-    int       n_rows;        // N_cpu rows
-    int64_t   N_gpu;         // row offset into dst for CPU portion
-    size_t    src1_bytes;    // bytes to D2H-copy for src1
+    const void * host_weights;  // host pointer to CPU weight rows (mmap or cached)
+    void *       src1_device;   // device pointer to src1->data (re-staged each replay)
+    float *      dst_device;    // device pointer to dst->data
+    ggml_type    type;          // weight quant type
+    int          ne00;          // K columns
+    int          n_rows;        // N_cpu rows
+    int64_t      N_gpu;         // row offset into dst for CPU portion
+    size_t       src1_bytes;    // bytes to D2H-copy for src1
 };
 static thread_local std::vector<split_cpu_work> g_split_cpu_queue;
 
@@ -19932,7 +19932,28 @@ static void split_cpu_output_ensure(size_t needed, sycl::queue * q) {
     g_split_cpu_output.bytes = needed;
 }
 
-// Execute all queued CPU work items (D2H src1, vec_dot, H2D output per item).
+// Persistent src1 D2H staging buffer for batched tensor split.
+// Sized to hold all unique src1 values across the work queue.
+static struct {
+    void *  data  = nullptr;
+    size_t  bytes = 0;
+} g_split_src1_staging;
+
+static void split_src1_staging_ensure(size_t needed, sycl::queue * q) {
+    if (g_split_src1_staging.bytes >= needed) {
+        return;
+    }
+    if (g_split_src1_staging.data) {
+        sycl::free(g_split_src1_staging.data, *q);
+    }
+    g_split_src1_staging.data = sycl::malloc_host(needed, *q);
+    g_split_src1_staging.bytes = g_split_src1_staging.data ? needed : 0;
+}
+
+// Execute all queued CPU work items using 3-phase batched execution.
+// Phase 1: Batch D2H src1 (deduplicated, one wait)
+// Phase 2: Single TBB parallel_for via ggml_sycl_cpu_vec_dot_batched()
+// Phase 3: Batch H2D output (one wait)
 // Called after graph replay or first graph execution.
 static void split_execute_cpu_work(sycl::queue * q) {
     if (g_split_cpu_queue.empty()) {
@@ -19940,43 +19961,79 @@ static void split_execute_cpu_work(sycl::queue * q) {
     }
     const size_t n_work = g_split_cpu_queue.size();
 
-    // Find max buffer sizes across all work items
-    size_t max_src1_bytes = 0;
-    int    max_out_rows   = 0;
+    // --- Phase 0: Compute buffer sizes ---
+    size_t total_output_rows = 0;
     for (const auto & w : g_split_cpu_queue) {
-        if (w.src1_bytes > max_src1_bytes) max_src1_bytes = w.src1_bytes;
-        if (w.n_rows > max_out_rows)       max_out_rows = w.n_rows;
+        total_output_rows += w.n_rows;
     }
-    split_staging_ensure(max_src1_bytes, 0, q);
-    split_cpu_output_ensure(static_cast<size_t>(max_out_rows) * sizeof(float), q);
 
-    if (!g_split_staging.src1_host || !g_split_cpu_output.data) {
+    // Count unique src1 device pointers for D2H dedup
+    std::unordered_map<void *, size_t> src1_unique;  // device_ptr -> offset in staging buf
+    size_t src1_staging_needed = 0;
+    for (const auto & w : g_split_cpu_queue) {
+        if (src1_unique.count(w.src1_device)) {
+            continue;
+        }
+        src1_unique[w.src1_device] = src1_staging_needed;
+        src1_staging_needed += w.src1_bytes;
+    }
+
+    // Ensure staging buffers
+    split_src1_staging_ensure(src1_staging_needed, q);
+    split_cpu_output_ensure(total_output_rows * sizeof(float), q);
+
+    if (!g_split_src1_staging.data || !g_split_cpu_output.data) {
+        GGML_LOG_WARN("[TENSOR-SPLIT] Failed to allocate staging buffers\n");
         return;
     }
 
-    // Process each CPU work item sequentially.
-    // Each has a different src1 (activations from different layers).
+    // --- Phase 1: Batch D2H src1 copies (deduplicated) ---
+    for (const auto & [dev_ptr, offset] : src1_unique) {
+        // Find the first work item with this src1 to get the byte count
+        size_t bytes = 0;
+        for (const auto & w : g_split_cpu_queue) {
+            if (w.src1_device == dev_ptr) {
+                bytes = w.src1_bytes;
+                break;
+            }
+        }
+        void * host_dst = (char *) g_split_src1_staging.data + offset;
+        q->memcpy(host_dst, dev_ptr, bytes);  // async, no wait
+    }
+    q->wait();  // ONE wait for all D2H copies
+
+    // --- Phase 2: Build batch work items and call batched vec_dot ---
+    std::vector<cpu_vec_dot_batch_item> batch_items(n_work);
+    size_t output_offset = 0;
     for (size_t wi = 0; wi < n_work; wi++) {
         const auto & w = g_split_cpu_queue[wi];
-
-        // D2H copy current src1 from device
-        q->memcpy(g_split_staging.src1_host, w.src1_device, w.src1_bytes).wait();
-
-        // CPU vec_dot
-        ggml_sycl_cpu_vec_dot_rows(w.type, w.ne00,
-                                    w.host_weights,
-                                    g_split_staging.src1_host,
-                                    g_split_cpu_output.data,
-                                    w.n_rows);
-
-        // H2D copy CPU output to device dst[N_gpu..]
-        q->memcpy(w.dst_device + w.N_gpu, g_split_cpu_output.data,
-                  w.n_rows * sizeof(float));
+        size_t src1_off = src1_unique[w.src1_device];
+        batch_items[wi] = {
+            w.host_weights,
+            (const float *) ((char *) g_split_src1_staging.data + src1_off),
+            g_split_cpu_output.data + output_offset,
+            w.type,
+            w.ne00,
+            w.n_rows,
+        };
+        output_offset += w.n_rows;
     }
 
-    // Wait for all H2D copies to complete
-    q->wait();
-    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Executed %zu CPU work items\n", n_work);
+    ggml_sycl_cpu_vec_dot_batched(batch_items.data(), static_cast<int>(n_work));
+
+    // --- Phase 3: Batch H2D output copies ---
+    output_offset = 0;
+    for (size_t wi = 0; wi < n_work; wi++) {
+        const auto & w = g_split_cpu_queue[wi];
+        q->memcpy(w.dst_device + w.N_gpu,
+                  g_split_cpu_output.data + output_offset,
+                  w.n_rows * sizeof(float));  // async, no wait
+        output_offset += w.n_rows;
+    }
+    q->wait();  // ONE wait for all H2D copies
+
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] Batched: %zu items, %zu unique src1, %zu total rows\n",
+                    n_work, src1_unique.size(), total_output_rows);
 }
 
 // Look up or create a persistent host-pinned weight cache entry for a tensor.
@@ -20076,21 +20133,26 @@ static bool ggml_sycl_mul_mat_tensor_split(
         // Recording mode: GPU partial MMVQ was captured above.
         // Cache weights if not already cached (happens during warmup before recording).
         // Save work descriptor for replay-time CPU execution.
-        // NOTE: Weight caching cannot happen here (would call .wait() during recording).
-        // Weights must be pre-cached during warmup. Look up the cache entry.
-        void * cached_weights = nullptr;
+        // Try host mmap pointer first (zero-copy, always available after model load).
+        // Falls back to D2H weight cache (populated during warmup).
+        const void * cached_weights = nullptr;
         if (src0->name) {
-            auto it = g_split_weight_cache.find(src0->name);
-            if (it != g_split_weight_cache.end() && it->second.bytes >= cpu_weight_bytes) {
-                cached_weights = it->second.data;
+            const void * host_ptr_full = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
+            if (host_ptr_full) {
+                cached_weights = (const char *) host_ptr_full + N_gpu * src0_row_bytes;
             }
         }
         if (!cached_weights) {
-            // Weights not cached yet — this can happen if warmup didn't run tensor split.
-            // Fall back: skip CPU work for this item (GPU produced partial output).
-            // The missing CPU rows will cause incorrect output, but this is a transient
-            // state that only occurs during the first recording pass.
-            GGML_LOG_WARN("[TENSOR-SPLIT] No cached weights for '%s' during recording, skipping CPU work\n",
+            // Fallback: check D2H weight cache (populated during warmup)
+            if (src0->name) {
+                auto it = g_split_weight_cache.find(src0->name);
+                if (it != g_split_weight_cache.end() && it->second.bytes >= cpu_weight_bytes) {
+                    cached_weights = it->second.data;
+                }
+            }
+        }
+        if (!cached_weights) {
+            GGML_LOG_WARN("[TENSOR-SPLIT] No host pointer or cached weights for '%s' during recording\n",
                           src0->name ? src0->name : "?");
             return true;
         }
@@ -20107,20 +20169,24 @@ static bool ggml_sycl_mul_mat_tensor_split(
         return true;
     }
 
-    // Non-recording mode (Phase 1 path): execute CPU portion immediately.
-    // Cache weights for future graph replay use.
-    void * host_weights = nullptr;
+    // Non-recording mode: use host mmap pointer if available (zero-copy).
+    // Falls back to D2H from device AOS if host pointer not registered.
+    const void * host_weights = nullptr;
     if (src0->name) {
-        host_weights = split_get_cached_weights(src0->name, src0_aos, N_gpu,
-                                                 src0_row_bytes, cpu_weight_bytes, stream);
+        const void * host_ptr_full = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
+        if (host_ptr_full) {
+            // Direct host access — no D2H copy needed
+            host_weights = (const char *) host_ptr_full + N_gpu * src0_row_bytes;
+        }
     }
     if (!host_weights) {
-        // Fallback: use transient staging buffer
+        // Fallback: D2H from device AOS data
         split_weight_staging_ensure(cpu_weight_bytes, stream);
         if (!g_split_weight_staging.data) {
             return false;
         }
-        stream->memcpy(g_split_weight_staging.data, src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
+        stream->memcpy(g_split_weight_staging.data,
+                        src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes).wait();
         host_weights = g_split_weight_staging.data;
     }
 
