@@ -22,7 +22,8 @@
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 
-#define HTP_ROPE_SPAD_NROWS  8
+#define HTP_ROPE_SPAD_NROWS  16
+#define HTP_ROPE_SPAD_BLOCK  (HTP_ROPE_SPAD_NROWS/2)
 
 #define htp_rope_preamble              \
     const uint32_t ne00 = src0->ne[0]; \
@@ -61,8 +62,6 @@ struct htp_rope_context {
     float corr_dims[2];
 
     uint32_t src0_nrows_per_thread;
-    struct fastdiv_values fastdiv_ne01;
-    struct fastdiv_values fastdiv_ne02;
     size_t spad_stride;
 
     struct htp_ops_context * octx;
@@ -154,13 +153,6 @@ static void init_rope_ctx(struct htp_rope_context * rctx, struct htp_ops_context
     rope_corr_dims(rctx->n_dims, rctx->n_ctx_orig, rctx->freq_base, rctx->beta_fast, rctx->beta_slow, rctx->corr_dims);
 
     rctx->octx = octx;
-
-    // Initialize fastdiv values
-    const uint32_t ne01 = octx->src0.ne[1];
-    const uint32_t ne02 = octx->src0.ne[2];
-
-    if (ne01 > 0) rctx->fastdiv_ne01 = init_fastdiv_values(ne01);
-    if (ne02 > 0) rctx->fastdiv_ne02 = init_fastdiv_values(ne02);
 
     const uint32_t ne0 = octx->dst.ne[0];
 
@@ -259,12 +251,37 @@ static void hvx_rope_f32_aa(float * restrict dst, const float * restrict src0, u
     }
 }
 
-struct rope_rowidx_cache {
-    uint32_t i1;
-    uint32_t i2;
-    uint32_t i3;
-    uint32_t pad;
-};
+static void inline rope_basic_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_f32_aa(d, s, rctx->n_dims, theta_cache);
+
+        // fill the remain channels with data from src tensor
+        if (rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        }
+    }
+}
+
+static void inline rope_neox_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_neox_f32_aa(d, s, rctx->n_dims, theta_cache);
+
+        // fill the remain channels with data from src tensor
+        if (rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        }
+    }
+}
 
 static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
@@ -304,76 +321,87 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     const int32_t * pos = (const int32_t *) src1->data;
     const float * freq_factors = src2->data ? (const float *) src2->data : NULL;
 
-    struct rope_rowidx_cache rowidx_cache[HTP_ROPE_SPAD_NROWS];
-
-    for (uint32_t ir = src0_start_row, is = 0; ir < src0_end_row && is < HTP_ROPE_SPAD_NROWS; ir++, is++) {
-        // Dummy DMA transaction for sequencing (interleaving dst,src,dst,...)
-        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + is * rctx->dst_row_size_aligned), 0, 0, 0);
-
-        uint32_t i1 = fastmodulo(ir, ne01, &rctx->fastdiv_ne01);
-        uint32_t r_div_ne01 = fastdiv(ir, &rctx->fastdiv_ne01);
-        uint32_t i2 = fastmodulo(r_div_ne01, ne02, &rctx->fastdiv_ne02);
-        uint32_t i3 = fastdiv(r_div_ne01, &rctx->fastdiv_ne02);
-        const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01;
-
-        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad_base + is * rctx->src0_row_size_aligned, src_addr),
-            rctx->src0_row_size_aligned, rctx->src0_row_size, 1);
-
-        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1 = i1;
-        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2 = i2;
-        rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3 = i3;
-    }
-
+    uint32_t ir = 0;
     uint32_t prev_i2 = (uint32_t) -1;
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        uint32_t i1 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1;
-        uint32_t i2 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2;
-        uint32_t i3 = rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3;
 
-        if (i2 != prev_i2) {
-            const int32_t p = pos[i2];
-            rope_cache_init(p, rctx->freq_scale, freq_factors, rctx->corr_dims, ne0, rctx->ext_factor, rctx->attn_factor, theta_cache, rctx->theta_scale);
-            prev_i2 = i2;
-        }
+    for (uint32_t i3 = 0; i3 < ne3; i3++) { // batch
+        for (uint32_t i2 = 0; i2 < ne2; i2++) { // seq-len
+            for (uint32_t i1 = 0; i1 < ne1; ) { // attn-heads
+                if (ir < src0_start_row) { ir++; i1++; continue; }
+                if (ir >= src0_end_row) goto done;
 
-        float * dst_spad  = (float *) dma_queue_pop(dma_queue).src;
-        float * src0_spad = (float *) dma_queue_pop(dma_queue).dst;
+                // Rows in this block
+                const uint32_t nrows = MIN(src0_end_row - ir, ne1 - i1);
 
-        if (is_neox) {
-            hvx_rope_neox_f32_aa(dst_spad, src0_spad, rctx->n_dims, theta_cache);
-        } else {
-            hvx_rope_f32_aa(dst_spad, src0_spad, rctx->n_dims, theta_cache);
-        }
+                // Depth before prefetch
+                uint32_t dma_depth = dma_queue_depth(dma_queue);
 
-        // fill the remain channels with data from src tensor
-        if (rctx->n_dims < ne0) {
-            hvx_copy_f32_uu((uint8_t *)(dst_spad + rctx->n_dims), (uint8_t *)(src0_spad + rctx->n_dims), ne0 - rctx->n_dims);
-        }
+                // Prefetch loop
+                for (uint32_t pnr = 0, pr = 0; pr < nrows && pr < HTP_ROPE_SPAD_NROWS; pr += pnr) {
+                    pnr = MIN(nrows - pr, HTP_ROPE_SPAD_BLOCK);
 
-        uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, 1);
+                    uint32_t pi1 = i1 + pr;
+                    uint32_t pir = ir + pr;
 
-        // prefetch next row
-        const uint32_t pr = (ir + HTP_ROPE_SPAD_NROWS);
-        if (pr < src0_end_row) {
-            // Re-calculate src ptr for prefetch
-            uint32_t pi1 = fastmodulo(pr, ne01, &rctx->fastdiv_ne01);
-            uint32_t pr_div_ne01 = fastdiv(pr, &rctx->fastdiv_ne01);
-            uint32_t pi2 = fastmodulo(pr_div_ne01, ne02, &rctx->fastdiv_ne02);
-            uint32_t pi3 = fastdiv(pr_div_ne01, &rctx->fastdiv_ne02);
-            const uint8_t * psrc_addr = (const uint8_t *) src0->data + pi3 * nb03 + pi2 * nb02 + pi1 * nb01;
+                    // Dummy DMA transaction for sequencing (interleaving dst,src,dst,...)
+                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr((void *) dst->data, dst_spad_base + pr * rctx->dst_row_size_aligned), 0, 0, 0);
 
-            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, psrc_addr), // reusing src0_spad buffer
-                rctx->src0_row_size_aligned, rctx->src0_row_size, 1);
+                    const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
+                          uint8_t * src_spad = src0_spad_base + pr * rctx->src0_row_size_aligned;
+                    dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
+                        rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
 
-            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i1 = pi1;
-            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i2 = pi2;
-            rowidx_cache[ir % HTP_ROPE_SPAD_NROWS].i3 = pi3;
+                    // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p npr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                }
+
+                // Update theta cache
+                if (i2 != prev_i2) {
+                    const int32_t p = pos[i2];
+                    rope_cache_init(p, rctx->freq_scale, freq_factors, rctx->corr_dims, ne0, rctx->ext_factor, rctx->attn_factor, theta_cache, rctx->theta_scale);
+                    prev_i2 = i2;
+                }
+
+                // Flush DMA transactions from prev block (if any)
+                for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop(dma_queue); }
+
+                // Compute loop
+                for (uint32_t cnr = 0, cr = 0; cr < nrows; cr += cnr, ir += cnr, i1 += cnr) {
+                    // Number of rows to compute
+                    cnr = MIN(nrows - cr, HTP_ROPE_SPAD_BLOCK);
+
+                    uint8_t * dst_spad = (uint8_t *) dma_queue_pop(dma_queue).src;
+                    uint8_t * src_spad = (uint8_t *) dma_queue_pop(dma_queue).dst;
+
+                    // FARF(HIGH, "rope-process %u: ir %u i1 %u i2 %u i3 %u src-spad %p npr %u", ith, ir, i1, i2, i3, src_spad, cnr);
+
+                    if (is_neox) {
+                        rope_neox_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    } else {
+                        rope_basic_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    }
+
+                    uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
+                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, cnr);
+
+                    // Prefetch more rows (if any)
+                    if ((cr + HTP_ROPE_SPAD_NROWS) < nrows) {
+                        uint32_t pnr = MIN(nrows - (cr + HTP_ROPE_SPAD_NROWS), HTP_ROPE_SPAD_BLOCK);
+                        uint32_t pi1 = i1 + HTP_ROPE_SPAD_NROWS;
+                        uint32_t pir = ir + HTP_ROPE_SPAD_NROWS;
+
+                        const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
+                        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
+                            rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+
+                        // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p npr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                    }
+                }
+            }
         }
     }
 
+done:
     dma_queue_flush(dma_queue);
-
     t2 = HAP_perf_get_qtimer_count();
 
     FARF(HIGH, "rope-f32: %d/%d: (%u:%u) usec %u\n", ith, nth, src0_start_row, src0_end_row,

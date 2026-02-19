@@ -149,6 +149,18 @@ static inline dma_ptr dma_queue_pop(dma_queue * q) {
     return dptr;
 }
 
+static inline bool dma_queue_empty(dma_queue * q) {
+    return q->push_idx == q->pop_idx;
+}
+
+static inline uint32_t dma_queue_depth(dma_queue * q) {
+    return (q->push_idx - q->pop_idx) & q->idx_mask;
+}
+
+static inline uint32_t dma_queue_capacity(dma_queue * q) {
+    return q->capacity;
+}
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif
