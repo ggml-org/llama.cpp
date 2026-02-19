@@ -19862,6 +19862,28 @@ static void split_staging_ensure(size_t src1_bytes, size_t out_bytes, sycl::queu
     }
 }
 
+// Persistent host-pinned staging for CPU weight rows (D2H copy from AOS device data)
+static struct {
+    void * data  = nullptr;
+    size_t bytes = 0;
+} g_split_weight_staging;
+
+static void split_weight_staging_ensure(size_t needed, sycl::queue * q) {
+    if (g_split_weight_staging.bytes >= needed) {
+        return;
+    }
+    if (g_split_weight_staging.data) {
+        sycl::free(g_split_weight_staging.data, *q);
+    }
+    g_split_weight_staging.data = sycl::malloc_host(needed, *q);
+    if (!g_split_weight_staging.data) {
+        GGML_LOG_WARN("[TENSOR-SPLIT] sycl::malloc_host failed for weight staging (%zu bytes)\n", needed);
+        g_split_weight_staging.bytes = 0;
+        return;
+    }
+    g_split_weight_staging.bytes = needed;
+}
+
 static bool ggml_sycl_mul_mat_tensor_split(
         ggml_backend_sycl_context & ctx,
         const ggml_tensor *         src0,
@@ -19873,19 +19895,25 @@ static bool ggml_sycl_mul_mat_tensor_split(
     const int64_t ne00 = src0->ne[0];  // K (columns)
     const int64_t ne01 = src0->ne[1];  // N (rows, output size)
 
-    // Compute split
+    // Compute split — align N_gpu to 16 rows (SOA MMVQ work-group granularity)
     int64_t N_cpu = ne01 * cpu_pct / 100;
     int64_t N_gpu = ne01 - N_cpu;
+    N_gpu = (N_gpu + 15) & ~(int64_t) 15;  // round up to multiple of 16
+    if (N_gpu > ne01) {
+        N_gpu = ne01;
+    }
+    N_cpu = ne01 - N_gpu;
 
     // Too few CPU rows — not worth the overhead
     if (N_cpu < 32) {
         return false;
     }
 
-    // Get host weight pointer for CPU portion
-    const void * host_ptr = ggml_sycl_cpu_dispatch_get_host_ptr(src0->name);
-    if (!host_ptr) {
-        return false;
+    // Get AOS device pointer for weight data (needed for D2H copy of CPU rows)
+    const int device = ctx.device;
+    const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
+    if (!src0_aos) {
+        return false;  // no AOS device data available
     }
 
     GGML_SYCL_DEBUG("[TENSOR-SPLIT] %s: N=%lld N_gpu=%lld N_cpu=%lld cpu_pct=%d\n",
@@ -19893,15 +19921,23 @@ static bool ggml_sycl_mul_mat_tensor_split(
                     (long long) ne01, (long long) N_gpu, (long long) N_cpu, cpu_pct);
 
     sycl::queue * stream = ctx.stream();
-    const int     device = ctx.device;
 
     // Ensure staging buffers are allocated
-    const size_t src1_bytes = ggml_nbytes(src1);
-    const size_t out_bytes  = N_cpu * sizeof(float);
+    const size_t src1_bytes      = ggml_nbytes(src1);
+    const size_t out_bytes       = N_cpu * sizeof(float);
+    const size_t src0_row_bytes  = ggml_row_size(src0->type, ne00);
+    const size_t cpu_weight_bytes = N_cpu * src0_row_bytes;
     split_staging_ensure(src1_bytes, out_bytes, stream);
+    split_weight_staging_ensure(cpu_weight_bytes, stream);
+    if (!g_split_staging.src1_host || !g_split_staging.output || !g_split_weight_staging.data) {
+        return false;
+    }
 
     // Stage src1 (activation) to host — tiny for TG (16KB for 4096-dim)
-    stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes).wait();
+    // Stage CPU weight rows (AOS) from device to host
+    stream->memcpy(g_split_staging.src1_host, src1->data, src1_bytes);
+    stream->memcpy(g_split_weight_staging.data, src0_aos + N_gpu * src0_row_bytes, cpu_weight_bytes);
+    stream->wait();
 
     // --- GPU portion: partial MMVQ for rows [0, N_gpu) ---
     const int64_t K         = ne00;
@@ -19937,9 +19973,12 @@ static bool ggml_sycl_mul_mat_tensor_split(
                                 K_padded,
                                 stream);
 
-    // --- CPU portion: placeholder (zeros) ---
-    // Task 3 will replace this with actual ggml_sycl_cpu_vec_dot_rows() call
-    memset(g_split_staging.output, 0, out_bytes);
+    // --- CPU portion: vec_dot on host-staged AOS weight data ---
+    ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
+                                g_split_weight_staging.data,
+                                g_split_staging.src1_host,
+                                g_split_staging.output,
+                                static_cast<int>(N_cpu));
 
     // Wait for GPU to complete
     stream->wait();
