@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#define GGUF_MAX_STRING_LENGTH (1024*1024*1024)
+
 template <typename T>
 struct type_to_gguf_type;
 
@@ -277,8 +279,38 @@ struct gguf_reader {
         if (!read(size)) {
             return false;
         }
-        dst.resize(size);
+        if (size > GGUF_MAX_STRING_LENGTH) {
+            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds maximum %d\n", __func__, size, GGUF_MAX_STRING_LENGTH);
+            return false;
+        }
+        const uint64_t n_remain = remain();
+        if (size > n_remain) {
+            GGML_LOG_ERROR("%s: string length %" PRIu64 " exceeds remaining file size %" PRIu64 "\n", __func__, size, n_remain);
+            return false;
+        }
+        dst.resize(static_cast<size_t>(size));
         return fread(dst.data(), 1, dst.length(), file) == dst.length();
+    }
+
+    // remaining bytes in the file
+    uint64_t remain() const {
+        long cur = ftell(file);
+        if (cur < 0) {
+            return 0;
+        }
+        if (fseek(file, 0, SEEK_END) != 0) {
+            fseek(file, cur, SEEK_SET);
+
+            return 0;
+        }
+        const long end = ftell(file);
+        if (end < 0) {
+            fseek(file, cur, SEEK_SET);
+
+            return 0;
+        }
+        fseek(file, cur, SEEK_SET);
+        return static_cast<uint64_t>(end - cur);
     }
 
     bool read(void * dst, const size_t size) const {
