@@ -3748,7 +3748,7 @@ class Ernie4_5Model(TextModel):
 
         if "mlp_AR" in name or "vision_model" in name:
             # skip vision model and projector tensors
-            return []
+            return
 
         if "ernie." in name:
             name = name.replace("ernie.", "model.")
