@@ -15,7 +15,8 @@
 #include <string>
 #include <vector>
 
-#define GGUF_MAX_STRING_LENGTH (1024*1024*1024)
+#define GGUF_MAX_STRING_LENGTH  (1024*1024*1024)
+#define GGUF_MAX_ARRAY_ELEMENTS (1024*1024*1024)
 
 template <typename T>
 struct type_to_gguf_type;
@@ -230,6 +231,19 @@ struct gguf_reader {
 
     template <typename T>
     bool read(std::vector<T> & dst, const size_t n) const {
+        if (n > GGUF_MAX_ARRAY_ELEMENTS) {
+            return false;
+        }
+        if constexpr (std::is_same<T, std::string>::value) {
+            // strings are prefixed with their length, so we need to account for that
+            if (n > SIZE_MAX / sizeof(uint64_t)) {
+                return false;
+            }
+        } else {
+            if (n > SIZE_MAX / sizeof(T)) {
+                return false;
+            }
+        }
         dst.resize(n);
         for (size_t i = 0; i < dst.size(); ++i) {
             if constexpr (std::is_same<T, bool>::value) {
@@ -292,6 +306,10 @@ struct gguf_reader {
         return fread(dst.data(), 1, dst.length(), file) == dst.length();
     }
 
+    bool read(void * dst, const size_t size) const {
+        return fread(dst, 1, size, file) == size;
+    }
+
     // remaining bytes in the file
     uint64_t remain() const {
         long cur = ftell(file);
@@ -311,10 +329,6 @@ struct gguf_reader {
         }
         fseek(file, cur, SEEK_SET);
         return static_cast<uint64_t>(end - cur);
-    }
-
-    bool read(void * dst, const size_t size) const {
-        return fread(dst, 1, size, file) == size;
     }
 };
 
