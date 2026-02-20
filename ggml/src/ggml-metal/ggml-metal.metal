@@ -77,6 +77,16 @@ static inline float e8m0_to_fp32(uint8_t x) {
     return as_type<float>(bits);
 }
 
+static inline float ue4m3_to_fp32(uint8_t x) {
+    if (x == 0 || x == 0x7F) return 0.0f;
+    int exp = (x >> 3) & 0xF;
+    int man = x & 0x7;
+    float raw;
+    if (exp == 0) raw = ldexp((float)man, -9);
+    else raw = ldexp(1.0f + (float)man / 8.0f, exp - 7);
+    return raw * 0.5f;
+}
+
 static inline float dot(float x, float y) {
     return x*y;
 }
@@ -565,7 +575,7 @@ template <typename type4x4>
 void dequantize_nvfp4(device const block_nvfp4 * xb, short il, thread type4x4 & reg) {
     device const uint8_t * q2 = (device const uint8_t *)xb->qs;
 
-    const float d = float(xb->d);
+    const float d = ue4m3_to_fp32(xb->d);
     const uint8_t shr = il >= 1 ? 4 : 0;
 
     for (int i = 0; i < 4; ++i) {
@@ -580,7 +590,7 @@ template <typename type4>
 void dequantize_nvfp4_t4(device const block_nvfp4 * xb, short il, thread type4 & reg) {
     device const uint8_t * q2 = (device const uint8_t *)xb->qs;
 
-    const float d = float(xb->d);
+    const float d = ue4m3_to_fp32(xb->d);
     const short il4 = il%2;
 
     const uint8_t shr = il >= 2 ? 4 : 0;
@@ -8477,7 +8487,7 @@ void kernel_mul_mv_nvfp4_f32_impl(
         FOR_UNROLL (short row = 0; row < NR0; row++) {
             device const block_nvfp4 & xb = x[row*ns01 + ib];
             device const uint8_t     * q2 = (device const uint8_t *)xb.qs;
-            const float d = float(xb.d);
+            const float d = ue4m3_to_fp32(xb.d);
 
             float acc = 0.0f;
             for (int j = 0; j < QK_NVFP4/2; ++j) {
