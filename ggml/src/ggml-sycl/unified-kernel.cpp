@@ -4006,7 +4006,7 @@ struct alignas(64) DeviceOperation {
     void *       merge_src;      // Host-pinned buffer for secondary device's partial output
     void *       merge_dst;      // Device pointer where merged output goes (primary only)
     float *      input_staging;  // Host-pinned activation staging (primary writes, secondary reads)
-    int *        progress_counter; // Host-pinned (malloc_host): kernel writes via volatile, host reads directly
+    int *        progress_counter; // Device-local (malloc_device): kernel writes via atomic_ref, host reads via D2H BCS
     int *        merge_complete;   // Device-local (malloc_device): host writes via H2D, kernel reads via atomic_ref
     int          op_idx;         // Matmul index for progress/merge addressing
     int          device_idx;     // 0=primary (B580), 1=secondary (B50)
@@ -4368,11 +4368,16 @@ private:
         // Only primary device runs the persistent kernel in host-mediated mode
         if (op.device_idx != 0) return;
 
-        // WG 0, thread 0 writes the progress counter via volatile store to
-        // host-pinned memory. GPU PCIe writes to system RAM are visible to host.
+        // WG 0, thread 0 writes the progress counter via atomic_ref to
+        // device-local memory (malloc_device). Host reads via OOQ D2H memcpy
+        // which uses the BCS engine to bypass the GPU L2 cache, ensuring
+        // the host sees the kernel's write immediately.
         if (wg_id == 0 && local_id == 0) {
-            volatile int * progress = op.progress_counter;
-            *progress = op.op_idx + 1;
+            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+                             sycl::memory_scope::device,
+                             sycl::access::address_space::global_space>
+                prog(*op.progress_counter);
+            prog.store(op.op_idx + 1, sycl::memory_order::release);
         }
 
         // No need to wait for secondary here. The merge wait happens in
