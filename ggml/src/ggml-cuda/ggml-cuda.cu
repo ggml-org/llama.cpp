@@ -3048,10 +3048,10 @@ static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_c
 #endif // CUDART_VERSION >= 12000
 
     if (stat == cudaErrorGraphExecUpdateFailure) {
-#ifndef NDEBUG
-        GGML_LOG_DEBUG("%s: CUDA graph update failed\n", __func__);
-#endif
-
+//#ifndef NDEBUG
+        // GGML_LOG_INFO("%s: CUDA graph update failed due to %d\n", __func__, static_cast<int>(result_info));
+//#endif
+        graph->record_update(true, true);
         // The pre-existing graph exec cannot be updated due to violated constraints
         // so instead clear error and re-instantiate
         (void)cudaGetLastError();
@@ -3059,6 +3059,7 @@ static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_c
         graph->instance = nullptr;
         CUDA_CHECK(cudaGraphInstantiate(&graph->instance, graph->graph, NULL, NULL, 0));
     } else {
+        graph->record_update(true, false);
         GGML_ASSERT(stat == cudaSuccess);
     }
 }
@@ -3937,8 +3938,6 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (graph->is_enabled()) {
         cuda_graph_update_required = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
         use_cuda_graph             = ggml_cuda_graph_check_compability(cgraph);
-
-        graph->record_update(use_cuda_graph, cuda_graph_update_required);
     }
 #endif // USE_CUDA_GRAPH
 

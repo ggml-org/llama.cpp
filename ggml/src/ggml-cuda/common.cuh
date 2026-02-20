@@ -1149,8 +1149,8 @@ struct ggml_cuda_graph {
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
     bool disable_due_to_gpu_arch = false;
-    bool disable_due_to_too_many_updates = false;
-    int number_consecutive_updates = 0;
+    bool disable_due_to_too_many_rebuilds = false;
+    int number_consecutive_rebuilds = 0;
     std::vector<ggml_cuda_graph_node_properties> props;
 
     // these are extra tensors (inputs) that participate in the ggml graph but are not nodes
@@ -1161,19 +1161,19 @@ struct ggml_cuda_graph {
 
     void record_update(bool use_graph, bool update_required) {
         if (use_graph && update_required) {
-            number_consecutive_updates++;
+            number_consecutive_rebuilds++;
         } else {
-            number_consecutive_updates = 0;
+            number_consecutive_rebuilds = 0;
         }
-        if (number_consecutive_updates >= 4) {
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
-            disable_due_to_too_many_updates = true;
+        if (number_consecutive_rebuilds >= 4) {
+            GGML_LOG_INFO("%s: disabling CUDA graphs due to too many consecutive rebuilds\n", __func__);
+            disable_due_to_too_many_rebuilds = true;
         }
     }
 
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-        return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env || disable_due_to_too_many_updates);
+        return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env || disable_due_to_too_many_rebuilds);
     }
 #endif
 };
