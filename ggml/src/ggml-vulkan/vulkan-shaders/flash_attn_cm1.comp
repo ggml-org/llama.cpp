@@ -50,7 +50,7 @@ const uint v_cols = MatBc / 4 * row_split; // total cols, 4 vec4s per MatBc * nu
 const uint vsh_stride = v_cols;
 shared f16vec4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc * vsh_stride)];
 
-const uint32_t osh_stride = row_split * MatBc / 4;
+const uint32_t osh_stride = row_split * MatBr / 4;
 shared f16vec4 pvsh[MatBc * osh_stride];
 
 shared ACC_TYPE slope[Br];
@@ -72,15 +72,10 @@ void main() {
 #define tile_row(r) (row_tid * rows_per_thread + (r))
 
     // Zero-initialize shared memory for Q/K when HSK is not a multiple of 16 (HSK_pad > HSK).
-    if ((HSK % 16) != 0 || (HSV % 16) != 0) {
+    if ((HSK % 16) != 0) {
         [[unroll]] for (uint i = 0; i < Br * qstride; i += gl_WorkGroupSize.x) {
             if (i + tid < Br * qstride) {
                 Qf[i + tid] = f16vec4(0);
-            }
-        }
-        [[unroll]] for (uint i = 0; i < Bc * kvsh_stride; i += gl_WorkGroupSize.x) {
-            if (i + tid < Bc * kvsh_stride) {
-                kvsh[i + tid] = f16vec4(0);
             }
         }
         barrier();
@@ -256,6 +251,10 @@ void main() {
         coopmat<float16_t, gl_ScopeSubgroup, 16, MatBr, gl_MatrixUseB> QMat;
 
         [[unroll]] for (uint32_t d = 0; d < HSK_pad / 16; ++d) {
+            // If SHMEM_STAGING is set, a Bc * HSK_pad size tile of K is loaded to shmem
+            // If not, f16 K is loaded directly from global memory if aligned, otherwise
+            // staged through a Bc * MatBr size staging buffer.
+            // If K is not type f16, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
 #if BLOCK_SIZE == 1
             if (KV_bounds_check || d * 16 + 16 > HSK) {
@@ -427,6 +426,10 @@ void main() {
             const uint v_total = v_rows * v_cols;
             const uint v_loads_per_thread = v_total / gl_WorkGroupSize.x;
 
+            // If SHMEM_STAGING is set, a Bc * HSV_pad size tile of V is loaded to shmem.
+            // If not, f16 V is loaded directly from global memory if aligned, otherwise
+            // staged through a Bc * MatBr size staging buffer.
+            // If V is not type f16, then it is always staged for dequantization.
             if (SHMEM_STAGING == 0) {
 #if BLOCK_SIZE == 1
             // For f16, only preload if not aligned
@@ -461,7 +464,7 @@ void main() {
             }
             barrier();
 
-            const uint o_offset = gl_SubgroupID * MatBc / 4;
+            const uint o_offset = gl_SubgroupID * MatBr / 4;
 
             if (hsv_offset < HSV_pad) {
                 [[unroll]] for (uint32_t bc_chunk = 0; bc_chunk < Bc / MatBc; ++bc_chunk) {

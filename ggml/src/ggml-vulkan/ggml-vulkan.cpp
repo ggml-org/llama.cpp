@@ -2812,8 +2812,7 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     const uint32_t D = hsk | hsv;
 
-    const bool reduce_block_rows = hsv > 256 || D & 8 || n_kv < 1024 ||
-                                   device->vendor_id == VK_VENDOR_ID_INTEL;
+    const bool reduce_block_rows = D & 8 || n_kv < 1024 || device->vendor_id == VK_VENDOR_ID_INTEL;
 
     if (n_rows == 1) {
         result.block_rows = 1;
@@ -8515,6 +8514,9 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     const uint32_t Br = params.block_rows;
     const uint32_t Bc = params.block_cols;
 
+    const uint32_t MatBr = 16;
+    const uint32_t MatBc = 16;
+
     const uint32_t float_type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
     const uint32_t acc_type_size = !f32acc ? sizeof(ggml_fp16_t) : sizeof(float);
 
@@ -8530,7 +8532,10 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     const bool shmem_staging = device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256;
     const uint32_t kvsh = shmem_staging ? Bc * (D / 4 + 1) * 4 * float_type_size : 4 * float_type_size;
 
-    const uint32_t total_size = tmpsh + tmpshv4 + masksh + Qf + kvsh;
+    const uint32_t osh_stride = params.row_split * MatBr / 4;
+    const uint32_t pvsh = MatBc * osh_stride;
+
+    const uint32_t total_size = tmpsh + tmpshv4 + masksh + Qf + kvsh + pvsh;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
     VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", total_size=" << total_size << ", supported=" << supported);
