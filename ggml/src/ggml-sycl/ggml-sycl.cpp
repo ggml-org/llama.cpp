@@ -19888,16 +19888,28 @@ static size_t  s_second_out_ring_sz = 0;
 static float * s_cpu_out_ring[MERGE_RING_SIZE] = {};
 static size_t  s_cpu_out_ring_sz = 0;
 
+static float * s_src1_ring[MERGE_RING_SIZE] = {};
+static size_t  s_src1_ring_sz = 0;
+
 static int s_ring_idx = 0;
 
-// Drain any pending merge events before consumer ops read the merged dst.
-// Blocks host until all merge memcpys complete.  Merges typically finish
-// during the preceding MMVQ (concurrent copy+compute engines), so this
-// wait is near-zero in practice.
-static void split_merge_drain() {
+// Drain pending merge events from the OOQ merge queue.
+// Two modes:
+//   compute_q != nullptr  → GPU-side barrier (fast path): submits a barrier
+//     on the compute queue that depends on all OOQ merge events.  The in-order
+//     compute queue won't proceed past this point until all merges complete.
+//     No host sync needed — the Level Zero runtime handles ordering.
+//   compute_q == nullptr  → host-side event::wait (cleanup/realloc path):
+//     blocks the host thread until all merges finish.  Required before
+//     freeing ring buffer memory referenced by in-flight merges.
+static void split_merge_drain(sycl::queue * compute_q = nullptr) {
     if (g_pending_merges.empty()) return;
-    for (auto & e : g_pending_merges) {
-        e.wait();
+    if (compute_q) {
+        compute_q->ext_oneapi_submit_barrier(g_pending_merges);
+    } else {
+        for (auto & e : g_pending_merges) {
+            e.wait();
+        }
     }
     g_pending_merges.clear();
     s_ring_idx = 0;
@@ -20403,19 +20415,25 @@ static bool ggml_sycl_mul_mat_tensor_split(
         quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
             src1_ddf, src1_ddq, K, 1, K_padded, stream);
 
-        // --- Cross-device src1 staging (shared-context host-pinned for PCIe zero-copy) ---
-        static float * g_split_src1_host = nullptr;
-        static size_t  g_split_src1_size = 0;
-        if (g_split_src1_size < src1_f32_bytes) {
-            if (g_split_src1_host) sycl::free(g_split_src1_host, *stream_second);
-            g_split_src1_host = (float *) sycl::malloc_host(src1_f32_bytes, *stream_second);
-            g_split_src1_size = g_split_src1_host ? src1_f32_bytes : 0;
+        // Pick this call's ring slot for host-pinned staging (before src1
+        // staging so the CPU worker from a prior call reads from an older slot
+        // while the current call writes to a new one).
+        const int ring_slot = s_ring_idx % MERGE_RING_SIZE;
+
+        // --- Cross-device src1 staging (ring-buffered, shared-context host-pinned) ---
+        if (s_src1_ring_sz < src1_f32_bytes) {
+            split_merge_drain();  // ensure no in-flight merge reads old slots
+            for (int i = 0; i < MERGE_RING_SIZE; i++) {
+                if (s_src1_ring[i]) sycl::free(s_src1_ring[i], *stream_second);
+                s_src1_ring[i] = (float *) sycl::malloc_host(src1_f32_bytes, *stream_second);
+            }
+            s_src1_ring_sz = s_src1_ring[0] ? src1_f32_bytes : 0;
         }
-        if (!g_split_src1_host) return false;
+        if (!s_src1_ring[ring_slot]) return false;
 
         // D2H: src1 float32 to host (async, event-chained to secondary GPU).
         // Placed before MMVQ so secondary GPU can start H2D sooner.
-        sycl::event e_src1_host = stream->memcpy(g_split_src1_host, src1->data, src1_f32_bytes);
+        sycl::event e_src1_host = stream->memcpy(s_src1_ring[ring_slot], src1->data, src1_f32_bytes);
 
         // Primary GPU MMVQ: rows [0, N_primary) — auto-follows D2H on in-order queue
         ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
@@ -20427,9 +20445,6 @@ static bool ggml_sycl_mul_mat_tensor_split(
         // serialises it).
         static float * s_second_out_dev      = nullptr;
         static size_t  s_second_out_dev_sz   = 0;
-
-        // Pick this call's ring slot for host-pinned staging
-        const int ring_slot = s_ring_idx % MERGE_RING_SIZE;
 
         // Event for secondary GPU output D2H (default-constructed = already complete)
         sycl::event e_second_out;
@@ -20464,7 +20479,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
             stream_second->submit([&](sycl::handler & h) {
                 h.depends_on(e_src1_host);
                 h.memcpy(g_split_secondary_gpu.f32_dev,
-                         g_split_src1_host, src1_f32_bytes);
+                         s_src1_ring[ring_slot], src1_f32_bytes);
             });
 
             // Q8 quantize on secondary GPU (in-order queue: waits for H2D implicitly)
@@ -20519,7 +20534,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
             g_cpu_worker.type      = src0->type;
             g_cpu_worker.ne00      = static_cast<int>(ne00);
             g_cpu_worker.src0      = src0_cpu;
-            g_cpu_worker.src1      = g_split_src1_host;
+            g_cpu_worker.src1      = s_src1_ring[ring_slot];
             g_cpu_worker.output    = s_cpu_out_ring[ring_slot];
             g_cpu_worker.n_rows    = static_cast<int>(N_cpu);
             g_cpu_worker.done      = false;
@@ -20759,7 +20774,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 }
 
                 // Non-tensor-split path: drain any pending merge
-                split_merge_drain();
+                split_merge_drain(ctx.stream());
 
                 // MMVQ with SOA reorder -- matches master's fast path
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d)\n",
@@ -20769,14 +20784,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 return;
             } else if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
                 // MMVQ with AOS layout
-                split_merge_drain();
+                split_merge_drain(ctx.stream());
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+AOS for %s (type=%d)\n", src0->name ? src0->name : "?",
                                 src0->type);
                 ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, GGML_LAYOUT_AOS);
                 return;
             } else {
                 // DMMV fallback for types not supported by MMVQ
-                split_merge_drain();
+                split_merge_drain(ctx.stream());
                 const bool use_dmmv = ggml_sycl_supports_dmmv(src0->type) && src0->ne[0] % GGML_SYCL_DMMV_X == 0;
                 if (use_dmmv) {
                     GGML_SYCL_DEBUG("[TG-FAST] batch=1 DMMV for %s (type=%d)\n", src0->name ? src0->name : "?",
@@ -20791,7 +20806,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
     }
 
     // Unified kernel / full dispatch path: drain any pending merge
-    split_merge_drain();
+    split_merge_drain(ctx.stream());
 
     auto is_kqv_matmul = [](const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * c) -> bool {
         if (c && c->name && std::strstr(c->name, "kqv") != nullptr) {
@@ -24342,7 +24357,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     // All other ops (ADD, NORM, SILU, non-split MUL_MAT, etc.) must drain
     // first because they may consume a dst that was partially merged.
     if (!g_pending_merges.empty() && dst->op != GGML_OP_MUL_MAT) {
-        split_merge_drain();
+        split_merge_drain(ctx.stream());
     }
     switch (dst->op) {
         case GGML_OP_ARGMAX:
@@ -24736,10 +24751,12 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
         for (int i = 0; i < MERGE_RING_SIZE; i++) {
             if (s_second_out_ring[i]) { sycl::free(s_second_out_ring[i], *g_split_config.queue[0]); s_second_out_ring[i] = nullptr; }
             if (s_cpu_out_ring[i])    { sycl::free(s_cpu_out_ring[i], *g_split_config.queue[0]);    s_cpu_out_ring[i]    = nullptr; }
+            if (s_src1_ring[i])       { sycl::free(s_src1_ring[i], *g_split_config.queue[0]);       s_src1_ring[i]       = nullptr; }
         }
     }
     s_second_out_ring_sz = 0;
     s_cpu_out_ring_sz    = 0;
+    s_src1_ring_sz       = 0;
     s_ring_idx           = 0;
     g_split_merge_queue  = nullptr;
     g_sycl_backend_refcount.fetch_sub(1, std::memory_order_acq_rel);
@@ -25972,7 +25989,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     // Safety net: drain any leftover merge events from a prior graph.
     // Should be empty if the previous graph ended cleanly, but guarantees
     // no stale events leak across graph boundaries.
-    split_merge_drain();
+    split_merge_drain(sycl_ctx->stream());
 
     // Invalidate per-graph caches.
     ggml_sycl_data_ptr_cache_new_graph();
