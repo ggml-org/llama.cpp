@@ -4330,7 +4330,7 @@ private:
 
         // WG 0, thread 0 polls merge_complete for the previous matmul
         if (wg_id == 0 && local_id == 0) {
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+            sycl::atomic_ref<int, sycl::memory_order::relaxed,
                              sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 merge_flag(*op.merge_complete);
@@ -4359,7 +4359,7 @@ private:
         // which uses the BCS engine to bypass the GPU L2 cache, ensuring
         // the host sees the kernel's write immediately.
         if (wg_id == 0 && local_id == 0) {
-            sycl::atomic_ref<int, sycl::memory_order::acq_rel,
+            sycl::atomic_ref<int, sycl::memory_order::relaxed,
                              sycl::memory_scope::device,
                              sycl::access::address_space::global_space>
                 prog(*op.progress_counter);

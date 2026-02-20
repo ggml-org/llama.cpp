@@ -19937,11 +19937,11 @@ static void ensure_split_persistent_resources(
     // Check if current allocations are sufficient
     if (r.allocated && r.merge_buf_size >= need_merge && r.activation_size >= need_act
                     && r.q8_staging_size >= need_q8
-                    && r.progress_counter && r.merge_complete) {
-        // Zero counters for the new token
+                    && r.progress_counter && r.merge_complete && r.h_progress) {
+        // Safe on primary_queue: runs before kernel launch, no concurrent access
         int zero = 0;
-        primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();
-        primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
+        primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();  // .wait() required: source is stack-local
+        primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();    // .wait() required: source is stack-local
         return;
     }
 
@@ -20002,10 +20002,10 @@ static void ensure_split_persistent_resources(
             return;
         }
     }
-    // Zero both counters
+    // Safe on primary_queue: runs before kernel launch, no concurrent access
     int zero = 0;
-    primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();
-    primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
+    primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();  // .wait() required: source is stack-local
+    primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();    // .wait() required: source is stack-local
 
     // Allocate q8_1 staging buffer on secondary device for input quantization
     if (r.q8_staging_size < need_q8) {
@@ -24922,6 +24922,19 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
     s_cpu_out_ring_sz    = 0;
     s_src1_ring_sz       = 0;
     s_ring_idx           = 0;
+    // Free BCS sync buffers from persistent TG split resources
+    {
+        auto & r = g_split_persistent;
+        if (r.allocated && g_split_config.queue[0]) {
+            auto ctx = g_split_config.queue[0]->get_context();
+            if (r.progress_counter) { sycl::free(r.progress_counter, ctx); r.progress_counter = nullptr; }
+            if (r.h_progress)       { sycl::free(r.h_progress, ctx);       r.h_progress       = nullptr; }
+            if (r.merge_complete)   { sycl::free(r.merge_complete, ctx);   r.merge_complete   = nullptr; }
+            // coord_queue points to a static local — do not free
+            r.coord_queue = nullptr;
+            r.allocated   = false;
+        }
+    }
     g_split_merge_queue  = nullptr;
     g_sycl_backend_refcount.fetch_sub(1, std::memory_order_acq_rel);
     // L2 prefetch manager is owned by context via unique_ptr, cleaned up automatically
@@ -32737,6 +32750,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                         while (true) {
                             q_coord->memcpy(res.h_progress, res.progress_counter, sizeof(int)).wait();
                             if (*res.h_progress >= info.op_idx + 1) break;
+                            std::this_thread::yield();
                         }
 
                         // D2H copy matmul input activation from primary device memory
@@ -32797,7 +32811,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
                         // Signal merge completion to primary kernel via device memory
                         int merge_val = info.op_idx + 1;
-                        q_coord->memcpy(res.merge_complete, &merge_val, sizeof(int)).wait();
+                        q_coord->memcpy(res.merge_complete, &merge_val, sizeof(int)).wait();  // .wait() required: source is stack-local
                     }
                 } catch (...) {
                     coordinator_exception = std::current_exception();
