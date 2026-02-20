@@ -38,6 +38,7 @@
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
 		onFilesAdd?: (files: File[]) => void;
+		onSend?: () => void;
 		onStop?: () => void;
 		onSubmit?: () => void;
 		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
@@ -55,12 +56,17 @@
 		value = $bindable(''),
 		onAttachmentRemove,
 		onFilesAdd,
+		onSend,
 		onStop,
 		onSubmit,
 		onSystemPromptClick,
 		onUploadedFileRemove,
 		onValueChange
 	}: Props = $props();
+
+	function submitMessage() {
+		(onSubmit ?? onSend)?.();
+	}
 
 	/**
 	 *
@@ -215,7 +221,7 @@
 
 			if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
 
-			onSubmit?.();
+			submitMessage();
 		}
 	}
 
@@ -321,7 +327,7 @@
 	onsubmit={(e) => {
 		e.preventDefault();
 		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
-		onSubmit?.();
+		submitMessage();
 	}}
 >
 	<div

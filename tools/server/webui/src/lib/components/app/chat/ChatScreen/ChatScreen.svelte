@@ -12,9 +12,11 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { INITIAL_SCROLL_DELAY } from '$lib/constants/auto-scroll';
-	import { KeyboardKey } from '$lib/enums';
-	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import {
+		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
+		AUTO_SCROLL_INTERVAL,
+		INITIAL_SCROLL_DELAY
+	} from '$lib/constants/auto-scroll';
 	import {
 		chatStore,
 		errorDialog,
@@ -42,13 +44,20 @@
 	let { showCenteredEmpty = false } = $props();
 
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
+	// Always hand ChatMessages a fresh array so mutations in the store trigger rerenders/merges
+	const liveMessages = $derived.by(() => [...conversationsStore.activeMessages]);
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
+	let lastScrollTop = $state(0);
+	let scrollInterval: ReturnType<typeof setInterval> | undefined;
+	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
-
-	const autoScroll = createAutoScrollController();
+	let userScrolledUp = $state(false);
+	let lastPinnedMessageCount = $state(0);
+	let lastPinnedTailId = $state<string | null>(null);
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -212,11 +221,7 @@
 	function handleKeydown(event: KeyboardEvent) {
 		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (
-			isCtrlOrCmd &&
-			event.shiftKey &&
-			(event.key === KeyboardKey.D_LOWER || event.key === KeyboardKey.D_UPPER)
-		) {
+		if (isCtrlOrCmd && event.shiftKey && (event.key === 'd' || event.key === 'D')) {
 			event.preventDefault();
 			if (activeConversation()) {
 				showDeleteDialog = true;
@@ -232,14 +237,46 @@
 		await chatStore.addSystemPrompt();
 	}
 
-	function handleScroll() {
-		autoScroll.handleScroll();
+	function handleScroll(event?: Event) {
+		if (disableAutoScroll || !chatScrollContainer) return;
+
+		// Ignore programmatic scroll events (e.g. our own scrollTo calls) so we only
+		// disable auto-scroll based on user intent.
+		if (event && 'isTrusted' in event && !(event as Event).isTrusted) {
+			lastScrollTop = chatScrollContainer.scrollTop;
+			return;
+		}
+
+		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
+		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
+
+		// Any user-driven upward scroll disables auto-scroll, even if they were close to the bottom.
+		if (scrollTop < lastScrollTop) {
+			userScrolledUp = true;
+			autoScrollEnabled = false;
+		} else if (isAtBottom && userScrolledUp) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+		}
+
+		if (scrollTimeout) {
+			clearTimeout(scrollTimeout);
+		}
+
+		scrollTimeout = setTimeout(() => {
+			if (isAtBottom) {
+				userScrolledUp = false;
+				autoScrollEnabled = true;
+			}
+		}, AUTO_SCROLL_INTERVAL);
+
+		lastScrollTop = scrollTop;
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const plainFiles = files ? $state.snapshot(files) : undefined;
-		const result = plainFiles
-			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
+		const result = files
+			? await parseFilesToMessageExtras(files, activeModelId ?? undefined)
 			: undefined;
 
 		if (result?.emptyFiles && result.emptyFiles.length > 0) {
@@ -256,9 +293,12 @@
 		const extras = result?.extras;
 
 		// Enable autoscroll for user-initiated message sending
-		autoScroll.enable();
+		if (!disableAutoScroll) {
+			userScrolledUp = false;
+			autoScrollEnabled = true;
+		}
 		await chatStore.sendMessage(message, extras);
-		autoScroll.scrollToBottom();
+		scrollChatToBottom();
 
 		return true;
 	}
@@ -308,15 +348,24 @@
 		}
 	}
 
+	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
+		if (disableAutoScroll) return;
+
+		chatScrollContainer?.scrollTo({
+			top: chatScrollContainer?.scrollHeight,
+			behavior
+		});
+	}
+
 	afterNavigate(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => autoScroll.scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
 	});
 
 	onMount(() => {
 		if (!disableAutoScroll) {
-			setTimeout(() => autoScroll.scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
+			setTimeout(() => scrollChatToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
 
 		const pendingDraft = chatStore.consumePendingDraft();
@@ -327,15 +376,40 @@
 	});
 
 	$effect(() => {
-		autoScroll.setContainer(chatScrollContainer);
+		if (disableAutoScroll) {
+			autoScrollEnabled = false;
+			if (scrollInterval) {
+				clearInterval(scrollInterval);
+				scrollInterval = undefined;
+			}
+			return;
+		}
+
+		if (isCurrentConversationLoading && autoScrollEnabled) {
+			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
+		} else if (scrollInterval) {
+			clearInterval(scrollInterval);
+			scrollInterval = undefined;
+		}
 	});
 
+	// Keep view pinned to bottom across message merges while auto-scroll is enabled.
 	$effect(() => {
-		autoScroll.setDisabled(disableAutoScroll);
-	});
+		const messageCount = liveMessages.length;
+		const tailId = liveMessages[messageCount - 1]?.id ?? null;
+		const shouldPinNow = messageCount !== lastPinnedMessageCount || tailId !== lastPinnedTailId;
 
-	$effect(() => {
-		autoScroll.updateInterval(isCurrentConversationLoading);
+		lastPinnedMessageCount = messageCount;
+		lastPinnedTailId = tailId;
+
+		if (!shouldPinNow) return;
+		if (disableAutoScroll || userScrolledUp || !autoScrollEnabled) return;
+
+		queueMicrotask(() => {
+			// Re-check at execution time so user scroll actions can "win" even if a pin was queued earlier.
+			if (disableAutoScroll || userScrolledUp || !autoScrollEnabled) return;
+			scrollChatToBottom('instant');
+		});
 	});
 </script>
 
@@ -361,10 +435,13 @@
 	>
 		<ChatMessages
 			class="mb-16 md:mb-24"
-			messages={activeMessages()}
+			messages={liveMessages}
 			onUserAction={() => {
-				autoScroll.enable();
-				autoScroll.scrollToBottom();
+				if (!disableAutoScroll) {
+					userScrolledUp = false;
+					autoScrollEnabled = true;
+					scrollChatToBottom();
+				}
 			}}
 		/>
 
@@ -428,7 +505,7 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
+				<h1 class="mb-4 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
 				<p class="text-lg text-muted-foreground">
 					{serverStore.props?.modalities?.audio
@@ -571,7 +648,7 @@
 	contextInfo={activeErrorDialog?.contextInfo}
 	onOpenChange={handleErrorDialogOpenChange}
 	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
+	type={(activeErrorDialog?.type as ErrorDialogType) ?? ErrorDialogType.SERVER}
 />
 
 <style>
