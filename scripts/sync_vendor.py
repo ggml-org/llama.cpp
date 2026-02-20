@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 
 import urllib.request
+import os
+import sys
+import subprocess
+
+HTTPLIB_VERSION = "d4180e923f846b44a3d30acd938438d6e64fc9f6"
 
 vendor = {
     "https://github.com/nlohmann/json/releases/latest/download/json.hpp":     "vendor/nlohmann/json.hpp",
@@ -12,8 +17,9 @@ vendor = {
     # "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.23/miniaudio.h": "vendor/miniaudio/miniaudio.h",
     "https://github.com/mackron/miniaudio/raw/669ed3e844524fcd883231b13095baee9f6de304/miniaudio.h": "vendor/miniaudio/miniaudio.h",
 
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.30.2/httplib.h": "vendor/cpp-httplib/httplib.h",
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.30.2/LICENSE":   "vendor/cpp-httplib/LICENSE",
+    f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/httplib.h": "httplib.h",
+    f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/split.py":  "split.py",
+    f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/LICENSE":   "vendor/cpp-httplib/LICENSE",
 
     "https://raw.githubusercontent.com/sheredom/subprocess.h/b49c56e9fe214488493021017bf3954b91c7c1f5/subprocess.h": "vendor/sheredom/subprocess.h",
 }
@@ -22,19 +28,16 @@ for url, filename in vendor.items():
     print(f"downloading {url} to {filename}") # noqa: NP100
     urllib.request.urlretrieve(url, filename)
 
-    # split cpp/h files for httplib
-    # see: https://github.com/yhirose/cpp-httplib/blob/master/split.py
-    if 'httplib.h' in filename:
-        border = '// ----------------------------------------------------------------------------'
-        with open(filename, 'r') as f:
-            content = f.read()
-        header, implementation, footer = content.split(border, 2)
-        fname_cpp = filename.replace('.h', '.cpp')
-        with open(filename, 'w') as fh:
-            fh.write(header)
-            fh.write(footer)
-        with open(fname_cpp, 'w') as fc:
-            fc.write('#include "httplib.h"\n')
-            fc.write('namespace httplib {\n')
-            fc.write(implementation.replace('\ninline ', '\n'))
-            fc.write('} // namespace httplib\n')
+print("Splitting httplib.h...") # noqa: NP100
+try:
+    subprocess.check_call([
+        sys.executable, "split.py",
+        "--extension", "cpp",
+        "--out", "vendor/cpp-httplib"
+    ])
+except Exception as e:
+    print(f"Error: {e}") # noqa: NP100
+    sys.exit(1)
+finally:
+    os.remove("split.py")
+    os.remove("httplib.h")

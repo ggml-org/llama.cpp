@@ -240,6 +240,8 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
 
 // Parses a JSON array of messages in OpenAI's chat completion API format.
 std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::ordered_json & messages);
+
+// DEPRECATED: only used in tests
 nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);

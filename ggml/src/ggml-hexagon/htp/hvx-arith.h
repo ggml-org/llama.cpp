@@ -46,127 +46,76 @@
 #define HVX_OP_MUL(a, b) Q6_Vsf_vmpy_VsfVsf(a, b)
 #endif
 
-// ADD variants
+// Generic macro to define alignment permutations for an op
+#define DEFINE_HVX_BINARY_OP_VARIANTS(OP_NAME, OP_MACRO) \
+static inline void OP_NAME##_aaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src0 % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a, OP_MACRO); \
+} \
+static inline void OP_NAME##_aau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src0 % 128 == 0); \
+    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a, OP_MACRO); \
+} \
+static inline void OP_NAME##_aua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_Vector, hvx_vec_store_a, OP_MACRO); \
+} \
+static inline void OP_NAME##_auu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) dst % 128 == 0); \
+    hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_UVector, hvx_vec_store_a, OP_MACRO); \
+} \
+static inline void OP_NAME##_uaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) src0 % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u, OP_MACRO); \
+} \
+static inline void OP_NAME##_uau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) src0 % 128 == 0); \
+    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_UVector, hvx_vec_store_u, OP_MACRO); \
+} \
+static inline void OP_NAME##_uua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    assert((uintptr_t) src1 % 128 == 0); \
+    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_Vector, hvx_vec_store_u, OP_MACRO); \
+} \
+static inline void OP_NAME##_uuu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u, OP_MACRO); \
+} \
 
-static inline void hvx_add_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_ADD);
+DEFINE_HVX_BINARY_OP_VARIANTS(hvx_add_f32, HVX_OP_ADD)
+DEFINE_HVX_BINARY_OP_VARIANTS(hvx_sub_f32, HVX_OP_SUB)
+DEFINE_HVX_BINARY_OP_VARIANTS(hvx_mul_f32, HVX_OP_MUL)
+
+// Dispatcher logic
+#define HVX_BINARY_DISPATCHER(OP_NAME) \
+static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) { \
+    if (hex_is_aligned((void *) dst, 128)) { \
+        if (hex_is_aligned((void *) src0, 128)) { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aaa(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_aau(dst, src0, src1, num_elems); \
+        } else { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aua(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_auu(dst, src0, src1, num_elems); \
+        } \
+    } else { \
+        if (hex_is_aligned((void *) src0, 128)) { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uaa(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_uau(dst, src0, src1, num_elems); \
+        } else { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uua(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_uuu(dst, src0, src1, num_elems); \
+        } \
+    } \
 }
 
-static inline void hvx_add_f32_au(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_ADD);
-}
-
-static inline void hvx_add_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u, HVX_OP_ADD);
-}
-
-static inline void hvx_add_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_ADD);
-}
-
-// SUB variants
-
-static inline void hvx_sub_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_SUB);
-}
-
-static inline void hvx_sub_f32_au(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_SUB);
-}
-
-static inline void hvx_sub_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u, HVX_OP_SUB);
-}
-
-static inline void hvx_sub_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_SUB);
-}
-
-// MUL variants
-
-static inline void hvx_mul_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_MUL);
-}
-
-static inline void hvx_mul_f32_au(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) dst % 128 == 0);
-    assert((unsigned long) src0 % 128 == 0);
-    hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_MUL);
-}
-
-static inline void hvx_mul_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    assert((unsigned long) src0 % 128 == 0);
-    assert((unsigned long) src1 % 128 == 0);
-    hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u, HVX_OP_MUL);
-}
-
-static inline void hvx_mul_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
-    hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_MUL);
-}
-
-// Dispatchers
-
-static inline void hvx_add_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
-    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
-        if (hex_is_aligned((void *) src1, 128)) {
-            hvx_add_f32_aa(dst, src0, src1, num_elems);
-        } else {
-            hvx_add_f32_au(dst, src0, src1, num_elems);
-        }
-    } else if (hex_is_aligned((void *) src0, 128) && hex_is_aligned((void *) src1, 128)) {
-        hvx_add_f32_ua(dst, src0, src1, num_elems);
-    } else {
-        hvx_add_f32_uu(dst, src0, src1, num_elems);
-    }
-}
-
-static inline void hvx_sub_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
-    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
-        if (hex_is_aligned((void *) src1, 128)) {
-            hvx_sub_f32_aa(dst, src0, src1, num_elems);
-        } else {
-            hvx_sub_f32_au(dst, src0, src1, num_elems);
-        }
-    } else if (hex_is_aligned((void *) src0, 128) && hex_is_aligned((void *) src1, 128)) {
-        hvx_sub_f32_ua(dst, src0, src1, num_elems);
-    } else {
-        hvx_sub_f32_uu(dst, src0, src1, num_elems);
-    }
-}
-
-static inline void hvx_mul_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
-    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
-        if (hex_is_aligned((void *) src1, 128)) {
-            hvx_mul_f32_aa(dst, src0, src1, num_elems);
-        } else {
-            hvx_mul_f32_au(dst, src0, src1, num_elems);
-        }
-    } else if (hex_is_aligned((void *) src0, 128) && hex_is_aligned((void *) src1, 128)) {
-        hvx_mul_f32_ua(dst, src0, src1, num_elems);
-    } else {
-        hvx_mul_f32_uu(dst, src0, src1, num_elems);
-    }
-}
+HVX_BINARY_DISPATCHER(hvx_add_f32)
+HVX_BINARY_DISPATCHER(hvx_sub_f32)
+HVX_BINARY_DISPATCHER(hvx_mul_f32)
 
 // Mul-Mul Optimized
-
 static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint8_t * restrict src2, const uint32_t num_elems) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src0 % 128 == 0);
@@ -443,6 +392,68 @@ static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * 
     }
 }
 
+//
+// Square
+//
+
+#define hvx_sqr_loop_body(dst_type, src_type, vec_store)           \
+    do {                                                                   \
+        dst_type * restrict vdst  = (dst_type *) dst;                      \
+        src_type * restrict vsrc = (src_type *) src;                       \
+                                                                           \
+        const uint32_t elem_size = sizeof(float);                          \
+        const uint32_t epv  = 128 / elem_size;                             \
+        const uint32_t nvec = n / epv;                                     \
+        const uint32_t nloe = n % epv;                                     \
+                                                                           \
+        uint32_t i = 0;                                                    \
+                                                                           \
+        _Pragma("unroll(4)")                                               \
+        for (; i < nvec; i++) {                                            \
+            vdst[i] = HVX_OP_MUL(vsrc[i], vsrc[i]);                        \
+        }                                                                  \
+        if (nloe) {                                                        \
+            HVX_Vector v = HVX_OP_MUL(vsrc[i], vsrc[i]);                   \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);             \
+        }                                                                  \
+    } while(0)
+
+static inline void hvx_sqr_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    hvx_sqr_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqr_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqr_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_sqr_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqr_f32(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) {
+    if (hex_is_aligned((void *) dst, 128)) {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f32_aa(dst, src, num_elems);
+        } else {
+            hvx_sqr_f32_au(dst, src, num_elems);
+        }
+    } else {
+        if (hex_is_aligned((void *) src, 128)) {
+            hvx_sqr_f32_ua(dst, src, num_elems);
+        } else {
+            hvx_sqr_f32_uu(dst, src, num_elems);
+        }
+    }
+}
+
 #undef HVX_OP_ADD
 #undef HVX_OP_SUB
 #undef HVX_OP_MUL
@@ -453,5 +464,7 @@ static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * 
 #undef hvx_scalar_loop_body
 #undef HVX_OP_MIN_SCALAR
 #undef HVX_OP_CLAMP_SCALAR
+#undef DEFINE_HVX_BINARY_OP_VARIANTS
+#undef HVX_BINARY_DISPATCHER
 
 #endif // HVX_ARITH_H

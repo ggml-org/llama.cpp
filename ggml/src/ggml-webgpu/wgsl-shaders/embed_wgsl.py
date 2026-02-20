@@ -56,12 +56,46 @@ def expand_includes(shader, input_dir):
     return include_pattern.sub(replacer, shader)
 
 
-def write_shader(shader_name, shader_code, output_dir, outfile):
+def chunk_shader(shader_code, max_chunk_len=60000):
+    """Split shader_code into safe raw-string sized chunks."""
+    return [shader_code[i : i + max_chunk_len] for i in range(0, len(shader_code), max_chunk_len)]
+
+
+def raw_delim(shader_code):
+    """Pick a raw-string delimiter that does not appear in the shader."""
+    delim = "wgsl"
+    while f"){delim}\"" in shader_code:
+        delim += "_x"
+    return delim
+
+
+def write_shader(shader_name, shader_code, output_dir, outfile, input_dir):
+    shader_code = expand_includes(shader_code, input_dir)
+
     if output_dir:
         wgsl_filename = os.path.join(output_dir, f"{shader_name}.wgsl")
         with open(wgsl_filename, "w", encoding="utf-8") as f_out:
             f_out.write(shader_code)
-    outfile.write(f'const char* wgsl_{shader_name} = R"({shader_code})";\n\n')
+
+    delim = raw_delim(shader_code)
+    chunks = chunk_shader(shader_code)
+
+    if len(chunks) == 1:
+        outfile.write(f'const char* wgsl_{shader_name} = R"{delim}({shader_code}){delim}";\n\n')
+    else:
+        for idx, chunk in enumerate(chunks):
+            outfile.write(f'static const char wgsl_{shader_name}_part{idx}[] = R"{delim}({chunk}){delim}";\n\n')
+        outfile.write(f'static const std::string& wgsl_{shader_name}_str() {{\n')
+        outfile.write('    static const std::string s = []{\n')
+        outfile.write('        std::string tmp;\n')
+        outfile.write(f'        tmp.reserve({len(shader_code)});\n')
+        for idx in range(len(chunks)):
+            outfile.write(f'        tmp.append(wgsl_{shader_name}_part{idx});\n')
+        outfile.write('        return tmp;\n')
+        outfile.write('    }();\n')
+        outfile.write('    return s;\n')
+        outfile.write('}\n')
+        outfile.write(f'const char* wgsl_{shader_name} = wgsl_{shader_name}_str().c_str();\n\n')
 
 
 def generate_variants(fname, input_dir, output_dir, outfile):
@@ -74,7 +108,7 @@ def generate_variants(fname, input_dir, output_dir, outfile):
     try:
         variants = ast.literal_eval(extract_block(text, "VARIANTS"))
     except ValueError:
-        write_shader(shader_base_name, text, output_dir, outfile)
+        write_shader(shader_base_name, text, output_dir, outfile, input_dir)
     else:
         try:
             decls_map = parse_decls(extract_block(text, "DECLS"))
@@ -123,7 +157,7 @@ def generate_variants(fname, input_dir, output_dir, outfile):
                 output_name = f"{shader_base_name}_" + variant["REPLS"]["TYPE"]
             else:
                 output_name = shader_base_name
-            write_shader(output_name, final_shader, output_dir, outfile)
+            write_shader(output_name, final_shader, output_dir, outfile, input_dir)
 
 
 def main():
@@ -137,7 +171,8 @@ def main():
         os.makedirs(args.output_dir, exist_ok=True)
 
     with open(args.output_file, "w", encoding="utf-8") as out:
-        out.write("// Auto-generated shader embedding\n\n")
+        out.write("// Auto-generated shader embedding\n")
+        out.write("#include <string>\n\n")
         for fname in sorted(os.listdir(args.input_dir)):
             if fname.endswith(".wgsl"):
                 generate_variants(fname, args.input_dir, args.output_dir, out)

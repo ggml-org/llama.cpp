@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Trash2, Pencil, MoreHorizontal, Download, Loader2, Square } from '@lucide/svelte';
-	import { ActionDropdown } from '$lib/components/app';
+	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -128,7 +128,7 @@
 
 	{#if renderActionsDropdown}
 		<div class="actions flex items-center">
-			<ActionDropdown
+			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="More actions"
 				bind:open={dropdownOpen}
@@ -142,7 +142,7 @@
 					{
 						icon: Download,
 						label: 'Export',
-						onclick: (e) => {
+						onclick: (e: Event) => {
 							e.stopPropagation();
 							conversationsStore.downloadConversation(conversation.id);
 						},

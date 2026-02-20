@@ -3,8 +3,10 @@ import { AttachmentType } from '$lib/enums';
 import type {
 	DatabaseMessageExtra,
 	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraLegacyContext
-} from '$lib/types/database';
+	DatabaseMessageExtraLegacyContext,
+	ClipboardTextAttachment,
+	ParsedClipboardContent
+} from '$lib/types';
 
 /**
  * Copy text to clipboard with toast notification
@@ -66,23 +68,6 @@ export async function copyCodeToClipboard(
 	errorMessage = 'Failed to copy code'
 ): Promise<boolean> {
 	return copyToClipboard(rawCode, successMessage, errorMessage);
-}
-
-/**
- * Format for text attachments when copied to clipboard
- */
-export interface ClipboardTextAttachment {
-	type: typeof AttachmentType.TEXT;
-	name: string;
-	content: string;
-}
-
-/**
- * Parsed result from clipboard content
- */
-export interface ParsedClipboardContent {
-	message: string;
-	textAttachments: ClipboardTextAttachment[];
 }
 
 /**

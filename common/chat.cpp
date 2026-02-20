@@ -65,14 +65,25 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
     } else if (!content_parts.empty()) {
         if (concat_typed_text) {
             std::string text;
+            bool last_was_media_marker = false;
+            // join parts with newline, do not add newline before or after media markers
             for (const auto & part : content_parts) {
-                if (part.type != "text") {
+                bool add_new_line = true;
+                if (part.type == "text") {
+                    add_new_line = !last_was_media_marker && !text.empty();
+                    last_was_media_marker = false;
+                } else if (part.type == "media_marker") {
+                    add_new_line = false;
+                    last_was_media_marker = true;
+                } else {
                     LOG_WRN("Ignoring content part type: %s\n", part.type.c_str());
                     continue;
                 }
-                if (!text.empty()) {
+
+                if (add_new_line) {
                     text += '\n';
                 }
+
                 text += part.text;
             }
             jmsg["content"] = text;
@@ -319,7 +330,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Missing content part type: " + part.dump());
                         }
                         const auto & type = part.at("type");
-                        if (type != "text") {
+                        if (type != "text" && type != "media_marker") {
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
@@ -380,13 +391,44 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
     return msgs;
 }
 
-json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text) {
+static json render_message_to_json(const std::vector<common_chat_msg> & msgs, const jinja::caps & c) {
+    if (!c.supports_string_content && !c.supports_typed_content) {
+        LOG_WRN("%s: Neither string content nor typed content is supported by the template. This is unexpected and may lead to issues.\n", __func__);
+    }
+
+    bool only_string_accepted =  c.supports_string_content && !c.supports_typed_content;
+    bool only_typed_accepted  = !c.supports_string_content &&  c.supports_typed_content;
+
     json messages = json::array();
     for (const auto & msg : msgs) {
-        json jmsg = msg.to_json_oaicompat(concat_typed_text);
-        messages.push_back(jmsg);
+        if (only_string_accepted) {
+            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ true);
+            messages.push_back(jmsg);
+        } else if (only_typed_accepted) {
+            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ false);
+            if (jmsg.at("content").is_string()) {
+                jmsg["content"] = json::array({
+                    json{
+                        {"type", "text"},
+                        {"text", jmsg.at("content").get<std::string>()},
+                    }
+                });
+            }
+            messages.push_back(jmsg);
+        } else {
+            json jmsg = msg.to_json_oaicompat(/* concat_typed_text= */ false);
+            messages.push_back(jmsg);
+        }
     }
     return messages;
+}
+
+// DEPRECATED: only used in tests
+json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text) {
+    jinja::caps c;
+    c.supports_string_content = true;
+    c.supports_typed_content = !concat_typed_text;
+    return render_message_to_json(msgs, c);
 }
 
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
@@ -2001,6 +2043,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         if (has_reasoning_content && has_tool_calls) {
             auto adjusted_message = msg;
             adjusted_message["thinking"] = msg.at("reasoning_content");
+            adjusted_message.erase("content");
             adjusted_messages.push_back(adjusted_message);
         } else {
             adjusted_messages.push_back(msg);
@@ -3020,7 +3063,7 @@ static common_chat_params common_chat_templates_apply_jinja(
         : *tmpls->template_default;
     const auto & src = tmpl.source();
     const auto & caps = tmpl.original_caps();
-    params.messages = common_chat_msgs_to_json_oaicompat(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
+    params.messages = render_message_to_json(inputs.messages, tmpl.original_caps());
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.tool_choice = inputs.tool_choice;
     params.reasoning_format = inputs.reasoning_format;
@@ -3098,15 +3141,15 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Qwen3-Coder XML format detection (must come before Hermes 2 Pro)
-    // Detect via explicit XML markers unique to Qwen3-Coder to avoid false positives in other templates.
-    // Require presence of <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Detect via XML markers: <tool_call>, <function=...>, and <parameter=...> blocks.
+    // Also matches Step-3.5-Flash and Nemotron 3 Nano which use the same output format.
     if (src.find("<tool_call>") != std::string::npos &&
-        src.find("<function>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameters>") != std::string::npos &&
         src.find("<parameter=") != std::string::npos) {
         workaround::func_args_not_string(params.messages);
-        // Nemotron 3 Nano 30B A3B
+        // Models with <think> support (Step-3.5-Flash, Nemotron 3 Nano) use the
+        // Nemotron v3 PEG parser for streaming and schema-aware parameter parsing.
+        // Qwen3-Coder has no <think> in its template.
         if (src.find("<think>") != std::string::npos) {
             return common_chat_params_init_nemotron_v3(tmpl, params);
         }
@@ -3276,7 +3319,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     for (const auto & msg : inputs.messages) {
         auto content = msg.content;
         for (const auto & part : msg.content_parts) {
-            if (part.type != "text") {
+            if (part.type != "text" && part.type != "media_marker") {
                 LOG_WRN("Ignoring non-text content part: %s\n", part.type.c_str());
                 continue;
             }

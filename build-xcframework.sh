@@ -43,11 +43,6 @@ COMMON_CMAKE_ARGS=(
     -DGGML_OPENMP=${GGML_OPENMP}
 )
 
-XCODE_VERSION=$(xcodebuild -version 2>/dev/null | head -n1 | awk '{ print $2 }')
-MAJOR_VERSION=$(echo $XCODE_VERSION | cut -d. -f1)
-MINOR_VERSION=$(echo $XCODE_VERSION | cut -d. -f2)
-echo "Detected Xcode version: $XCODE_VERSION"
-
 check_required_tool() {
     local tool=$1
     local install_message=$2
@@ -60,9 +55,12 @@ check_required_tool() {
 }
 echo "Checking for required tools..."
 check_required_tool "cmake" "Please install CMake 3.28.0 or later (brew install cmake)"
-check_required_tool "xcodebuild" "Please install Xcode and Xcode Command Line Tools (xcode-select --install)"
-check_required_tool "libtool" "Please install libtool which should be available with Xcode Command Line Tools (CLT). Make sure Xcode CLT is installed (xcode-select --install)"
-check_required_tool "dsymutil" "Please install Xcode and Xcode Command Line Tools (xcode-select --install)"
+check_required_tool "xcrun" "Please install Xcode and Xcode Command Line Tools (xcode-select --install)"
+
+XCODE_VERSION=$(xcrun xcodebuild -version 2>/dev/null | head -n1 | awk '{ print $2 }')
+MAJOR_VERSION=$(echo $XCODE_VERSION | cut -d. -f1)
+MINOR_VERSION=$(echo $XCODE_VERSION | cut -d. -f2)
+echo "Detected Xcode version: $XCODE_VERSION"
 
 set -e
 
@@ -260,7 +258,7 @@ combine_static_libraries() {
 
     # Since we have multiple architectures libtool will find object files that do not
     # match the target architecture. We suppress these warnings.
-    libtool -static -o "${temp_dir}/combined.a" "${libs[@]}" 2> /dev/null
+    xcrun libtool -static -o "${temp_dir}/combined.a" "${libs[@]}" 2> /dev/null
 
     # Determine SDK, architectures, and install_name based on platform and simulator flag.
     local sdk=""
@@ -333,7 +331,7 @@ combine_static_libraries() {
 
     # Platform-specific post-processing for device builds
     if [[ "$is_simulator" == "false" ]]; then
-        if command -v xcrun vtool &>/dev/null; then
+        if xcrun -f vtool &>/dev/null; then
             case "$platform" in
                 "ios")
                     echo "Marking binary as a framework binary for iOS..."
@@ -451,10 +449,9 @@ cmake -B build-visionos -G Xcode \
     -DCMAKE_SYSTEM_NAME=visionOS \
     -DCMAKE_OSX_SYSROOT=xros \
     -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
-    -DCMAKE_C_FLAGS="-D_XOPEN_SOURCE=700 ${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="-D_XOPEN_SOURCE=700 ${COMMON_CXX_FLAGS}" \
+    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_HTTPLIB=OFF \
     -DLLAMA_BUILD_SERVER=OFF \
     -S .
 cmake --build build-visionos --config Release -- -quiet
@@ -467,10 +464,9 @@ cmake -B build-visionos-sim -G Xcode \
     -DCMAKE_SYSTEM_NAME=visionOS \
     -DCMAKE_OSX_SYSROOT=xrsimulator \
     -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
-    -DCMAKE_C_FLAGS="-D_XOPEN_SOURCE=700 ${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="-D_XOPEN_SOURCE=700 ${COMMON_CXX_FLAGS}" \
+    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
     -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_HTTPLIB=OFF \
     -DLLAMA_BUILD_SERVER=OFF \
     -S .
 cmake --build build-visionos-sim --config Release -- -quiet
@@ -528,13 +524,13 @@ combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
 
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
-xcodebuild -create-xcframework \
+xcrun xcodebuild -create-xcframework \
     -framework $(pwd)/build-ios-sim/framework/llama.framework \
     -debug-symbols $(pwd)/build-ios-sim/dSYMs/llama.dSYM \
     -framework $(pwd)/build-ios-device/framework/llama.framework \
     -debug-symbols $(pwd)/build-ios-device/dSYMs/llama.dSYM \
     -framework $(pwd)/build-macos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-macos/dSYMS/llama.dSYM \
+    -debug-symbols $(pwd)/build-macos/dSYMs/llama.dSYM \
     -framework $(pwd)/build-visionos/framework/llama.framework \
     -debug-symbols $(pwd)/build-visionos/dSYMs/llama.dSYM \
     -framework $(pwd)/build-visionos-sim/framework/llama.framework \

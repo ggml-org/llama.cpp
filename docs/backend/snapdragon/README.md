@@ -35,7 +35,7 @@ Adapt below build commands accordingly.
 Let's build llama.cpp with CPU, OpenCL, and Hexagon backends via CMake presets:
 
 ```
-[d]/workspace> cp docs/backend/hexagon/CMakeUserPresets.json .
+[d]/workspace> cp docs/backend/snapdragon/CMakeUserPresets.json .
 
 [d]/workspace> cmake --preset arm64-android-snapdragon-release -B build-snapdragon
 Preset CMake variables:

@@ -1,66 +1,47 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { getMessageEditContext } from '$lib/contexts';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		isEditing: boolean;
-		editedContent: string;
-		editedExtras?: DatabaseMessageExtra[];
-		editedUploadedFiles?: ChatUploadedFile[];
 		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		onCancelEdit: () => void;
-		onSaveEdit: () => void;
-		onSaveEditOnly?: () => void;
-		onEditKeydown: (event: KeyboardEvent) => void;
-		onEditedContentChange: (content: string) => void;
-		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
-		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
-		onCopy: () => void;
+		showDeleteDialog: boolean;
 		onEdit: () => void;
 		onDelete: () => void;
 		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
-		textareaElement?: HTMLTextAreaElement;
+		onNavigateToSibling?: (siblingId: string) => void;
+		onCopy: () => void;
 	}
 
 	let {
 		class: className = '',
 		message,
-		isEditing,
-		editedContent,
-		editedExtras = [],
-		editedUploadedFiles = [],
 		siblingInfo = null,
-		showDeleteDialog,
 		deletionInfo,
-		onCancelEdit,
-		onSaveEdit,
-		onSaveEditOnly,
-		onEditKeydown,
-		onEditedContentChange,
-		onEditedExtrasChange,
-		onEditedUploadedFilesChange,
-		onCopy,
+		showDeleteDialog,
 		onEdit,
 		onDelete,
 		onConfirmDelete,
-		onNavigateToSibling,
 		onShowDeleteDialogChange,
-		textareaElement = $bindable()
+		onNavigateToSibling,
+		onCopy
 	}: Props = $props();
+
+	// Get contexts
+	const editCtx = getMessageEditContext();
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
@@ -96,24 +77,8 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	{#if isEditing}
-		<ChatMessageEditForm
-			bind:textareaElement
-			messageId={message.id}
-			{editedContent}
-			{editedExtras}
-			{editedUploadedFiles}
-			originalContent={message.content}
-			originalExtras={message.extra}
-			showSaveOnlyOption={!!onSaveEditOnly}
-			{onCancelEdit}
-			{onSaveEdit}
-			{onSaveEditOnly}
-			{onEditKeydown}
-			{onEditedContentChange}
-			{onEditedExtrasChange}
-			{onEditedUploadedFilesChange}
-		/>
+	{#if editCtx.isEditing}
+		<ChatMessageEditForm />
 	{:else}
 		{#if message.extra && message.extra.length > 0}
 			<div class="mb-2 max-w-[80%]">
@@ -123,15 +88,13 @@
 
 		{#if message.content.trim()}
 			<Card
-				class="max-w-[80%] rounded-[1.125rem] border-none bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
+				class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 text-foreground backdrop-blur-md data-[multiline]:py-2.5 dark:bg-primary/15"
 				data-multiline={isMultiline ? '' : undefined}
+				style="max-height: var(--max-message-height); overflow-wrap: anywhere; word-break: break-word;"
 			>
 				{#if currentConfig.renderUserContentAsMarkdown}
-					<div bind:this={messageElement} class="text-md">
-						<MarkdownContent
-							class="markdown-user-content text-primary-foreground"
-							content={message.content}
-						/>
+					<div bind:this={messageElement}>
+						<MarkdownContent class="markdown-user-content -my-4" content={message.content} />
 					</div>
 				{:else}
 					<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
@@ -155,7 +118,7 @@
 					{onShowDeleteDialogChange}
 					{siblingInfo}
 					{showDeleteDialog}
-					role="user"
+					role={MessageRole.USER}
 				/>
 			</div>
 		{/if}

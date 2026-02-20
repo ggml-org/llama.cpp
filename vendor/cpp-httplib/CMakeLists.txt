@@ -17,7 +17,7 @@ endif()
 target_link_libraries(${TARGET} PRIVATE Threads::Threads)
 
 if (WIN32 AND NOT MSVC)
-    target_link_libraries(${TARGET} PRIVATE ws2_32)
+    target_link_libraries(${TARGET} PUBLIC ws2_32)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
@@ -39,7 +39,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
-    set(BORINGSSL_VERSION "0.20260204.0" CACHE STRING "BoringSSL version")
+    set(BORINGSSL_VERSION "0.20260211.0" CACHE STRING "BoringSSL version")
 
     message(STATUS "Fetching BoringSSL version ${BORINGSSL_VERSION}")
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Package } from '@lucide/svelte';
-	import { BadgeInfo, CopyToClipboardIcon } from '$lib/components/app';
+	import { BadgeInfo, ActionIconCopyToClipboard } from '$lib/components/app';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -34,7 +34,7 @@
 		{model}
 
 		{#if showCopyIcon}
-			<CopyToClipboardIcon text={model || ''} ariaLabel="Copy model name" />
+			<ActionIconCopyToClipboard text={model || ''} ariaLabel="Copy model name" />
 		{/if}
 	</BadgeInfo>
 {/snippet}

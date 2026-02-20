@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { RemoveButton } from '$lib/components/app';
+	import { ActionIconRemove } from '$lib/components/app';
 
 	interface Props {
 		id: string;
@@ -58,7 +58,7 @@
 		<div
 			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
 		>
-			<RemoveButton {id} {onRemove} class="text-white" />
+			<ActionIconRemove {id} {onRemove} class="text-white" />
 		</div>
 	{/if}
 </div>

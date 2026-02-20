@@ -1,6 +1,13 @@
 export { AttachmentType } from './attachment';
 
-export { ChatMessageStatsView } from './chat';
+export {
+	ChatMessageStatsView,
+	ContentPartType,
+	ErrorDialogType,
+	MessageRole,
+	MessageType,
+	ReasoningFormat
+} from './chat';
 
 export {
 	FileTypeCategory,
@@ -12,6 +19,9 @@ export {
 	FileExtensionAudio,
 	FileExtensionPdf,
 	FileExtensionText,
+	MimeTypePrefix,
+	MimeTypeIncludes,
+	UriPattern,
 	MimeTypeApplication,
 	MimeTypeAudio,
 	MimeTypeImage,
@@ -21,3 +31,9 @@ export {
 export { ModelModality } from './model';
 
 export { ServerRole, ServerModelStatus } from './server';
+
+export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
+
+export { ColorMode, UrlPrefix } from './ui';
+
+export { KeyboardKey } from './keyboard';

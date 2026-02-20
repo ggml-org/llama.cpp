@@ -446,6 +446,12 @@ value for_statement::execute_impl(context & ctx) {
 
     value iterable_val = iter_expr->execute(scope);
 
+    // mark the variable being iterated as used for stats
+    if (ctx.is_get_stats) {
+        iterable_val->stats.used = true;
+        iterable_val->stats.ops.insert("array_access");
+    }
+
     if (iterable_val->is_undefined()) {
         JJ_DEBUG("%s", "For loop iterable is undefined, skipping loop");
         iterable_val = mk_val<value_array>();

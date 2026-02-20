@@ -35,9 +35,9 @@ export interface DatabaseMessageExtraPdfFile {
 	type: AttachmentType.PDF;
 	base64Data: string;
 	name: string;
-	content: string; // Text content extracted from PDF
-	images?: string[]; // Optional: PDF pages as base64 images
-	processedAsImages: boolean; // Whether PDF was processed as images
+	content: string;
+	images?: string[];
+	processedAsImages: boolean;
 }
 
 export interface DatabaseMessageExtraTextFile {
@@ -60,26 +60,24 @@ export interface DatabaseMessage {
 	timestamp: number;
 	role: ChatRole;
 	content: string;
-	parent: string;
-	thinking: string;
+	parent: string | null;
+	/**
+	 * @deprecated - left for backward compatibility
+	 */
+	thinking?: string;
+	/** Serialized JSON array of tool calls made by assistant messages */
 	toolCalls?: string;
+	/** Tool call ID for tool result messages (role: 'tool') */
+	toolCallId?: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
 	model?: string;
 }
 
-/**
- * Represents a single conversation with its associated messages,
- * typically used for import/export operations.
- */
 export type ExportedConversation = {
 	conv: DatabaseConversation;
 	messages: DatabaseMessage[];
 };
 
-/**
- * Type representing one or more exported conversations.
- * Can be a single conversation object or an array of them.
- */
 export type ExportedConversations = ExportedConversation | ExportedConversation[];

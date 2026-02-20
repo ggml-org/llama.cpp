@@ -85,6 +85,7 @@ enum mtmd_slice_tmpl {
     MTMD_SLICE_TMPL_MINICPMV_2_6,
     MTMD_SLICE_TMPL_LLAMA4,
     MTMD_SLICE_TMPL_IDEFICS3,
+    MTMD_SLICE_TMPL_LFM2,
 };
 
 const char * mtmd_default_marker() {
@@ -174,7 +175,7 @@ struct mtmd_context {
 
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
-            /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
+            /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
             /* warmup            */ ctx_params.warmup,
@@ -307,13 +308,27 @@ struct mtmd_context {
             img_end = "<|im_end|>";
 
         } else if (proj == PROJECTOR_TYPE_LFM2) {
-            img_beg = "<|image_start|>";
-            img_end = "<|image_end|>";
-
+            // multi-tile:
+            //   <|image_start|>
+            //     <|img_row_1_col_1|> (tile) <|img_row_1_col_2|> (tile) ...
+            //     <|img_thumbnail|> (thumbnail)
+            //   <|image_end|>
+            // single-tile:
+            //   <|image_start|> (image) <|image_end|>
+            img_beg            = "<|image_start|>";
+            img_end            = "<|image_end|>";
+            slice_tmpl         = MTMD_SLICE_TMPL_LFM2;
+            sli_img_start_tmpl = "<|img_row_%d_col_%d|>";
+            tok_ov_img_start   = {lookup_token("<|img_thumbnail|>")};
+            ov_img_first       = false;
         } else if (proj == PROJECTOR_TYPE_GLM4V) {
             img_beg = "<|begin_of_image|>";
             img_end = "<|end_of_image|>";
 
+        } else if (proj == PROJECTOR_TYPE_PADDLEOCR) {
+            // <|IMAGE_START|> ... (image embeddings) ... <|IMAGE_END|>
+            img_beg = "<|IMAGE_START|>";
+            img_end = "<|IMAGE_END|>";
         }
     }
 
@@ -562,11 +577,13 @@ struct mtmd_tokenizer {
             }
 
             // handle llava-uhd style preprocessing
+            const bool has_tiling_grid = batch_f32.grid_x > 0 && batch_f32.grid_y > 0;
             if (
                 ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_5
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_IDEFICS3
+                || (ctx->slice_tmpl == MTMD_SLICE_TMPL_LFM2 && has_tiling_grid)
             ) {
                 const int n_col = batch_f32.grid_x;
                 const int n_row = batch_f32.grid_y;
@@ -877,6 +894,7 @@ bool mtmd_decode_use_mrope(mtmd_context * ctx) {
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_PADDLEOCR:
             return true;
         default:
             return false;

@@ -12,6 +12,7 @@
 #include "hvx-sigmoid.h"
 #include "hvx-sqrt.h"
 #include "hvx-arith.h"
+#include "hvx-div.h"
 #include "hvx-base.h"
 
 #endif /* HVX_UTILS_H */

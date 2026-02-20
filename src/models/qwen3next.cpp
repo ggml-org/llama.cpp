@@ -1,9 +1,9 @@
 #include "models.h"
 
-#define CHUNK_SIZE 64
+#include "llama-memory-recurrent.h"
 
 llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_graph_params & params) :
-    llm_graph_context_delta(params), model(model) {
+    llm_build_delta_net_base(params), model(model) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -15,17 +15,6 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    ggml_tensor * causal_mask =
-        ggml_tri(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, CHUNK_SIZE, CHUNK_SIZE), 1.0f),
-                    GGML_TRI_TYPE_LOWER);
-
-    ggml_tensor * identity = ggml_diag(ctx0, ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, CHUNK_SIZE), 1.0f));
-    ggml_tensor * diag_mask = ggml_add(ctx0, causal_mask, identity);
-
-    ggml_build_forward_expand(gf, causal_mask);
-    ggml_build_forward_expand(gf, identity);
-    ggml_build_forward_expand(gf, diag_mask);
-
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
@@ -35,7 +24,7 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
         // Determine layer type and build appropriate attention mechanism
         if (hparams.is_recurrent(il)) {
             // Linear attention layer (gated delta net)
-            cur = build_layer_attn_linear(inp->get_recr(), cur, causal_mask, identity, diag_mask, il);
+            cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
             // Full attention layer
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
@@ -85,6 +74,14 @@ llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_gr
     ggml_build_forward_expand(gf, cur);
 }
 
+// utility to get one slice from the third dimension
+// input dim:  [x, y, c, b]
+// output dim: [x, y, 1, b]
+static ggml_tensor * get_slice_2d(ggml_context * ctx0, ggml_tensor * t, int64_t c) {
+    return ggml_view_4d(ctx0, t, t->ne[0], t->ne[1], 1, t->ne[3],
+        t->nb[1], t->nb[2], t->nb[3], t->nb[2] * c);
+}
+
 ggml_tensor * llm_build_qwen3next::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
@@ -115,20 +112,13 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     // Split Q projection into query and gate
     // The split should be along dimension 0 (the feature dimension)
     ggml_tensor * Qcur = ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
-                                             Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], 0);
+                                            Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], 0);
+    cb(Qcur, "Qcur_view", il);
+
     ggml_tensor * gate =
         ggml_view_4d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens, 1,
                      Qcur_full->nb[1], Qcur_full->nb[2], Qcur_full->nb[3], n_embd_head * ggml_element_size(Qcur_full));
-    cb(Qcur, "Qcur", il);
     cb(gate, "gate", il);
-
-    // Now reshape Qcur to [n_embd_head, n_head, n_tokens] for multi-head attention
-    Qcur = ggml_cont_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-    cb(Qcur, "Qcur_reshaped", il);
-
-    // Apply Q normalization
-    Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-    cb(Qcur, "Qcur_normed", il);
 
     ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
     cb(Kcur, "Kcur", il);
@@ -136,18 +126,15 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
     cb(Vcur, "Vcur", il);
 
-    // Apply K normalization
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+    Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+    cb(Qcur, "Qcur_normed", il);
+
     Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(Kcur, "Kcur_normed", il);
 
-    // Reshape gate to [n_embd, n_tokens] for the sigmoid gating (flatten the heads)
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
-    cb(gate, "gate_reshaped", il);
-
-    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-    // Apply RoPE
     Qcur = ggml_rope_ext(
             ctx0, Qcur, inp_pos, nullptr,
             n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -162,7 +149,6 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
     cb(Kcur, "Kcur", il);
     cb(Vcur, "Vcur", il);
 
-    // Attention computation
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     cur = build_attn(inp,
@@ -170,10 +156,15 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn(
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
-    ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
-    cb(gate_sigmoid, "gate_sigmoid", il);
+    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
 
-    cur = ggml_mul(ctx0, cur, gate_sigmoid);
+    gate = ggml_sigmoid(ctx0, gate);
+    cb(gate, "gate_sigmoid", il);
+
+    gate = ggml_reshape_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+
+    cur = ggml_mul(ctx0, cur, gate);
     cb(cur, "attn_gated", il);
 
     cur = build_lora_mm(model.layers[il].wo, cur);
@@ -203,7 +194,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_qkvz(
         cb(z, "z", il);
 
         return { qkv_mixed, z };
-
     } else {
         // legacy (slower) path
         ggml_tensor * mixed_qkvz = build_lora_mm(model.layers[il].ssm_in, input);
@@ -267,9 +257,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_qwen3next::build_qkvz(
 ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
         llm_graph_input_rs * inp,
         ggml_tensor *        cur,
-        ggml_tensor *        causal_mask,
-        ggml_tensor *        identity,
-        ggml_tensor *        diag_mask,
         int                  il) {
     const auto * mctx_cur = inp->mctx;
 
@@ -314,7 +301,10 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
                                    split_sizes_ba[0] * ggml_element_size(mixed_ba_reshaped));
     cb(a, "a", il);
 
-    ggml_tensor * beta  = ggml_cont_4d(ctx0, b, num_v_heads, 1, n_seq_tokens, n_seqs);
+    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
+    b = ggml_cont(ctx0, b);
+
+    ggml_tensor * beta = ggml_sigmoid(ctx0, b);
 
     // Reshape a to merge head dimensions: [batch, seq_len, num_k_heads, num_v_heads/num_k_heads] -> [batch, seq_len, num_v_heads]
     ggml_tensor * alpha = ggml_cont_3d(ctx0, a, num_v_heads, n_seq_tokens, n_seqs);
@@ -322,14 +312,16 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
     cb(alpha_softplus, "a_softplus", il);
+
     ggml_tensor * gate = ggml_mul(ctx0, alpha_softplus, model.layers[il].ssm_a);  // -A_log.exp() * softplus
     cb(gate, "gate", il);
+
+    beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
+    gate = ggml_reshape_4d(ctx0, gate, 1, num_v_heads, n_seq_tokens, n_seqs);
 
     // Get convolution states from cache
     ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
     ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
-
-    // bool use_precomputed_states = n_seq_tokens == 1 && mctx_cur->has_previous_state();
 
     // Build the convolution states tensor
     ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
@@ -339,11 +331,12 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     ggml_tensor * conv_kernel      = model.layers[il].ssm_conv1d;
     const int64_t conv_kernel_size = conv_kernel->ne[0];
     const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
-    conv_states                    = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
+
+    conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
     cb(conv_states, "conv_states_reshaped", il);
 
-    qkv_mixed = ggml_permute(ctx0, qkv_mixed, 1, 0, 2, 3);
-    cb(qkv_mixed, "qkv_mixed_permuted", il);
+    qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
+    cb(qkv_mixed, "qkv_mixed_transposed", il);
 
     ggml_tensor * conv_input = ggml_concat(ctx0, conv_states, qkv_mixed, 0);
     cb(conv_input, "conv_input", il);
@@ -363,7 +356,10 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_conv_states, state_update_target));
     cb(conv_states_all, "conv_states_updated", il);
 
-    // Apply SSM convolution
+    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
+    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+    cb(state, "state_predelta", il);
+
     ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
     cb(conv_output_proper, "conv_output_raw", il);
 
@@ -377,26 +373,36 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
 
     // Extract the convolved Q, K, V from conv_output
-    ggml_tensor * q_conv =
-        ggml_view_2d(ctx0, conv_qkv_mix, head_k_dim * num_k_heads, n_seq_tokens * n_seqs, nb1_qkv, 0);
+    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            0);
+
+    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_k_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
+
+    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            ggml_row_size(conv_qkv_mix->type, head_v_dim),
+            nb1_qkv,
+            nb1_qkv * n_seq_tokens,
+            ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
+
     cb(q_conv, "q_conv", il);
-    ggml_tensor * k_conv =
-        ggml_view_2d(ctx0, conv_qkv_mix, head_k_dim * num_k_heads, n_seq_tokens * n_seqs, nb1_qkv,
-                     head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
     cb(k_conv, "k_conv", il);
-    ggml_tensor * v_conv =
-        ggml_view_2d(ctx0, conv_qkv_mix, head_v_dim * num_v_heads, n_seq_tokens * n_seqs, nb1_qkv,
-                     2 * head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
     cb(v_conv, "v_conv", il);
 
-    // Unsqueeze them
-    q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
-    k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
-    v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
+    const float eps_norm = hparams.f_norm_rms_eps;
 
-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
-    state               = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim,  num_v_heads, n_seqs);
-    cb(state, "state_predelta", il);
+    q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
+    k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+
+    //q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
+    //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
+    //v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
     // if head keys and value keys are different, repeat to force tensors into matching shapes
     if (num_k_heads != num_v_heads) {
@@ -424,10 +430,13 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    std::pair<ggml_tensor *, ggml_tensor *> attn_out = build_delta_net_unified(ctx0, q_conv, k_conv, v_conv,
-            gate, beta, state, causal_mask, identity, diag_mask,
-            il, CHUNK_SIZE, hparams.f_norm_rms_eps);
-
+    // Choose between build_delta_net_chunking, build_delta_net_recurrent, and build_delta_net_autoregressive based on n_tokens
+    std::pair<ggml_tensor *, ggml_tensor *> attn_out; // pair of (output, new_state)
+    if (n_seq_tokens == 1) {
+        attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
+    } else {
+        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, il);
+    }
     ggml_tensor * output    = attn_out.first;
     ggml_tensor * new_state = attn_out.second;
     cb(output, "attn_output", il);
@@ -435,19 +444,15 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
 
     // Update the recurrent states
     ggml_build_forward_expand(gf,
-                              ggml_cpy(ctx0, new_state,
-                                       ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
-                                                    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
-
-    // Reshape both attn_out_final and z to 2D tensors for normalization
-    // attn_out_final: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
-    ggml_tensor * attn_out_2d_final = ggml_reshape_2d(ctx0, output, head_v_dim, num_v_heads * n_seq_tokens * n_seqs);
+            ggml_cpy(ctx0, new_state,
+                ggml_view_1d(ctx0, ssm_states_all, hparams.n_embd_s() * n_seqs,
+                    kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all))));
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
-    ggml_tensor * z_2d = ggml_reshape_2d(ctx0, z, head_v_dim, num_v_heads * n_seq_tokens * n_seqs);
+    ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
     // Apply gated normalization: self.norm(core_attn_out, z)
-    ggml_tensor * attn_out_norm = build_norm_gated(attn_out_2d_final, model.layers[il].ssm_norm, z_2d, il);
+    ggml_tensor * attn_out_norm = build_norm_gated(output, model.layers[il].ssm_norm, z_2d, il);
 
     // Final reshape: [head_dim, n_heads, n_tokens, n_seqs] -> [n_tokens, n_seqs, n_heads * head_dim]
     ggml_tensor * final_output = ggml_reshape_3d(ctx0, attn_out_norm, head_v_dim * num_v_heads, n_seq_tokens, n_seqs);
@@ -458,7 +463,8 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(cur, "linear_attn_out", il);
 
     // Reshape back to original dimensions
-    cur = ggml_cont_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
+    cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
+
     return cur;
 }
 
@@ -479,7 +485,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int 
         if (model.layers[il].ffn_up_shexp != nullptr) {
             ggml_tensor * ffn_shexp =
                 build_ffn(cur,
-                    model.layers[il].ffn_up_shexp, NULL, NULL,
+                    model.layers[il].ffn_up_shexp,   NULL, NULL,
                     model.layers[il].ffn_gate_shexp, NULL, NULL,
                     model.layers[il].ffn_down_shexp, NULL, NULL,
                     NULL,
@@ -492,11 +498,9 @@ ggml_tensor * llm_build_qwen3next::build_layer_ffn(ggml_tensor * cur, const int 
             ggml_tensor * shared_gate = build_lora_mm(model.layers[il].ffn_gate_inp_shexp, cur);
             cb(shared_gate, "shared_expert_gate", il);
 
-            // Apply sigmoid to the gate
             shared_gate = ggml_sigmoid(ctx0, shared_gate);
             cb(shared_gate, "shared_expert_gate_sigmoid", il);
 
-            // Apply the gate to the shared expert output
             ffn_shexp = ggml_mul(ctx0, ffn_shexp, shared_gate);
             cb(ffn_shexp, "ffn_shexp_gated", il);
 

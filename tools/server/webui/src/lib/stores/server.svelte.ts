@@ -1,4 +1,4 @@
-import { PropsService } from '$lib/services/props';
+import { PropsService } from '$lib/services/props.service';
 import { ServerRole } from '$lib/enums';
 
 /**
@@ -18,9 +18,13 @@ import { ServerRole } from '$lib/enums';
  * - **Default Params**: Server-wide generation defaults
  */
 class ServerStore {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// State
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * State
+	 *
+	 *
+	 */
 
 	props = $state<ApiLlamaCppServerProps | null>(null);
 	loading = $state(false);
@@ -28,16 +32,22 @@ class ServerStore {
 	role = $state<ServerRole | null>(null);
 	private fetchPromise: Promise<void> | null = null;
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Getters
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Getters
+	 *
+	 *
+	 */
 
 	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
 		return this.props?.default_generation_settings?.params || null;
 	}
 
 	get contextSize(): number | null {
-		return this.props?.default_generation_settings?.n_ctx ?? null;
+		const nCtx = this.props?.default_generation_settings?.n_ctx;
+
+		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
 	get webuiSettings(): Record<string, string | number | boolean> | undefined {
@@ -52,9 +62,13 @@ class ServerStore {
 		return this.role === ServerRole.MODEL;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Data Handling
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Data Handling
+	 *
+	 *
+	 */
 
 	async fetch(): Promise<void> {
 		if (this.fetchPromise) return this.fetchPromise;
@@ -115,9 +129,13 @@ class ServerStore {
 		this.fetchPromise = null;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	private detectRole(props: ApiLlamaCppServerProps): void {
 		const newRole = props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL;

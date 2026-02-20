@@ -19,9 +19,7 @@
 #include <thread>
 #include <vector>
 
-#if defined(LLAMA_USE_HTTPLIB)
 #include "http.h"
-#endif
 
 #ifndef __EMSCRIPTEN__
 #ifdef __linux__
@@ -114,44 +112,18 @@ static void write_etag(const std::string & path, const std::string & etag) {
 }
 
 static std::string read_etag(const std::string & path) {
-    std::string none;
     const std::string etag_path = path + ".etag";
-
-    if (std::filesystem::exists(etag_path)) {
-        std::ifstream etag_in(etag_path);
-        if (!etag_in) {
-            LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
-            return none;
-        }
-        std::string etag;
-        std::getline(etag_in, etag);
-        return etag;
+    if (!std::filesystem::exists(etag_path)) {
+        return {};
     }
-
-    // no etag file, but maybe there is an old .json
-    // remove this code later
-    const std::string metadata_path = path + ".json";
-
-    if (std::filesystem::exists(metadata_path)) {
-        std::ifstream metadata_in(metadata_path);
-        try {
-            nlohmann::json metadata_json;
-            metadata_in >> metadata_json;
-            LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(),
-                    metadata_json.dump().c_str());
-            if (metadata_json.contains("etag") && metadata_json.at("etag").is_string()) {
-                std::string etag = metadata_json.at("etag");
-                write_etag(path, etag);
-                if (!std::filesystem::remove(metadata_path)) {
-                    LOG_WRN("%s: failed to delete old .json metadata file: %s\n", __func__, metadata_path.c_str());
-                }
-                return etag;
-            }
-        } catch (const nlohmann::json::exception & e) {
-            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
-        }
+    std::ifstream etag_in(etag_path);
+    if (!etag_in) {
+        LOG_ERR("%s: could not open .etag file for reading: %s\n", __func__, etag_path.c_str());
+        return {};
     }
-    return none;
+    std::string etag;
+    std::getline(etag_in, etag);
+    return etag;
 }
 
 static bool is_http_status_ok(int status) {
@@ -167,8 +139,6 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     }
     return {hf_repo, tag};
 }
-
-#if defined(LLAMA_USE_HTTPLIB)
 
 class ProgressBar {
     static inline std::mutex mutex;
@@ -305,7 +275,10 @@ static bool common_pull_file(httplib::Client & cli,
     );
 
     if (!res) {
-        LOG_ERR("%s: error during download. Status: %d\n", __func__, res ? res->status : -1);
+        LOG_ERR("%s: download failed: %s (status: %d)\n",
+                __func__,
+                httplib::to_string(res.error()).c_str(),
+                res ? res->status : -1);
         return false;
     }
 
@@ -344,62 +317,64 @@ static int common_download_file_single_online(const std::string        & url,
         LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
     }
 
-    for (int i = 0; i < max_attempts; ++i) {
-        auto head = cli.Head(parts.path);
-        bool head_ok = head && head->status >= 200 && head->status < 300;
-        if (!head_ok) {
-            LOG_WRN("%s: HEAD invalid http status code received: %d\n", __func__, head ? head->status : -1);
-            if (file_exists) {
-                LOG_INF("%s: Using cached file (HEAD failed): %s\n", __func__, path.c_str());
-                return 304; // 304 Not Modified - fake cached response
-            }
-            return head->status; // cannot use cached file, return raw status code
-            // TODO: maybe retry only on certain codes
-        }
-
-        std::string etag;
-        if (head_ok && head->has_header("ETag")) {
-            etag = head->get_header_value("ETag");
-        }
-
-        size_t total_size = 0;
-        if (head_ok && head->has_header("Content-Length")) {
-            try {
-                total_size = std::stoull(head->get_header_value("Content-Length"));
-            } catch (const std::exception& e) {
-                LOG_WRN("%s: Invalid Content-Length in HEAD response: %s\n", __func__, e.what());
-            }
-        }
-
-        bool supports_ranges = false;
-        if (head_ok && head->has_header("Accept-Ranges")) {
-            supports_ranges = head->get_header_value("Accept-Ranges") != "none";
-        }
-
-        bool should_download_from_scratch = false;
-        if (!last_etag.empty() && !etag.empty() && last_etag != etag) {
-            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__,
-                    last_etag.c_str(), etag.c_str());
-            should_download_from_scratch = true;
-        }
-
+    auto head = cli.Head(parts.path);
+    if (!head || head->status < 200 || head->status >= 300) {
+        LOG_WRN("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
-            if (!should_download_from_scratch) {
-                LOG_INF("%s: using cached file: %s\n", __func__, path.c_str());
-                return 304; // 304 Not Modified - fake cached response
-            }
-            LOG_WRN("%s: deleting previous downloaded file: %s\n", __func__, path.c_str());
-            if (remove(path.c_str()) != 0) {
-                LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-                return -1;
-            }
+            LOG_INF("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        return head ? head->status : -1;
+    }
+
+    std::string etag;
+    if (head->has_header("ETag")) {
+        etag = head->get_header_value("ETag");
+    }
+
+    size_t total_size = 0;
+    if (head->has_header("Content-Length")) {
+        try {
+            total_size = std::stoull(head->get_header_value("Content-Length"));
+        } catch (const std::exception& e) {
+            LOG_WRN("%s: invalid Content-Length in HEAD response: %s\n", __func__, e.what());
+        }
+    }
+
+    bool supports_ranges = false;
+    if (head->has_header("Accept-Ranges")) {
+        supports_ranges = head->get_header_value("Accept-Ranges") != "none";
+    }
+
+    if (file_exists) {
+        if (etag.empty()) {
+            LOG_INF("%s: using cached file (no server etag): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        if (!last_etag.empty() && last_etag == etag) {
+            LOG_INF("%s: using cached file (same etag): %s\n", __func__, path.c_str());
+            return 304; // 304 Not Modified - fake cached response
+        }
+        if (remove(path.c_str()) != 0) {
+            LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
+            return -1;
+        }
+    }
+
+    const std::string path_temporary = path + ".downloadInProgress";
+    int delay = retry_delay_seconds;
+
+    for (int i = 0; i < max_attempts; ++i) {
+        if (i) {
+            LOG_WRN("%s: retrying after %d seconds...\n", __func__, delay);
+            std::this_thread::sleep_for(std::chrono::seconds(delay));
+            delay *= retry_delay_seconds;
         }
 
-        const std::string path_temporary = path + ".downloadInProgress";
         size_t existing_size = 0;
 
         if (std::filesystem::exists(path_temporary)) {
-            if (supports_ranges && !should_download_from_scratch) {
+            if (supports_ranges) {
                 existing_size = std::filesystem::file_size(path_temporary);
             } else if (remove(path_temporary.c_str()) != 0) {
                 LOG_ERR("%s: unable to delete file: %s\n", __func__, path_temporary.c_str());
@@ -407,32 +382,23 @@ static int common_download_file_single_online(const std::string        & url,
             }
         }
 
-        // start the download
-        LOG_INF("%s: trying to download model from %s to %s (etag:%s)...\n",
-                __func__, common_http_show_masked_url(parts).c_str(), path_temporary.c_str(), etag.c_str());
-        const bool was_pull_successful = common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size);
-        if (!was_pull_successful) {
-            if (i + 1 < max_attempts) {
-                const int exponential_backoff_delay = std::pow(retry_delay_seconds, i) * 1000;
-                LOG_WRN("%s: retrying after %d milliseconds...\n", __func__, exponential_backoff_delay);
-                std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
-            } else {
-                LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
+        LOG_INF("%s: downloading from %s to %s (etag:%s)...\n",
+                __func__, common_http_show_masked_url(parts).c_str(),
+                path_temporary.c_str(), etag.c_str());
+
+        if (common_pull_file(cli, parts.path, path_temporary, supports_ranges, existing_size, total_size)) {
+            if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
+                LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
+                return -1;
             }
-            continue;
+            if (!etag.empty()) {
+                write_etag(path, etag);
+            }
+            return head->status;
         }
-
-        if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
-            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
-            return -1;
-        }
-        if (!etag.empty()) {
-            write_etag(path, etag);
-        }
-
-        return head->status; // TODO: use actual GET status?
     }
 
+    LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
     return -1; // max attempts reached
 }
 
@@ -797,30 +763,6 @@ std::string common_docker_resolve_model(const std::string & docker) {
         throw;
     }
 }
-
-#else
-
-common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-bool common_download_model(const common_params_model &, const std::string &, bool, const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-std::string common_docker_resolve_model(const std::string &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-int common_download_file_single(const std::string &,
-                                const std::string &,
-                                const std::string &,
-                                bool,
-                                const common_header_list &) {
-    throw std::runtime_error("download functionality is not enabled in this build");
-}
-
-#endif // defined(LLAMA_USE_HTTPLIB)
 
 std::vector<common_cached_model_info> common_list_cached_models() {
     std::vector<common_cached_model_info> models;

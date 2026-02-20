@@ -30,12 +30,18 @@ fi
 PR=$1
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "error: PR number must be numeric"; exit 1; }
 
+url_origin=$(git config --get remote.upstream.url 2>/dev/null) || \
 url_origin=$(git config --get remote.origin.url) || {
-    echo "error: no remote named 'origin' in this repository"
+    echo "error: no remote named 'upstream' or 'origin' in this repository"
     exit 1
 }
 
-org_repo=$(echo $url_origin | cut -d/ -f4-)
+# Extract org/repo from either https or ssh format.
+if [[ $url_origin =~ ^git@ ]]; then
+    org_repo=$(echo $url_origin | cut -d: -f2)
+else
+    org_repo=$(echo $url_origin | cut -d/ -f4-)
+fi
 org_repo=${org_repo%.git}
 
 echo "org/repo: $org_repo"

@@ -28,6 +28,14 @@ if [ "${1:-}" = "huge" ]; then
     echo "Include BIG and HUGE models..."
 fi
 
+# Check if the second argument is "flash", then enable flash attention
+# This is useful to test if flash attention off works correctly
+FLASH_ATTN="on"
+if [ "${2:-}" = "flash_off" ] || [ "${1:-}" = "flash_off" ]; then
+    FLASH_ATTN="off"
+    echo "Flash attention disabled..."
+fi
+
 ###############
 
 arr_prefix=()
@@ -143,6 +151,7 @@ for i in "${!arr_hf[@]}"; do
         -hf $(printf %q "$hf") \
         --image $(printf %q "$SCRIPT_DIR/$inp_file") \
         --temp 0 -n 128 \
+        --flash-attn $(printf %q "$FLASH_ATTN") \
         ${extra_args}"
 
     # if extra_args does not contain -p, we add a default prompt
