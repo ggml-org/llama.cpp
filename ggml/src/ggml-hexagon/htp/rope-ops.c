@@ -72,6 +72,8 @@ struct htp_rope_context {
     size_t dst_row_size_aligned;
     size_t theta_cache_offset;
     uint32_t src0_nrows;
+
+    uint64_t t_start;
 };
 
 static float rope_yarn_ramp(const float low, const float high, const int i0) {
@@ -129,35 +131,6 @@ static void rope_corr_dims(int     n_dims,
     float end   = ceilf(n_dims * logf(n_ctx_orig / (beta_slow * 2 * (float) M_PI)) / (2 * logf(freq_base)));
     dims[0]     = MAX(0, start);
     dims[1]     = MIN(n_dims - 1, end);
-}
-
-static void rope_init_context(struct htp_rope_context * rctx, struct htp_ops_context * octx) {
-    memset(rctx, 0, sizeof(struct htp_rope_context));
-
-    const int32_t * op_params = &octx->op_params[0];
-
-    rctx->n_dims     = ((const int32_t *) op_params)[1];
-    rctx->mode       = ((const int32_t *) op_params)[2];
-    rctx->n_ctx_orig = ((const int32_t *) op_params)[4];
-
-    memcpy(&rctx->freq_base,   (int32_t *) op_params + 5,  sizeof(float));
-    memcpy(&rctx->freq_scale,  (int32_t *) op_params + 6,  sizeof(float));
-    memcpy(&rctx->ext_factor,  (int32_t *) op_params + 7,  sizeof(float));
-    memcpy(&rctx->attn_factor, (int32_t *) op_params + 8,  sizeof(float));
-    memcpy(&rctx->beta_fast,   (int32_t *) op_params + 9,  sizeof(float));
-    memcpy(&rctx->beta_slow,   (int32_t *) op_params + 10, sizeof(float));
-    memcpy(&rctx->sections,    (int32_t *) op_params + 11, sizeof(int) * 4);
-
-    rctx->theta_scale = powf(rctx->freq_base, -2.0f / rctx->n_dims);
-
-    rope_corr_dims(rctx->n_dims, rctx->n_ctx_orig, rctx->freq_base, rctx->beta_fast, rctx->beta_slow, rctx->corr_dims);
-
-    rctx->octx = octx;
-
-    const uint32_t ne0 = octx->dst.ne[0];
-
-    FARF(HIGH, "rope-f32 n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx->n_dims, ne0,
-         rctx->ext_factor, rctx->theta_scale, rctx->attn_factor);
 }
 
 static inline void hvx_rope_neox_f32_aa(float * restrict dst, const float * restrict src0, uint32_t ne, const float * restrict theta_cache) {
@@ -298,8 +271,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
         return;
     }
 
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
+    uint64_t tt = HAP_perf_get_qtimer_count();
 
     const int32_t mode    = rctx->mode;
     const bool    is_neox = mode & HTP_ROPE_TYPE_NEOX;
@@ -329,6 +301,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                 // Depth before prefetch
                 uint32_t dma_depth = dma_queue_depth(dma_queue);
 
+                // FARF(HIGH, "rope-block %u: ir %u n-rows %u dma-depth %u : usec %u", ith, ir, nrows, dma_depth,
+                //             (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
+
                 // Prefetch loop
                 for (uint32_t pnr = 0, pr = 0; pr < nrows && pr < HTP_ROPE_SPAD_NROWS; pr += pnr) {
                     pnr = MIN(nrows - pr, HTP_ROPE_SPAD_BLOCK);
@@ -344,18 +319,23 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
                         rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
 
-                    // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p npr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                    // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                 }
 
                 // Update theta cache
                 if (i2 != prev_i2) {
+                    prev_i2 = i2;
+
                     const int32_t p = pos[i2];
                     rope_cache_init(p, rctx->freq_scale, freq_factors, rctx->corr_dims, ne0, rctx->ext_factor, rctx->attn_factor, theta_cache, rctx->theta_scale);
-                    prev_i2 = i2;
+
+                    // FARF(HIGH, "rope-theta %u: ir %u i1 %u i2 %u i3 %u cache %p : usec %u", ith, ir, i1, i2, i3, theta_cache,
+                    //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
                 }
 
-                // Flush DMA transactions from prev block (if any)
-                for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop(dma_queue); }
+                // Skip DMA transactions from prev block (if any)
+                // No need to wait for these since the DMA is setup for in-order processing
+                for (uint32_t d=0; d < dma_depth; d++) { dma_queue_pop_nowait(dma_queue); }
 
                 // Compute loop
                 for (uint32_t cnr = 0, cr = 0; cr < nrows; cr += cnr, ir += cnr, i1 += cnr) {
@@ -365,7 +345,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     uint8_t * dst_spad = (uint8_t *) dma_queue_pop(dma_queue).src;
                     uint8_t * src_spad = (uint8_t *) dma_queue_pop(dma_queue).dst;
 
-                    // FARF(HIGH, "rope-process %u: ir %u i1 %u i2 %u i3 %u src-spad %p npr %u", ith, ir, i1, i2, i3, src_spad, cnr);
+                    // FARF(HIGH, "rope-compute %u: ir %u i1 %u i2 %u i3 %u src-spad %p cnr %u : usec %u", ith, ir, i1, i2, i3, src_spad, cnr,
+                    //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
 
                     if (is_neox) {
                         rope_neox_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
@@ -386,7 +367,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                         dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
                             rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
 
-                        // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p npr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
+                        // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                     }
                 }
             }
@@ -395,10 +376,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
 done:
     dma_queue_flush(dma_queue);
-    t2 = HAP_perf_get_qtimer_count();
+    tt = HAP_perf_get_qtimer_count() - tt;
 
-    FARF(HIGH, "rope-f32: %d/%d: (%u:%u) usec %u\n", ith, nth, src0_start_row, src0_end_row,
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    FARF(HIGH, "rope-f32: %d/%d: (%u:%u) usec %u\n", ith, nth, src0_start_row, src0_end_row, (unsigned) HAP_perf_qtimer_count_to_us(tt));
 }
 
 static int execute_op_rope_f32(struct htp_ops_context * octx) {
@@ -409,12 +389,10 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src2 = &octx->src2;
     struct htp_tensor *       dst  = &octx->dst;
 
-    struct htp_rope_context rctx;
     const char * op_type = "rope-f32";
 
     switch (octx->op) {
         case HTP_OP_ROPE:
-            rope_init_context(&rctx, octx);
             break;
 
         default:
@@ -457,14 +435,42 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
 
     // Fill context
+    struct htp_rope_context rctx;
+    memset(&rctx, 0, sizeof(struct htp_rope_context));
+
+    rctx.t_start = HAP_perf_get_qtimer_count();
+
+    rctx.octx = octx;
+
+    const int32_t * op_params = &octx->op_params[0];
+    rctx.n_dims     = ((const int32_t *) op_params)[1];
+    rctx.mode       = ((const int32_t *) op_params)[2];
+    rctx.n_ctx_orig = ((const int32_t *) op_params)[4];
+
+    memcpy(&rctx.freq_base,   (int32_t *) op_params + 5,  sizeof(float));
+    memcpy(&rctx.freq_scale,  (int32_t *) op_params + 6,  sizeof(float));
+    memcpy(&rctx.ext_factor,  (int32_t *) op_params + 7,  sizeof(float));
+    memcpy(&rctx.attn_factor, (int32_t *) op_params + 8,  sizeof(float));
+    memcpy(&rctx.beta_fast,   (int32_t *) op_params + 9,  sizeof(float));
+    memcpy(&rctx.beta_slow,   (int32_t *) op_params + 10, sizeof(float));
+    memcpy(&rctx.sections,    (int32_t *) op_params + 11, sizeof(int) * 4);
+
+    rctx.theta_scale = powf(rctx.freq_base, -2.0f / rctx.n_dims);
+
+    rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, rctx.corr_dims);
+
     rctx.src0_row_size = src0_row_size;
     rctx.dst_row_size  = dst_row_size;
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;
 
+    uint32_t ne0 = dst->ne[0];
     uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     rctx.src0_nrows = src0_nrows;
+
+    FARF(HIGH, "rope-f32 n-rows %u n-dims %d ne0 %u ext-factor %.6f theta-scale %.6f attn-factor %.6f\n", rctx.src0_nrows, rctx.n_dims, ne0,
+         rctx.ext_factor, rctx.theta_scale, rctx.attn_factor);
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         uint32_t n_jobs = MIN(n_threads, src0_nrows);
