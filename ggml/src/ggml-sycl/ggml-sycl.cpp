@@ -19928,7 +19928,6 @@ static struct cpu_split_worker {
 } g_cpu_worker;
 
 static void cpu_worker_loop() {
-    GGML_LOG_INFO("[CPU-WORKER] background thread started\n");
     std::unique_lock<std::mutex> lock(g_cpu_worker.mtx);
     while (true) {
         g_cpu_worker.cv_work.wait(lock, [] {
@@ -19949,7 +19948,13 @@ static void cpu_worker_loop() {
         g_cpu_worker.has_work = false;
         g_cpu_worker.cv_done.notify_one();
     }
-    GGML_LOG_INFO("[CPU-WORKER] background thread exiting\n");
+}
+
+// Clean shutdown at program exit (called by atexit)
+static void cpu_worker_shutdown() {
+    g_cpu_worker.shutdown = true;
+    g_cpu_worker.cv_work.notify_one();
+    if (g_cpu_worker.thread.joinable()) g_cpu_worker.thread.join();
 }
 
 // Initialize 3-device split config. Called once (idempotent).
@@ -19960,6 +19965,7 @@ static void split_config_init(sycl::queue * primary_queue) {
     }
     g_split_config.queue[0] = primary_queue;
     g_split_config.gpu_count = 1;
+    g_pending_merges.reserve(16);
 
     // Parse GGML_SYCL_SPLIT_RATIO (new 3-way) or GGML_SYCL_TENSOR_SPLIT (legacy 2-way)
     const char * ratio_env  = std::getenv("GGML_SYCL_SPLIT_RATIO");
@@ -20070,7 +20076,13 @@ static void split_config_init(sycl::queue * primary_queue) {
         }
         // Spawn persistent background worker for CPU vec_dot
         if (g_split_config.ratio[2] > 0.0f && !g_cpu_worker.thread.joinable()) {
+            g_cpu_worker.shutdown = false;
             g_cpu_worker.thread = std::thread(cpu_worker_loop);
+            static bool atexit_registered = false;
+            if (!atexit_registered) {
+                std::atexit(cpu_worker_shutdown);
+                atexit_registered = true;
+            }
         }
     }
 }
@@ -20432,7 +20444,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
             const size_t second_out_bytes = N_second * sizeof(float);
             // Ensure ring slot host output buffer (shared-context pinned for both GPUs)
             if (s_second_out_ring_sz < second_out_bytes) {
-                // All ring entries are the same size — grow them all
+                split_merge_drain();  // ensure no in-flight merge reads old slots
                 for (int i = 0; i < MERGE_RING_SIZE; i++) {
                     if (s_second_out_ring[i]) sycl::free(s_second_out_ring[i], *stream_second);
                     s_second_out_ring[i] = (float *) sycl::malloc_host(second_out_bytes, *stream_second);
@@ -20487,7 +20499,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
         if (N_cpu > 0) {
             const size_t cpu_out_bytes = N_cpu * sizeof(float);
             if (s_cpu_out_ring_sz < cpu_out_bytes) {
-                // All ring entries are the same size — grow them all
+                split_merge_drain();  // ensure no in-flight merge reads old slots
                 for (int i = 0; i < MERGE_RING_SIZE; i++) {
                     if (s_cpu_out_ring[i]) sycl::free(s_cpu_out_ring[i], *stream_second);
                     s_cpu_out_ring[i] = (float *) sycl::malloc_host(cpu_out_bytes, *stream_second);
@@ -24713,10 +24725,10 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
 
     ggml_sycl_free_dev2dev_transfer_buffer();
     ggml_sycl_layout_ptr_stats_dump();
-    // Shut down background CPU worker thread
-    g_cpu_worker.shutdown = true;
-    g_cpu_worker.cv_work.notify_one();
-    if (g_cpu_worker.thread.joinable()) g_cpu_worker.thread.join();
+    // NOTE: do NOT shut down g_cpu_worker here — ggml_backend_sycl_free()
+    // is called for temporary backends during model loading.  The worker
+    // thread is a global resource tied to split config; it self-terminates
+    // via static destructor at program exit.
     // Drain any pending merge events before teardown
     split_merge_drain();
     // Free ring buffer staging entries
