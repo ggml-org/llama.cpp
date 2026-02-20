@@ -651,6 +651,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr uint32_t MSE_MAGIC = 0x4d534531; // MSE1
     constexpr uint32_t WCE_MAGIC = 0x57434531; // WCE1
     constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
+    constexpr float penalty = 5.0f;
     const char * func = __func__;
     const bool wce = params->use_wce;
     const bool valid_wce = wce && activations_data && statistics_data != nullptr;
@@ -1013,7 +1014,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return std::accumulate(v.begin() + k, v.end() - k, 0.0) / std::max(1.0, (double)(n - 2 * k));
         };
 
-        // Compute Error Metrics: Entropy-Modulated Weighted Cosine Error (WCE) - Experimental
+        // Weighted Cosine Error (WCE) - Experimental
         if (do_wce) {
             double total_cos_error = 0.0;
             size_t off = 0;
@@ -1074,7 +1075,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 }
 
                 const double nrows = t->ne[1];
-                total_cos_error += slice_sum / (double) rs * (double) nrows;
+                total_cos_error += slice_sum / (double)rs * (double)nrows;
             }
 
             const double penalty = 2.0 - std::clamp((double) h_norm, 0.0, 1.0);
@@ -1083,7 +1084,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return qe;
         }
 
-        // Compute Error Metrics: Weighted MSE Optimization - Default
+        // Weighted Mean Squared Error (MSE) - Default
         size_t off = 0;
         size_t row_idx = 0;
         double total_wmse = 0.0;
@@ -1112,7 +1113,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 if (val && act) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
                         const double w = std::max(0.0f, val[j]);
-                        const double e = y[j] - x[j];
+                        const double e = (double)y[j] - (double)x[j];
                         const double we = w * e;
                         w_err += we * e;
                         bias_num += we * act[j];
@@ -1120,18 +1121,18 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 } else if (val) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
                         const double w = std::max(0.0f, val[j]);
-                        const double e = y[j] - x[j];
+                        const double e = (double)y[j] - (double)x[j];
                         w_err += w * e * e;
                     }
                 } else if (act) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
-                         const double e = y[j] - x[j];
+                         const double e = (double)y[j] - (double)x[j];
                          w_err += e * e;
                          bias_num += e * act[j];
                     }
                 } else {
                     for (int64_t j = 0; j < n_per_row; ++j) {
-                        const double e = y[j] - x[j];
+                        const double e = (double)y[j] - (double)x[j];
                         w_err += e * e;
                     }
                 }
@@ -1197,7 +1198,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     std::unordered_map<std::string, type_choice> bpw_data;
-    if (params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); }
+    if (params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); } // ToDo: rethink this condition
 
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](
@@ -2056,9 +2057,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 LLAMA_LOG_INFO("%s: assigning more budget to important tensors\n", __func__);
             }
             if (params->use_wce) {
-                LLAMA_LOG_INFO("%s: using experimental Entropy-Modulated Weighted Cosine Error (WCE) approximation optimization\n", __func__);
+                LLAMA_LOG_INFO("%s: using experimental Weighted Cosine Error (WCE) optimization\n", __func__);
             } else {
-                LLAMA_LOG_INFO("%s: using weighted Mean Squared Error (MSE) optimization\n", __func__);
+                LLAMA_LOG_INFO("%s: using default Weighted Mean Squared Error (MSE) optimization\n", __func__);
             }
             if (params->target_size >= 0) {
                 LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve file size %.2f MiB\n",
