@@ -4074,9 +4074,9 @@ public:
             const DeviceOperation & op = args_.operations[op_idx];
 
             // Pre-matmul sync: poll merge_complete for previous matmul.
-            // Host coordinator writes merge_complete via H2D after staging
+            // Host coordinator writes merge_complete via BCS H2D after merging
             // the secondary's partial output into primary's device memory.
-            if (is_matmul_op(op.type) && op.n_devices > 1 && op.input_staging) {
+            if (is_matmul_op(op.type) && op.n_devices > 1 && op.merge_complete) {
                 pre_matmul_sync(op);
                 // Barrier so all WGs see the merge_complete poll result
                 if (use_split_barrier) {
@@ -4116,10 +4116,8 @@ public:
             }
 
             // Post-matmul sync: write progress_counter so host coordinator
-            // knows this matmul is complete and can D2H copy the activation.
-            // Guard: require progress_counter AND input_staging to confirm
-            // this matmul was actually split across devices.
-            if (is_matmul_op(op.type) && op.n_devices > 1 && op.progress_counter && op.input_staging) {
+            // knows this matmul is complete and can BCS D2H read the progress.
+            if (is_matmul_op(op.type) && op.n_devices > 1 && op.progress_counter) {
                 post_matmul_sync(op);
                 // Barrier so ALL work-groups see the progress write before
                 // proceeding to the next operation.
@@ -4330,10 +4328,7 @@ private:
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
 
-        if (op.n_devices <= 1 || !op.merge_complete || !op.input_staging) return;
-
-        // Only primary device runs the persistent kernel in host-mediated mode
-        if (op.device_idx != 0) return;
+        if (op.n_devices <= 1 || !op.merge_complete) return;
 
         // First matmul (op_idx == 0): no previous merge to wait for
         if (op.op_idx == 0) return;
@@ -4350,10 +4345,9 @@ private:
         }
     }
 
-    // Host-mediated sync: primary writes progress_counter (host-pinned) after
-    // completing a matmul. The host coordinator reads it directly (CPU load).
-    // Using volatile store to host-pinned memory — the PCIe write from GPU is
-    // visible to the host CPU since malloc_host lives in system RAM.
+    // Host-mediated sync: primary writes progress_counter (device-local) after
+    // completing a matmul via atomic_ref<device>. The host coordinator reads it
+    // via OOQ D2H memcpy which uses the BCS engine to bypass the GPU L2 cache.
     //
     // After writing progress, primary does NOT wait here — it proceeds to the
     // next operation. The pre_matmul_sync at the START of the next split matmul
@@ -4363,10 +4357,7 @@ private:
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
 
-        if (op.n_devices <= 1 || !op.progress_counter || !op.input_staging) return;
-
-        // Only primary device runs the persistent kernel in host-mediated mode
-        if (op.device_idx != 0) return;
+        if (op.n_devices <= 1 || !op.progress_counter) return;
 
         // WG 0, thread 0 writes the progress counter via atomic_ref to
         // device-local memory (malloc_device). Host reads via OOQ D2H memcpy
