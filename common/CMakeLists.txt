@@ -43,7 +43,13 @@ endif()
 
 set(TARGET common)
 
-add_library(${TARGET} STATIC
+if (BUILD_SHARED_LIBS)
+    set(COMMON_LIB_TYPE SHARED)
+else()
+    set(COMMON_LIB_TYPE STATIC)
+endif()
+
+add_library(${TARGET} ${COMMON_LIB_TYPE}
     arg.cpp
     arg.h
     base64.hpp
