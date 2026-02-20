@@ -183,17 +183,11 @@
 #elif defined(__riscv)
 // quants.c
 #    define quantize_row_q8_K_generic          quantize_row_q8_K
-#    define ggml_vec_dot_tq1_0_q8_K_generic    ggml_vec_dot_tq1_0_q8_K
-#    define ggml_vec_dot_tq2_0_q8_K_generic    ggml_vec_dot_tq2_0_q8_K
 #    define ggml_vec_dot_q1_5_K_q8_K_generic   ggml_vec_dot_q1_5_K_q8_K
 #    define ggml_vec_dot_q2_K_s_q8_K_generic   ggml_vec_dot_q2_K_s_q8_K
 #    define ggml_vec_dot_iq2_xxs_q8_K_generic  ggml_vec_dot_iq2_xxs_q8_K
 #    define ggml_vec_dot_iq2_xs_q8_K_generic   ggml_vec_dot_iq2_xs_q8_K
-#    define ggml_vec_dot_iq2_s_q8_K_generic    ggml_vec_dot_iq2_s_q8_K
 #    define ggml_vec_dot_iq3_xxs_q8_K_generic  ggml_vec_dot_iq3_xxs_q8_K
-#    define ggml_vec_dot_iq3_s_q8_K_generic    ggml_vec_dot_iq3_s_q8_K
-#    define ggml_vec_dot_iq1_s_q8_K_generic    ggml_vec_dot_iq1_s_q8_K
-#    define ggml_vec_dot_iq1_m_q8_K_generic    ggml_vec_dot_iq1_m_q8_K
 #    define ggml_vec_dot_iq4_nl_q8_0_generic   ggml_vec_dot_iq4_nl_q8_0
 #    define ggml_vec_dot_iq4_xs_q8_K_generic   ggml_vec_dot_iq4_xs_q8_K
 #    define ggml_vec_dot_mxfp4_q8_0_generic    ggml_vec_dot_mxfp4_q8_0
