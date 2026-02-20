@@ -229,6 +229,20 @@ common_chat_tool python_tool {
         "required": ["code"]
     })",
 };
+common_chat_tool todo_list_tool {
+    /* .name = */ "todo_list",
+    /* .description = */ "Create or update the todo list",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "todos": {
+                "type": "array",
+                "description": "List of TODO list items"
+            }
+        },
+        "required": ["todos"]
+    })",
+};
 common_chat_tool code_interpreter_tool {
     /* .name = */ "code_interpreter",
     /* .description = */ "an ipython interpreter",
@@ -3205,6 +3219,25 @@ static void test_template_output_peg_parsers() {
             t.expect.tool_calls = {{
                 /* .name = */      "python",
                 /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with JSON parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=todo_list>\n"
+                "<parameter=todos>\n"
+                "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.tools = {todo_list_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "todo_list",
+                /* .arguments = */ "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}",
                 /* .id = */        {},
             }};
         });
