@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if defined(GGML_USE_HIP)
@@ -223,12 +224,12 @@ struct ggml_cuda_pdl_config {
 
 
 template<typename Kernel, typename... Args>
-void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args... args) {
+static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {
 #if defined(GGML_CUDA_USE_PDL)
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
-        CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, args... ));
+        CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
 #else
-        kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(args... );
+        kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
 #endif //defined(GGML_CUDA_USE_PDL)
 }
 
