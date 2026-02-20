@@ -80,6 +80,7 @@ const ggml_sycl_info_stub & ggml_sycl_info() {
 #include <algorithm>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
 
 namespace ggml_sycl_unified {
 
@@ -3998,6 +3999,19 @@ struct alignas(64) DeviceOperation {
     int64_t      mask_nb3;
     int          mask_ne2;
     int          mask_ne3;
+
+    // Multi-device row-split fields (zero = single-device, no split)
+    int          row_start;      // First output row this device computes (0 for primary)
+    int          row_count;      // Number of output rows this device computes (0 = use N)
+    void *       merge_src;      // Host-pinned buffer for secondary device's partial output
+    void *       merge_dst;      // Device pointer where merged output goes (primary only)
+    float *      input_staging;  // Host-pinned activation staging (primary writes, secondary reads)
+    int *        sync_flags;     // Host-pinned atomic flag array [n_operations * n_devices]
+    int          op_idx;         // Operation index for sync flag addressing
+    int          device_idx;     // 0=primary (B580), 1=secondary (B50)
+    int          n_devices;      // Total number of GPU devices in split (0 or 1 = no split)
+    int          merge_count;    // Number of floats to merge from secondary (N - row_count)
+    int          input_K;        // K dimension for activation staging (number of floats to stage)
 };
 
 // Arguments passed to the persistent kernel
@@ -4039,6 +4053,16 @@ public:
                            sycl::nd_item<1> item)
         : args_(args), slm_(slm), item_(item) {}
 
+    // Helper to identify MUL_MAT operations that need cross-device row-split sync.
+    // Defined before run() so SYCL device code compilation can resolve the call.
+    static bool is_matmul_op(int type) {
+        const auto t = static_cast<OperationType>(type);
+        return t == OperationType::MATMUL_Q_PROJ  || t == OperationType::MATMUL_K_PROJ  ||
+               t == OperationType::MATMUL_V_PROJ  || t == OperationType::MATMUL_OUT_PROJ ||
+               t == OperationType::MATMUL_GATE    || t == OperationType::MATMUL_UP       ||
+               t == OperationType::MATMUL_DOWN    || t == OperationType::MATMUL_GATE_UP_SILU;
+    }
+
     void run() {
         const int local_id = item_.get_local_id(0);
         const int wg_id    = item_.get_group_linear_id();
@@ -4047,6 +4071,18 @@ public:
 
         for (int op_idx = 0; op_idx < args_.n_operations; op_idx++) {
             const DeviceOperation & op = args_.operations[op_idx];
+
+            // Pre-matmul sync: primary stages activation to host-pinned buffer,
+            // secondary waits for it before dispatching tiles.
+            if (is_matmul_op(op.type) && op.n_devices > 1 && op.input_staging) {
+                pre_matmul_sync(op);
+                // Barrier so all WGs see the sync result (secondary waited in WG 0)
+                if (use_split_barrier) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
+                }
+            }
 
             // Work-stealing: each work-group claims tiles atomically
             while (true) {
@@ -4077,6 +4113,23 @@ public:
                 device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ true);
             } else {
                 device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ true);
+            }
+
+            // Post-matmul sync for multi-device row-split MUL_MAT operations.
+            // After all local tiles are done, signal other device(s) and wait
+            // for their completion. Primary device merges secondary's output.
+            // Guard: require sync_flags AND input_staging to confirm this matmul
+            // was actually split. Unsplit matmuls (N_secondary<=0) have n_devices>0
+            // from KernelSplitConfig but no per-op metadata — skip sync for those.
+            if (is_matmul_op(op.type) && op.n_devices > 1 && op.sync_flags && op.input_staging) {
+                post_matmul_sync(op);
+                // Second barrier so ALL work-groups see the merged output
+                // before the next operation (RMS_NORM, ROPE, etc.) reads it.
+                if (use_split_barrier) {
+                    device_split_barrier(local_id, wg_id, /* reset_tile_counter = */ false);
+                } else {
+                    device_barrier_atomic(local_id, n_wgs, /* reset_tile_counter = */ false);
+                }
             }
         }
     }
@@ -4255,6 +4308,101 @@ private:
 
         // Synchronize within WG so all threads see the barrier completion
         sycl::group_barrier(item_.get_group());
+    }
+
+    // Cross-device synchronization for multi-device row-split persistent TG.
+    // Called after intra-device barrier for MUL_MAT ops when n_devices > 1.
+    // Only WG 0, thread 0 performs signaling/polling to minimize PCIe bus traffic.
+    // Other threads wait at the subsequent intra-device barrier.
+    // Pre-matmul sync: stages activation data for cross-device access.
+    // Primary (device 0): copies activation from device memory to host-pinned staging,
+    //   then signals flag=1 so secondary can read.
+    // Secondary (device 1+): waits for flag=1, then proceeds to dispatch matmul tiles
+    //   reading from the host-pinned input_staging buffer.
+    void pre_matmul_sync(const DeviceOperation & op) {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+
+        if (op.n_devices <= 1 || !op.sync_flags || !op.input_staging) return;
+
+        const int flag_base = op.op_idx * op.n_devices;
+
+        // NOTE: We use volatile pointers instead of sycl::atomic_ref because
+        // Intel Arc GPU's memory_scope::system atomics do NOT flush the L2
+        // cache to host-pinned memory during long-running persistent kernels.
+        // Plain writes via volatile bypass the atomic subsystem and are visible
+        // to other devices via PCIe zero-copy after the write completes.
+        // Each flag slot has a single writer, so atomic RMW is not needed.
+        volatile int * flags = op.sync_flags;
+
+        if (op.device_idx == 0) {
+            // Primary: stage activation to host-pinned buffer.
+            // WG 0, thread 0 does the copy (K floats, typically 4096 = 16KB).
+            if (wg_id == 0 && local_id == 0) {
+                const float * src = static_cast<const float *>(op.input);
+                volatile float * staging = op.input_staging;
+                for (int i = 0; i < op.input_K; i++) {
+                    staging[i] = src[i];
+                }
+                // Signal: activation is staged (single writer, volatile store)
+                flags[flag_base + 0] = 1;
+            }
+            // Other WGs don't need to wait — they proceed to compute_matmul_tile
+            // which reads from op.input (device memory, valid for primary)
+        } else {
+            // Secondary: wait for primary to stage activation
+            if (wg_id == 0 && local_id == 0) {
+                while (flags[flag_base + 0] < 1) {
+                    // Spin-wait for activation staging (volatile read)
+                }
+            }
+            // All WGs need to see the staged data — barrier ensures WG 0's
+            // wait result is visible before any WG dispatches tiles
+        }
+    }
+
+    // Post-matmul sync: signals completion and merges partial outputs.
+    // Called after all local matmul tiles are done (after device barrier).
+    // Primary: signals done (flag=2), waits for secondary (flag=2), merges output.
+    // Both devices: signal done (flag=2), wait for other device's flag>=2.
+    // Primary then merges secondary's output. No flag reset needed — each
+    // matmul uses a unique slot, zeroed at token start by memset on host.
+    void post_matmul_sync(const DeviceOperation & op) {
+        const int local_id = item_.get_local_id(0);
+        const int wg_id    = item_.get_group_linear_id();
+
+        if (op.n_devices <= 1 || !op.sync_flags || !op.input_staging) return;
+
+        // Use volatile instead of atomic_ref — see pre_matmul_sync comment
+        // about Intel Arc L2 cache not flushing system-scope atomics.
+        volatile int * flags = op.sync_flags;
+
+        if (wg_id == 0 && local_id == 0) {
+            const int flag_base = op.op_idx * op.n_devices;
+
+            // Signal: this device's MUL_MAT is done (flag value 2)
+            flags[flag_base + op.device_idx] = 2;
+
+            // Wait for all other device(s) to signal done
+            for (int d = 0; d < op.n_devices; d++) {
+                if (d == op.device_idx) continue;
+                while (flags[flag_base + d] < 2) {
+                    // Spin-wait for other device's matmul completion (volatile read)
+                }
+            }
+
+            // Primary device: merge secondary's partial output into device memory
+            if (op.device_idx == 0 && op.merge_src && op.merge_dst) {
+                const volatile float * src = static_cast<const volatile float *>(op.merge_src);
+                float *                dst = static_cast<float *>(op.merge_dst);
+                for (int i = 0; i < op.merge_count; i++) {
+                    dst[i] = src[i];
+                }
+            }
+        }
+
+        // All threads/WGs wait until WG 0 thread 0 completes the sync + merge
+        // (handled by the caller's subsequent intra-device barrier)
     }
 
     void dispatch_operation(const DeviceOperation & op, int tile_idx) {
@@ -4646,7 +4794,7 @@ private:
         const float * activations = static_cast<const float *>(op.input);
         float *       out         = static_cast<float *>(op.output);
         const int     K           = op.K;
-        const int     N           = op.N;
+        const int     N           = (op.row_count > 0) ? op.row_count : op.N;
         const int     k_blocks    = K / DMMV_QK4_0;
         if (k_blocks <= 0) return;
 
@@ -4752,7 +4900,7 @@ private:
         const float * activations = static_cast<const float *>(op.input);
         float *       out         = static_cast<float *>(op.output);
         const int     K           = op.K;
-        const int     N           = op.N;
+        const int     N           = (op.row_count > 0) ? op.row_count : op.N;
         const int     k_blocks    = K / DMMV_QK4_0;
         if (k_blocks <= 0) return;
 
@@ -5864,6 +6012,11 @@ void UnifiedKernel::add_temp_device_alloc_handle(const ggml_sycl::alloc_handle &
     current_plan_->temp_device_alloc_handles[handle.ptr] = handle;
 }
 
+void UnifiedKernel::set_split_config(const KernelSplitConfig & config) {
+    split_config_     = config;
+    split_config_set_ = true;
+}
+
 void UnifiedKernel::cancel_persistent() {
     if (current_plan_) {
         if (current_plan_->temp_device_alloc_bytes > 0 && device_id_ >= 0) {
@@ -6164,11 +6317,20 @@ void UnifiedKernel::launch_persistent_kernel() {
         dst.mask_ne2         = src.mask_ne2;
         dst.mask_ne3         = src.mask_ne3;
 
+        // Save the pre-fusion index for split metadata lookup.
+        // Fusion (below) advances i by +2, but op_meta was indexed by the original plan position.
+        const size_t pre_fusion_idx = i;
+
         // Fuse MATMUL_GATE + MATMUL_UP + SILU_MUL into a single op when the
         // dependency chain is explicit and contiguous in the persistent plan.
         // NOTE: Fusion changes the operation count and invalidates DAG indices
         // (built pre-fusion in extract_persistent_plan). Skip fusion when DAG is active.
-        if (!dag_allocated_ && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
+        // NOTE: Also skip fusion when multi-device split is active because the
+        // fused op runs pre/post_matmul_sync once (for GATE's op_idx), but the
+        // secondary kernel has separate GATE and UP ops each needing their own
+        // sync slot — fusion would deadlock the secondary's UP spin-wait.
+        const bool split_active = split_config_set_ && split_config_.n_devices > 1;
+        if (!dag_allocated_ && !split_active && src.type == OperationType::MATMUL_GATE && (i + 2) < n_ops) {
             const auto & up   = current_plan_->operations[i + 1];
             const auto & silu = current_plan_->operations[i + 2];
             const bool contiguous_chain =
@@ -6193,6 +6355,31 @@ void UnifiedKernel::launch_persistent_kernel() {
                 dst.aux    = const_cast<void *>(up.weights);  // second weight tensor
                 dst.output = silu.output;                     // fused SiLU output
                 i += 2;
+            }
+        }
+
+        // Apply multi-device split metadata if configured.
+        // Maps plan op index → DeviceOperation cross-device fields.
+        // Use pre_fusion_idx (saved before GATE+UP+SILU fusion incremented i)
+        // because op_meta was indexed by the original plan position.
+        if (split_config_set_ && split_config_.n_devices > 1) {
+            dst.device_idx = split_config_.device_idx;
+            dst.n_devices  = split_config_.n_devices;
+            dst.sync_flags = split_config_.sync_flags;
+            // Look up per-op metadata (sparse: only matmul ops have entries)
+            const int meta_idx = static_cast<int>(pre_fusion_idx);
+            if (meta_idx < (int) split_config_.op_meta.size() && split_config_.op_meta[meta_idx].row_count > 0) {
+                const auto & meta = split_config_.op_meta[meta_idx];
+                dst.op_idx        = meta.op_idx;
+                dst.row_start     = meta.row_start;
+                dst.row_count     = meta.row_count;
+                dst.merge_count   = meta.merge_count;
+                dst.merge_src     = meta.merge_src;
+                dst.merge_dst     = meta.merge_dst;
+                dst.input_staging = meta.input_staging;
+                dst.input_K       = meta.input_K;
+                // For split matmul, adjust N to row_count
+                dst.N = meta.row_count;
             }
         }
 

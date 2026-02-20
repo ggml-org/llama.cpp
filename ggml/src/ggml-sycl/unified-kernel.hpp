@@ -2558,6 +2558,27 @@ inline bool can_use_xmx(int64_t /* M */, int64_t /* N */, int64_t /* K */) {
 
 namespace ggml_sycl {
 
+// Per-operation multi-device split metadata, passed to UnifiedKernel::set_split_config()
+// to populate DeviceOperation cross-device fields during launch_persistent_kernel().
+struct SplitOpMeta {
+    int     op_idx;          // Matmul index for sync_flags addressing
+    int     row_start;       // First output row this device computes
+    int     row_count;       // Number of output rows
+    int     merge_count;     // Floats to merge from other device (0 = none)
+    void *  merge_src;       // Host-pinned buffer for secondary partial output
+    void *  merge_dst;       // Device pointer where merged output goes (primary only)
+    float * input_staging;   // Host-pinned activation staging buffer (both devices share)
+    int     input_K;         // K dimension for activation staging (floats to copy)
+};
+
+// Kernel-level split configuration, set once and applied to all ops during launch.
+struct KernelSplitConfig {
+    int *  sync_flags;       // Host-pinned atomic flag array [n_ops * n_devices]
+    int    device_idx;       // 0=primary, 1=secondary
+    int    n_devices;        // Total GPU devices in split (0 or 1 = no split)
+    std::vector<SplitOpMeta> op_meta;  // Per-matmul split metadata (indexed by plan op_idx)
+};
+
 class UnifiedKernel {
 public:
     explicit UnifiedKernel(sycl::queue & queue);
@@ -2641,6 +2662,10 @@ public:
     bool get_op_descriptor(int op_idx, OperationDescriptor & out) const;
     bool update_op_descriptor(int op_idx, const OperationDescriptor & desc);
 
+    // Multi-device split: set per-kernel split config that populates DeviceOperation
+    // cross-device fields during launch_persistent_kernel().
+    void set_split_config(const KernelSplitConfig & config);
+
     // DAG scheduling for barrier-free persistent kernel
     void build_dag(const std::vector<std::vector<int>> & successors,
                    const std::vector<int> & in_degree);
@@ -2686,6 +2711,10 @@ private:
     int *   barrier_counter_       = nullptr;
     int *   barrier_sense_         = nullptr;
     size_t  persistent_buffer_size_ = 0;
+
+    // Multi-device split configuration (set by set_split_config, consumed by launch)
+    KernelSplitConfig      split_config_;
+    bool                   split_config_set_   = false;
 
     // DAG scheduling state
     DeviceDAGState         dag_state_          = {};
