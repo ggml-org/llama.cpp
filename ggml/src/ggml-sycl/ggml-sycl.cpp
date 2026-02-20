@@ -20251,11 +20251,6 @@ static bool ggml_sycl_mul_mat_tensor_split(
         quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
             src1_ddf, src1_ddq, K, 1, K_padded, stream);
 
-        // Primary GPU MMVQ: rows [0, N_primary)
-        ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
-                                    src0_primary, nullptr, src1_ddq, dst_dd,
-                                    0, N_primary, 1, K_padded, stream);
-
         // --- Cross-device src1 staging (shared-context host-pinned for PCIe zero-copy) ---
         static float * g_split_src1_host = nullptr;
         static size_t  g_split_src1_size = 0;
@@ -20266,8 +20261,14 @@ static bool ggml_sycl_mul_mat_tensor_split(
         }
         if (!g_split_src1_host) return false;
 
-        // D2H: primary GPU device → shared-context host-pinned (accessible by both GPUs)
-        stream->memcpy(g_split_src1_host, src1->data, src1_f32_bytes).wait();
+        // D2H: src1 float32 to host (async, event-chained to B50).
+        // Placed before MMVQ so B50 can start H2D sooner.
+        sycl::event e_src1_host = stream->memcpy(g_split_src1_host, src1->data, src1_f32_bytes);
+
+        // Primary GPU MMVQ: rows [0, N_primary) — auto-follows D2H on in-order queue
+        ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
+                                    src0_primary, nullptr, src1_ddq, dst_dd,
+                                    0, N_primary, 1, K_padded, stream);
 
         // Persistent output staging buffers (shared-context host-pinned)
         static float * s_second_out_host     = nullptr;
@@ -20276,6 +20277,9 @@ static bool ggml_sycl_mul_mat_tensor_split(
         static size_t  s_second_out_dev_sz   = 0;
         static float * s_cpu_out             = nullptr;
         static size_t  s_cpu_out_sz          = 0;
+
+        // Event for B50 output D2H (default-constructed = already complete)
+        sycl::event e_b50_out;
 
         // Secondary GPU: H2D src1, Q8 quantize, MMVQ dispatch
         if (N_second > 0) {
@@ -20300,9 +20304,12 @@ static bool ggml_sycl_mul_mat_tensor_split(
             }
             if (!s_second_out_dev) return false;
 
-            // H2D: host → secondary device f32 buffer
-            stream_second->memcpy(g_split_secondary_gpu.f32_dev,
-                                   g_split_src1_host, src1_f32_bytes);
+            // H2D: host → secondary device f32 buffer (depends on D2H completion)
+            stream_second->submit([&](sycl::handler & h) {
+                h.depends_on(e_src1_host);
+                h.memcpy(g_split_secondary_gpu.f32_dev,
+                         g_split_src1_host, src1_f32_bytes);
+            });
 
             // Q8 quantize on secondary GPU (in-order queue: waits for H2D implicitly)
             quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
@@ -20327,8 +20334,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
             b50_args.dst_row_stride      = N_second;
             ggml_sycl::ggml_sycl_mmvq_bench_launch(b50_args, nullptr);
 
-            // D2H: secondary device output → host
-            stream_second->memcpy(s_second_out_host, s_second_out_dev, second_out_bytes);
+            // D2H: secondary device output → host (capture event for merge dependency)
+            e_b50_out = stream_second->memcpy(s_second_out_host, s_second_out_dev, second_out_bytes);
         }
 
         // CPU vec_dot: runs concurrently with both GPUs
@@ -20340,6 +20347,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
                 s_cpu_out_sz = s_cpu_out ? cpu_out_bytes : 0;
             }
             if (!s_cpu_out) return false;
+            // Wait for D2H of src1 to complete before CPU reads the host buffer
+            e_src1_host.wait();
             ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
                                         src0_cpu,
                                         g_split_src1_host,
@@ -20347,23 +20356,22 @@ static bool ggml_sycl_mul_mat_tensor_split(
                                         static_cast<int>(N_cpu));
         }
 
-        // --- Wait for both GPUs ---
-        stream->wait();
-        if (N_second > 0) stream_second->wait();
-
-        // --- Merge outputs to primary dst ---
+        // --- Merge outputs to primary dst (event-chained, no queue waits) ---
         if (N_second > 0) {
-            stream->memcpy(dst_dd + N_primary,
-                           s_second_out_host,
-                           N_second * sizeof(float));
+            // Merge B50 output: depends on B50 D2H completion
+            stream->submit([&](sycl::handler & h) {
+                h.depends_on(e_b50_out);
+                h.memcpy(dst_dd + N_primary,
+                         s_second_out_host,
+                         N_second * sizeof(float));
+            });
         }
         if (N_cpu > 0) {
+            // Merge CPU output: auto-follows B50 merge on in-order B580 queue.
+            // CPU vec_dot already completed (synchronous on host thread above).
             stream->memcpy(dst_dd + N_primary + N_second,
                            s_cpu_out,
                            N_cpu * sizeof(float));
-        }
-        if (N_second > 0 || N_cpu > 0) {
-            stream->wait();
         }
 
         return true;
