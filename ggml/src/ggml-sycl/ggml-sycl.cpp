@@ -108,6 +108,7 @@ static sycl::event  ggml_sycl_submit_queue_sync_event(sycl::queue & q);
 static dnnl::memory::data_type ggml_sycl_onednn_dtype(ggml_type type);
 #endif
 #include "ggml-sycl/dispatch.hpp"
+#include "ggml-sycl/ggml-sycl-bench.hpp"
 #include "ggml-sycl/gpu-sampler.hpp"
 #include "ggml-sycl/mmvq.hpp"
 #include "ggml-sycl/moe-sort.hpp"
@@ -20030,6 +20031,86 @@ static void split_staging_ensure(int dev_idx, size_t src1_bytes, size_t out_byte
     }
 }
 
+// Persistent device-side Q8 buffer for secondary GPU MMVQ dispatch.
+// Lazy-allocated on first 3-device tensor split, reused across tokens.
+static struct {
+    char * q8_dev  = nullptr;  // Q8_1 quantized src1 on secondary GPU device
+    float * f32_dev = nullptr; // f32 src1 copy on secondary GPU device (Q8 input)
+    size_t q8_size  = 0;
+    size_t f32_size = 0;
+} g_split_secondary_gpu;
+
+static void split_secondary_gpu_ensure(size_t q8_bytes, size_t f32_bytes, sycl::queue * q) {
+    if (g_split_secondary_gpu.q8_size < q8_bytes) {
+        if (g_split_secondary_gpu.q8_dev) sycl::free(g_split_secondary_gpu.q8_dev, *q);
+        g_split_secondary_gpu.q8_dev = (char *) sycl::malloc_device(q8_bytes, *q);
+        g_split_secondary_gpu.q8_size = g_split_secondary_gpu.q8_dev ? q8_bytes : 0;
+    }
+    if (g_split_secondary_gpu.f32_size < f32_bytes) {
+        if (g_split_secondary_gpu.f32_dev) sycl::free(g_split_secondary_gpu.f32_dev, *q);
+        g_split_secondary_gpu.f32_dev = (float *) sycl::malloc_device(f32_bytes, *q);
+        g_split_secondary_gpu.f32_size = g_split_secondary_gpu.f32_dev ? f32_bytes : 0;
+    }
+}
+
+// Persistent SOA weight cache for secondary GPU (bypasses unified cache).
+// Stores device pointers keyed by tensor name. Weights are loaded once (H2D + SOA
+// reorder) on first access and reused for all subsequent tokens.
+static std::unordered_map<std::string, void *> g_split_secondary_weights;
+
+// Load partial weight rows onto the secondary GPU with SOA layout.
+// src_device_aos: AOS weight data on the PRIMARY GPU (device pointer).
+// q_primary: primary GPU queue (for D2H copy).
+// q_secondary: secondary GPU queue (for H2D copy + SOA reorder).
+static const void * split_secondary_weight_get(
+        const char * name, ggml_type type, int64_t ncols, int64_t nrows,
+        const void * src_device_aos, sycl::queue * q_primary, sycl::queue * q_secondary) {
+    auto it = g_split_secondary_weights.find(name);
+    if (it != g_split_secondary_weights.end()) {
+        return it->second;
+    }
+    // First access: D2H from primary → host staging → H2D to secondary → SOA reorder
+    const size_t row_bytes   = ggml_row_size(type, ncols);
+    const size_t total_bytes = (size_t) nrows * row_bytes;
+
+    // Plain host staging (aligned_alloc avoids cross-context USM issues)
+    void * staging = aligned_alloc(64, total_bytes);
+    if (!staging) {
+        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] staging alloc failed for %s (%zu bytes)\n",
+                      name, total_bytes);
+        return nullptr;
+    }
+    // D2H: primary GPU device → plain host staging
+    q_primary->memcpy(staging, src_device_aos, total_bytes).wait();
+
+    // Allocate device memory on secondary GPU
+    void * dev_ptr = sycl::malloc_device(total_bytes, *q_secondary);
+    if (!dev_ptr) {
+        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] sycl::malloc_device failed for %s (%zu bytes)\n",
+                      name, total_bytes);
+        free(staging);
+        return nullptr;
+    }
+    // H2D: plain host staging → secondary GPU device
+    q_secondary->memcpy(dev_ptr, staging, total_bytes).wait();
+    free(staging);
+
+    // In-place AOS → SOA reorder on secondary GPU
+    bool ok = reorder_rows_to_soa(static_cast<uint8_t *>(dev_ptr), type, ncols, nrows,
+                                   total_bytes, q_secondary);
+    if (!ok) {
+        GGML_LOG_WARN("[TENSOR-SPLIT-3DEV] SOA reorder failed for %s (type=%d)\n",
+                      name, (int) type);
+        sycl::free(dev_ptr, *q_secondary);
+        return nullptr;
+    }
+    q_secondary->wait();
+    g_split_secondary_weights[name] = dev_ptr;
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT-3DEV] loaded %s on secondary GPU: %lld rows, %zu bytes\n",
+                    name, (long long) nrows, total_bytes);
+    return dev_ptr;
+}
+
 // Persistent host-pinned staging for CPU weight rows (D2H copy from AOS device data)
 static struct {
     void * data  = nullptr;
@@ -20096,14 +20177,212 @@ static bool ggml_sycl_mul_mat_tensor_split(
         layout_mode                 src0_layout) {
 
     // During graph recording, tensor split is disabled. Graph is auto-disabled
-    // for TG when tensor split is active (Task 3), so this only fires during
-    // PP recording or if graph is forced on for diagnostic purposes.
+    // for TG when tensor split is active, so this only fires during PP recording
+    // or if graph is forced on for diagnostic purposes.
     if (g_ggml_sycl_graph_recording) {
         return false;
     }
 
     const int64_t ne00 = src0->ne[0];  // K (columns)
     const int64_t ne01 = src0->ne[1];  // N (rows, output size)
+    const int     device = ctx.device;
+    sycl::queue * stream = ctx.stream();
+
+    // =====================================================================
+    // 3-device path: primary GPU + secondary GPU + CPU
+    // =====================================================================
+    if (g_split_config.gpu_count >= 2) {
+        // Compute 3-way row split, aligning GPU portions to 16 rows (MMVQ granularity)
+        int64_t N_primary = (int64_t)(ne01 * g_split_config.ratio[0]);
+        int64_t N_second  = (int64_t)(ne01 * g_split_config.ratio[1]);
+        N_primary = (N_primary + 15) & ~(int64_t) 15;
+        N_second  = (N_second  + 15) & ~(int64_t) 15;
+        int64_t N_cpu = ne01 - N_primary - N_second;
+        if (N_cpu < 0) { N_second += N_cpu; N_cpu = 0; }
+        if (N_primary < 16) return false;
+
+        GGML_SYCL_DEBUG("[TENSOR-SPLIT-3DEV] %s: N=%lld pri=%lld sec=%lld cpu=%lld\n",
+                        src0->name ? src0->name : "?",
+                        (long long) ne01, (long long) N_primary,
+                        (long long) N_second, (long long) N_cpu);
+
+        // --- Get weight pointers ---
+        const size_t src0_row_bytes = ggml_row_size(src0->type, ne00);
+
+        // Primary GPU: existing SOA device pointer
+        const char * src0_primary = (const char *) ggml_sycl_get_layout_ptr_for(
+            src0, device, src0_layout);
+        if (!src0_primary) return false;
+
+        // AOS device pointer on primary GPU (source for D2H copies to secondary/CPU)
+        const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(
+            src0, device, GGML_LAYOUT_AOS);
+        if (!src0_aos && (N_second > 0 || N_cpu > 0)) return false;
+
+        // Secondary GPU: D2H from primary AOS → host staging → H2D to B50 → SOA reorder
+        const void * src0_second = nullptr;
+        sycl::queue * stream_second = g_split_config.queue[1];
+        if (N_second > 0 && src0->name) {
+            src0_second = split_secondary_weight_get(
+                src0->name, src0->type, ne00, N_second,
+                src0_aos + N_primary * src0_row_bytes,
+                stream, stream_second);
+            if (!src0_second) return false;
+        }
+
+        // CPU: D2H from primary AOS → persistent host cache for vec_dot
+        const void * src0_cpu = nullptr;
+        if (N_cpu > 0 && src0->name) {
+            const size_t cpu_weight_bytes = N_cpu * src0_row_bytes;
+            src0_cpu = split_get_cached_weights(
+                src0->name, src0_aos, N_primary + N_second,
+                src0_row_bytes, cpu_weight_bytes, stream);
+            if (!src0_cpu) {
+                // First token: synchronous D2H fallback
+                split_weight_staging_ensure(cpu_weight_bytes, stream);
+                if (!g_split_weight_staging.data) return false;
+                stream->memcpy(g_split_weight_staging.data,
+                               src0_aos + (N_primary + N_second) * src0_row_bytes,
+                               cpu_weight_bytes).wait();
+                src0_cpu = g_split_weight_staging.data;
+            }
+        }
+
+        // --- Q8 quantize src1 and stage to devices ---
+        const int64_t K         = ne00;
+        const int64_t K_padded  = GGML_PAD(K, MATRIX_ROW_PADDING);
+        const size_t  q8_bytes  = K_padded / QK8_1 * sizeof(block_q8_1);
+        const size_t  src1_f32_bytes = K * sizeof(float);
+        float * dst_dd = (float *) dst->data;
+
+        // Primary GPU: Q8 quantize on primary queue (existing path)
+        ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(), q8_bytes);
+        char * src1_ddq = src1_q8_alloc.get();
+        const float * src1_ddf = (const float *) src1->data;
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+            src1_ddf, src1_ddq, K, 1, K_padded, stream);
+
+        // Primary GPU MMVQ: rows [0, N_primary)
+        ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
+                                    src0_primary, nullptr, src1_ddq, dst_dd,
+                                    0, N_primary, 1, K_padded, stream);
+
+        // --- Cross-device src1 staging (plain host memory, no USM context issues) ---
+        static float * g_split_src1_host = nullptr;
+        static size_t  g_split_src1_size = 0;
+        if (g_split_src1_size < src1_f32_bytes) {
+            free(g_split_src1_host);
+            g_split_src1_host = (float *) aligned_alloc(64, src1_f32_bytes);
+            g_split_src1_size = g_split_src1_host ? src1_f32_bytes : 0;
+        }
+        if (!g_split_src1_host) return false;
+
+        // D2H: primary GPU device → plain host (works with any SYCL queue)
+        stream->memcpy(g_split_src1_host, src1->data, src1_f32_bytes).wait();
+
+        // Persistent output staging buffers (plain host, cross-context safe)
+        static float * s_second_out_host     = nullptr;
+        static size_t  s_second_out_host_sz  = 0;
+        static float * s_second_out_dev      = nullptr;
+        static size_t  s_second_out_dev_sz   = 0;
+        static float * s_cpu_out             = nullptr;
+        static size_t  s_cpu_out_sz          = 0;
+
+        // Secondary GPU: H2D src1, Q8 quantize, MMVQ dispatch
+        if (N_second > 0) {
+            split_secondary_gpu_ensure(q8_bytes, src1_f32_bytes, stream_second);
+            if (!g_split_secondary_gpu.q8_dev || !g_split_secondary_gpu.f32_dev) {
+                return false;
+            }
+
+            const size_t second_out_bytes = N_second * sizeof(float);
+            // Ensure host output buffer
+            if (s_second_out_host_sz < second_out_bytes) {
+                free(s_second_out_host);
+                s_second_out_host = (float *) aligned_alloc(64, second_out_bytes);
+                s_second_out_host_sz = s_second_out_host ? second_out_bytes : 0;
+            }
+            if (!s_second_out_host) return false;
+            // Ensure device output buffer
+            if (s_second_out_dev_sz < second_out_bytes) {
+                if (s_second_out_dev) sycl::free(s_second_out_dev, *stream_second);
+                s_second_out_dev = (float *) sycl::malloc_device(second_out_bytes, *stream_second);
+                s_second_out_dev_sz = s_second_out_dev ? second_out_bytes : 0;
+            }
+            if (!s_second_out_dev) return false;
+
+            // H2D: host → secondary device f32 buffer
+            stream_second->memcpy(g_split_secondary_gpu.f32_dev,
+                                   g_split_src1_host, src1_f32_bytes);
+
+            // Q8 quantize on secondary GPU (in-order queue: waits for H2D implicitly)
+            quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                g_split_secondary_gpu.f32_dev, g_split_secondary_gpu.q8_dev,
+                K, 1, K_padded, stream_second);
+
+            // MMVQ on secondary GPU: rows [0, N_second) within partial SOA data
+            ggml_sycl::mmvq_bench_args b50_args{};
+            b50_args.stream              = stream_second;
+            b50_args.weight_type         = src0->type;
+            b50_args.layout              = GGML_LAYOUT_SOA;
+            b50_args.weights             = src0_second;
+            b50_args.layout_base         = src0_second;
+            b50_args.activations         = g_split_secondary_gpu.q8_dev;
+            b50_args.output              = s_second_out_dev;
+            b50_args.ncols               = K;
+            b50_args.nrows               = N_second;
+            b50_args.batch               = 1;
+            b50_args.row_low             = 0;
+            b50_args.row_high            = N_second;
+            b50_args.src1_padded_col_size = K_padded;
+            b50_args.dst_row_stride      = N_second;
+            ggml_sycl::ggml_sycl_mmvq_bench_launch(b50_args, nullptr);
+
+            // D2H: secondary device output → host
+            stream_second->memcpy(s_second_out_host, s_second_out_dev, second_out_bytes);
+        }
+
+        // CPU vec_dot: runs concurrently with both GPUs
+        if (N_cpu > 0) {
+            const size_t cpu_out_bytes = N_cpu * sizeof(float);
+            if (s_cpu_out_sz < cpu_out_bytes) {
+                free(s_cpu_out);
+                s_cpu_out = (float *) aligned_alloc(64, cpu_out_bytes);
+                s_cpu_out_sz = s_cpu_out ? cpu_out_bytes : 0;
+            }
+            if (!s_cpu_out) return false;
+            ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
+                                        src0_cpu,
+                                        g_split_src1_host,
+                                        s_cpu_out,
+                                        static_cast<int>(N_cpu));
+        }
+
+        // --- Wait for both GPUs ---
+        stream->wait();
+        if (N_second > 0) stream_second->wait();
+
+        // --- Merge outputs to primary dst ---
+        if (N_second > 0) {
+            stream->memcpy(dst_dd + N_primary,
+                           s_second_out_host,
+                           N_second * sizeof(float));
+        }
+        if (N_cpu > 0) {
+            stream->memcpy(dst_dd + N_primary + N_second,
+                           s_cpu_out,
+                           N_cpu * sizeof(float));
+        }
+        if (N_second > 0 || N_cpu > 0) {
+            stream->wait();
+        }
+
+        return true;
+    }
+
+    // =====================================================================
+    // 2-device path: primary GPU + CPU (legacy)
+    // =====================================================================
 
     // Compute split — align N_gpu to 16 rows (SOA MMVQ work-group granularity)
     int64_t N_cpu = ne01 * cpu_pct / 100;
@@ -20120,18 +20399,14 @@ static bool ggml_sycl_mul_mat_tensor_split(
     }
 
     // Get AOS device pointer for weight data (needed for D2H copy of CPU rows)
-    const int device = ctx.device;
     const char * src0_aos = (const char *) ggml_sycl_get_layout_ptr_for(src0, device, GGML_LAYOUT_AOS);
     if (!src0_aos) {
         return false;  // no AOS device data available
     }
 
-    GGML_SYCL_DEBUG("[TENSOR-SPLIT] %s: N=%lld N_gpu=%lld N_cpu=%lld cpu_pct=%d%s\n",
+    GGML_SYCL_DEBUG("[TENSOR-SPLIT] %s: N=%lld N_gpu=%lld N_cpu=%lld cpu_pct=%d\n",
                     src0->name ? src0->name : "?",
-                    (long long) ne01, (long long) N_gpu, (long long) N_cpu, cpu_pct,
-                    g_ggml_sycl_graph_recording ? " [RECORDING]" : "");
-
-    sycl::queue * stream = ctx.stream();
+                    (long long) ne01, (long long) N_gpu, (long long) N_cpu, cpu_pct);
 
     const size_t src1_bytes      = ggml_nbytes(src1);
     const size_t src0_row_bytes  = ggml_row_size(src0->type, ne00);
@@ -20142,7 +20417,7 @@ static bool ggml_sycl_mul_mat_tensor_split(
     void * overlap_weights = nullptr;
     bool   src1_prestaged  = false;
 
-    if (!g_ggml_sycl_graph_recording) {
+    {
         // Weight lookup (instant after first token; first call triggers D2H + .wait())
         if (src0->name) {
             overlap_weights = split_get_cached_weights(
@@ -20167,7 +20442,6 @@ static bool ggml_sycl_mul_mat_tensor_split(
     }
 
     // --- GPU portion: partial MMVQ for rows [0, N_gpu) ---
-    // This is captured into the graph during recording, or executed immediately.
     const int64_t K         = ne00;
     const int64_t K_padded  = GGML_PAD(K, MATRIX_ROW_PADDING);
     const size_t  q8_1_size = K_padded / QK8_1 * sizeof(block_q8_1);
