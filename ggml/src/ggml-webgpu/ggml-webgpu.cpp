@@ -2074,14 +2074,15 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
     std::vector<webgpu_command>            commands;
     std::vector<webgpu_submission_futures> futures;
-    uint32_t                               total_kernels = 0;
+    uint32_t                               num_batched_kernels = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes[i])) {
             commands.push_back(*cmd);
-            total_kernels += cmd.value().num_kernels;
+            num_batched_kernels += cmd.value().num_kernels;
         }
 
-        if (total_kernels >= WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
+        if (num_batched_kernels >= WEBGPU_COMMAND_SUBMIT_BATCH_SIZE) {
+            num_batched_kernels = 0;
             futures.push_back(ggml_backend_webgpu_submit(ctx->global_ctx, commands, ctx->param_buf_pool,
                                                          &ctx->set_rows_error_buf_pool));
             // Process events and check for completed submissions
