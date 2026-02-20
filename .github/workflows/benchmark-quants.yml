@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential python3-pip
-          pip3 install torch transformers sentencepiece protobuf safetensors --break-system-packages
+          pip3 install torch transformers sentencepiece protobuf safetensors "huggingface_hub[cli]" --break-system-packages
 
       - name: Build llama.cpp
         run: |
