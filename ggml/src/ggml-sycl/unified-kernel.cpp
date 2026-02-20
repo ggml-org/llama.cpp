@@ -4310,17 +4310,12 @@ private:
     // Called after intra-device barrier for MUL_MAT ops when n_devices > 1.
     // Only WG 0, thread 0 performs signaling/polling to minimize PCIe bus traffic.
     // Other threads wait at the subsequent intra-device barrier.
-    // Pre-matmul sync: stages activation data for cross-device access.
-    // Primary (device 0): copies activation from device memory to host-pinned staging,
-    //   then signals flag=1 so secondary can read.
-    // Secondary (device 1+): waits for flag=1, then proceeds to dispatch matmul tiles
-    //   reading from the host-pinned input_staging buffer.
-    // Host-mediated sync: primary polls merge_complete from the PREVIOUS matmul.
-    // The host coordinator writes to merge_complete (device memory) via H2D copy
-    // after staging the secondary's partial output. Primary reads it with a
-    // device-local atomic — this works because both the writer (H2D memcpy by
-    // host) and reader (persistent kernel atomic) operate on sycl::malloc_device
-    // memory, which has coherent access on Intel Arc GPUs.
+    // Pre-matmul sync: waits for host coordinator to finish merging the previous matmul.
+    // After the secondary GPU completes its MMVQ partial output, the host coordinator
+    // merges results and writes merge_complete (device memory) via H2D BCS memcpy.
+    // Primary polls merge_complete with a device-local atomic_ref — this works because
+    // both the BCS writer (H2D memcpy) and kernel reader (atomic_ref) operate on
+    // sycl::malloc_device memory, and BCS bypasses the GPU L2 cache.
     //
     // Secondary device: not a persistent kernel — host launches per-op MMVQ
     // kernels, so this method is only called on the primary.

@@ -19939,8 +19939,8 @@ static void ensure_split_persistent_resources(
                     && r.q8_staging_size >= need_q8
                     && r.progress_counter && r.merge_complete) {
         // Zero counters for the new token
-        { int z = 0; primary_queue.memcpy(r.progress_counter, &z, sizeof(int)).wait(); }  // Device-local: H2D zero
         int zero = 0;
+        primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();
         primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
         return;
     }
@@ -20003,8 +20003,8 @@ static void ensure_split_persistent_resources(
         }
     }
     // Zero both counters
-    { int z = 0; primary_queue.memcpy(r.progress_counter, &z, sizeof(int)).wait(); }  // Device-local: H2D zero
     int zero = 0;
+    primary_queue.memcpy(r.progress_counter, &zero, sizeof(int)).wait();
     primary_queue.memcpy(r.merge_complete, &zero, sizeof(int)).wait();
 
     // Allocate q8_1 staging buffer on secondary device for input quantization
