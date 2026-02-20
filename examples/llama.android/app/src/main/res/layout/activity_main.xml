@@ -7,17 +7,18 @@
     android:layout_height="match_parent"
     android:fitsSystemWindows="true">
 
-    <!-- ── Ana içerik ── -->
+    <!-- Ana içerik -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:background="#121212">
 
         <androidx.appcompat.widget.Toolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:background="#6200EE"
+            android:background="#1E1E1E"
             android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar"
             app:navigationIcon="@drawable/ic_menu_hamburger"
             app:title="LLaMA Chat" />
@@ -27,6 +28,7 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
+            android:background="#121212"
             android:clipToPadding="false"
             android:padding="8dp"
             android:scrollbars="vertical" />
@@ -34,6 +36,7 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:background="#1E1E1E"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:padding="8dp">
@@ -43,7 +46,10 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
+                android:background="@null"
                 android:hint="Mesaj yazın..."
+                android:textColorHint="#666666"
+                android:textColor="#E0E0E0"
                 android:imeOptions="actionSend"
                 android:inputType="textMultiLine"
                 android:maxLines="4"
@@ -54,26 +60,26 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
+                android:backgroundTint="#5C5FE0"
                 android:contentDescription="Gönder" />
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ── Sol çekmece ── -->
+    <!-- Sol çekmece -->
     <LinearLayout
         android:id="@+id/nav_drawer"
         android:layout_width="280dp"
         android:layout_height="match_parent"
         android:layout_gravity="start"
-        android:background="#FAFAFA"
+        android:background="#1A1A1A"
         android:elevation="8dp"
         android:fitsSystemWindows="true"
         android:orientation="vertical">
 
-        <!-- Başlık -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="?attr/actionBarSize"
-            android:background="#6200EE"
+            android:background="#1E1E1E"
             android:gravity="center_vertical"
             android:paddingStart="16dp"
             android:paddingEnd="8dp">
@@ -83,17 +89,17 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="Sohbet Geçmişi"
-                android:textColor="#FFFFFF"
+                android:textColor="#E0E0E0"
                 android:textSize="17sp"
                 android:textStyle="bold" />
 
             <Button
-                android:id="@+id/btn_new_chat"
                 style="@style/Widget.AppCompat.Button.Borderless"
+                android:id="@+id/btn_new_chat"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="+ Yeni"
-                android:textColor="#FFFFFF"
+                android:textColor="#5C5FE0"
                 android:textSize="13sp" />
         </LinearLayout>
 
