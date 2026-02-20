@@ -488,13 +488,24 @@ std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser:
 }
 
 std::optional<common_json> common_chat_msg_parser::try_consume_json() {
+    // Skip leading whitespace - JSON values never start with whitespace, and models often
+    // output newlines/spaces between tags and JSON content (e.g., "<function=name>\n  {...}")
+    auto saved_pos = pos_;
+    consume_spaces();
+
     auto it = input_.cbegin() + pos_;
     const auto end = input_.cend();
     common_json result;
     if (!common_json_parse(it, end, healing_marker_, result)) {
+        // Restore position if parsing failed - don't consume whitespace without a successful parse
+        pos_ = saved_pos;
         return std::nullopt;
     }
     pos_ = std::distance(input_.cbegin(), it);
+
+    // Consume trailing whitespace after successful JSON parse
+    consume_spaces();
+
     if (result.healing_marker.marker.empty()) {
         // No healing marker, just return the parsed json
         return result;
