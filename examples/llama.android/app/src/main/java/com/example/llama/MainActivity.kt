@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import com.example.llama.Llm
 
 class MainActivity : AppCompatActivity() {
 
@@ -260,7 +261,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 llm.send(text, loadedModelPath!!)
-                    .collect { token ->
+                    .collect { token: String ->
                         fullResponse += token
                         messageAdapter.updateLastAssistantMessage(fullResponse)
                         messagesRv.scrollToPosition(currentMessages.size - 1)
