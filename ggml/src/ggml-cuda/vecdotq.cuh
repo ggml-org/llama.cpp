@@ -344,7 +344,7 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
     }
 
     // kvalues_mxfp4 are the integer E2M1 values (0,1,2,3,4,6,8,12,...), scale is FP16
-    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1->ds);
     return d * sumi;
 }
 
@@ -1230,7 +1230,7 @@ static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1(
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const float d = __half2float(bq4->d) * __low2float(bq8_1->ds);
+    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1->ds);
     return d * sumi;
 }
 
@@ -1258,6 +1258,6 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const int ls = ((bq4->scales_l[iqs/8] >> (iqs & 0x04)) & 0x0F) | (((bq4->scales_h >> (iqs/2)) & 0x03) << 4);
     sumi *= ls - 32;
 
-    const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
+    const float d = ggml_cuda_ue4m3_to_fp32(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }

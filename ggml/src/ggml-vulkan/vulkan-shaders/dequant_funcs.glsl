@@ -474,7 +474,7 @@ vec2 get_dm(uint ib, uint a_offset) {
 
 #if defined(DATA_A_NVFP4)
 vec2 get_dm(uint ib, uint a_offset) {
-    return vec2(float(data_a[a_offset + ib].d), 0);
+    return vec2(ue4m3_to_fp32(data_a[a_offset + ib].d), 0);
 }
 #endif
 

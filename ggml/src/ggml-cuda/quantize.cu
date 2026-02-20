@@ -70,6 +70,32 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     return static_cast<uint8_t>(biased);
 }
 
+// Convert float to UE4M3 (unsigned, 4 exp bits bias=7, 3 mantissa bits, max=448)
+__device__ __forceinline__ uint8_t compute_ue4m3_scale(float x) {
+    if (!(x > 0.0f)) return 0;
+    if (x > 448.0f) x = 448.0f;
+    uint32_t bits;
+    memcpy(&bits, &x, 4);
+    int fp32_exp = ((bits >> 23) & 0xFF) - 127;
+    int fp32_man = (bits >> 20) & 0x7;
+    int ue4m3_exp = fp32_exp + 7;
+    if (ue4m3_exp <= 0) return 0;
+    if (ue4m3_exp >= 15) return 0x7E; // max normal
+    int round_bit = (bits >> 19) & 1;
+    int ue4m3_man = fp32_man + round_bit;
+    if (ue4m3_man > 7) { ue4m3_man = 0; ue4m3_exp++; if (ue4m3_exp >= 15) return 0x7E; }
+    return (uint8_t)((ue4m3_exp << 3) | ue4m3_man);
+}
+
+// UE4M3 to float (raw, no 0.5 factor — for B quantization inverse scale)
+__device__ __forceinline__ float ue4m3_to_fp32_raw(uint8_t x) {
+    if (x == 0) return 0.0f;
+    int exp = (x >> 3) & 0xF;
+    int man = x & 0x7;
+    if (exp == 0) return ldexpf((float)man, -9);
+    return ldexpf(1.0f + (float)man / 8.0f, exp - 7);
+}
+
 // quantize values in the format mxfp4 is stored which is interleaved nibbles
 // i.e. a block a0-a31 is represented as a0a16,a1a17 ...a15a31
 static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
@@ -340,4 +366,73 @@ void quantize_mmq_mxfp4_cuda(const float *                    x,
     const dim3    block_size(WARP_SIZE, nwarps, 1);
 
     quantize_mmq_mxfp4<<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+}
+
+// NVFP4 B quantization: per-16-element UE4M3 scales, NVFP4 nibble layout
+static __global__ void quantize_mmq_nvfp4(const float * __restrict__ x,
+                                          const int32_t * __restrict__ ids,
+                                          void * __restrict__ vy,
+                                          const int64_t ne00, const int64_t s01,
+                                          const int64_t s02, const int64_t s03,
+                                          const int64_t ne0, const int ne1, const int ne2) {
+    constexpr int vals_per_warp = 64;
+    const int warp_id = threadIdx.y, lane_id_32 = threadIdx.x, nwarps = blockDim.y;
+    const int64_t warp_start_offset = (blockIdx.y * nwarps + warp_id) * vals_per_warp;
+    if (warp_start_offset >= ne0) return;
+
+    const int64_t i1 = blockIdx.x, i2 = blockIdx.z % ne2, i3 = blockIdx.z / ne2;
+    const int64_t i01 = ids ? ids[i1] : i1;
+
+    block_fp4_mmq * y = (block_fp4_mmq *) vy;
+    const int64_t block_fp4_mmq_size = 8 * QK_MXFP4;
+    const int64_t ib0 = blockIdx.z * ((int64_t) ne1 * (ne0 / block_fp4_mmq_size));
+    const int64_t ib = ib0 + (warp_start_offset / block_fp4_mmq_size) * ne1 + blockIdx.x;
+    const int64_t quad_idx = (warp_start_offset % block_fp4_mmq_size) / vals_per_warp;
+
+    char * yqs = (char *) y[ib].qs;
+    const int64_t base_pos = i3 * s03 + i2 * s02 + i01 * s01;
+    uint8_t scales[4];
+
+#pragma unroll
+    for (int g = 0; g < 4; ++g) {
+        const int lane16 = lane_id_32 % 16;
+        const int64_t i0 = warp_start_offset + g * 16 + lane16;
+        const float xi = (i0 < ne00 && lane_id_32 < 16) ? x[base_pos + i0] : 0.0f;
+
+        float amax = fabsf(xi);
+#pragma unroll
+        for (int mask = 8; mask > 0; mask >>= 1)
+            amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, WARP_SIZE));
+
+        // Use hardware E4M3 conversion for exact scale
+        const float scale_f = amax / 6.0f;
+        __nv_fp8_e4m3 scale_fp8(scale_f);
+        const uint8_t ue4m3 = *(uint8_t*)&scale_fp8 & 0x7F;
+        scales[g] = ue4m3;
+        // Use hardware float conversion for exact inverse
+        const float scale_back = (float)scale_fp8;
+        const float inv_s = (scale_back == 0.0f) ? 0.0f : __frcp_rn(scale_back);
+
+        const uint8_t q = ggml_cuda_float_to_fp4_e2m1(xi, inv_s);
+        const uint8_t q_lo = __shfl_sync(0xFFFFFFFF, q, lane16, WARP_SIZE);
+        const uint8_t q_hi = __shfl_sync(0xFFFFFFFF, q, lane16 + 8, WARP_SIZE);
+        if (lane_id_32 < 8)
+            yqs[quad_idx * 32 + g * 8 + lane_id_32] = (char)((q_hi << 4) | q_lo);
+    }
+
+    if (lane_id_32 == 0)
+        y[ib].d4[quad_idx] = (uint32_t)scales[0] | ((uint32_t)scales[1] << 8) |
+                              ((uint32_t)scales[2] << 16) | ((uint32_t)scales[3] << 24);
+}
+
+void quantize_mmq_nvfp4_cuda(const float * x, const int32_t * ids, void * vy,
+                             [[maybe_unused]] const ggml_type type_src0,
+                             const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+                             const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+                             cudaStream_t stream) {
+    GGML_ASSERT(ne0 % (2 * QK_MXFP4) == 0);
+    constexpr int nwarps = 8, vals_per_block = nwarps * 64;
+    const dim3 num_blocks(ne1, (ne0 + vals_per_block - 1) / vals_per_block, ne2 * ne3);
+    quantize_mmq_nvfp4<<<num_blocks, dim3(WARP_SIZE, nwarps, 1), 0, stream>>>(
+        x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
 }

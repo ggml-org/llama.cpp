@@ -899,14 +899,14 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
         const __m512 scale = _mm512_set_ps(
-            dy1 * GGML_CPU_FP16_TO_FP32(x3->d), dy1 * GGML_CPU_FP16_TO_FP32(x3->d),
-            dy1 * GGML_CPU_FP16_TO_FP32(x3->d), dy1 * GGML_CPU_FP16_TO_FP32(x3->d),
-            dy1 * GGML_CPU_FP16_TO_FP32(x2->d), dy1 * GGML_CPU_FP16_TO_FP32(x2->d),
-            dy1 * GGML_CPU_FP16_TO_FP32(x2->d), dy1 * GGML_CPU_FP16_TO_FP32(x2->d),
-            dy0 * GGML_CPU_FP16_TO_FP32(x1->d), dy0 * GGML_CPU_FP16_TO_FP32(x1->d),
-            dy0 * GGML_CPU_FP16_TO_FP32(x1->d), dy0 * GGML_CPU_FP16_TO_FP32(x1->d),
-            dy0 * GGML_CPU_FP16_TO_FP32(x0->d), dy0 * GGML_CPU_FP16_TO_FP32(x0->d),
-            dy0 * GGML_CPU_FP16_TO_FP32(x0->d), dy0 * GGML_CPU_FP16_TO_FP32(x0->d));
+            dy1 * ggml_ue4m3_to_fp32(x3->d), dy1 * ggml_ue4m3_to_fp32(x3->d),
+            dy1 * ggml_ue4m3_to_fp32(x3->d), dy1 * ggml_ue4m3_to_fp32(x3->d),
+            dy1 * ggml_ue4m3_to_fp32(x2->d), dy1 * ggml_ue4m3_to_fp32(x2->d),
+            dy1 * ggml_ue4m3_to_fp32(x2->d), dy1 * ggml_ue4m3_to_fp32(x2->d),
+            dy0 * ggml_ue4m3_to_fp32(x1->d), dy0 * ggml_ue4m3_to_fp32(x1->d),
+            dy0 * ggml_ue4m3_to_fp32(x1->d), dy0 * ggml_ue4m3_to_fp32(x1->d),
+            dy0 * ggml_ue4m3_to_fp32(x0->d), dy0 * ggml_ue4m3_to_fp32(x0->d),
+            dy0 * ggml_ue4m3_to_fp32(x0->d), dy0 * ggml_ue4m3_to_fp32(x0->d));
 
         accum512 = _mm512_fmadd_ps(scale, _mm512_cvtepi32_ps(p32), accum512);
     }
@@ -944,11 +944,11 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
         const __m256 scale0 = _mm256_blend_ps(
-            _mm256_set1_ps(dy0 * GGML_CPU_FP16_TO_FP32(x0->d)),
-            _mm256_set1_ps(dy0 * GGML_CPU_FP16_TO_FP32(x1->d)), 0xF0);
+            _mm256_set1_ps(dy0 * ggml_ue4m3_to_fp32(x0->d)),
+            _mm256_set1_ps(dy0 * ggml_ue4m3_to_fp32(x1->d)), 0xF0);
         const __m256 scale1 = _mm256_blend_ps(
-            _mm256_set1_ps(dy1 * GGML_CPU_FP16_TO_FP32(x2->d)),
-            _mm256_set1_ps(dy1 * GGML_CPU_FP16_TO_FP32(x3->d)), 0xF0);
+            _mm256_set1_ps(dy1 * ggml_ue4m3_to_fp32(x2->d)),
+            _mm256_set1_ps(dy1 * ggml_ue4m3_to_fp32(x3->d)), 0xF0);
 
         accum  = _mm256_fmadd_ps(scale0, _mm256_cvtepi32_ps(p32_0), accum);
         accum2 = _mm256_fmadd_ps(scale1, _mm256_cvtepi32_ps(p32_1), accum2);
@@ -979,8 +979,8 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         // Scale: low 4 floats get dy*d0, high 4 floats get dy*d1
         const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
         const __m256 scale = _mm256_blend_ps(
-            _mm256_set1_ps(dy * GGML_CPU_FP16_TO_FP32(x0->d)),
-            _mm256_set1_ps(dy * GGML_CPU_FP16_TO_FP32(x1->d)),
+            _mm256_set1_ps(dy * ggml_ue4m3_to_fp32(x0->d)),
+            _mm256_set1_ps(dy * ggml_ue4m3_to_fp32(x1->d)),
             0xF0);  // 0xF0 = high 4 elements from second operand
 
         accum = _mm256_fmadd_ps(scale, _mm256_cvtepi32_ps(p32), accum);
@@ -993,8 +993,8 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const block_nvfp4 * x0 = &x[2*ib + 0];
         const block_nvfp4 * x1 = &x[2*ib + 1];
 
-        const float d0 = GGML_CPU_FP16_TO_FP32(x0->d);
-        const float d1 = GGML_CPU_FP16_TO_FP32(x1->d);
+        const float d0 = ggml_ue4m3_to_fp32(x0->d);
+        const float d1 = ggml_ue4m3_to_fp32(x1->d);
         const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
 
         int sumi0_lo = 0, sumi0_hi = 0;
