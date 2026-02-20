@@ -38,7 +38,7 @@ Before submitting your PR:
   - Avoid combining unrelated changes in a single PR
   - For intricate features, consider opening a feature request first to discuss and align expectations
   - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
-  - Since it's very easy to propose new quantization schemes and very hard to verify them without concrete data, the *minimum* requirement for a new quantization scheme to be considered is:
+  - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
     - providing a model GGUF quantized in the new scheme
     - providing perplexity comparisons to Q8 as well as to surrounding quants
     - providing KLD divergence data calculated from the Q8 version for both the new quant as well as the surrounding quants
