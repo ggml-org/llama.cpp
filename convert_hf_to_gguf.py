@@ -2665,7 +2665,8 @@ class LlamaModel(TextModel):
             # Eagle-3 llama checkpoint special weights handling
             # fc.weight: feature fusion layer
             if name == "fc.weight":
-                return [(name, data_torch)]
+                yield (name, data_torch)
+                return
             # d2t: draft to target vocabulary mapping
             elif name == "d2t":
                 # Skip parent class processing (store for manual handling in prepare_tensors)
@@ -2678,7 +2679,8 @@ class LlamaModel(TextModel):
                 return []
             # hidden_norm: EAGLE-3 specific layer normalization
             elif name == "model.layers.0.hidden_norm.weight":
-                return [("blk.0.hidden_norm.weight", data_torch)]
+                yield ("blk.0.hidden_norm.weight", data_torch)
+                return
 
         n_head = self.find_hparam(["n_heads", "num_attention_heads"])
         n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
