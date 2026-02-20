@@ -117,7 +117,6 @@ static void ssm_conv_thread_f32_f32(struct htp_ops_context * octx, uint32_t nth,
         }
     }
 
-
     t2 = HAP_perf_get_qtimer_count();
 
     FARF(HIGH, "ssm-conv-f32 %d/%d: %ux%ux%ux%u (%u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n",
@@ -126,8 +125,7 @@ static void ssm_conv_thread_f32_f32(struct htp_ops_context * octx, uint32_t nth,
          dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-// HVX FP32 SSM_CONV implementation
-// Vectorizes across d_inner dimension, processing 32 inner dims at once
+// HVX FP32 SSM_CONV implementation - vectorizes across d_inner dimension
 static void ssm_conv_thread_f32_f32_hvx(struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_ssm_conv_preamble;
 
@@ -156,44 +154,53 @@ static void ssm_conv_thread_f32_f32_hvx(struct htp_ops_context * octx, uint32_t 
         return;  // No work for this thread
     }
 
-    // gather op src0 offsets
+    // src0 gather offsets
     uint32_t src0_offsets[VLEN_FP32] = { 0 };
     for (uint32_t i = 0; i < VLEN_FP32; ++i) {
         src0_offsets[i] = i * (ncs) * sizeof(float);
     }
+    uint32_t src0_gather_len = VLEN * ncs;
 
-    // gather op src1 offsets
+    // src1 gather offsets
     uint32_t src1_offsets[VLEN_FP32] = { 0 };
     for (uint32_t i = 0; i < VLEN_FP32; ++i) {
         src1_offsets[i] = i * (d_conv) * sizeof(float);
     }
-
-    uint32_t src0_gather_len = (src0->ne[0] * src0->ne[1] * src0->ne[2] * src0->ne[3]) * sizeof(float);
-    uint32_t src1_gather_len = (src1->ne[0] * dr * src1->ne[2] * src1->ne[3]) * sizeof(float);
+    uint32_t src1_gather_len = VLEN * d_conv;
 
     HVX_Vector * src0_vec = (HVX_Vector *) (octx->ctx->vtcm_base + ith * VLEN);
     HVX_Vector * src1_vec = (HVX_Vector *) (octx->ctx->vtcm_base + 1024 + ith * VLEN);
 
+    float * data_src0 = (float *) ((char *) src0->data + ir0*(src0->nb[1]));
+    float * data_src1 = (float *) ((char *) src1->data + ir0*(src1->nb[1]));
+
+    uint8_t * spad_src0 = octx->src0_spad.data + ith * octx->src0_spad.size_per_thread;
+    uint8_t * spad_src1 = octx->src1_spad.data + ith * octx->src1_spad.size_per_thread;
+
+    memcpy(spad_src1, data_src1, octx->src1_spad.size_per_thread);
+
     for (uint32_t i3 = 0; i3 < n_s; ++i3) {
+        float * src0_data_ptr = (float *) ((char *) data_src0 + i3 * (src0->nb[2]));
+
+        memcpy(spad_src0, src0_data_ptr, octx->src0_spad.size_per_thread);
+
         for (uint32_t i2 = 0; i2 < n_t; ++i2) {
             for (uint32_t i1 = 0; i1 < ir; i1 += VLEN_FP32) {
                 HVX_Vector acc_vec = Q6_V_vzero();
 
                 for (uint32_t i0 = 0; i0 < d_conv; ++i0) {
-                    // src0 -> {d_conv, d_inner, n_s}
-                    const float * src0_ptr = (const float *) ((const char *) octx->src0_spad.data + (i0 + i1*ncs) * sizeof(float) + ir0*(src0->nb[1]) + i2*(src0->nb[0]) + i3*(src0->nb[2]));
-                    // src1 -> {d_conv, d_inner}
-                    const float * src1_ptr = (const float *) ((const char *) octx->src1_spad.data  + (i0 + i1*nc) * sizeof(float) + ir0*(src1->nb[1]));
-
-                    Q6_vgather_ARMVw(src0_vec, SCATTER_TYPE(src0_ptr), src0_gather_len, (*(const HVX_Vector *) src0_offsets));
-                    Q6_vgather_ARMVw(src1_vec, SCATTER_TYPE(src1_ptr), src1_gather_len, (*(const HVX_Vector *) src1_offsets));
+                    Q6_vgather_ARMVw(src0_vec,
+                                     SCATTER_TYPE(spad_src0 + (i0 + i1 * ncs) * sizeof(float) + i2 * (src0->nb[0])),
+                                     src0_gather_len, (*(const HVX_Vector *) src0_offsets));
+                    Q6_vgather_ARMVw(src1_vec,
+                                     SCATTER_TYPE(spad_src1 + (i0 + i1 * nc) * sizeof(float)),
+                                     src1_gather_len, (*(const HVX_Vector *) src1_offsets));
 
                     HVX_Vector prod = Q6_Vqf32_vmpy_VsfVsf(*(const HVX_Vector *) src0_vec, *(const HVX_Vector *) src1_vec);
                     acc_vec         = Q6_Vqf32_vadd_Vqf32Vqf32(acc_vec, prod);
                 }
 
-                // dst -> {d_inner, n_t, n_s}
-                float * dst_ptr = (float *) ((char *) octx->dst_spad.data  + i1*sizeof(float) + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2]));
+                float * dst_ptr = (float *) ((char *) dst->data  + i1*sizeof(float) + ir0*(dst->nb[0]) + i2*(dst->nb[1]) + i3*(dst->nb[2]));
                 HVX_Vector result_vec   = Q6_Vsf_equals_Vqf32(acc_vec);
                 *(HVX_Vector *) dst_ptr = result_vec;
             }
@@ -218,8 +225,6 @@ static void ssm_conv_work_f32_f32_hvx(unsigned int nth, unsigned int ith, void *
     ssm_conv_thread_f32_f32_hvx(octx, nth, ith);
 }
 
-float tmp_dst[4096] = { 0.0f };
-
 int op_ssm_conv_f32(struct htp_ops_context * octx) {
     htp_ssm_conv_tensors_preamble;
 
@@ -232,8 +237,8 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
 
     const uint32_t d_conv  = src1->ne[0];
     const uint32_t d_inner = src0->ne[1];
-    const uint32_t n_t =  dst->ne[1];        // tokens per sequence
-    const uint32_t n_s =  dst->ne[2];        // number of sequences in the batch
+    const uint32_t n_t     = dst->ne[1];  // tokens per sequence
+    const uint32_t n_s     = dst->ne[2];  // number of sequences in the batch
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         const uint32_t n_jobs = MIN(octx->n_threads, d_inner);
@@ -244,21 +249,21 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
                              hex_is_aligned((void *) src1->data, VLEN) &&
                              hex_is_aligned((void *) dst->data, VLEN);
 
-            if (is_aligned && n_t > 8) {
+            if (is_aligned && n_t > 3) {
                 use_hvx = 1;
             }
-
-            FARF(HIGH, "ssm-conv-f32: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : use_hvx %d is_aligned %d\n",
-                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
-                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], use_hvx, is_aligned);
         }
 
-        // rows per thread
-        const int dr = (src0->ne[1] + n_jobs - 1) / n_jobs;
+        FARF(HIGH, "ssm-conv-f32: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : use_hvx %d\n",
+                src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], use_hvx);
+
+        // chunks per thread
+        const int dr = (d_inner + n_jobs - 1) / n_jobs;
 
         octx->dst_spad.size_per_thread  = hex_round_up(dr * ne1 * ne2 * ne3 * sizeof(float), 256);
-        octx->src0_spad.size_per_thread = hex_round_up(ne00 * dr * ne02 * ne03 * sizeof(float), 256);
-        octx->src1_spad.size_per_thread = hex_round_up(ne10 * dr * ne12 * ne13 * sizeof(float), 256);
+        octx->src0_spad.size_per_thread = hex_round_up(ne00 * dr * sizeof(float), 256);
+        octx->src1_spad.size_per_thread = hex_round_up(ne10 * dr * sizeof(float), 256);
 
         octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
         octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
@@ -268,23 +273,13 @@ int op_ssm_conv_f32(struct htp_ops_context * octx) {
         octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
         octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
 
-        FARF(ERROR,
-             "ssm_conv: dr: %u spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-per-thread-data:(%p:%p:%p)\n", dr,
+        FARF(HIGH, "ssm_conv-f32: spad-per-thread:(%u:%u:%u) spad-sizes:(%u:%u:%u) spad-data:(%p:%p:%p)\n",
              octx->src0_spad.size_per_thread, octx->src1_spad.size_per_thread, octx->dst_spad.size_per_thread,
              octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size, octx->src0_spad.data,
              octx->src1_spad.data, octx->dst_spad.data);
 
         if (use_hvx) {
-            //// Remove me
-            //worker_pool_run_func(octx->ctx->worker_pool, ssm_conv_work_f32_f32, octx, n_jobs);
-            //memcpy((uint8_t *) tmp_dst, (const float *) dst->data, 4096);
-
-            memcpy(octx->src0_spad.data, (const uint8_t *) src0->data, octx->src0_spad.size);
-            memcpy(octx->src1_spad.data, (const uint8_t *) src1->data, octx->src1_spad.size);
-
             worker_pool_run_func(octx->ctx->worker_pool, ssm_conv_work_f32_f32_hvx, octx, n_jobs);
-
-            memcpy((uint8_t *) dst->data, octx->dst_spad.data, octx->dst_spad.size);
         } else {
             worker_pool_run_func(octx->ctx->worker_pool, ssm_conv_work_f32_f32, octx, n_jobs);
         }
