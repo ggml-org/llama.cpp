@@ -3824,7 +3824,7 @@ static void test_template_output_peg_parsers() {
             t.params.tools = {special_function_tool};
 
             t.expect = message_assist_call_content;
-        });      
+        });
     }
 
     {

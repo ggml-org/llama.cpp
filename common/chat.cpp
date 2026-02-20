@@ -1904,7 +1904,6 @@ static common_chat_params common_chat_params_init_gigachat_v3(
             {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, tool_call_start_prefix}
         };
     }
-        
     return data;
 }
 
@@ -3296,7 +3295,7 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<|tool_response:result|>") != std::string::npos) {
         return common_chat_params_init_solar_open(tmpl, params);
     }
-    
+
     // GigaChatV3 format detection
     if (src.find("<|role_sep|>") != std::string::npos && src.find("<|message_sep|>") != std::string::npos) {
         return common_chat_params_init_gigachat_v3(tmpl, params);

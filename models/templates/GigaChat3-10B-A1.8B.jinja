@@ -3,7 +3,7 @@
 {#---------------------------------------------------------------
   Converts JSON Schema (dict) to a TypeScript type definition
 ----------------------------------------------------------------#}
-{%- macro json_schema_to_typescript(schema, indent="", indent_factor=2) -%}
+{%- macro json_schema_to_typescript(schema, indent="") -%}
 	{%- set ADDITIONAL_JSON_KEYS = ['format', 'maxItems', 'maximum', 'minItems', 'minimum', 'pattern'] -%}
 	{%- set ty = schema.get("type") -%}
 
@@ -48,8 +48,7 @@
 			{# ---------- Property Definition ---------- #}
             {%- set type_str = json_schema_to_typescript(
                 val, 
-                indent + (' ' * indent_factor), 
-                indent_factor
+                indent + "  "
             ) -%}
 
 			{{- indent + key + ('' if key in required else '?') + ': ' + type_str + ',' -}}
@@ -70,13 +69,12 @@
 		{%- if has_additional_props and additional_props_type is not none -%}
 			{%- set additional_type_str = json_schema_to_typescript(
 				additional_props_type,
-				indent + (' ' * indent_factor),
-				indent_factor
+				indent + "  "
 			) -%}
 			{{- indent + '[key: string]: ' + additional_type_str + '\n' -}}
 		{%- endif -%}
 
-		{{- indent[:-indent_factor] + '}' -}}
+		{{- indent[: (indent|length - "  "|length) ] + '}' -}}
 
 	{# ---------------- STRING ---------------- #}
 	{%- elif ty == "string" -%}
@@ -86,7 +84,7 @@
                 {%- set ns.enum = ns.enum + ['"' ~ en ~ '"'] -%}
             {%- endfor -%}
 			{{- ns.enum | join(' | ') -}}
-		{%- elif schema.get("format") in ['date-time', 'date'] -%}
+		{%- elif schema.get("format", "none") in ['date-time', 'date'] -%}
 			{{- 'Date' -}}
 		{%- else -%}
 			{{- 'string' -}}
@@ -107,7 +105,7 @@
 	{# ---------------- ARRAY ---------------- #}
 	{%- elif ty == "array" -%}
 		{%- if "items" in schema -%}
-			{{- json_schema_to_typescript(schema['items'], indent, indent_factor) + '[]' -}}
+			{{- json_schema_to_typescript(schema['items'], indent) + '[]' -}}
 		{%- else -%}
 			{{- 'Array<any>' -}}
 		{%- endif -%}
