@@ -34,6 +34,7 @@ jobs:
 
       - name: Download and convert model to F16 GGUF
         run: |
+          export PATH="$HOME/.local/bin:$PATH"
           huggingface-cli download ${{ env.MODEL_REPO }} --local-dir models/hf-model
           python3 convert_hf_to_gguf.py models/hf-model --outfile models/model-F16.gguf --outtype f16
 
