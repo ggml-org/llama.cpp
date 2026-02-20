@@ -72,6 +72,12 @@ bool server_http_context::init(const common_params & params) {
     srv.reset(new httplib::Server());
 #endif
 
+    // Enable address reuse to allow immediate restart of server
+    srv->set_socket_options([](socket_t sock) {
+        int val = 1;
+        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+    });
+
     srv->set_default_headers({{"Server", "llama.cpp"}});
     srv->set_logger(log_server_request);
     srv->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
