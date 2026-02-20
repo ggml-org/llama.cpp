@@ -692,7 +692,7 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufNVF
 
 float16_t dequantFuncNVFP4(const in decodeBufNVFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const float d = float(bl.block.d);
+    const float d = ue4m3_to_fp32(bl.block.d);
     const uint idx = coordInBlock[1];
     const uint iqs = idx & 0x7;
     const uint shift = (idx & 0x8) >> 1;

@@ -626,7 +626,7 @@ static __global__ void dequantize_block_nvfp4(const void * __restrict__ vx, dst_
     const int64_t ib = tid / 2;  // block index: 0..15
     const int64_t il = tid % 2;  // lo or hi nibbles
     dst_t * y = yy + i*QK_K + QK_NVFP4*ib + il*(QK_NVFP4/2);
-    const float d = __half2float(x[ib].d);
+    const float d = ggml_cuda_ue4m3_to_fp32(x[ib].d);
     const int shift = il * 4;
 #pragma unroll
     for (int j = 0; j < QK_NVFP4/2; ++j) {

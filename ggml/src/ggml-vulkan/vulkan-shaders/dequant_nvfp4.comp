@@ -25,7 +25,7 @@ void main() {
     const uint q_idx = 4*il;
     const uint b_idx = 16*ib + 8*half_idx + q_idx;
 
-    const float d = float(data_a[ib].d);
+    const float d = ue4m3_to_fp32(data_a[ib].d);
 
     [[unroll]] for (uint l = 0; l < 4; ++l) {
         uint q = half_idx == 0 ? (data_a[ib].qs[q_idx + l] & 0xF) : (data_a[ib].qs[q_idx + l] >> 4);

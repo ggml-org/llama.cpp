@@ -241,8 +241,8 @@ void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         const block_nvfp4 * x0 = &x[2*ib + 0];
         const block_nvfp4 * x1 = &x[2*ib + 1];
 
-        const float d0 = GGML_CPU_FP16_TO_FP32(x0->d);
-        const float d1 = GGML_CPU_FP16_TO_FP32(x1->d);
+        const float d0 = ggml_ue4m3_to_fp32(x0->d);
+        const float d1 = ggml_ue4m3_to_fp32(x1->d);
         const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
 
         int sumi0_lo = 0, sumi0_hi = 0;

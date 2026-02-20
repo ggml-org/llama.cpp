@@ -312,7 +312,7 @@ void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRI
     const int nb = k / qk;
 
     for (int i = 0; i < nb; i++) {
-        const float d = GGML_FP16_TO_FP32(x[i].d);
+        const float d = ggml_ue4m3_to_fp32(x[i].d);
 
         for (int j = 0; j < qk/2; ++j) {
             const int x0 = (x[i].qs[j] & 0x0F) - 8;
@@ -451,9 +451,8 @@ void quantize_row_nvfp4_ref(const float * GGML_RESTRICT x, block_nvfp4 * GGML_RE
             }
         }
 
-        const float d = amax / 6.0f;
-
-        y[i].d = GGML_FP32_TO_FP16(d);
+        y[i].d = ggml_fp32_to_ue4m3(amax / 6.0f);
+        const float d = ggml_ue4m3_to_fp32(y[i].d);
 
         for (int j = 0; j < qk/2; ++j) {
             const uint8_t x0 = best_index_mxfp4(x[i*qk + 0    + j], d);

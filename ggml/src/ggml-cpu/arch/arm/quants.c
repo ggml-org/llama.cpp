@@ -696,10 +696,10 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const float dy0 = GGML_CPU_FP16_TO_FP32(y[ib + 0].d);
         const float dy1 = GGML_CPU_FP16_TO_FP32(y[ib + 1].d);
 
-        sumf += dy0 * GGML_CPU_FP16_TO_FP32(x0->d) * vaddvq_s32(prod_0)
-              + dy0 * GGML_CPU_FP16_TO_FP32(x1->d) * vaddvq_s32(prod_1)
-              + dy1 * GGML_CPU_FP16_TO_FP32(x2->d) * vaddvq_s32(prod_2)
-              + dy1 * GGML_CPU_FP16_TO_FP32(x3->d) * vaddvq_s32(prod_3);
+        sumf += dy0 * ggml_ue4m3_to_fp32(x0->d) * vaddvq_s32(prod_0)
+              + dy0 * ggml_ue4m3_to_fp32(x1->d) * vaddvq_s32(prod_1)
+              + dy1 * ggml_ue4m3_to_fp32(x2->d) * vaddvq_s32(prod_2)
+              + dy1 * ggml_ue4m3_to_fp32(x3->d) * vaddvq_s32(prod_3);
     }
 
     for (; ib < nb; ++ib) {
@@ -728,8 +728,8 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
         const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
 
-        sumf += dy * GGML_CPU_FP16_TO_FP32(x0->d) * vaddvq_s32(prod_0)
-              + dy * GGML_CPU_FP16_TO_FP32(x1->d) * vaddvq_s32(prod_1);
+        sumf += dy * ggml_ue4m3_to_fp32(x0->d) * vaddvq_s32(prod_0)
+              + dy * ggml_ue4m3_to_fp32(x1->d) * vaddvq_s32(prod_1);
     }
 
 #endif
@@ -737,8 +737,8 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         const block_nvfp4 * x0 = &x[2*ib + 0];
         const block_nvfp4 * x1 = &x[2*ib + 1];
 
-        const float d0 = GGML_CPU_FP16_TO_FP32(x0->d);
-        const float d1 = GGML_CPU_FP16_TO_FP32(x1->d);
+        const float d0 = ggml_ue4m3_to_fp32(x0->d);
+        const float d1 = ggml_ue4m3_to_fp32(x1->d);
         const float dy = GGML_CPU_FP16_TO_FP32(y[ib].d);
 
         int sumi0_lo = 0, sumi0_hi = 0;
