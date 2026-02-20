@@ -23,6 +23,7 @@
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -35,6 +36,7 @@
 #include <regex>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <typeinfo>
 #include <utility>
 #if !defined(_WIN32)
@@ -19867,6 +19869,72 @@ struct split_device_config {
 
 static split_device_config g_split_config;
 
+// Separate out-of-order merge queue on B580: merge memcpy runs here so
+// depends_on(e_b50_out) doesn't stall B580's primary in-order compute queue.
+// OOQ allows merge submissions with cross-device dependencies (B50 events)
+// to execute independently — B580's compute pipeline never drains.
+static sycl::queue * g_split_merge_queue   = nullptr;
+static sycl::event   g_split_merge_events[2];  // [0]=B50 merge, [1]=CPU merge
+static int           g_split_merge_count   = 0;
+
+// Drain any pending merge events before consumer ops read the merged dst.
+// Blocks host until all merge memcpys complete.  Merges typically finish
+// during the preceding MMVQ (concurrent copy+compute engines), so this
+// wait is near-zero in practice.
+static void split_merge_drain(sycl::queue * /*primary_stream*/) {
+    if (g_split_merge_count == 0) return;
+    for (int i = 0; i < g_split_merge_count; i++) {
+        g_split_merge_events[i].wait();
+    }
+    g_split_merge_count = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Persistent background worker for CPU vec_dot in tensor split.
+// Allows the host thread to hand off e_src1_host.wait() + CPU vec_dot
+// to a background thread, so it can immediately loop back and submit
+// the next op's GPU work — eliminating GPU idle gaps.
+// ---------------------------------------------------------------------------
+static struct cpu_split_worker {
+    std::thread             thread;
+    std::mutex              mtx;
+    std::condition_variable cv_work;
+    std::condition_variable cv_done;
+    std::atomic<bool>       has_work{false};
+    std::atomic<bool>       done{true};
+    std::atomic<bool>       shutdown{false};
+    // Work parameters (set by host before signaling)
+    sycl::event             e_src1;
+    ggml_type               type;
+    int                     ne00;
+    const void *            src0;
+    const float *           src1;
+    float *                 output;
+    int                     n_rows;
+} g_cpu_worker;
+
+static void cpu_worker_loop() {
+    while (true) {
+        std::unique_lock<std::mutex> lock(g_cpu_worker.mtx);
+        g_cpu_worker.cv_work.wait(lock, [] {
+            return g_cpu_worker.has_work.load() || g_cpu_worker.shutdown.load();
+        });
+        if (g_cpu_worker.shutdown) break;
+        lock.unlock();
+
+        g_cpu_worker.e_src1.wait();
+        ggml_sycl_cpu_vec_dot_rows(g_cpu_worker.type, g_cpu_worker.ne00,
+                                    g_cpu_worker.src0,
+                                    g_cpu_worker.src1,
+                                    g_cpu_worker.output,
+                                    g_cpu_worker.n_rows);
+
+        g_cpu_worker.done    = true;
+        g_cpu_worker.has_work = false;
+        g_cpu_worker.cv_done.notify_one();
+    }
+}
+
 // Initialize 3-device split config. Called once (idempotent).
 // primary_queue = the main GPU's in-order queue (device 0).
 static void split_config_init(sycl::queue * primary_queue) {
@@ -19945,6 +20013,16 @@ static void split_config_init(sycl::queue * primary_queue) {
                 // would try to create a cache via dpct (no backend registered for device 1).
                 ggml_sycl::unified_cache_register_for_queue(1, q1);
 
+                // Separate out-of-order merge queue on primary GPU (B580).
+                // Uses the primary queue's own context so the merge can access
+                // dst device memory allocated on that context.  OOQ so that
+                // depends_on(e_b50_out) doesn't stall any other submission.
+                {
+                    sycl::context pri_ctx = primary_queue->get_context();
+                    static sycl::queue merge_q(pri_ctx, primary_dev);
+                    g_split_merge_queue = &merge_q;
+                }
+
                 GGML_LOG_INFO("SYCL 3-device split: %s + %s + CPU (%.0f%%/%.0f%%/%.0f%%)\n",
                               primary_dev.get_info<sycl::info::device::name>().c_str(),
                               secondary_dev.get_info<sycl::info::device::name>().c_str(),
@@ -19972,6 +20050,10 @@ static void split_config_init(sycl::queue * primary_queue) {
             GGML_LOG_INFO("SYCL split: GPU+CPU (%.0f%%/%.0f%%)\n",
                           g_split_config.ratio[0] * 100,
                           g_split_config.ratio[2] * 100);
+        }
+        // Spawn persistent background worker for CPU vec_dot
+        if (g_split_config.ratio[2] > 0.0f && !g_cpu_worker.thread.joinable()) {
+            g_cpu_worker.thread = std::thread(cpu_worker_loop);
         }
     }
 }
@@ -20158,6 +20240,42 @@ static void * split_get_cached_weights(const char * name, const char * src0_aos,
     return buf;
 }
 
+// --- Per-op timing for 3-device profiling (enabled via GGML_SYCL_SPLIT_PROFILE=1) ---
+struct split_profile {
+    double host_submit_us  = 0;  // Time host spends submitting work (not waiting)
+    double e_src1_wait_us  = 0;  // Time blocked in e_src1_host.wait()
+    double cpu_vecdot_us   = 0;  // Time in CPU vec_dot
+    double sync_b580_us    = 0;  // Time to sync B580 queue (actual GPU time)
+    double sync_b50_us     = 0;  // Time to sync B50 queue (actual GPU time)
+    double total_us        = 0;  // Wall time per tensor_split call
+    int    call_count      = 0;
+    static bool enabled() {
+        static const bool e = (std::getenv("GGML_SYCL_SPLIT_PROFILE") != nullptr);
+        return e;
+    }
+    // Deep profile mode: add explicit sync points to measure actual GPU time per op
+    static bool deep() {
+        static const bool d = (std::getenv("GGML_SYCL_SPLIT_PROFILE_DEEP") != nullptr);
+        return d;
+    }
+    void print_and_reset() {
+        if (call_count == 0) return;
+        GGML_LOG_INFO("[SPLIT-PROFILE] %d ops: total=%.1fms e_wait=%.1fms "
+                      "cpu_vd=%.1fms",
+                      call_count, total_us / 1000.0,
+                      e_src1_wait_us / 1000.0, cpu_vecdot_us / 1000.0);
+        if (deep()) {
+            GGML_LOG_INFO(" sync_b580=%.1fms sync_b50=%.1fms",
+                          sync_b580_us / 1000.0, sync_b50_us / 1000.0);
+        }
+        GGML_LOG_INFO(" per_op=%.1fus\n", total_us / call_count);
+        host_submit_us = e_src1_wait_us = cpu_vecdot_us = 0;
+        sync_b580_us = sync_b50_us = total_us = 0;
+        call_count = 0;
+    }
+};
+static split_profile g_split_prof;
+
 static bool ggml_sycl_mul_mat_tensor_split(
         ggml_backend_sycl_context & ctx,
         const ggml_tensor *         src0,
@@ -20182,6 +20300,13 @@ static bool ggml_sycl_mul_mat_tensor_split(
     // 3-device path: primary GPU + secondary GPU + CPU
     // =====================================================================
     if (g_split_config.gpu_count >= 2) {
+        // Drain any pending merge from the previous token before we reuse
+        // staging buffers (s_second_out_host, s_cpu_out).  On the OOQ merge
+        // queue, a prior merge might still be reading these buffers.
+        if (g_split_merge_count > 0) {
+            split_merge_drain(stream);
+        }
+
         // Compute 3-way row split, aligning GPU portions to 16 rows (MMVQ granularity)
         int64_t N_primary = (int64_t)(ne01 * g_split_config.ratio[0]);
         int64_t N_second  = (int64_t)(ne01 * g_split_config.ratio[1]);
@@ -20236,6 +20361,13 @@ static bool ggml_sycl_mul_mat_tensor_split(
                 src0_cpu = g_split_weight_staging.data;
             }
         }
+
+        // --- Profiling ---
+        using hrc = std::chrono::high_resolution_clock;
+        auto t_start = hrc::now();
+        auto us_since = [&](auto tp) {
+            return std::chrono::duration<double, std::micro>(hrc::now() - tp).count();
+        };
 
         // --- Q8 quantize src1 and stage to devices ---
         const int64_t K         = ne00;
@@ -20338,7 +20470,8 @@ static bool ggml_sycl_mul_mat_tensor_split(
             e_b50_out = stream_second->memcpy(s_second_out_host, s_second_out_dev, second_out_bytes);
         }
 
-        // CPU vec_dot: runs concurrently with both GPUs
+        // CPU vec_dot: hand off to background thread so host can loop back
+        // and submit next op's GPU work immediately (no GPU idle gaps).
         if (N_cpu > 0) {
             const size_t cpu_out_bytes = N_cpu * sizeof(float);
             if (s_cpu_out_sz < cpu_out_bytes) {
@@ -20347,19 +20480,50 @@ static bool ggml_sycl_mul_mat_tensor_split(
                 s_cpu_out_sz = s_cpu_out ? cpu_out_bytes : 0;
             }
             if (!s_cpu_out) return false;
-            // Wait for D2H of src1 to complete before CPU reads the host buffer
-            e_src1_host.wait();
-            ggml_sycl_cpu_vec_dot_rows(src0->type, static_cast<int>(ne00),
-                                        src0_cpu,
-                                        g_split_src1_host,
-                                        s_cpu_out,
-                                        static_cast<int>(N_cpu));
+
+            // Wait for previous CPU work to complete before reusing buffers
+            {
+                std::unique_lock<std::mutex> lock(g_cpu_worker.mtx);
+                g_cpu_worker.cv_done.wait(lock, [] { return g_cpu_worker.done.load(); });
+            }
+
+            // Hand off work to background thread (non-blocking)
+            g_cpu_worker.e_src1    = e_src1_host;
+            g_cpu_worker.type      = src0->type;
+            g_cpu_worker.ne00      = static_cast<int>(ne00);
+            g_cpu_worker.src0      = src0_cpu;
+            g_cpu_worker.src1      = g_split_src1_host;
+            g_cpu_worker.output    = s_cpu_out;
+            g_cpu_worker.n_rows    = static_cast<int>(N_cpu);
+            g_cpu_worker.done      = false;
+            g_cpu_worker.has_work  = true;
+            g_cpu_worker.cv_work.notify_one();
         }
 
-        // --- Merge outputs to primary dst (event-chained, no queue waits) ---
+        // --- Deep profiling: measure actual GPU time per op ---
+        if (split_profile::deep()) {
+            auto t_s = hrc::now();
+            stream->wait();
+            g_split_prof.sync_b580_us += us_since(t_s);
+            if (N_second > 0) {
+                t_s = hrc::now();
+                stream_second->wait();
+                g_split_prof.sync_b50_us += us_since(t_s);
+            }
+        }
+
+        // --- Merge outputs to primary dst via OOQ (doesn't stall B580 compute) ---
+        // The merge queue is out-of-order on B580.  Each merge memcpy uses
+        // depends_on for its data dependency and runs as soon as data is ready
+        // — without blocking B580's in-order compute queue for the next MUL_MAT.
+        // Merge events are drained before any non-tensor-split consumer op.
+        sycl::queue * merge_q = g_split_merge_queue ? g_split_merge_queue : stream;
+        g_split_merge_count = 0;
         if (N_second > 0) {
-            // Merge B50 output: depends on B50 D2H completion
-            stream->submit([&](sycl::handler & h) {
+            // Merge B50 output: depends on B50 D2H completion.
+            // Writes to dst_dd[N_primary..N_primary+N_second) — no overlap
+            // with B580 MMVQ output in dst_dd[0..N_primary).
+            g_split_merge_events[g_split_merge_count++] = merge_q->submit([&](sycl::handler & h) {
                 h.depends_on(e_b50_out);
                 h.memcpy(dst_dd + N_primary,
                          s_second_out_host,
@@ -20367,11 +20531,23 @@ static bool ggml_sycl_mul_mat_tensor_split(
             });
         }
         if (N_cpu > 0) {
-            // Merge CPU output: auto-follows B50 merge on in-order B580 queue.
-            // CPU vec_dot already completed (synchronous on host thread above).
-            stream->memcpy(dst_dd + N_primary + N_second,
-                           s_cpu_out,
-                           N_cpu * sizeof(float));
+            // Ensure background vec_dot is complete before merging
+            {
+                std::unique_lock<std::mutex> lock(g_cpu_worker.mtx);
+                g_cpu_worker.cv_done.wait(lock, [] { return g_cpu_worker.done.load(); });
+            }
+            g_split_merge_events[g_split_merge_count++] = merge_q->memcpy(
+                dst_dd + N_primary + N_second,
+                s_cpu_out,
+                N_cpu * sizeof(float));
+        }
+
+        if (split_profile::enabled()) {
+            g_split_prof.total_us += us_since(t_start);
+            g_split_prof.call_count++;
+            if (g_split_prof.call_count >= 128) {
+                g_split_prof.print_and_reset();
+            }
         }
 
         return true;
@@ -20555,6 +20731,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                     // Fall through to normal GPU dispatch if split failed
                 }
 
+                // Non-tensor-split path: drain any pending merge
+                split_merge_drain(ctx.stream());
+
                 // MMVQ with SOA reorder -- matches master's fast path
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+SOA for %s (type=%d layout=%d)\n",
                                 src0->name ? src0->name : "?", src0->type, static_cast<int>(effective_layout));
@@ -20563,12 +20742,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                 return;
             } else if (src1->ne[1] <= MMVQ_MAX_BATCH_SIZE) {
                 // MMVQ with AOS layout
+                split_merge_drain(ctx.stream());
                 GGML_SYCL_DEBUG("[TG-FAST] batch=1 MMVQ+AOS for %s (type=%d)\n", src0->name ? src0->name : "?",
                                 src0->type);
                 ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, GGML_LAYOUT_AOS);
                 return;
             } else {
                 // DMMV fallback for types not supported by MMVQ
+                split_merge_drain(ctx.stream());
                 const bool use_dmmv = ggml_sycl_supports_dmmv(src0->type) && src0->ne[0] % GGML_SYCL_DMMV_X == 0;
                 if (use_dmmv) {
                     GGML_SYCL_DEBUG("[TG-FAST] batch=1 DMMV for %s (type=%d)\n", src0->name ? src0->name : "?",
@@ -20581,6 +20762,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
             // Neither MMVQ nor DMMV available: fall through to full dispatch
         }
     }
+
+    // Unified kernel / full dispatch path: drain any pending merge
+    split_merge_drain(ctx.stream());
 
     auto is_kqv_matmul = [](const ggml_tensor * a, const ggml_tensor * b, const ggml_tensor * c) -> bool {
         if (c && c->name && std::strstr(c->name, "kqv") != nullptr) {
@@ -24125,6 +24309,14 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
     }
+    // Drain any pending merge from a previous tensor_split call.
+    // Tensor-split MUL_MATs skip the drain to allow overlap: their MMVQ
+    // writes to a different dst and doesn't read any previously merged data.
+    // All other ops (ADD, NORM, SILU, non-split MUL_MAT, etc.) must drain
+    // first because they may consume a dst that was partially merged.
+    if (g_split_merge_count > 0 && dst->op != GGML_OP_MUL_MAT) {
+        split_merge_drain(ctx.stream());
+    }
     switch (dst->op) {
         case GGML_OP_ARGMAX:
             ggml_sycl_argmax(ctx, dst);
@@ -24506,6 +24698,13 @@ static void ggml_backend_sycl_free(ggml_backend_t backend) {
 
     ggml_sycl_free_dev2dev_transfer_buffer();
     ggml_sycl_layout_ptr_stats_dump();
+    // Shut down background CPU worker thread
+    g_cpu_worker.shutdown = true;
+    g_cpu_worker.cv_work.notify_one();
+    if (g_cpu_worker.thread.joinable()) g_cpu_worker.thread.join();
+    // Drain any pending merge events before teardown
+    split_merge_drain(nullptr);
+    g_split_merge_queue = nullptr;
     g_sycl_backend_refcount.fetch_sub(1, std::memory_order_acq_rel);
     // L2 prefetch manager is owned by context via unique_ptr, cleaned up automatically
     // NOTE: We intentionally do NOT release host weight extras when refcount reaches 0.
